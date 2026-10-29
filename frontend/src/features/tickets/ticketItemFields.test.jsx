@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
+  CatalogOption,
   isRequiredItemField,
   ITEM_FIELD_META,
   missingQtyMessage,
@@ -89,7 +91,9 @@ describe('ITEM_FIELD_META', () => {
   it('carries the canonical labels both surfaces render', () => {
     expect(ITEM_FIELD_META.brand.label).toBe('ยี่ห้อ / โรงงาน');
     expect(ITEM_FIELD_META.model.label).toBe('ชื่อรุ่น / Collection');
-    expect(ITEM_FIELD_META.size.label).toBe('ขนาด');
+    // QA-28: size is centimetres everywhere — the label says so (the required-field message stays 'ขนาด').
+    expect(ITEM_FIELD_META.size.label).toBe('ขนาด (ซม.)');
+    expect(ITEM_FIELD_META.size.placeholder).toBe('เช่น 60x120');
     expect(ITEM_FIELD_META.color.label).toBe('สี');
     expect(ITEM_FIELD_META.texture.label).toBe('เนื้อผิว');
   });
@@ -139,6 +143,28 @@ describe('applyCatalogPick', () => {
     expect(result.catalogPrice).toBe(8.8);
     expect(result.catalogCurrency).toBe('USD');
     expect(result.catalogPriceUnit).toBe('per_sqm');
+  });
+
+  // QA-28: size is cm. The catalogue's raw size text is mixed-unit ('20*20X30,5'); the pick must use
+  // the same cm derivation as the quotation editor (sizeTextFromCatalog).
+  it('QA-28: size is the cm text derived from widthMm/heightMm, not the raw catalogue string', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ widthMm: 200, heightMm: 305, sizeRaw: '20*20X30,5' }));
+    expect(result.size).toBe('20x30.5');
+  });
+
+  it('QA-28: size prefers the catalogue sizeCm column when it is served', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeCm: '60x120', widthMm: 600, heightMm: 1200, sizeRaw: '600x1200' }));
+    expect(result.size).toBe('60x120');
+  });
+
+  it('QA-28: size falls back to sizeRaw when the row has no dimensions', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeRaw: 'Mosaic 30x30', widthMm: null, heightMm: null }));
+    expect(result.size).toBe('Mosaic 30x30');
+  });
+
+  it('QA-28: a blank sizeRaw does not shadow size when the row has no dimensions', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeRaw: '', size: '60x60' }));
+    expect(result.size).toBe('60x60');
   });
 
   it('resolves sqmPerPiece from the catalog row and cross-fills qtySqm from an existing qty', () => {
@@ -287,4 +313,14 @@ describe('shared usage pin — TicketCreateModal.jsx and TicketDetailPage.jsx bo
       expect(match, `${name} re-declares ${match?.[1]} locally`).toBeNull();
     });
   }
+});
+
+// QA-28 (owner ruling 2026-10-29): the deal form's ขนาด field is cm, so a catalogue row in its dropdown
+// reads in cm too -- the same text a pick writes into the field.
+describe('CatalogOption', () => {
+  it('shows the catalogue size in cm, not the raw factory string', () => {
+    const { container } = render(<CatalogOption cat={{ factoryName: 'Panaria', collection: 'BIOARCH', color: 'BARGE GIALLA', widthMm: 200, heightMm: 305, sizeRaw: '200x305' }} />);
+    expect(container.textContent).toContain('BARGE GIALLA · 20x30.5');
+    expect(container.textContent).not.toContain('200x305');
+  });
 });

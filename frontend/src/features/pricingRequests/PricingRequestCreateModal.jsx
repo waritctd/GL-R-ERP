@@ -468,6 +468,9 @@ export function PricingRequestCreateModal({
   // ticket_item rows instead.
   const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
+  // QA-12 (owner ruling 2026-10-29): the backend (GLA-102 requireUnchangedRecipientType) 409s any
+  // recipientType change on a revision child — createCustomerChangeRevision and updateDraft alike.
+  const recipientLocked = isRevision || (isEdit && initialSummary?.parentPricingRequestId != null);
   const seededRecipientType = seedsFromExisting
     ? (initialSummary?.recipientType ?? 'DESIGNER')
     : (initialRecipientType ?? initialSummary?.recipientType ?? (recipientForEntryChannel(deal?.entryChannel) || 'DESIGNER'));
@@ -985,16 +988,22 @@ export function PricingRequestCreateModal({
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-bold ${
+                  disabled={recipientLocked}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-bold disabled:cursor-not-allowed ${
                     selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text-muted'
-                  }`}
-                  onClick={() => setRecipientType(option.code)}
+                  } ${recipientLocked && !selected ? 'opacity-60' : ''}`}
+                  onClick={() => { if (!recipientLocked) setRecipientType(option.code); }}
                 >
                   {option.label}
                 </button>
               );
             })}
           </div>
+          {recipientLocked ? (
+            <p className="mt-1.5 text-xs text-text-muted">
+              เปลี่ยนผู้รับไม่ได้ในรอบแก้ไข — หากต้องการเสนอราคาให้ผู้รับรายอื่น ให้สร้างคำขอราคาใหม่
+            </p>
+          ) : null}
         </div>
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">

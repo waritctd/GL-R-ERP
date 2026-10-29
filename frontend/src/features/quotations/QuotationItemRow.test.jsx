@@ -526,6 +526,29 @@ describe('QuotationItemRow', () => {
     expect(onCatalogPicked).toHaveBeenCalledWith(recent[0]);
   });
 
+  // QA-28 (owner ruling 2026-10-29): the ขนาด (ซม.) field is cm, so the catalogue rows offered beside it
+  // read in cm too (sizeTextFromCatalog) -- never the factory's raw millimetre string.
+  it('the typeahead option and the ใช้ล่าสุด chip show the catalogue size in cm, not the raw factory string', async () => {
+    const bioarch = { priceId: 77, factoryName: 'Panaria', collection: 'BIOARCH', color: 'BARGE GIALLA', widthMm: 200, heightMm: 305, sizeRaw: '200x305', price: 53.9 };
+    api.catalog.prices.mockImplementation(async (q) => ((q ?? '').includes('BIOARCH') ? { items: [bioarch] } : { items: [] }));
+    render(
+      <QuotationItemRow
+        item={emptyQuotationItem('g1')}
+        index={0}
+        groupId="g1"
+        recentPicks={[bioarch]}
+        onChange={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'BIOARCH' }).title).toBe('Panaria · BARGE GIALLA · 20x30.5');
+    fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'BIOARCH' } });
+    const option = await waitFor(() => screen.getByRole('option', { name: /BIOARCH/ }), { timeout: 1000 });
+    expect(option.textContent).toContain('20x30.5');
+    expect(option.textContent).not.toContain('200x305');
+  });
+
   it('hides the ใช้ล่าสุด chips once the row already names a product', () => {
     render(
       <QuotationItemRow
@@ -944,6 +967,8 @@ describe('sizeTextFromCatalog — ขนาด comes from the catalogue mm, neve
     expect(sizeTextFromCatalog({ sizeRaw: '60x120' })).toBe('60x120');
     expect(sizeTextFromCatalog({ widthMm: 0, heightMm: 0, sizeRaw: 'ตามภาพ' })).toBe('ตามภาพ');
     expect(sizeTextFromCatalog({})).toBe('');
+    // A blank sizeRaw ('' is not nullish) must not shadow a usable size.
+    expect(sizeTextFromCatalog({ sizeRaw: '', size: '60x60' })).toBe('60x60');
   });
 });
 

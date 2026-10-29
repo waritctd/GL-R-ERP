@@ -101,7 +101,7 @@ export function sizeTextFromCatalog(cat) {
     return `${cm(w)}x${cm(h)}`;
   }
   // 3. Only when the row carries no dimensions at all (~49 production rows).
-  return cat?.sizeRaw ?? cat?.size ?? '';
+  return cat?.sizeRaw || cat?.size || '';
 }
 
 /**
@@ -583,7 +583,7 @@ export function QuotationItemRow({
             <button
               key={cat.priceId ?? `${cat.productCode}-${cat.collection}`}
               type="button"
-              title={`${cat.factoryName ?? cat.factory ?? '-'} · ${cat.color ?? '-'} · ${cat.sizeRaw ?? cat.size ?? '-'}`}
+              title={`${cat.factoryName ?? cat.factory ?? '-'} · ${cat.color ?? '-'} · ${sizeTextFromCatalog(cat) || '-'}`}
               className="inline-flex min-h-7 max-w-[16rem] items-center gap-1 truncate rounded-full border border-border bg-surface-subtle px-2.5 text-2xs font-bold text-text-muted hover:border-primary hover:text-primary"
               onClick={() => pickCatalog(cat)}
             >
@@ -628,7 +628,7 @@ export function QuotationItemRow({
                   >
                     <strong>{cat.collection ?? cat.productName ?? cat.productCode}</strong>
                     <span className="block text-2xs text-text-muted">
-                      {(cat.factoryName ?? cat.factory ?? '-')} · {cat.color ?? '-'} · {cat.sizeRaw ?? cat.size ?? '-'}
+                      {(cat.factoryName ?? cat.factory ?? '-')} · {cat.color ?? '-'} · {sizeTextFromCatalog(cat) || '-'}
                       {cat.price != null ? ` · ${formatMoney(cat.price)}` : ''}
                     </span>
                   </button>

@@ -1,5 +1,5 @@
 import {
-  forwardRef, useImperativeHandle, useMemo, useState,
+  forwardRef, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -23,13 +23,8 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
-import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, outcomeKeyFor, outcomeReasonConfirmCopy } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
-
-function generateClientRequestId() {
-  return crypto.randomUUID?.()
-    ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
-}
 
 // The customer-quotation tail only ever exists once a PricingRequest reaches
 // APPROVED_FOR_QUOTATION (canCreateCustomerQuotation's own gate) — earlier
@@ -100,6 +95,11 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
   const [confirmingAccept, setConfirmingAccept] = useState(false);
+  // W3-06/QA-35 (owner ruling 2026-10-29/30): ปฏิเสธ / ขอแก้ไข ask for the customer's reason first; each outcome
+  // keeps its own idempotency key per quotation until it succeeds (see outcomeKeyFor). outcomeToConfirm is
+  // { quotation, outcome }: the quotation is captured at click so a refetch can't retarget the confirm.
+  const [outcomeToConfirm, setOutcomeToConfirm] = useState(null);
+  const outcomeKeys = useRef({});
   // SK-02: the order confirmation is irreversible (the deal can no longer go below ขั้น 10), so every door to it
   // (sticky primary, ⋯, this panel) opens this dialog first.
   const [confirmingOrder, setConfirmingOrder] = useState(false);
@@ -132,10 +132,10 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   }
 
   const recordOutcome = useMutation({
-    mutationFn: (outcome) => api.pricingRequests.recordCustomerQuotationOutcome(current.id, {
-      outcome, customerNote: outcomeNote || null, clientRequestId: generateClientRequestId(),
+    mutationFn: ({ quotation, outcome, note = outcomeNote }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
+      outcome, customerNote: note || null, clientRequestId: outcomeKeyFor(outcomeKeys.current, quotation.id, outcome),
     }),
-    onSuccess: () => { setOutcomeNote(''); showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว'); invalidate(); },
+    onSuccess: (_data, { quotation, outcome }) => { dropOutcomeKey(outcomeKeys.current, quotation.id, outcome); setOutcomeNote(''); showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว'); invalidate(); },
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
   const confirmOrder = useMutation({
@@ -261,16 +261,16 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordOutcome.isPending}
-                    onClick={() => (acceptConfirm ? setConfirmingAccept(true) : recordOutcome.mutate('ACCEPTED'))}
+                    onClick={() => (acceptConfirm ? setConfirmingAccept(true) : recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }))}
                     data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="secondary" style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger-border)' }}
-                    disabled={recordOutcome.isPending} onClick={() => recordOutcome.mutate('REJECTED')} data-testid="deal-quotation-reject">
+                    disabled={recordOutcome.isPending} onClick={() => setOutcomeToConfirm({ quotation: current, outcome: 'REJECTED' })} data-testid="deal-quotation-reject">
                     ลูกค้าปฏิเสธ
                   </Button>
                   <Button type="button" variant="secondary" disabled={recordOutcome.isPending}
-                    onClick={() => recordOutcome.mutate('REVISION_REQUESTED')} data-testid="deal-quotation-revision">
+                    onClick={() => setOutcomeToConfirm({ quotation: current, outcome: 'REVISION_REQUESTED' })} data-testid="deal-quotation-revision">
                     ลูกค้าขอแก้ไข
                   </Button>
                 </div>
@@ -325,7 +325,16 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         message={acceptConfirm?.message}
         busy={recordOutcome.isPending}
         onCancel={() => setConfirmingAccept(false)}
-        onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate('ACCEPTED'); }}
+        onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }); }}
+      />
+      <ConfirmDialog
+        open={Boolean(outcomeToConfirm)}
+        {...outcomeReasonConfirmCopy(outcomeToConfirm?.outcome)}
+        requireReason
+        busy={recordOutcome.isPending}
+        onCancel={() => setOutcomeToConfirm(null)}
+        // Close only on success: a failed call keeps the dialog (and the typed reason) for a same-key retry.
+        onConfirm={(reason) => recordOutcome.mutate({ ...outcomeToConfirm, note: reason }, { onSuccess: () => setOutcomeToConfirm(null) })}
       />
     </Panel>
   );

@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { api } from '../../api/index.js';
@@ -625,6 +625,13 @@ describe('PricingRequestCreateModal typed โรงงาน → สกุลเ
   });
 });
 
+// QA-12: the backend (GLA-102) 409s a changed recipientType on a revision / on editing a revision draft,
+// so the ผู้รับคำขอราคา radios are locked there and a hint points at "create a new request" instead.
+const RECIPIENT_LOCK_HINT = 'สร้างคำขอราคาใหม่';
+const recipientRadios = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับคำขอราคา' })).getAllByRole('radio');
+const radioByName = (re) => recipientRadios().find((r) => re.test(r.textContent));
+const isLocked = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
+
 describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
   function editInitialValue(overrides = {}) {
     return {
@@ -680,6 +687,36 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       items: [expect.objectContaining({ productDescription: 'กระเบื้องพื้น SCG A1' })],
     })));
     expect(onCreated).toHaveBeenCalledTimes(1);
+  });
+
+  it('QA-12: editing a REVISION draft (parentPricingRequestId set) locks the ผู้รับ radios, keeps the seeded one checked, shows the hint, and saves the original recipientType', async () => {
+    const updateFn = vi.fn().mockResolvedValue({});
+    const initial = editInitialValue();
+    initial.summary.parentPricingRequestId = 66;
+    render(
+      <PricingRequestCreateModal mode="edit" initialValue={initial} onClose={vi.fn()} onCreated={vi.fn()} updateFn={updateFn} />,
+    );
+    expect(recipientRadios().every(isLocked)).toBe(true);
+    fireEvent.click(radioByName(/ผู้ซื้อ/));
+    expect(radioByName(/เจ้าของโครงการ/).getAttribute('aria-checked')).toBe('true');
+    expect(radioByName(/ผู้ซื้อ/).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText(new RegExp(RECIPIENT_LOCK_HINT))).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
+    await waitFor(() => expect(updateFn).toHaveBeenCalledTimes(1));
+    expect(updateFn.mock.calls[0][1].recipientType).toBe('OWNER');
+  });
+
+  it('QA-12: editing a non-revision draft (parentPricingRequestId null) keeps ผู้รับ changeable and shows no hint', () => {
+    const initial = editInitialValue();
+    initial.summary.parentPricingRequestId = null;
+    render(
+      <PricingRequestCreateModal mode="edit" initialValue={initial} onClose={vi.fn()} onCreated={vi.fn()} updateFn={vi.fn()} />,
+    );
+    expect(recipientRadios().some(isLocked)).toBe(false);
+    fireEvent.click(radioByName(/ผู้ซื้อ/));
+    expect(radioByName(/ผู้ซื้อ/).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText(new RegExp(RECIPIENT_LOCK_HINT))).toBeNull();
   });
 
   // Review finding 3: the row remembers the stockSource it was loaded with, so un-ticking and re-ticking จากสต็อก
@@ -1049,6 +1086,28 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
     expect(createFn).not.toHaveBeenCalled();
     expect(submitFn).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith({ pricingRequest: { summary: { id: 999 } } });
+  });
+
+  it('QA-12: revision mode locks the ผู้รับ radios, keeps the seeded one checked, shows the hint, and submits the ORIGINAL recipientType', async () => {
+    const { createRevisionFn } = renderRevisionModal();
+    expect(recipientRadios().every(isLocked)).toBe(true);
+    fireEvent.click(radioByName(/ผู้ซื้อ/));
+    fireEvent.click(radioByName(/ผู้ออกแบบ/));
+    expect(radioByName(/เจ้าของโครงการ/).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText(new RegExp(RECIPIENT_LOCK_HINT))).not.toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText('เช่น ลูกค้าเปลี่ยนสินค้า/จำนวน/ขนาด'), { target: { value: 'ลูกค้าเปลี่ยนใจ' } });
+    fireEvent.click(screen.getByRole('button', { name: /สร้างรอบแก้ไข/ }));
+    await waitFor(() => expect(createRevisionFn).toHaveBeenCalledTimes(1));
+    expect(createRevisionFn.mock.calls[0][1].recipientType).toBe('OWNER');
+  });
+
+  it('QA-12: plain create mode keeps ผู้รับ changeable and shows no lock hint', () => {
+    renderModal();
+    expect(recipientRadios().some(isLocked)).toBe(false);
+    fireEvent.click(radioByName(/ผู้ซื้อ/));
+    expect(radioByName(/ผู้ซื้อ/).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText(new RegExp(RECIPIENT_LOCK_HINT))).toBeNull();
   });
 
   it('has no "ส่งให้ฝ่ายนำเข้า"/"บันทึกร่าง"/"บันทึกการแก้ไข" buttons — only "สร้างรอบแก้ไข"', () => {
