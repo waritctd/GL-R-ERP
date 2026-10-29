@@ -352,6 +352,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // panel's confirm directly instead of scrolling to a second copy of the
   // button — same convention as the two refs above.
   const dealQuotationPanelRef = useRef(null);
+  const fulfilmentPanelRef = useRef(null);
 
   // Edit-items mode
   const [editMode, setEditMode] = useState(false);
@@ -610,6 +611,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
     enabled: readsDocs,
   });
+  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry (QA-09).
+  const storedIrQuery = useQuery({
+    queryKey: queryKeys.storedImportRequests(ticketId),
+    queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
+    enabled: readsDocs,
+  });
+  const importRequests = storedIrQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
   // undefined until the list is read: nextSalesAction then never offers the invoice.
   const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
@@ -1297,14 +1305,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // treated like an unknown route (no route choice; ⋯ still offers its outcome).
   // (Read once is enough: a failed refetch keeps the rows it read.)
   const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
-  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice });
+  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
-  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice });
+  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   // The backend refuses a non-owner for both documents (2026-10-28): no main button for them.
-  const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice'];
+  const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'create_import_request'];
   const workStateAction = OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner ? null : workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
@@ -1462,6 +1470,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
           onClick={() => setRemainingInvoiceDialogOpen(true)}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'create_import_request') {
+      // A DRAFT IR already exists (label says so): just show it; else run the panel's own create.
+      const hasDraft = importRequests?.some((r) => r.status === 'DRAFT');
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          disabled={importRequests === undefined}
+          onClick={() => runOnTab('fulfilment', () => (hasDraft ? fulfilmentPanelRef.current?.showIrSection() : fulfilmentPanelRef.current?.createIrDrafts()))}>
           {workStateAction.label}
         </Button>
       );
@@ -2730,6 +2749,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           <div id="deal-fulfilment-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
             {sections.delivery ? (
               <DealFulfilmentPanel
+                ref={fulfilmentPanelRef}
                 ticketId={ticketId}
                 user={user}
                 summary={summary}
