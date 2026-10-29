@@ -25,8 +25,9 @@ import th.co.glr.hr.common.ApiExceptionHandler;
  * {@code ceo}/{@code import} gate by exactly one role, to {@code sales}, so the deal-create modal's
  * "ราคาตั้ง (ประมาณการ)" estimate can convert a catalog price to THB for a plain {@code sales}
  * session. It was NOT opened to every authenticated session — the owner's words were "should only
- * be to sale". See {@link FxRateController#READ_ROLES}'s javadoc for the full reasoning, including
- * why this does NOT relax {@code PriceCalcConfigController}.
+ * be to sale". The owner widened it once more on 2026-10-29 (role check RC-01), to
+ * {@code sales_manager}. See {@link FxRateController#READ_ROLES}'s javadoc for the full reasoning,
+ * including why this does NOT relax {@code PriceCalcConfigController}.
  *
  * <p>This class proves the DECISION (which branch the role check takes).
  * {@code CatalogPricingReadAuthzIntegrationTest} proves the ENFORCEMENT on real Postgres through the
@@ -36,17 +37,16 @@ import th.co.glr.hr.common.ApiExceptionHandler;
  * suite that only asserts "sales can read" stays green with the gate wide open.
  */
 class FxRateControllerTest {
-    /** The whole of the 2026-08-02 ruling. Anything added here is a new ruling, not a refactor. */
-    private static final List<String> READ_ALLOWED = List.of("ceo", "import", "sales");
-
     /**
-     * Everyone else. {@code sales_manager} belongs here deliberately: it browses the deal pipeline
-     * but cannot create a deal ({@code canCreateTickets} is {@code ['sales']} and
-     * {@code TicketService.create} gates on {@code Set.of("sales")}), so it never reaches the modal
-     * that needs the rate.
+     * The 2026-08-02 ruling plus {@code sales_manager}, owner ruling 2026-10-29 (role check RC-01:
+     * the deal page converts foreign-currency prices to THB for SM too). Anything added here is a
+     * new ruling, not a refactor.
      */
+    private static final List<String> READ_ALLOWED = List.of("ceo", "import", "sales", "sales_manager");
+
+    /** Everyone else. */
     private static final List<String> READ_DENIED =
-        List.of("employee", "warehouse", "qc", "hr", "sales_manager", "account");
+        List.of("employee", "warehouse", "qc", "hr", "account");
 
     /** Everyone but CEO — the write gate that /fetch-now shares with upsert. */
     private static final List<String> WRITE_DENIED =

@@ -202,11 +202,12 @@ export function ImportFulfilmentPage({ user, showToast }) {
       let completesDeal = false;
       if (targetStep === 'RECEIVED') {
         try {
-          const [{ ticket: freshTicket }, { importRequests: freshRows }] = await Promise.all([
-            api.tickets.get(ticketId),
+          // importDeals.get, not tickets.get: TicketService#get refuses role import (RC-02).
+          const [{ deal: freshDeal }, { importRequests: freshRows }] = await Promise.all([
+            api.importDeals.get(ticketId),
             api.storedImportRequests.listForTicket(ticketId),
           ]);
-          const fs = freshTicket?.summary?.fulfillmentStatus;
+          const fs = freshDeal?.fulfillmentStatus;
           if (fs === 'GOODS_RECEIVED') {
             completesDeal = true;
           } else if (fs === 'PARTIALLY_DELIVERED') {
