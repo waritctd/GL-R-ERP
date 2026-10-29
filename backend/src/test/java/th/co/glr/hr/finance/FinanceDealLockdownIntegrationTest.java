@@ -243,6 +243,19 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
         assertFinanceShape(deal, id);
     }
 
+    /** QA-19 (owner ruling 2026-10-29): account only ever moves a money stage FORWARD; going back is refused. */
+    @Test
+    void stage_accountCannotMoveABackwardMoneyStage_409_andTheDealStaysPut() throws Exception {
+        long id = createS15Deal("FULLY_PAID");
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'CLOSED_PAID', next_follow_up_at = CURRENT_DATE + 3 WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", id));
+
+        expectStatus(financeMvc.perform(json(post("/api/finance/deals/{id}/stage", id).session(session(accountUser)),
+            "{\"stage\":\"DEPOSIT_RECEIVED\",\"note\":\"ย้อนกลับ\"}")), 409);
+
+        assertThat(salesStageOf(id)).isEqualTo(DealStage.CLOSED_PAID);
+    }
+
     @Test
     void comments_accountAndCeoCanPost_andItAppearsInTheFinanceDeal() throws Exception {
         long id = createS15Deal("DEPOSIT_PAID");

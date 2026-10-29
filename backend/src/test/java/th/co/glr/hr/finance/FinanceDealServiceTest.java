@@ -16,7 +16,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.RemainingInvoiceRepository;
+import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketRepository;
+import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -54,9 +56,61 @@ class FinanceDealServiceTest {
         assertThat(dto.availableActions()).isEmpty();
     }
 
+    // ── QA-19 (owner ruling 2026-10-29): a manual money-stage move is only ever FORWARD ──────────
+
+    /** S20 CLOSED_PAID, account has confirmed close, waiting on the CEO: "move to S11" is a step backwards. */
+    @Test
+    void availableActions_atClosedPaid_offerNoAdvanceOrUpdateStage_butKeepTheCloseActions() {
+        List<String> actions = actionsAt(DealStage.CLOSED_PAID,
+            new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนไปขั้น S11", DealStage.DEPOSIT_RECEIVED),
+            new TicketActionDto("UPDATE_STAGE", "stage", "อัปเดตขั้น"),
+            new TicketActionDto("REVOKE_CLOSE_CONFIRM", "money", "ถอนการยืนยันปิดงาน"));
+
+        assertThat(actions).doesNotContain("ADVANCE_STAGE", "UPDATE_STAGE");
+        assertThat(actions).contains("REVOKE_CLOSE_CONFIRM");
+    }
+
+    @Test
+    void availableActions_atOrderReceived_stillOffersAdvanceToDepositReceived_andUpdateStage() {
+        List<String> actions = actionsAt(DealStage.ORDER_RECEIVED,
+            new TicketActionDto("ADVANCE_STAGE", "stage", "เลื่อนไปขั้น S11", DealStage.DEPOSIT_RECEIVED),
+            new TicketActionDto("UPDATE_STAGE", "stage", "อัปเดตขั้น"));
+
+        assertThat(actions).containsExactly("ADVANCE_STAGE", "UPDATE_STAGE");
+    }
+
+    /** Edge: a target equal to the current stage is not "ahead"; the one still ahead survives alone. */
+    @Test
+    void availableActions_atDepositReceived_dropsTheSameStageTarget_keepsTheLaterOne() {
+        List<TicketActionDto> offered = List.of(
+            new TicketActionDto("ADVANCE_STAGE", "stage", "S11", DealStage.DEPOSIT_RECEIVED),
+            new TicketActionDto("ADVANCE_STAGE", "stage", "S20", DealStage.CLOSED_PAID),
+            new TicketActionDto("UPDATE_STAGE", "stage", "อัปเดตขั้น"));
+        when(tickets.findSummaryById(anyLong())).thenReturn(Optional.of(summary(DealStage.DEPOSIT_RECEIVED)));
+        when(tickets.isInAccountScope(anyLong())).thenReturn(true);
+        when(ticketService.financeActionsAlreadyScoped(anyLong(), any()))
+            .thenReturn(new TicketActionsResponse(null, offered, List.of()));
+
+        assertThat(service.get(10L, account).availableActions())
+            .extracting(FinanceDealDto.Action::targetStage)
+            .containsExactly(DealStage.CLOSED_PAID, null);
+    }
+
+    private List<String> actionsAt(String salesStage, TicketActionDto... offered) {
+        when(tickets.findSummaryById(anyLong())).thenReturn(Optional.of(summary(salesStage)));
+        when(tickets.isInAccountScope(anyLong())).thenReturn(true);
+        when(ticketService.financeActionsAlreadyScoped(anyLong(), any()))
+            .thenReturn(new TicketActionsResponse(null, List.of(offered), List.of()));
+        return service.get(10L, account).availableActions().stream().map(FinanceDealDto.Action::action).toList();
+    }
+
     private static TicketSummaryDto summary() {
+        return summary("NEGOTIATION");
+    }
+
+    private static TicketSummaryDto summary(String salesStage) {
         return new TicketSummaryDto(1L, "PR-T", null, "t", "draft", "NORMAL", 1L, null, null, null, "cust", null,
-            null, null, null, null, null, null, null, null, 0, false, null, null, "NEGOTIATION", null, null, null,
+            null, null, null, null, null, null, null, null, 0, false, null, null, salesStage, null, null, null,
             "ACTIVE", null, null, null, null);
     }
 }

@@ -14,7 +14,7 @@ import { cn } from '../../utils/cn.js';
 import { dealStageLabel, formatBangkokTime, formatThaiDate } from '../../utils/format.js';
 import { InvoiceFromDealForm } from '../commissions/InvoiceFromDealForm.jsx';
 import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from '../commissions/invoiceFromDeal.js';
-import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
+import { findStage, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import {
   RecordPaymentModal, RevokeCloseModal, StageModal,
 } from './FinanceActionModals.jsx';
@@ -32,7 +32,8 @@ const ACTION_LABEL = {
 };
 
 // The stages account may write (DealStage.ACCOUNT_TARGET_STAGES) — only used to label the choices in
-// the UPDATE_STAGE form; the server decides whether the move is accepted.
+// the UPDATE_STAGE form (only those AHEAD of the deal are offered — account never moves a stage back);
+// the server decides whether the move is accepted.
 const MONEY_STAGE_OPTIONS = ['DEPOSIT_RECEIVED', 'CLOSED_PAID'];
 
 function Bone({ className }) {
@@ -459,7 +460,8 @@ export function FinanceDealPage() {
       ) : null}
       {activeAction?.action === 'UPDATE_STAGE' ? (
         <StageModal
-          options={MONEY_STAGE_OPTIONS.map((code) => ({ value: code, label: `${findStage(catalog, code)?.businessCode ?? ''} ${dealStageLabel(code).label}`.trim() }))}
+          // Catalog not loaded yet: list both and let the server refuse a backward move (409).
+          options={MONEY_STAGE_OPTIONS.filter((code) => !catalog?.stages || stageIndexIn(catalog, code) > stageIndexIn(catalog, deal.salesStage)).map((code) => ({ value: code, label: `${findStage(catalog, code)?.businessCode ?? ''} ${dealStageLabel(code).label}`.trim() }))}
           busy={busy} error={flowError}
           onSubmit={(body) => run(() => api.finance.updateStage(deal.id, body))}
           onClose={() => setFlow(null)}

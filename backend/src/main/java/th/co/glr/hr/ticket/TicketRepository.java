@@ -308,7 +308,7 @@ public class TicketRepository {
 
     public String nextTicketCode() {
         long seq = jdbc.queryForObject("SELECT nextval('sales.ticket_code_seq')", Map.of(), Long.class);
-        return "PR-" + Year.now() + "-" + String.format("%04d", seq);
+        return "DL-" + Year.now() + "-" + String.format("%04d", seq);
     }
 
     public String nextQuotationCode() {
@@ -1352,6 +1352,13 @@ public class TicketRepository {
 
     private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,
                                       BigDecimal outstanding, boolean balanceReceipt) {
+        // QA-16 (owner ruling 2026-10-29): the chip follows the payment track. Before the order is confirmed
+        // (no payment_status, nothing paid, stage before ORDER_RECEIVED) there is no payment step to speak of;
+        // a legacy deal already past that with a null track keeps the derivation below.
+        if (s.paymentStatus() == null && paid.signum() <= 0
+                && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED)) {
+            return PaymentStage.NOT_STARTED;
+        }
         if (payable.signum() <= 0) {
             return PaymentStage.NOT_REQUIRED;
         }
@@ -1359,11 +1366,18 @@ public class TicketRepository {
             return PaymentStage.FULLY_PAID;
         }
         if (paid.signum() > 0) {
-            return balanceReceipt ? PaymentStage.PARTIALLY_PAID : PaymentStage.DEPOSIT_RECEIVED;
+            if (balanceReceipt) {
+                return PaymentStage.PARTIALLY_PAID;
+            }
+            return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
+                ? PaymentStage.BALANCE_PENDING : PaymentStage.DEPOSIT_RECEIVED;
         }
-        if (!DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-                && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
-                    || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()))) {
+        if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
+            // A 0% quotation: nothing to collect up front, the whole amount is the balance.
+            return "CUSTOMER_CONFIRMED".equals(s.paymentStatus()) ? PaymentStage.NO_DEPOSIT
+                : outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;
+        }
+        if ("CUSTOMER_CONFIRMED".equals(s.paymentStatus()) || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             return PaymentStage.DEPOSIT_PENDING;
         }
         return outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;

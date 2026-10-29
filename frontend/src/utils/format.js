@@ -631,6 +631,8 @@ export function depositPolicyLabel(value) {
 
 export function paymentStageLabel(value) {
   const map = {
+    NOT_STARTED: { label: 'ยังไม่ถึงขั้นชำระ', tone: 'neutral' },
+    NO_DEPOSIT: { label: 'ไม่เก็บมัดจำ', tone: 'neutral' },
     NOT_REQUIRED: { label: 'ไม่ต้องชำระ', tone: 'neutral' },
     DEPOSIT_PENDING: { label: 'รอมัดจำ', tone: 'warning' },
     DEPOSIT_RECEIVED: { label: 'รับมัดจำแล้ว', tone: 'success' },

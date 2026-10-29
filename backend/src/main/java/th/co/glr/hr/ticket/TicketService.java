@@ -2051,6 +2051,11 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับสถานะขั้นตอนการขาย '" + targetStage + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
+        // QA-19 (owner ruling 2026-10-29): account only ever moves a money stage FORWARD. Account reaches this
+        // method only through financeUpdateStage (updateStage refuses it).
+        if ("account".equals(actor.role()) && DealStage.indexOf(targetStage) < DealStage.indexOf(s.salesStage())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ฝ่ายบัญชีเลื่อนขั้นได้เฉพาะไปข้างหน้า ย้อนขั้นไม่ได้");
+        }
         requireStageMoveAllowed(s, targetStage, actor);
         // ONE decision, two messages. This used to be two independent rules — a backward check
         // with an isRoutineBackwardMove exception bolted on, and a raw `indexOf(target) -

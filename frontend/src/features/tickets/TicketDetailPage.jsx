@@ -46,7 +46,7 @@ import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel, depositNoticesQueryOptions, pickDepositNotice } from './DealDepositPanel.jsx';
 import { createDepositNoticeDraft } from '../deposits/createDepositNoticeDraft.js';
 import { DealDocumentPipeline } from './DealDocumentPipeline.jsx';
-import { DealDocumentRegister } from './DealDocumentRegister.jsx';
+import { DealDocumentRegister, canReadStoredImportRequests } from './DealDocumentRegister.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
@@ -612,11 +612,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
     enabled: readsDocs,
   });
-  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry (QA-09).
+  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry (QA-09). Read for every role
+  // the backend lets read stored IRs, since the header's การนำเข้า chip (QA-22) follows them on every tab.
   const storedIrQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
-    enabled: readsDocs,
+    enabled: !!ticketId && canReadStoredImportRequests(user, ticket?.summary),
   });
   const importRequests = storedIrQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
@@ -1225,7 +1226,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // recording/confirming a payment is account-only now (see isMoneyRecorder above), so the CEO no
   // longer clears either wait and must see the same read-only status a sales/import viewer does,
   // not silence.
-  const blocker = closeConfirmedAt && !can.verifyClose
+  // QA-27: the CEO can only verify an ACTIVE deal (canVerifyClose), so on any other lifecycle — COMPLETED
+  // after the verify, or cancelled/lost/paused — there is no CEO step left to wait for.
+  const blocker = closeConfirmedAt && !can.verifyClose && (summary?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
     ? 'รอ CEO ตรวจสอบปิดงาน'
     : ps === 'DEPOSIT_NOTICE_ISSUED' && !isMoneyRecorder ? 'รอชำระมัดจำ'
       : ps === 'AWAITING_FINAL_PAYMENT' && !isMoneyRecorder ? 'รอชำระส่วนที่เหลือ'
@@ -1871,6 +1874,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           <DealStateHeader
             summary={summary}
             pricingRequests={pricingRequests}
+            importRequests={importRequests}
             role={role}
             primaryAction={stickyPrimaryAction}
             bannerText={bannerText}

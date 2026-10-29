@@ -3843,8 +3843,12 @@ function derivePaymentFields(ticket) {
   const outstanding = moneyValue(Math.max(0, payable - paid));
   const hasBalance = receiptsForTicket(ticket.id).some((receipt) => receipt.kind === 'BALANCE');
   let paymentStage = 'NOT_REQUIRED';
-  if (payable > 0 && paid >= payable) paymentStage = 'FULLY_PAID';
-  else if (payable > 0 && paid > 0) paymentStage = hasBalance ? 'PARTIALLY_PAID' : 'DEPOSIT_RECEIVED';
+  // Mirrors TicketRepository.derivePaymentStage (QA-16): NOT_STARTED = order not confirmed yet.
+  if (!ticket.paymentStatus && paid <= 0 && dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) paymentStage = 'NOT_STARTED';
+  else if (payable > 0 && paid >= payable) paymentStage = 'FULLY_PAID';
+  else if (payable > 0 && paid > 0) {
+    paymentStage = hasBalance ? 'PARTIALLY_PAID' : ticket.paymentStatus === 'AWAITING_FINAL_PAYMENT' ? 'BALANCE_PENDING' : 'DEPOSIT_RECEIVED';
+  } else if (payable > 0 && depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED') paymentStage = 'NO_DEPOSIT';
   else if (payable > 0 && !depositBypassesNotice(ticket)
       && ['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED'].includes(ticket.paymentStatus)) paymentStage = 'DEPOSIT_PENDING';
   else if (payable > 0 && outstanding > 0) paymentStage = 'BALANCE_PENDING';
@@ -8068,7 +8072,9 @@ function buildTicketActions(user, ticket) {
 function mockFinanceAvailableActions(user, ticket) {
   const all = buildTicketActions(user, ticket).availableActions;
   const MONEY = ['DEPOSIT_PAID', 'RECORD_PAYMENT', 'FINAL_PAYMENT', 'CONFIRM_CLOSE', 'REVOKE_CLOSE_CONFIRM'];
-  const moneyStage = (a) => a.action === 'ADVANCE_STAGE' && ['DEPOSIT_RECEIVED', 'CLOSED_PAID'].includes(a.targetStage);
+  // Mirrors FinanceDealService.availableActions (QA-19): only money stages AHEAD of the deal.
+  const moneyStage = (a) => a.action === 'ADVANCE_STAGE' && ['DEPOSIT_RECEIVED', 'CLOSED_PAID'].includes(a.targetStage)
+    && dealStageIndex(a.targetStage) > dealStageIndex(ticket.salesStage);
   const anyMoneyStage = all.some(moneyStage);
   return all
     .filter((a) => MONEY.includes(a.action) || moneyStage(a) || (a.action === 'UPDATE_STAGE' && anyMoneyStage))
@@ -8712,7 +8718,7 @@ export const api = {
         }
       }
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
-      const code = `PR-2026-${String(nextId).padStart(4, '0')}`;
+      const code = `DL-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
       // Every deal begins as a DRAFT at the lead stage, regardless of whether
       // products were attached at creation time — pricing no longer starts at
@@ -13231,6 +13237,11 @@ export const api = {
 
     async updateStage(id, payload) {
       const { user, raw } = requireMockFinanceAccess(id);
+      // Mirrors TicketService.financeUpdateStage (QA-19): account only ever moves a money stage forward.
+      if (user.role === 'account' && dealStageIndex(payload.stage) >= 0
+          && dealStageIndex(payload.stage) < dealStageIndex(raw.salesStage)) {
+        fail('ฝ่ายบัญชีเลื่อนขั้นได้เฉพาะไปข้างหน้า ย้อนขั้นไม่ได้', 409);
+      }
       await mockUpdateStage(id, payload, true);
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
