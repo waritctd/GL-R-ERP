@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  fulfilmentStatusLabel,
   addDaysIso,
   attendanceSourceLabel,
   bangkokMonthStartIso,
@@ -503,5 +504,11 @@ describe('formatFileSize', () => {
   it('reads "-" when the size is not known', () => {
     expect(formatFileSize(null)).toBe('-');
     expect(formatFileSize(undefined)).toBe('-');
+  });
+});
+
+describe('fulfilmentStatusLabel — one word for the document: ใบขอซื้อ (owner ruling 2026-10-29)', () => {
+  it('IR_ISSUED reads ออกใบขอซื้อแล้ว, not ออกคำขอนำเข้าแล้ว', () => {
+    expect(fulfilmentStatusLabel('IR_ISSUED').label).toBe('ออกใบขอซื้อแล้ว');
   });
 });

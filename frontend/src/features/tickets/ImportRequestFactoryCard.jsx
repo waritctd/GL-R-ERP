@@ -45,12 +45,13 @@ function downloadBlob(blob, filename) {
  *   - `canFooterWrite` (CEO only): Checked/Approved By+date, vessel ETA.
  *   - `canAdvance` (import/CEO): advance the per-factory step, set lead time AFTER issue.
  *   - `canEmailWrite` (owning rep, CEO, or import): edit/mark-sent the order-email draft.
+ * `showOrderEmail` (import's surfaces only): the order-email row; the sales deal tab omits it (owner ruling 2026-10-29).
  * Everyone who can reach this card at all may read it and download the PDF — the buttons above
  * are an affordance; the server is the authority, so a 403/409 surfaces its own Thai message.
  */
 export function ImportRequestFactoryCard({
   row, ticketId, canFullWrite, canFooterWrite, canAdvance, canEmailWrite, showToast,
-  showInlineDownload = false,
+  showInlineDownload = false, showOrderEmail = false,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });
@@ -343,7 +344,7 @@ export function ImportRequestFactoryCard({
           with its → next-step advance, plus the order-email action on its own row right below it.
           Every document-heavy control (PDF downloads, ลบร่าง/ออกฉบับแก้ไข, the lead-time editor,
           the CEO footer) lives in the collapsed-by-default details block further down. */}
-      {isIssued ? (
+      {isIssued && showOrderEmail ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border-subtle pt-3 text-xs">
           <strong className="text-text-secondary">อีเมลสั่งซื้อ:</strong>
           {row.emailSentAt ? (
@@ -355,7 +356,7 @@ export function ImportRequestFactoryCard({
             <Button type="button" size="sm" variant="secondary" className="ml-auto whitespace-nowrap mobile:ml-0"
               onClick={() => { setEmailDraft({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' }); setEmailOpen(true); }}
               data-testid={`ir-email-open-${row.id}`}>
-              ✉ อีเมลสั่งซื้อ
+              อีเมลสั่งซื้อ
             </Button>
           ) : null}
         </div>
@@ -401,7 +402,7 @@ export function ImportRequestFactoryCard({
 
       {documentDetails}
 
-      {emailOpen ? (
+      {emailOpen && showOrderEmail ? (
         <Modal
           title="อีเมลสั่งซื้อ (ร่าง)"
           subtitle={row.factoryName}

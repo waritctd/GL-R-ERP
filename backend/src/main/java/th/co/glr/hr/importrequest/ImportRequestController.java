@@ -98,9 +98,10 @@ public class ImportRequestController {
     }
 
     @GetMapping("/tickets/{ticketId}/import-requests")
-    Map<String, List<ImportRequestDto>> listForTicket(@PathVariable long ticketId, HttpSession session) {
+    Map<String, Object> listForTicket(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("importRequests", service.list(ticketId, user));
+        return Map.of("importRequests", service.list(ticketId, user),
+            "hasUncoveredFactories", service.hasUncoveredFactories(ticketId, user));
     }
 
     @GetMapping("/import-requests/{id}")

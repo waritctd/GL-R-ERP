@@ -8,6 +8,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import org.springframework.mock.web.MockHttpSession;
+import th.co.glr.hr.auth.SessionContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -176,6 +180,56 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         var summary = new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary();
         assertThat(summary.fulfillmentStatus()).isEqualTo("IR_ISSUED");
         assertThat(summary.salesStage()).isEqualTo(DealStage.PROCUREMENT);
+    }
+
+    // ── owner ruling 2026-10-29 (5c): GET /tickets/{id}/import-requests also says whether a factory is uncovered ──
+
+    /** The flag as the frontend reads it: a top-level key of the list response, read-only, no factory is created. */
+    private Object hasUncoveredFactoriesOverHttpShape(long forTicket) {
+        SessionContext sessions = mock(SessionContext.class);
+        MockHttpSession session = new MockHttpSession();
+        when(sessions.requireUser(session)).thenReturn(owner);
+        Map<String, ?> body = new ImportRequestController(service, sessions).listForTicket(forTicket, session);
+        assertThat(body).containsKey("importRequests");
+        return body.get("hasUncoveredFactories");
+    }
+
+    @Test
+    void listResponse_hasUncoveredFactories_trueBeforeAnyIr_falseOnceCreateCoversEveryFactory_trueAgainForANewFactoryLine() {
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+
+        service.createDrafts(ticketId, null, owner);
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
+
+        insertFactory("Late Added Flag Factory");
+        insertItem(ticketId, "Late Added Flag Factory", "Late line", "60x60 cm", "5", "pcs", 3);
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void listResponse_hasUncoveredFactories_countsAnUnresolvedFactoryNameAsUncovered_andCreatesNoFactory() {
+        service.createDrafts(ticketId, null, owner);
+        insertItem(ticketId, "Never Seen Flag Factory Co", "Mystery line", "60x60 cm", "5", "pcs", 3);
+        Long factoriesBefore = jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
+
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class))
+            .isEqualTo(factoriesBefore);
+    }
+
+    @Test
+    void listResponse_hasUncoveredFactories_aFactoryCoveredOnlyBySupersededRowsIsUncovered_aLiveRowCovers() {
+        service.createDrafts(ticketId, null, owner);
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
+
+        jdbc.update("UPDATE sales.import_request SET status = 'SUPERSEDED' WHERE ticket_id = :t AND factory_id = :f",
+            Map.of("t", ticketId, "f", leaFactoryId));
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+
+        jdbc.update("UPDATE sales.import_request SET status = 'ISSUED' WHERE ticket_id = :t AND factory_id = :f",
+            Map.of("t", ticketId, "f", leaFactoryId));
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
     }
 
     @Test

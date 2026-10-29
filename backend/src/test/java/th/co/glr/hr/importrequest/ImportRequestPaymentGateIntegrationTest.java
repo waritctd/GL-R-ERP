@@ -156,7 +156,8 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getMessage()).contains("รับชำระมัดจำ").doesNotContain("ประเทศ");
+                assertThat(e.getMessage()).contains("ออกใบขอซื้อ (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว")
+                    .doesNotContain("ใบขอนำเข้า").doesNotContain("ประเทศ");
             });
 
         assertThat(service.list(ticketId, owner)).isEmpty();

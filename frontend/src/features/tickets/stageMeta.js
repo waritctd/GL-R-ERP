@@ -28,6 +28,22 @@ export const GATE_LABEL = {
 };
 
 /**
+ * Display-only owner override (owner ruling 2026-10-29): the sales rep issues the IR, so the pipeline
+ * card names ฝ่ายขาย at ขั้น 12. The catalog's write gate (DealStage.gateOf) is a permission and is NOT changed.
+ */
+export const STAGE_OWNER_DISPLAY = { PROCUREMENT: 'sales' };
+
+/**
+ * Label of the manual move to the next stage. ขั้น 12 advances by itself when the IR is issued, so moving
+ * on by hand there is a deliberate skip (secondary button), not the normal เลื่อนไป (W3-09).
+ */
+export function manualMoveLabel(salesStage, next, stageLabel) {
+  return salesStage === 'PROCUREMENT'
+    ? `ข้ามไปขั้น ${next.no} ด้วยตนเอง`
+    : `เลื่อนไป: ${next.no}. ${stageLabel}`;
+}
+
+/**
  * Thai wording for the auto-advanced stages — "where does this stage come from, if I cannot just
  * click into it?". Keyed by code; the *set* of auto stages is the catalog's `auto` flag, served by
  * the backend, so this map only supplies words for the ones that have it.

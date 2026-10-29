@@ -13,7 +13,7 @@ import {
   EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, routePosition,
 } from './stageCatalog.js';
 import {
-  AUTO_STAGE_HINT, GATE_LABEL, routeName, STAGE_HEADLINE,
+  AUTO_STAGE_HINT, GATE_LABEL, manualMoveLabel, routeName, STAGE_HEADLINE, STAGE_OWNER_DISPLAY,
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 import { stageForQuotationRecipient } from '../quotations/quotationMeta.js';
@@ -318,9 +318,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="text-base font-extrabold leading-snug text-text">{STAGE_HEADLINE[summary.salesStage] ?? label.label}</div>
-                {meta && GATE_LABEL[meta.gate] ? (
+                {meta && GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate] ? (
                   <div data-testid="deal-stage-owner" className="mt-0.5 text-xs font-bold text-text-muted">
-                    {`ผู้รับผิดชอบ: ${GATE_LABEL[meta.gate]}`}
+                    {`ผู้รับผิดชอบ: ${GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate]}`}
                   </div>
                 ) : null}
                 {/* One text line naming the route and the honest position on it. Nothing at all when
@@ -383,12 +383,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 {showGuidedOpener ? (
                   <Button
                     type="button"
-                    variant="primary"
+                    variant={summary.salesStage === 'PROCUREMENT' ? 'secondary' : 'primary'}
                     disabled={actionLoading}
                     onClick={() => setGuidedOpen(true)}
                     data-testid="guided-advance-open"
                   >
-                    เลื่อนไป: {next.no}. {dealStageLabel(next.code, summary.entryChannel).label}
+                    {manualMoveLabel(summary.salesStage, next, dealStageLabel(next.code, summary.entryChannel).label)}
                   </Button>
                 ) : null}
               </div>

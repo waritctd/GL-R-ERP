@@ -9080,7 +9080,7 @@ export const api = {
       if (mockHasLiveImportRequests(ticket.id)) {
         fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
       }
-      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าส่งคำขอนำเข้าแล้วได้', 409);
+      if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอซื้อ (IR) ก่อนจึงจะทำเครื่องหมายว่าส่งคำขอนำเข้าแล้วได้', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'IR_SENT', ticket.status, ticket.status, null);
@@ -12370,7 +12370,7 @@ export const api = {
       // Payment gate FIRST (same predicate as issue() below), before any prompt-producing check.
       if (!(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
         || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED'))) {
-        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+        fail('ออกใบขอซื้อ (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
       }
       // Supplied per-factory lead times (10-29): 400 on a bad value, before anything is written.
       const suppliedLeadTimes = new Map();
@@ -12435,7 +12435,16 @@ export const api = {
     async listForTicket(ticketId) {
       const ticket = findTicketRaw(Number(ticketId));
       requireStoredIrRead(ticket, requireSession());
-      return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
+      // Mirrors ImportRequestService#hasUncoveredFactories: read-only; an unresolved/unknown factory
+      // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
+      let hasUncoveredFactories = true;
+      try {
+        const live = new Set(mockImportRequests
+          .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
+          .map((r) => r.factoryId));
+        hasUncoveredFactories = mockResolveFactoryGroups(ticket, null).some((g) => !live.has(g.factoryId));
+      } catch { /* unresolved factory -> uncovered */ }
+      return delay({ importRequests: mockImportRequestsForTicket(ticket.id), hasUncoveredFactories });
     },
     async get(id) {
       const row = findStoredImportRequestRaw(id);
@@ -12521,7 +12530,7 @@ export const api = {
         || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED');
       // Gated on the deposit ALONE (mirrors TicketService#requireImportRequestIssuable, 2026-10-01).
       if (!depositReadyOrLater) {
-        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+        fail('ออกใบขอซื้อ (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
       }
       const override = request?.docNumber?.trim() || null;
       if (override && mockImportRequests.some((r) => r.docNumber === override)) {

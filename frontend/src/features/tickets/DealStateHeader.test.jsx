@@ -110,3 +110,12 @@ const stages = DEAL_STAGE_CATALOG.stages.map((s) => s.code).filter((c) => !CHANN
     }
   });
 });
+
+describe('DealStateHeader — การนำเข้า chip wording (owner ruling 2026-10-29)', () => {
+  const chipValue = () => screen.getByText('การนำเข้า').nextElementSibling.textContent;
+
+  it('no fulfilment yet reads ยังไม่ออกใบขอซื้อ, not ยังไม่เริ่ม', () => {
+    renderHeader({ fulfillmentStatus: null });
+    expect(chipValue()).toBe('ยังไม่ออกใบขอซื้อ');
+  });
+});
