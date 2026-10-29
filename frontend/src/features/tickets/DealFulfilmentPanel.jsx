@@ -618,7 +618,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // QA-09: the deal page's sticky ขั้น 11 button drives this panel's own create (modal + PDF download stay here).
   const showIrSection = () => document.getElementById('deal-fulfilment-stored-ir')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   useImperativeHandle(ref, () => ({
-    createIrDrafts: () => { showIrSection(); createDraftsMutation.mutate(undefined); },
+    createIrDrafts: () => { showIrSection(); return requestCreateIrDrafts(); },
     showIrSection,
   }));
 

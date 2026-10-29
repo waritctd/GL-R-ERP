@@ -80,14 +80,14 @@ const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus
 
 // `rows` may be an Error, to render the panel with a failed ใบขอซื้อ fetch.
 function renderPanel(user, rows = [draftRow()], {
-  summary: dealSummary = summary, availableActions = [], showToast = vi.fn(), items = [],
+  summary: dealSummary = summary, availableActions = [], showToast = vi.fn(), items = [], ref = undefined,
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} showToast={showToast} />
+      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} showToast={showToast} />
     </QueryClientProvider>,
   );
 }
@@ -309,6 +309,16 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(1, {
         itemFactories: [{ ticketItemId: 3, factoryId: 7 }],
       }));
+    });
+
+    it('the deal page\'s ขั้น 11 handle (PR #1189) goes through the picker: no create while a line lacks a factory', async () => {
+      const showToast = vi.fn();
+      const ref = React.createRef();
+      renderPanel(OWNER, [], { summary: directSummary, items: lines, showToast, ref });
+      await screen.findByTestId('ir-line-factory-3');
+      ref.current.createIrDrafts();
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('เลือกโรงงาน')));
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
     });
 
     it('sends no payload at all when every line already has a factory (shape unchanged)', async () => {
