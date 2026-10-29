@@ -165,6 +165,33 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
+     * Owner ruling 2026-10-30: the factory-facing email shows item size in centimetres. A size with
+     * no unit token ("20x30.5", what a catalogue-linked line now stores) gets " cm"; a size that
+     * already carries a unit is printed exactly as typed -- no doubling ("60x60 cm cm"), no
+     * conversion ("600x600 mm" stays millimetres), Thai unit too ("60x60 ซม.").
+     */
+    @Test
+    void issue_bodyAppendsCmToAUnitlessSize_butPrintsAUnitCarryingSizeAsTyped() {
+        insertFactory("Size Unit Factory", "IT", "sales@sizeunit.example");
+        long ticketId = insertTicket("EM-SIZE-UNIT");
+        insertItem(ticketId, "Size Unit Factory", "Unitless Model", "20x30.5", "10", "pcs", 0);
+        insertItem(ticketId, "Size Unit Factory", "Cm Model", "60x60 cm", "10", "pcs", 1);
+        insertItem(ticketId, "Size Unit Factory", "Mm Model", "600x600 mm", "10", "pcs", 2);
+        insertItem(ticketId, "Size Unit Factory", "Thai Model", "60x60 ซม.", "10", "pcs", 3);
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
+
+        String body = service.issue(id, null, owner).emailBody();
+
+        assertThat(body).contains("Size: 20x30.5 cm")
+            .contains("Size: 60x60 cm")
+            .doesNotContain("cm cm")
+            .contains("Size: 600x600 mm")
+            .doesNotContain("600x600 mm cm")
+            .contains("Size: 60x60 ซม.")
+            .doesNotContain("ซม. cm");
+    }
+
+    /**
      * REVIEW ROUND 2, S-A: a business-typed note that does NOT match the auto-derived colour/surface
      * sentence is never skipped — only the exact duplicate is.
      */
