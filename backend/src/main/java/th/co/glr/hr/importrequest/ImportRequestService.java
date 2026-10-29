@@ -210,13 +210,17 @@ public class ImportRequestService {
     }
 
     /**
-     * Raises one DRAFT per FACTORY on the deal that does not already have a live one, resolving each
+     * Raises AND ISSUES one ใบขอซื้อ per FACTORY on the deal that does not already have a live one (owner
+     * ruling 10-29: no DRAFT is left behind; each row comes back ISSUED with a doc number and step
+     * CONTACTED, and the first one moves the deal to PROCUREMENT). All-or-nothing: a missing lead time,
+     * an empty item list or the payment gate refuses the whole call with a 409 before anything is
+     * written. Resolving each
      * line's factory per {@link ImportRequestQueryRepository#factoryResolutionCandidates}'s cascade —
      * see that method's Javadoc for the order and {@link #resolveFactoryGroups} for the match-or-create
      * step (owner decision 2, revised 09-18: auto-create now requires {@code request}'s {@code
      * newFactoryCountries}).
      *
-     * <p>Idempotent in the way that matters: a factory with a DRAFT or an ISSUED form is skipped
+     * <p>Idempotent in the way that matters: a factory with a (leftover) DRAFT or an ISSUED form is skipped
      * rather than duplicated, so calling this twice does not produce two forms for the same factory —
      * and the two partial unique indexes in V184 refuse it in the database even if this check were
      * wrong. Refuses outright if every factory is already covered, rather than returning "created
@@ -233,6 +237,9 @@ public class ImportRequestService {
                 "สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น");
         }
 
+        // 400 before anything is written (the picker and auto-create below both write).
+        Map<String, ImportRequestRequests.NewFactoryLeadTimeInput> suppliedLeadTimes =
+            validatedLeadTimes(request);
         applyItemFactoryChoices(ticketId, request);
         List<FactoryGroup> groups = resolveFactoryGroups(ticketId, actor.id(), request);
         if (groups.isEmpty()) {
@@ -248,32 +255,57 @@ public class ImportRequestService {
         // CR-1 (D, B-R4/B-R5): each factory's IR takes the lead time on the deal's current QUOTATION items.
         List<ImportRequestQueryRepository.QuotationLeadTimeRow> quotationLeadTimes =
             repository.currentQuotationLeadTimes(ticketId);
-        int created = 0;
+
+        // ALL-OR-NOTHING (owner ruling 10-29): create also ISSUES, so every issue check runs for every
+        // NEW factory BEFORE the first write. (Not left to the @Transactional rollback alone: it is
+        // inert in the hand-wired integration suite, and the checks are cheap.)
+        record NewRow(FactoryGroup group, LeadTimeDefaults.Range derived, LeadTimeDefaults.Range leadTime) { }
+        List<NewRow> newRows = new ArrayList<>();
+        List<String> missingLeadTime = new ArrayList<>();
         for (FactoryGroup group : groups) {
             if (alreadyCovered.contains(group.factoryId())) {
                 continue;
             }
             LeadTimeDefaults.Range derived = leadTimeFromQuotation(quotationLeadTimes, group.factoryId(), group.items());
-            LeadTimeDefaults.Range leadTime = derived;
+            LeadTimeDefaults.Range leadTime = derived != null ? derived : LeadTimeDefaults.forCountry(group.countryCode());
+            if (group.items().isEmpty()) {
+                throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อยังไม่มีรายการสินค้า");
+            }
             if (leadTime == null) {
-                leadTime = LeadTimeDefaults.forCountry(group.countryCode());
+                // Owner ruling 10-29: a caller-supplied lead time (keyed by factory name) fills it in.
+                var supplied = suppliedLeadTimes.get(normalizeFactoryName(group.factoryName()));
+                if (supplied == null) {
+                    missingLeadTime.add(group.factoryName());
+                    continue;
+                }
+                leadTime = new LeadTimeDefaults.Range(supplied.minDays(), supplied.maxDays());
             }
-            long id = stored.insertDraft(ticketId, group.factoryId(), group.factoryName(),
-                group.brandLabel(), stored.highestVersion(ticketId, group.factoryId()) + 1,
-                snapshot, leadTime == null ? null : leadTime.minDays(),
-                leadTime == null ? null : leadTime.maxDays(), null, // S-E: nothing to carry, fresh draft
-                null, // REVIEW ROUND 3, item 2: nothing to carry either -- a fresh draft's own
-                      // requiredByNote comes from the deal snapshot only, same as before.
-                actor.id(), actor.name());
-            stored.replaceItems(id, group.items());
-            if (derived != null) {
-                stored.setDerivedLeadTime(id, derived.minDays(), derived.maxDays());
-            }
-            created++;
+            newRows.add(new NewRow(group, derived, leadTime));
         }
-        if (created == 0) {
+        if (!missingLeadTime.isEmpty()) {
+            // Parseable by the panel (like the missing-country prefix); lists ONLY the factories still lacking one.
+            throw new ApiException(HttpStatus.CONFLICT,
+                MISSING_LEAD_TIME_PREFIX + String.join(", ", missingLeadTime));
+        }
+        if (newRows.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว");
+        }
+        // The payment gate applies at create now (widened gate, same as issue()).
+        ticketService.requireImportRequestIssuable(requireTicketSummary(ticketId), true);
+
+        for (NewRow n : newRows) {
+            FactoryGroup group = n.group();
+            long id = stored.insertDraft(ticketId, group.factoryId(), group.factoryName(),
+                group.brandLabel(), stored.highestVersion(ticketId, group.factoryId()) + 1,
+                snapshot, n.leadTime().minDays(), n.leadTime().maxDays(), null, // S-E: nothing to carry, fresh row
+                null, // REVIEW ROUND 3, item 2: nothing to carry either -- requiredByNote comes from the deal snapshot only.
+                actor.id(), actor.name());
+            stored.replaceItems(id, group.items());
+            if (n.derived() != null) {
+                stored.setDerivedLeadTime(id, n.derived().minDays(), n.derived().maxDays());
+            }
+            issueStoredDraft(requireStored(id), null, snapshot, actor);
         }
         return withPageCounts(stored.findByTicket(ticketId));
     }
@@ -546,6 +578,17 @@ public class ImportRequestService {
 
         String override = request == null || request.docNumber() == null
             || request.docNumber().isBlank() ? null : request.docNumber().strip();
+        return issueStoredDraft(draft, override, dealSnapshot, actor);
+    }
+
+    /**
+     * The write half of {@link #issue}: everything AFTER the issuability checks (status, items, lead
+     * time, payment gate). Shared with {@link #createDrafts}, which pre-checks every new factory and
+     * then issues each freshly inserted row through here, so the two paths cannot drift.
+     */
+    private ImportRequestDto issueStoredDraft(ImportRequestDto draft, String override,
+                                              TicketSnapshot dealSnapshot, UserPrincipal actor) {
+        long id = draft.id();
         // An override does NOT advance the sequence. A number typed ahead of the counter therefore
         // cannot be minted a second time later — ux_import_request_doc_number refuses the duplicate —
         // and this pre-check turns that race into a clear message instead of a constraint violation.
@@ -1104,6 +1147,29 @@ public class ImportRequestService {
     /** One factory's group of resolved lines, ready to become one DRAFT row. */
     private record FactoryGroup(long factoryId, String factoryName, String countryCode, String brandLabel,
                                 List<ImportRequestItemInput> items) {}
+
+    /** 409 prefix the panel parses to open its lead-time popup (mirrors the missing-country prefix). */
+    public static final String MISSING_LEAD_TIME_PREFIX = "กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ";
+
+    /** Supplied per-factory lead times keyed by normalized name; same bounds as setLeadTime, else 400. */
+    private static Map<String, ImportRequestRequests.NewFactoryLeadTimeInput> validatedLeadTimes(
+            CreateImportRequestsRequest request) {
+        Map<String, ImportRequestRequests.NewFactoryLeadTimeInput> out = new LinkedHashMap<>();
+        if (request == null || request.leadTimes() == null) {
+            return out;
+        }
+        for (var in : request.leadTimes()) {
+            if (in == null || in.factoryName() == null || in.factoryName().isBlank()
+                || in.minDays() == null || in.maxDays() == null
+                || in.minDays() < 1 || in.maxDays() > 365 || in.minDays() > in.maxDays()) {
+                throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "ระยะเวลานำเข้าต้องเป็น 1–365 วัน และขั้นต่ำต้องไม่เกินขั้นสูง"
+                        + (in == null || in.factoryName() == null ? "" : " (โรงงาน " + in.factoryName() + ")"));
+            }
+            out.put(normalizeFactoryName(in.factoryName()), in);
+        }
+        return out;
+    }
 
     /** A caller-supplied country for a factory about to be auto-created, already validated. */
     private record ValidatedCountry(String code, String other) {}

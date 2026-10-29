@@ -90,7 +90,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Email Factory", "IT", "sales@emailfactory.example");
         long ticketId = insertTicket("EM-ISSUE");
         insertItem(ticketId, "Email Factory", "Lithos Nero", "60x60 cm", "100", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         ImportRequestDto issued = service.issue(id, null, owner);
 
@@ -141,9 +141,9 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             "60x60 cm", "308.000", "pcs", 0, "Grigio", "Matte");
         insertItemWithBrandModelColor(ticketId, "Terrazzo Co", "Block Layout Factory", "Terrazzo White",
             "30x60 cm", "10", "pcs", 1, null, null);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
-
-        ImportRequestDto issued = service.issue(id, null, owner);
+        // Real create (it now issues): these two pin the line prefill (colour/surface, catalog code)
+        // that only the service's own resolution produces, which a seeded row would not carry.
+        ImportRequestDto issued = service.createDrafts(ticketId, null, owner).get(0);
         String body = issued.emailBody();
 
         assertThat(body).contains("1. Living Ceramics Lithos Nero")
@@ -177,7 +177,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         // Business hand-edits the auto-derived note to something else before drafts are raised is not
         // reachable pre-createDrafts in this flow (the note is only ever set AT creation), so this
         // exercises the draft-stage item edit via update() instead.
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         ImportRequestDto draft = service.get(id, owner);
         java.util.List<ImportRequestRequests.ImportRequestItemInput> edited = draft.items().stream()
             .map(it -> new ImportRequestRequests.ImportRequestItemInput(it.ticketItemId(), it.code(),
@@ -209,9 +209,9 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
                 .addValue("model", "Lithos Nero Hand-Typed").addValue("size", "60x60 cm")
                 .addValue("qty", new BigDecimal("10")).addValue("unit", "pcs")
                 .addValue("catalogPriceId", catalogPriceId));
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
-
-        ImportRequestDto issued = service.issue(id, null, owner);
+        // Real create (it now issues): these two pin the line prefill (colour/surface, catalog code)
+        // that only the service's own resolution produces, which a seeded row would not carry.
+        ImportRequestDto issued = service.createDrafts(ticketId, null, owner).get(0);
         assertThat(issued.emailBody())
             .contains("1. Living Ceramics Lithos Nero Hand-Typed  (Code: CAT-CODE-777)");
     }
@@ -227,7 +227,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Filename Tie Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-FILENAME-TIE");
         insertItem(ticketId, "Filename Tie Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         ImportRequestDto issued = service.issue(id, null, owner);
         String expectedFilename = ImportRequestService.downloadFileName(issued.docNumber(), issued.id(),
@@ -249,7 +249,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "Required By Consistency Factory", "Line", "60x60", "10", "pcs", 0);
         // The draft is raised BEFORE the deal-level value is set, so the draft's OWN requiredByNote
         // starts (and stays) blank until #issue's re-snapshot fallback fires.
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         assertThat(service.get(id, owner).requiredByNote()).isNull();
         service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 30 days"), owner);
 
@@ -270,7 +270,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Privacy Factory", "IT", "sales@privacyfactory.example");
         long ticketId = insertTicket("EM-PRIVACY");
         insertItem(ticketId, "Privacy Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         ImportRequestDto issued = service.issue(id, null, owner);
 
@@ -289,7 +289,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("No Email Factory", "IT", null);
         long ticketId = insertTicket("EM-NOEMAIL");
         insertItem(ticketId, "No Email Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         ImportRequestDto issued = service.issue(id, null, owner);
 
@@ -303,7 +303,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Revision Email Factory", "IT", "old@example.com");
         long ticketId = insertTicket("EM-REVISE");
         insertItem(ticketId, "Revision Email Factory", "Line A", "60x60", "10", "pcs", 0);
-        long v1 = service.createDrafts(ticketId, null, owner).get(0).id();
+        long v1 = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         ImportRequestDto issuedV1 = service.issue(v1, null, owner);
         assertThat(issuedV1.emailBody()).contains("Line A");
 
@@ -328,7 +328,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Hand Edit Preserve Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-HANDEDIT-PRESERVE");
         insertItem(ticketId, "Hand Edit Preserve Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(id, null, owner);
 
         ImportRequestDto handEdited = service.updateEmailDraft(id, new UpdateEmailDraftRequest(
@@ -352,7 +352,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Original Signer Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-ORIG-SIGNER");
         insertItem(ticketId, "Original Signer Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
 
         ImportRequestDto issued = service.issue(id, null, owner);
         assertThat(issued.emailBody()).contains(owner.email());
@@ -374,7 +374,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Edit Email Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-EDIT");
         insertItem(ticketId, "Edit Email Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(id, null, owner);
 
         ImportRequestDto afterOwner = service.updateEmailDraft(id,
@@ -406,7 +406,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Sent Email Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-SENT-EDIT");
         insertItem(ticketId, "Sent Email Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(id, null, owner);
         service.markEmailSent(id, importUser);
 
@@ -431,7 +431,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Repo Guard Draft Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-REPO-DRAFT");
         insertItem(ticketId, "Repo Guard Draft Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id(); // never issued
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id(); // never issued
 
         ImportRequestRepository repo = new ImportRequestRepository(jdbc);
         assertThat(repo.updateEmailDraft(id, "sneaky@example.com", null, null)).isZero();
@@ -445,7 +445,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Repo Guard Sent Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-REPO-SENT");
         insertItem(ticketId, "Repo Guard Sent Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(id, null, owner);
         service.markEmailSent(id, importUser);
 
@@ -461,7 +461,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Repo Guard MarkSent Draft Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-REPO-MARK-DRAFT");
         insertItem(ticketId, "Repo Guard MarkSent Draft Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id(); // never issued
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id(); // never issued
 
         ImportRequestRepository repo = new ImportRequestRepository(jdbc);
         assertThat(repo.markEmailSent(id, importUser.id(), importUser.name())).isZero();
@@ -479,7 +479,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertItem(ticketId, "Mark Sent Factory", "Line", "60x60", "10", "pcs", 0);
 
         // Non-owning rep and sales_manager: refused.
-        long draftForOther = service.createDrafts(ticketId, null, owner).get(0).id();
+        long draftForOther = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(draftForOther, null, owner);
         assertThatThrownBy(() -> service.markEmailSent(draftForOther, otherSalesRep))
             .isInstanceOfSatisfying(ApiException.class,
@@ -505,7 +505,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Mark Sent Factory 2", "IT", "a@example.com");
         long ticketId = insertTicket("EM-MARK2");
         insertItem(ticketId, "Mark Sent Factory 2", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(id, null, owner);
 
         ImportRequestDto afterOwner = service.markEmailSent(id, owner);
@@ -517,7 +517,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         insertFactory("Event Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-EVENT");
         insertItem(ticketId, "Event Factory", "Line", "60x60", "10", "pcs", 0);
-        long id = service.createDrafts(ticketId, null, owner).get(0).id();
+        long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         service.issue(id, null, owner);
 
         service.markEmailSent(id, importUser);

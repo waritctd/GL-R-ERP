@@ -147,13 +147,6 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     void createDrafts_isOnePerFactory_andSkipsFactoriesAlreadyCovered() {
         List<ImportRequestDto> first = service.createDrafts(ticketId, null, owner);
         assertThat(first).hasSize(2);
-        assertThat(first).allSatisfy(r -> {
-            assertThat(r.status()).isEqualTo(ImportRequestStatus.DRAFT);
-            assertThat(r.docNumber()).isNull();
-            assertThat(r.issueDate()).isNull();
-            // DRAFT carries no progress step yet (chk_import_request_step_pairing).
-            assertThat(r.importStep()).isNull();
-        });
         assertThat(first).extracting(ImportRequestDto::factoryId)
             .containsExactlyInAnyOrder(padanaFactoryId, leaFactoryId);
         assertThat(byFactory(first, padanaFactoryId).items()).extracting(i -> i.code())
@@ -166,9 +159,46 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(service.list(ticketId, owner)).hasSize(2);
     }
 
+    // ── 10-29 ruling: createDrafts creates AND ISSUES, all-or-nothing ────────────────────────────
+
+    @Test
+    void createDrafts_issuesEveryFactoryInOneStep_andMovesTheDealToProcurement() {
+        List<ImportRequestDto> created = service.createDrafts(ticketId, null, owner);
+
+        assertThat(created).hasSize(2);
+        assertThat(created).allSatisfy(r -> {
+            assertThat(r.status()).isEqualTo(ImportRequestStatus.ISSUED);
+            assertThat(r.docNumber()).matches("IR\\d{2}\\d{3}");
+            assertThat(r.importStep()).isEqualTo(ImportRequestStep.CONTACTED);
+        });
+        assertThat(created).extracting(ImportRequestDto::docNumber).doesNotHaveDuplicates();
+        // The tab and ImportFulfilmentPage read this: the ticket must now carry a fulfilment status.
+        var summary = new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary();
+        assertThat(summary.fulfillmentStatus()).isEqualTo("IR_ISSUED");
+        assertThat(summary.salesStage()).isEqualTo(DealStage.PROCUREMENT);
+    }
+
+    @Test
+    void createDrafts_isAllOrNothing_whenOneNewFactoryHasNoLeadTime() {
+        // country PL has no LeadTimeDefaults entry -> null lead time -> cannot be issued.
+        jdbc.update("INSERT INTO price_catalog.factories (name, country, default_currency) "
+            + "VALUES ('No Lead Time Factory', 'PL', 'EUR')", Map.of());
+        insertItem(ticketId, "No Lead Time Factory", "Line", "60x60 cm", "5", "pcs", 3);
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("No Lead Time Factory");
+            });
+
+        assertThat(service.list(ticketId, owner)).isEmpty();
+        assertThat(new TicketRepository(jdbc).findById(ticketId).orElseThrow().summary()
+            .fulfillmentStatus()).isNull();
+    }
+
     @Test
     void issue_mintsTheNumberAndFreezesTheDate_andSetsTheFirstStepToContacted() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
 
         ImportRequestDto issued = service.issue(id, null, owner);
 
@@ -187,7 +217,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void issue_withAnOverride_doesNotBurnASequenceValue() {
-        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
         int seqBefore = sequenceValue();
 
         service.issue(byFactory(drafts, padanaFactoryId).id(),
@@ -201,7 +231,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void issue_withAnAlreadyUsedOverride_isRefused() {
-        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
         service.issue(byFactory(drafts, padanaFactoryId).id(),
             new IssueImportRequestRequest("IR69068"), owner);
 
@@ -218,7 +248,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void revise_leavesThePreviousVersionIssuedUntilTheReplacementIsIssued_andCarriesTheStepForward() {
-        long v1 = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(v1, null, owner);
         service.advanceStep(v1, new AdvanceImportStepRequest(ImportRequestStep.ORDERED, null, null), importUser);
 
@@ -242,7 +272,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     /** A revision cannot even be prepared once the predecessor has reached RECEIVED. */
     @Test
     void revise_isRefusedOnceThePredecessorHasReceivedTheGoods() {
-        long v1 = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(v1, null, owner);
         for (String step : List.of(ImportRequestStep.ORDERED, ImportRequestStep.PICKED_UP,
                 ImportRequestStep.IN_TRANSIT, ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
@@ -256,7 +286,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void issuedForm_bodyIsFrozenEvenToTheOwningRep() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, null, owner);
 
         // Body: refused to import outright — FORBIDDEN, not CONFLICT, because import is not even in
@@ -285,7 +315,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void issuedFormFooter_isWritableByCeoOnly_ownerRepImportAndSalesManagerAllRefused() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         ImportRequestDto issued = service.issue(id, null, owner);
         // vesselEtaNote is auto-prefilled by the SYSTEM at issue (owner decision 09-18 #3 §A) — a
         // service-internal write, unaffected by 09-19's actor-role gate. Captured here so the
@@ -320,7 +350,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void deleteDraft_removesADraftButNeverAnIssuedForm() {
-        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
         long lea = byFactory(drafts, leaFactoryId).id();
         long padana = byFactory(drafts, padanaFactoryId).id();
         service.issue(padana, null, owner);
@@ -336,7 +366,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aStoredFormRendersFromItsOwnSnapshot_notFromTheDeal() throws Exception {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, new IssueImportRequestRequest("IR69068"), owner);
 
         jdbc.update("UPDATE sales.ticket SET customer_name = 'ลูกค้าใหม่' WHERE ticket_id = :id",
@@ -354,7 +384,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void aStoredFormsPrintedHeader_namesItsOwnFactory() throws Exception {
-        long padanaId = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long padanaId = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(padanaId, new IssueImportRequestRequest("IR-S-B-1"), owner);
 
         String text = textOf(service.renderStored(padanaId, importUser));
@@ -370,7 +400,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void factoryCopy_omitsCustomerNameAndDepositDate_internalCopyKeepsBoth() throws Exception {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, new IssueImportRequestRequest("IR-OWNER-0919-2"), owner);
 
         String internal = textOf(service.renderStored(id, importUser, false));
@@ -394,7 +424,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void uniquePartialIndex_refusesASecondIssuedRowForTheSameTicketAndFactory_evenBypassingTheService() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, new IssueImportRequestRequest("IR-UNIQ-1"), owner);
 
         assertThatThrownBy(() -> jdbc.update("""
@@ -412,7 +442,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void advanceStep_forwardSkipsAllowed_butNeverBackwards() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, null, owner);
 
         // Skip ORDERED and PICKED_UP entirely — forward skips are allowed by owner decision.
@@ -434,7 +464,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void advanceStep_isRefusedToSalesAndSalesManager_butAllowedToCeo() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, null, owner);
 
         assertThatThrownBy(() -> service.advanceStep(id,
@@ -461,7 +491,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(stored.findByTicket(ticketId)).isEmpty();
 
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         assertThatThrownBy(() -> service.issue(id, null, otherSalesRep))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -480,7 +510,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(stored.findByTicket(ticketId)).isEmpty();
 
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         assertThatThrownBy(() -> service.issue(id, null, importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -509,7 +539,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, null, owner);
 
         assertThatThrownBy(() -> service.update(id, new UpdateImportRequestRequest(
@@ -528,7 +558,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void ceoCanRaiseAndIssue() {
-        long id = byFactory(service.createDrafts(ticketId, null, ceoUser), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, ceoUser), padanaFactoryId).id();
         assertThat(service.issue(id, null, ceoUser).status()).isEqualTo(ImportRequestStatus.ISSUED);
     }
 
@@ -546,7 +576,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     void requiredByNote_isSetByTheOwningRep_andSnapshottedOntoTheFormAtCreation() {
         service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 21/5/26"), owner);
 
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         assertThat(service.get(id, owner).requiredByNote()).isEqualTo("Within 21/5/26");
     }
 
@@ -557,7 +587,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void requiredByNote_isEditableOnTheDraftByOwningRepOrCeo_notByANonOwningRepOrImport() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
 
         ImportRequestDto afterOwner = service.update(id, new UpdateImportRequestRequest(
             null, null, null, null, null, null, null, null, null, null, null, "Within 10 days"), owner);
@@ -589,7 +619,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         // ONE createDrafts call raises BOTH factories' drafts at once (setUp's ticket already has
         // items for both) — capture both ids from it rather than calling createDrafts a second
         // time, which would find every factory already covered and 409.
-        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
         long blankId = byFactory(drafts, padanaFactoryId).id();
         long typedId = byFactory(drafts, leaFactoryId).id();
         assertThat(service.get(blankId, owner).requiredByNote()).isNull();
@@ -618,7 +648,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void requiredByNote_typedOnTheFormBeforeItsFirstIssue_survivesARevision() {
-        long v1 = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.update(v1, new UpdateImportRequestRequest(
             null, null, null, null, null, null, null, null, null, null, null, "Before Songkran"), owner);
 
@@ -642,7 +672,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void nonOwningSalesRepCannotReadListOrDownloadAnotherRepsIr() throws Exception {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, new IssueImportRequestRequest("IR-S3-READ"), owner);
 
         assertThatThrownBy(() -> service.get(id, otherSalesRep))
@@ -671,7 +701,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void importAndSalesManagerCannotDeleteDraft() {
-        long lea = byFactory(service.createDrafts(ticketId, null, owner), leaFactoryId).id();
+        long lea = byFactory(DraftSeed.seed(jdbc, ticketId, owner), leaFactoryId).id();
 
         assertThatThrownBy(() -> service.deleteDraft(lea, importUser))
             .isInstanceOfSatisfying(ApiException.class,
@@ -694,7 +724,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void everyMutatingMethod_isRefusedOnceTheDealIsInactive() {
-        long padana = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long padana = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(padana, null, owner);
         long lea = byFactory(service.list(ticketId, owner), leaFactoryId).id();
         // A THIRD, not-yet-covered factory, added before markLost — so the post-lost createDrafts
@@ -760,7 +790,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void revision_doesNotMoveTheArrivalAnchor() {
-        long v1 = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.update(v1, new UpdateImportRequestRequest(
             null, null, null, null, null, null, null, null, null, 10, 20, null), owner);
         ImportRequestDto issuedV1 = service.issue(v1, null, owner);
@@ -782,7 +812,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void advanceStep_refusesAFutureEventDate_andADateBeforeTheFirstIssue() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         ImportRequestDto issued = service.issue(id, null, owner);
 
         assertThatThrownBy(() -> service.advanceStep(id, new AdvanceImportStepRequest(
@@ -802,7 +832,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
      * not the raw uppercase code. */
     @Test
     void advanceStep_eventMessageUsesThaiStepLabels() {
-        long id = byFactory(service.createDrafts(ticketId, null, owner), padanaFactoryId).id();
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, null, owner);
 
         service.advanceStep(id, new AdvanceImportStepRequest(ImportRequestStep.ORDERED, null, "ทดสอบ"), importUser);

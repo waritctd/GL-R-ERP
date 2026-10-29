@@ -294,7 +294,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.queryByTestId('ir-line-factory-3')).toBeNull();
     });
 
-    it('keeps สร้างใบ IR disabled until every factory-less line has a factory, and sends the choice', async () => {
+    it('keeps ออกใบขอซื้อ (IR) disabled until every factory-less line has a factory, and sends the choice', async () => {
       api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
       renderPanel(OWNER, [], { summary: directSummary, items: lines });
       const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
@@ -343,6 +343,96 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         newFactoryCountries: [{ factoryName: 'New Factory', countryCode: 'CN', countryOther: null }],
         itemFactories: [{ ticketItemId: 3, factoryId: 8 }],
       }));
+    });
+  });
+
+  // 10-29 ruling B: a new factory with no lead time (quotation or country default) is askable, not a
+  // dead end. The 409 carries a parseable prefix; the popup collects min-max per listed factory.
+  describe('lead-time popup (10-29)', () => {
+    beforeEach(() => api.storedImportRequests.createDrafts.mockReset());
+    const LT = (names) => Object.assign(new Error(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${names}`), { status: 409 });
+    const CTRY = (names) => Object.assign(new Error(`กรุณาระบุประเทศให้กับโรงงานใหม่: ${names}`), { status: 409 });
+    const fill = (name, min, max) => {
+      fireEvent.change(screen.getByTestId(`factory-lead-time-min-${name}`), { target: { value: String(min) } });
+      fireEvent.change(screen.getByTestId(`factory-lead-time-max-${name}`), { target: { value: String(max) } });
+    };
+
+    it('a missing-lead-time 409 opens the popup, and submitting retries with leadTimes', async () => {
+      api.storedImportRequests.createDrafts
+        .mockRejectedValueOnce(LT('Rex Ceramics, Cotto'))
+        .mockResolvedValueOnce({ importRequests: [issuedRow({ factoryName: 'Rex Ceramics' })] });
+      renderPanel(OWNER, []);
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+
+      const submit = await screen.findByTestId('factory-lead-time-submit');
+      expect(submit.disabled).toBe(true);
+      fill('Rex Ceramics', 20, 30);
+      expect(submit.disabled).toBe(true); // Cotto still blank
+      fill('Cotto', 5, 9);
+      await waitFor(() => expect(submit.disabled).toBe(false));
+      fireEvent.click(submit);
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenLastCalledWith(1, {
+        leadTimes: [
+          { factoryName: 'Rex Ceramics', minDays: 20, maxDays: 30 },
+          { factoryName: 'Cotto', minDays: 5, maxDays: 9 },
+        ],
+      }));
+    });
+
+    it('does not enable submit while min is greater than max', async () => {
+      api.storedImportRequests.createDrafts.mockRejectedValueOnce(LT('Rex Ceramics'));
+      renderPanel(OWNER, []);
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      const submit = await screen.findByTestId('factory-lead-time-submit');
+      fill('Rex Ceramics', 40, 30);
+      expect(submit.disabled).toBe(true);
+    });
+
+    it('cancel creates nothing: no retry, popup gone', async () => {
+      api.storedImportRequests.createDrafts.mockRejectedValueOnce(LT('Rex Ceramics'));
+      renderPanel(OWNER, []);
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      fireEvent.click(await screen.findByTestId('factory-lead-time-cancel'));
+
+      await waitFor(() => expect(screen.queryByTestId('factory-lead-time-submit')).toBeNull());
+      expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1);
+    });
+
+    it('country first, then lead time: the second retry carries both', async () => {
+      api.storedImportRequests.createDrafts
+        .mockRejectedValueOnce(CTRY('Rex Ceramics'))
+        .mockRejectedValueOnce(LT('Rex Ceramics'))
+        .mockResolvedValueOnce({ importRequests: [issuedRow({ factoryName: 'Rex Ceramics' })] });
+      renderPanel(OWNER, []);
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+
+      fireEvent.change(await screen.findByLabelText(/^ประเทศ/), { target: { value: 'CN' } });
+      fireEvent.click(await screen.findByTestId('new-factory-country-submit'));
+      await screen.findByTestId('factory-lead-time-submit');
+      expect(screen.queryByTestId('new-factory-country-submit')).toBeNull();
+      fill('Rex Ceramics', 20, 30);
+      fireEvent.click(screen.getByTestId('factory-lead-time-submit'));
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenLastCalledWith(1, {
+        newFactoryCountries: [{ factoryName: 'Rex Ceramics', countryCode: 'CN', countryOther: null }],
+        leadTimes: [{ factoryName: 'Rex Ceramics', minDays: 20, maxDays: 30 }],
+      }));
+    });
+
+    it('retry guard: the same factory asked for again after a submit does not loop the popup', async () => {
+      const onToast = vi.fn();
+      api.storedImportRequests.createDrafts
+        .mockRejectedValueOnce(LT('Rex Ceramics'))
+        .mockRejectedValueOnce(LT('Rex Ceramics'));
+      renderPanel(OWNER, [], { showToast: onToast });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await screen.findByTestId('factory-lead-time-submit');
+      fill('Rex Ceramics', 20, 30);
+      fireEvent.click(screen.getByTestId('factory-lead-time-submit'));
+
+      await waitFor(() => expect(screen.queryByTestId('factory-lead-time-submit')).toBeNull());
+      expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -634,10 +724,10 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
 
   // PR-B REVIEW ROUND 1, nit: the create button relabels once the deal already has rows.
   describe('create-button relabel (nit)', () => {
-    it('reads "สร้างใบ IR" with no rows yet, and "สร้างใบ IR โรงงานที่ยังไม่มี" once rows exist (CR-1 rename)', async () => {
+    it('reads "ออกใบขอซื้อ (IR)" with no rows yet, and "ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี" once rows exist (CR-1 rename)', async () => {
       const { rerender } = renderPanel(OWNER, []);
       const initialButton = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
-      expect(initialButton.textContent).toBe('สร้างใบ IR');
+      expect(initialButton.textContent).toBe('ออกใบขอซื้อ (IR)');
 
       api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [draftRow()] });
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -646,7 +736,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
           <DealFulfilmentPanel user={OWNER} ticketId={2} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
         </QueryClientProvider>,
       );
-      expect(await screen.findByText('สร้างใบ IR โรงงานที่ยังไม่มี')).not.toBeNull();
+      expect(await screen.findByText('ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี')).not.toBeNull();
     });
   });
 
@@ -670,10 +760,10 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   });
 });
 
-// CR-1 (GLA-167) R6 / R9: sales presses สร้างใบ IR once the quotation is approved; one IR per
+// CR-1 (GLA-167) R6 / R9: sales presses ออกใบขอซื้อ (IR) once the quotation is approved; one IR per
 // factory is created and each PDF downloads straight away so sales can hand it over; import then
 // downloads the same IR from /fulfilment.
-describe('DealFulfilmentPanel — สร้างใบ IR downloads every created PDF (CR-1)', () => {
+describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloads every created PDF (CR-1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:ir');
@@ -681,13 +771,13 @@ describe('DealFulfilmentPanel — สร้างใบ IR downloads every creat
     api.storedImportRequests.download.mockResolvedValue(new Blob(['pdf'], { type: 'application/pdf' }));
   });
 
-  it('relabels the button สร้างใบ IR for the owning rep and CEO, and import still does not get it', async () => {
+  it('relabels the button ออกใบขอซื้อ (IR) for the owning rep and CEO, and import still does not get it', async () => {
     renderPanel(OWNER, []);
-    expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).textContent).toBe('สร้างใบ IR');
+    expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).textContent).toBe('ออกใบขอซื้อ (IR)');
   });
 
   it('after a successful create, downloads the PDF of each IR it just created (one per factory)', async () => {
-    const created = [draftRow({ id: 21, factoryName: 'Cotto Industry' }), draftRow({ id: 22, factoryId: 2, factoryName: 'Panaria' })];
+    const created = [issuedRow({ id: 21, factoryName: 'Cotto Industry' }), issuedRow({ id: 22, factoryId: 2, factoryName: 'Panaria' })];
     api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: created });
     renderPanel(OWNER, []);
     fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
@@ -696,9 +786,25 @@ describe('DealFulfilmentPanel — สร้างใบ IR downloads every creat
     expect(api.storedImportRequests.download.mock.calls.map((c) => c[0]).sort()).toEqual([21, 22]);
   });
 
+  it('10-29: create ends with the rows ISSUED (no ออกเลข button) and the toast ออกใบขอซื้อ (IR) แล้ว', async () => {
+    const showToast = vi.fn();
+    const issued = [issuedRow({ id: 21, importStep: 'CONTACTED' }), issuedRow({ id: 22, factoryId: 2, factoryName: 'Panaria', docNumber: 'IR26002', importStep: 'CONTACTED' })];
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: issued });
+    renderPanel(OWNER, [], { showToast });
+    // after the create the refetch returns the server's rows, which are already ISSUED
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: issued });
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ออกใบขอซื้อ (IR) แล้ว'));
+    await screen.findByText('Panaria');
+    expect(screen.queryByTestId('ir-issue-21')).toBeNull();
+    expect(screen.queryByTestId('ir-issue-22')).toBeNull();
+    expect(screen.queryByTestId('ir-draft-hint-21')).toBeNull();
+  });
+
   it('downloads only the NEW IRs when some factories already had one', async () => {
     const existing = draftRow({ id: 10, factoryName: 'Cotto Industry' });
-    const fresh = draftRow({ id: 23, factoryId: 3, factoryName: 'Rex Ceramics' });
+    const fresh = issuedRow({ id: 23, factoryId: 3, factoryName: 'Rex Ceramics' });
     api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [existing, fresh] });
     renderPanel(OWNER, [existing]);
     await screen.findByText('Cotto Industry');
@@ -710,7 +816,7 @@ describe('DealFulfilmentPanel — สร้างใบ IR downloads every creat
 
   it('a failed PDF download does not undo the create: the toast says the IRs exist but the PDF failed', async () => {
     const showToast = vi.fn();
-    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [draftRow({ id: 21 })] });
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [issuedRow({ id: 21 })] });
     api.storedImportRequests.download.mockRejectedValueOnce(new Error('ดาวน์โหลดใบขอซื้อไม่สำเร็จ'));
     api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -720,12 +826,12 @@ describe('DealFulfilmentPanel — สร้างใบ IR downloads every creat
       </QueryClientProvider>,
     );
     fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('สร้างใบ IR')));
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ดาวน์โหลด')));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('ออกใบขอซื้อ (IR)')));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ออกใบขอซื้อ (IR) แล้ว แต่ดาวน์โหลด')));
   });
 
   it('refreshes the stored IRs, the import deal and the fulfilment worklist after creating (F)', async () => {
-    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [draftRow({ id: 21 })] });
+    api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [issuedRow({ id: 21 })] });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });

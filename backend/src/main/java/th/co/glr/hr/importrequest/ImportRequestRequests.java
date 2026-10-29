@@ -32,13 +32,30 @@ public final class ImportRequestRequests {
     public record CreateImportRequestsRequest(
         String clientRequestId,
         @Valid List<NewFactoryCountryInput> newFactoryCountries,
-        @Valid List<ItemFactoryInput> itemFactories
+        @Valid List<ItemFactoryInput> itemFactories,
+        @Valid List<NewFactoryLeadTimeInput> leadTimes
     ) {
         /** Pre-picker shape: no per-line factory choices. */
         public CreateImportRequestsRequest(String clientRequestId, List<NewFactoryCountryInput> newFactoryCountries) {
-            this(clientRequestId, newFactoryCountries, null);
+            this(clientRequestId, newFactoryCountries, null, null);
+        }
+
+        public CreateImportRequestsRequest(String clientRequestId, List<NewFactoryCountryInput> newFactoryCountries,
+                                           List<ItemFactoryInput> itemFactories) {
+            this(clientRequestId, newFactoryCountries, itemFactories, null);
         }
     }
+
+    /**
+     * One factory NAME's caller-supplied import lead time, for a new factory whose lead time can be
+     * derived from neither the quotation nor the country default (owner ruling 10-29). Same bounds as
+     * {@link SetLeadTimeRequest}; min must not exceed max.
+     */
+    public record NewFactoryLeadTimeInput(
+        @NotBlank String factoryName,
+        @NotNull @Min(1) @Max(365) Integer minDays,
+        @NotNull @Min(1) @Max(365) Integer maxDays
+    ) {}
 
     /**
      * Sales' factory choice for ONE deal line that has no factory (a free-text line on a direct

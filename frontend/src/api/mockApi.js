@@ -12367,6 +12367,16 @@ export const api = {
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
       }
+      // Supplied per-factory lead times (10-29): 400 on a bad value, before anything is written.
+      const suppliedLeadTimes = new Map();
+      for (const lt of request?.leadTimes ?? []) {
+        const okInt = (v) => Number.isInteger(v) && v >= 1 && v <= 365;
+        if (!lt?.factoryName?.trim() || !okInt(lt.minDays) || !okInt(lt.maxDays) || lt.minDays > lt.maxDays) {
+          fail('ระยะเวลานำเข้าต้องเป็น 1–365 วัน และขั้นต่ำต้องไม่เกินขั้นสูง', 400);
+        }
+        suppliedLeadTimes.set(lt.factoryName.trim().replace(/\s+/g, ' ').toLowerCase(), lt);
+      }
+      const suppliedFor = (g) => suppliedLeadTimes.get(String(g.factoryName).trim().replace(/\s+/g, ' ').toLowerCase());
       mockApplyItemFactoryChoices(ticket, request);
       const groups = mockResolveFactoryGroups(ticket, request);
       if (groups.length === 0) {
@@ -12375,11 +12385,26 @@ export const api = {
       const alreadyCovered = new Set(mockImportRequests
         .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
         .map((r) => r.factoryId));
-      let created = 0;
       const now = new Date().toISOString();
-      for (const group of groups) {
-        if (alreadyCovered.has(group.factoryId)) continue;
-        const leadTime = mockLeadTimeDefaults(group.countryCode);
+      // 10-29: create also ISSUES, all-or-nothing -- check every NEW factory before writing any row
+      // (the payment gate itself is re-checked per row by issue() below, same predicate).
+      const newGroups = groups.filter((g) => !alreadyCovered.has(g.factoryId));
+      const missingLeadTime = newGroups
+        .filter((g) => !mockLeadTimeDefaults(g.countryCode) && !suppliedFor(g))
+        .map((g) => g.factoryName);
+      if (missingLeadTime.length > 0) {
+        fail(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${missingLeadTime.join(', ')}`, 409);
+      }
+      if (newGroups.length === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      if (!(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
+        || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED'))) {
+        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+      }
+      const newIds = [];
+      for (const group of newGroups) {
+        const supplied = suppliedFor(group);
+        const leadTime = mockLeadTimeDefaults(group.countryCode)
+          ?? (supplied ? { min: supplied.minDays, max: supplied.maxDays } : null);
         const id = mockImportRequestSeq++;
         mockImportRequests.push({
           id, ticketId: ticket.id, ticketCode: ticket.code,
@@ -12400,9 +12425,10 @@ export const api = {
             id: `${id}-${i + 1}`, importRequestId: id, ticketItemId: it.ticketItemId, seq: i + 1, ...it,
           })),
         });
-        created++;
+        newIds.push(id);
       }
-      if (created === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      // Reuse the mock's issue(): doc number, step CONTACTED, IR_ISSUED + PROCUREMENT on the first.
+      for (const id of newIds) await api.storedImportRequests.issue(id);
       return delay({ importRequests: mockImportRequestsForTicket(ticket.id) });
     },
     async listForTicket(ticketId) {

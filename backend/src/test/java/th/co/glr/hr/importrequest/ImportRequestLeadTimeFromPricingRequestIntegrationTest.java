@@ -413,7 +413,6 @@ class ImportRequestLeadTimeFromPricingRequestIntegrationTest extends AbstractPos
         if (min != null) {
             assertThat(v1.leadTimeMinDays()).isEqualTo(min);
         }
-        service.issue(v1.id(), null, owner);
         return new long[] {v1.id(), pr, q};
     }
 
