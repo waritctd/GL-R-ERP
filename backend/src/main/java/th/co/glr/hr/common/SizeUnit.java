@@ -15,7 +15,7 @@ public final class SizeUnit {
     private SizeUnit() {}
 
     public static boolean hasUnit(String size) {
-        return ALREADY_HAS_UNIT.matcher(size.trim()).find();
+        return size != null && ALREADY_HAS_UNIT.matcher(size.trim()).find();
     }
 
     /** Owner ruling 2026-10-30: IR factory email/PDF show cm. Unitless gets " cm"; blank stays as-is. */

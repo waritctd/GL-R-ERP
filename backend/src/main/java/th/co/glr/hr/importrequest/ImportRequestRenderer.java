@@ -1,6 +1,5 @@
 package th.co.glr.hr.importrequest;
 
-import th.co.glr.hr.common.SizeUnit;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -18,6 +17,7 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
+import th.co.glr.hr.common.SizeUnit;
 
 /**
  * Draws an import request onto the business's own F-SM-001 (04) form and returns it ready to print

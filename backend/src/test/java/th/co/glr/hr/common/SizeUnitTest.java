@@ -12,6 +12,7 @@ class SizeUnitTest {
         assertThat(SizeUnit.withCmUnit(null)).isNull();
         assertThat(SizeUnit.withCmUnit("")).isEmpty();
         assertThat(SizeUnit.withCmUnit("  ")).isEqualTo("  ");
+        assertThat(SizeUnit.hasUnit(null)).isFalse();
     }
 
     @Test
