@@ -33,6 +33,7 @@ vi.mock('../../api/index.js', () => ({
       factoryQuoteAttachmentUrl: (id) => `#quote-attachment-${id}`,
       setItemFactory: vi.fn(),
       pickup: vi.fn(),
+      submit: vi.fn(),
       generateFactoryEmailDrafts: vi.fn(),
       updateFactoryQuote: vi.fn(),
       markFactoryQuoteContacted: vi.fn(),
@@ -1346,6 +1347,33 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
     await waitForLoaded(request);
 
     expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไข' })).toBeNull();
+  });
+});
+
+// QA-11 (Ploy 2026-10-29): a DRAFT (e.g. a customer-change revision) can be sent from its own page.
+describe('PricingRequestDetailPage DRAFT — ส่งให้ฝ่ายนำเข้า', () => {
+  it('the owning rep sends their DRAFT to import from its own page', async () => {
+    const request = buildRequest({ summary: { status: 'DRAFT' } });
+    api.pricingRequests.submit.mockResolvedValue({ pricingRequest: request });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' }));
+
+    await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(501));
+  });
+
+  it.each([
+    ['another sales rep, on a DRAFT', salesOwner, { status: 'DRAFT', ticketCreatedById: 999 }],
+    ['the sales manager, on a DRAFT', salesManager, { status: 'DRAFT' }],
+    ['import, on a DRAFT', importUser, { status: 'DRAFT' }],
+    ['the owning rep, once SUBMITTED', salesOwner, { status: 'SUBMITTED' }],
+  ])('no ส่งให้ฝ่ายนำเข้า for %s', async (_label, user, summary) => {
+    const request = buildRequest({ summary });
+    renderDetailPage({ user, request });
+    await waitForLoaded(request);
+
+    expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
   });
 });
 

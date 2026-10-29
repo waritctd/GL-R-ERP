@@ -1313,7 +1313,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   // The backend refuses a non-owner for both documents (2026-10-28): no main button for them.
   const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'create_import_request'];
-  const workStateAction = OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner ? null : workState.action;
+  // Like the quotation list above: with the deal's request list unread, a DRAFT may be hiding, so no create_pcr.
+  const requestListUnread = canViewPricingRequests && pricingRequestsQuery.data === undefined;
+  const workStateAction = (OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner)
+    || (workState.action?.key === 'create_pcr' && requestListUnread) ? null : workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
   // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the

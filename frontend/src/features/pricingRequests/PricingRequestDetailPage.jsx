@@ -44,6 +44,7 @@ import {
   canSeePricingDecisionSalesView,
   canSeeRawPricingDecision,
   canPickupPricingRequest,
+  canSubmitPricingRequest,
   canStartCeoReview,
   canViewCustomerQuotation,
   isCustomerQuotationEditable,
@@ -1141,6 +1142,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // notification link) with no way to claim it except going back to the คิวขอราคา queue. Same
   // endpoint + canPickupPricingRequest gate as the queue and the deal panel; server is the authority.
   const pickupRequest = useActionMutation(() => api.pricingRequests.pickup(pricingRequestId), 'รับเรื่องแล้ว');
+  // QA-11: a DRAFT (e.g. a customer-change revision) is sent from its own page; same gate as the deal panel.
+  const submitRequest = useActionMutation(() => api.pricingRequests.submit(pricingRequestId), 'ส่งคำขอราคาแล้ว');
   const generateDrafts = useActionMutation(() => api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId), 'สร้างเมลแล้ว');
   const updateQuote = useActionMutation(({ quote, draft }) => api.pricingRequests.updateFactoryQuote(quote.id, draft), 'บันทึกร่างแล้ว');
   // CR-1 (GLA-167) R3/R5/R7: records that import (or the CEO) already contacted this factory —
@@ -2923,6 +2926,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <Button type="button" variant="primary" disabled={pickupRequest.isPending}
                 onClick={() => pickupRequest.mutate()} data-testid="pcr-detail-pickup">
                 รับเรื่อง
+              </Button>
+            ) : null}
+            {canSubmitPricingRequest(user, summary) ? (
+              <Button type="button" variant="primary" disabled={submitRequest.isPending}
+                onClick={() => submitRequest.mutate()} data-testid="pcr-detail-submit">
+                ส่งให้ฝ่ายนำเข้า
               </Button>
             ) : null}
             <Button type="button" variant="secondary" onClick={() => navigate(-1)}>

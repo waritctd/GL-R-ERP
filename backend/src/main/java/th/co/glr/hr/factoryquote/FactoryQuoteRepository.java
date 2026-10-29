@@ -292,13 +292,15 @@ public class FactoryQuoteRepository {
 
     public long createRevision(FactoryQuoteDto previous, String supplierQuoteRef, String currency, String paymentTerms,
                                String leadTimeText, String revisionReason, String negotiationNote, long actorId) {
+        // Legacy carried-forward rows have a NULL root (they are their own chain, revision 1).
+        long rootId = previous.rootFactoryQuoteId() != null ? previous.rootFactoryQuoteId() : previous.id();
         jdbc.query("SELECT pg_advisory_xact_lock(:rootId)",
-            Map.of("rootId", previous.rootFactoryQuoteId()), (rs, rowNum) -> 0);
+            Map.of("rootId", rootId), (rs, rowNum) -> 0);
         int nextRevision = jdbc.queryForObject("""
             SELECT COALESCE(MAX(revision_no), 0) + 1
               FROM sales.factory_quote
-             WHERE root_factory_quote_id = :rootId
-            """, Map.of("rootId", previous.rootFactoryQuoteId()), Integer.class);
+             WHERE COALESCE(root_factory_quote_id, factory_quote_id) = :rootId
+            """, Map.of("rootId", rootId), Integer.class);
         Long id = jdbc.queryForObject("""
             INSERT INTO sales.factory_quote
                 (quote_code, pricing_request_id, factory_id, factory_name_snapshot, status,
@@ -333,7 +335,7 @@ public class FactoryQuoteRepository {
                 .addValue("leadTimeText", leadTimeText)
                 .addValue("revisionReason", revisionReason)
                 .addValue("negotiationNote", negotiationNote)
-                .addValue("rootId", previous.rootFactoryQuoteId())
+                .addValue("rootId", rootId)
                 .addValue("parentId", previous.id())
                 .addValue("revisionNo", nextRevision)
                 .addValue("createdBy", actorId)
@@ -581,8 +583,9 @@ public class FactoryQuoteRepository {
      * change. {@code FactoryQuoteCarryForward} is the only caller and owns the decision about
      * WHEN this is safe; this method owns only the copy.
      *
-     * <p>Copies are fresh roots, not revisions: {@code root_factory_quote_id}/
-     * {@code parent_factory_quote_id} are left NULL and {@code revision_no} is 1, because the
+     * <p>Copies are fresh roots, not revisions: each is its own {@code root_factory_quote_id}
+     * (as {@link #createDraft} does), {@code parent_factory_quote_id} is left NULL and
+     * {@code revision_no} is 1, because the
      * chain key {@code uq_factory_quote_chain_revision} is
      * {@code (COALESCE(root_factory_quote_id, factory_quote_id), revision_no)} — pointing the copy
      * at the parent's root would collide with the parent's own revision numbering, and the two
@@ -633,6 +636,11 @@ public class FactoryQuoteRepository {
                     .addValue("actorId", actorId)
                     .addValue("sourceQuoteId", sourceQuoteId),
                 Long.class);
+            jdbc.update("""
+                UPDATE sales.factory_quote
+                   SET root_factory_quote_id = :id
+                 WHERE factory_quote_id = :id
+                """, Map.of("id", newQuoteId));
             // Item-by-item rather than INSERT ... SELECT with a join: the remapping lives in a Java
             // Map (built by the item-equivalence check that authorised this copy in the first
             // place), and an item whose parent id is absent from that map must be SKIPPED, not
