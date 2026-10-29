@@ -730,3 +730,47 @@ describe('nextSalesAction — สร้างใบแจ้งยอดเง�
       .not.toBe('create_remaining_invoice');
   });
 });
+
+// QA-09: ขั้น 11 (DEPOSIT_RECEIVED) — the owning rep's one main button creates the import request.
+describe('nextSalesAction — สร้างใบขอซื้อ (IR) at ขั้น 11 (owner rulings QA-09)', () => {
+  const paidDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, ...overrides });
+  const CREATE_IR = { key: 'create_import_request', label: 'สร้างใบขอซื้อ (IR)' };
+
+  it('exposes the action key', () => {
+    expect(SALES_ACTION.CREATE_IMPORT_REQUEST).toBe('create_import_request');
+  });
+
+  it('DEPOSIT_PAID + no fulfilment yet -> สร้างใบขอซื้อ (IR); importRequests unknown (undefined) or empty -> same', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()])).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+  });
+
+  it('a DRAFT IR exists -> ออกเลขใบขอซื้อ (IR) (same key); SUPERSEDED rows are ignored', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'DRAFT' }] }))
+      .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'SUPERSEDED' }, { id: 2, status: 'DRAFT' }] }))
+      .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'SUPERSEDED' }] }))
+      .toEqual(CREATE_IR);
+  });
+
+  it.each(['IR_ISSUED', 'FROM_STOCK', 'SHIPPING'])('fulfillmentStatus %s -> not offered', (fulfillmentStatus) => {
+    expect(nextSalesAction(paidDeal({ fulfillmentStatus }), [orderConfirmedPr()], { importRequests: [] })?.key)
+      .not.toBe('create_import_request');
+  });
+
+  it('a confirmed direct-quotation deal with a reviseTarget still gets the IR, not แก้ใบเสนอราคา', () => {
+    const deal = paidDeal({ liveDirectQuotation: { id: 90, number: 'QT-2026-0090-1', docStatus: 'APPROVED', recipientType: 'BUYER' } });
+    expect(nextSalesAction(deal, [], { reviseTarget: { quotationId: 90, number: 'QT-2026-0090-1' }, importRequests: [] })).toEqual(CREATE_IR);
+  });
+
+  it.each(['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT', null])('paymentStatus %s -> not offered', (paymentStatus) => {
+    expect(nextSalesAction(paidDeal({ paymentStatus }), [orderConfirmedPr()], { importRequests: [] })?.key)
+      .not.toBe('create_import_request');
+  });
+
+  it('CUSTOMER_CONFIRMED: the deposit-notice action still wins (the IR button only follows it)', () => {
+    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED' }), [orderConfirmedPr()], { importRequests: [] }))
+      .toMatchObject({ key: 'create_deposit_notice' });
+  });
+});

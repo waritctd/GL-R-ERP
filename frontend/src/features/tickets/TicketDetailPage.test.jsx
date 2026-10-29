@@ -4328,6 +4328,88 @@ describe('TicketDetailPage', () => {
     });
   });
 
+  // QA-09 (owner rulings): at ขั้น 11 (DEPOSIT_RECEIVED, deposit paid, nothing ordered yet) the
+  // owning rep's ONE main button creates the import request through DealFulfilmentPanel's own flow.
+  describe('sticky primary — สร้างใบขอซื้อ (IR) (ขั้น 11), QA-09', () => {
+    const acceptedPr = {
+      id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+      status: 'QUOTATION_ACCEPTED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: '2026-10-20T09:00:00.000Z',
+    };
+    const nonOwnerSales = { id: 2, employeeId: 2, name: 'เซลส์อื่น', role: 'sales' };
+    const primary = () => screen.queryByTestId('ticket-primary-action');
+    const primaryAction = () => primary()?.getAttribute('data-action') ?? null;
+    const location = () => screen.getByTestId('location-probe').textContent;
+    // jsdom has no scrollIntoView: record which element the page asked to scroll to.
+    let scrolledIds = [];
+    beforeEach(() => {
+      scrolledIds = [];
+      Element.prototype.scrollIntoView = function scrollIntoView() { scrolledIds.push(this.id); };
+    });
+    const scrolledToIrSection = () => scrolledIds.includes('deal-fulfilment-stored-ir');
+
+    function irStageDeal({ rows = [] } = {}) {
+      const state = {
+        lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued',
+      };
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1 } }) });
+      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [acceptedPr] });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
+      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [{ id: 31, status: 'DRAFT', ticketId: 701 }] });
+    }
+
+    afterEach(() => {
+      api.dealQuotations.listForTicket.mockReset();
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+      delete Element.prototype.scrollIntoView;
+    });
+
+    it('owner rep at DEPOSIT_PAID: the main button is สร้างใบขอซื้อ (IR); clicking creates the drafts once and lands on the จัดซื้อ-ส่งมอบ tab', async () => {
+      irStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+      expect(primary().textContent).toContain('สร้างใบขอซื้อ (IR)');
+      await waitFor(() => expect(primary().disabled).toBe(false));
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+      expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(701, undefined);
+      await waitFor(() => expect(location()).toContain('tab=fulfilment'));
+      await waitFor(() => expect(scrolledToIrSection()).toBe(true));
+    });
+
+    it('a DRAFT IR is listed: the button reads ออกเลขใบขอซื้อ (IR) and only switches tab — createDrafts is not called', async () => {
+      irStageDeal({ rows: [{ id: 31, status: 'DRAFT', ticketId: 701, docNumber: null, factoryName: 'Factory A', version: 1, items: [] }] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+      await waitFor(() => expect(primary().textContent).toContain('ออกเลขใบขอซื้อ (IR)'));
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(location()).toContain('tab=fulfilment'));
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+      await waitFor(() => expect(scrolledToIrSection()).toBe(true));
+    });
+
+    it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {
+      irStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], nonOwnerSales);
+      await stickyInputsSettled();
+      await screen.findByRole('heading', { level: 1 });
+      expect(primaryAction()).not.toBe('create_import_request');
+    });
+
+    it('the button is disabled until the IR list is read (a click must not create beside an unseen DRAFT)', async () => {
+      irStageDeal();
+      api.storedImportRequests.listForTicket.mockReturnValue(new Promise(() => {}));
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+      expect(primary().disabled).toBe(true);
+    });
+  });
+
   // Slice 2 — flow B + the direct-quotation CTAs (SLICE-2-FLOW-A.md §D/§E). The ใบเสนอราคา panel
   // offers the two routes as sibling buttons — never a dialog (DESIGN.md §16) — and the sticky CTA
   // follows a live direct quotation (TicketSummaryDto.liveDirectQuotation, S2-B4).
