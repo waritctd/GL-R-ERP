@@ -2142,7 +2142,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(2026), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate())))
+        when(leaveRepository.workingDayPredicate(eq(10L), any(), eq(request.endDate())))
             .thenReturn(date -> date.getDayOfWeek() != java.time.DayOfWeek.SUNDAY);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
@@ -2178,7 +2178,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(2026), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate())))
+        when(leaveRepository.workingDayPredicate(eq(10L), any(), eq(request.endDate())))
             .thenReturn(date -> !date.equals(seededHoliday));
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
@@ -2217,7 +2217,7 @@ class LeaveServiceTest {
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("MATERNITY"), eq(2026), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.workingDayPredicate(eq(10L), eq(nonWorkingDate), eq(nonWorkingDate)))
+        when(leaveRepository.workingDayPredicate(eq(10L), any(), eq(nonWorkingDate)))
             .thenReturn(alwaysNonWorking);
         when(leaveRepository.create(eq(10L), eq(10L), eq(maternitySubDay), any(BigDecimal.class), any(BigDecimal.class),
             any(BigDecimal.class), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
@@ -2235,7 +2235,7 @@ class LeaveServiceTest {
             null, "VACATION", nonWorkingDate, nonWorkingDate, "Sub-day vacation",
             LocalTime.of(8, 30), LocalTime.of(12, 30), null, null, null, null, null, null, null);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
-        when(leaveRepository.workingDayPredicate(eq(10L), eq(nonWorkingDate), eq(nonWorkingDate)))
+        when(leaveRepository.workingDayPredicate(eq(10L), any(), eq(nonWorkingDate)))
             .thenReturn(alwaysNonWorking);
 
         assertThatThrownBy(() -> leaveService.submit(vacationSubDay, user("employee", 10L)))
@@ -2788,8 +2788,9 @@ class LeaveServiceTest {
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("SUBMITTED");
+        // ...and the §5 advance-notice gate reuses that same predicate instead of building its own.
         verify(leaveRepository, org.mockito.Mockito.times(1))
-            .workingDayPredicate(eq(10L), eq(request.startDate()), eq(request.endDate()));
+            .workingDayPredicate(eq(10L), any(), any());
     }
 
     @Test
@@ -2913,6 +2914,8 @@ class LeaveServiceTest {
         "2026-07-04, 2026-07-06, MON_SAT, , 4, true",
         // leave starting on a holiday: the notice runs to Fri 07-03, the first day they would work
         "2026-07-02, 2026-07-03, MON_FRI, 2026-07-02, 1, false",
+        // starts TODAY on a holiday (not past day 0): Thu 07-02 is still the 1st working day ahead
+        "2026-07-01, 2026-07-02, MON_FRI, 2026-07-01, 1, false",
     })
     void previewCountsAdvanceNoticeInTheEmployeesWorkingDays(
             LocalDate startDate, LocalDate endDate, String schedule, LocalDate holiday, int noticeDays,
@@ -2921,7 +2924,7 @@ class LeaveServiceTest {
             ? date -> date.getDayOfWeek() != DayOfWeek.SUNDAY
             : LeaveDayMath::isWorkingDay;
         // Like LeaveRepository#workingDayPredicate, a holiday is only seen inside the range asked for.
-        when(leaveRepository.workingDayPredicate(anyLong(), any(), any())).thenAnswer(invocation -> {
+        when(leaveRepository.workingDayPredicate(eq(10L), any(), any())).thenAnswer(invocation -> {
             LocalDate from = invocation.getArgument(1);
             LocalDate to = invocation.getArgument(2);
             boolean holidayInRange = holiday != null && !holiday.isBefore(from) && !holiday.isAfter(to);
