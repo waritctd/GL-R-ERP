@@ -83,6 +83,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   advanceReady = true, advanceInHeader = false,
   // Owner ruling 2026-10-27: the parties the sticky เสนอราคา menu offers, in route order.
   quoteParties = null,
+  // The ticket's events, oldest first — the stepper reads which stages the deal skipped from them.
+  events = [],
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
 }, ref) {
@@ -431,6 +433,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               salesStage={summary.salesStage}
               lost={lost}
               stageDecisions={stageDecisions}
+              events={events}
               entryChannel={summary.entryChannel}
               entryChannelAction={entryChannelAction}
               onSetEntryChannel={onSetEntryChannel}
