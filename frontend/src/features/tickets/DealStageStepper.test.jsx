@@ -497,4 +497,22 @@ describe('DealStageStepper marks the stages a deal skipped', () => {
     expect(within(pipFor('OWNER_SIGNOFF')).getByText('ขั้นที่ 6 เสร็จแล้ว')).not.toBeNull();
     expect(within(pipFor('AWAITING_BUYER')).getByText('ขั้นที่ 7 ข้าม')).not.toBeNull();
   });
+
+  it('a phase the deal skipped whole (4 → 10) reads ข้าม, not เสร็จแล้ว', () => {
+    const events = [stageChange(1, 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE'), stageChange(2, 'QUOTE_DESIGN_SIDE', 'ORDER_RECEIVED')];
+    render(<DealStageStepper catalog={catalog} salesStage="ORDER_RECEIVED" stageDecisions={decisionsFor([])}
+      entryChannel="DESIGNER_LED" events={events} />);
+    const phase3 = screen.getByRole('button', { name: /เฟส 3/ });
+    expect(phase3.textContent).toContain('ข้าม 3');
+    expect(phase3.textContent).not.toContain('เสร็จแล้ว');
+    expect(screen.getByRole('button', { name: /เฟส 2/ }).textContent).toContain('เสร็จแล้ว · ข้าม 2');
+  });
+
+  it('a first change with no known from-stage marks nothing ข้าม (history unknown = done)', () => {
+    const events = [stageChange(1, null, 'QUOTE_DESIGN_SIDE'), stageChange(2, 'QUOTE_DESIGN_SIDE', 'QUOTE_BUYER')];
+    render(<DealStageStepper catalog={catalog} salesStage="QUOTE_BUYER" stageDecisions={decisionsFor([])}
+      entryChannel="DESIGNER_LED" events={events} />);
+    expect(within(pipFor('LEAD_APPROACH')).getByText('ขั้นที่ 1 เสร็จแล้ว')).not.toBeNull();
+    expect(screen.queryByText(/ข้าม/)).toBeNull();
+  });
 });

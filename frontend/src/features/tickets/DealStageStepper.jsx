@@ -92,19 +92,17 @@ function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
  * SK-05 (owner ruling 2026-10-29): the codes of the stages BEHIND the deal that it never sat on.
  * "Sat on" = every STAGE_CHANGED's toStatus (events are oldest first, as the server sends them).
  * The first change's fromStatus and everything before it are pre-history and count as done; no
- * STAGE_CHANGED at all means nothing is skipped.
+ * STAGE_CHANGED at all, or a first fromStatus outside the catalog, means nothing is skipped.
  */
 function skippedStageCodes(catalog, currentIdx, events) {
   const changes = (events ?? []).filter((event) => event.kind === 'STAGE_CHANGED');
   if (changes.length === 0) return new Set();
   const visited = new Set(changes.map((event) => event.toStatus));
   const firstIdx = stageIndexIn(catalog, changes[0].fromStatus);
+  if (firstIdx < 0) return new Set();
   return new Set(
     catalog.stages
-      .filter((step) => {
-        const idx = stageIndexIn(catalog, step.code);
-        return idx < currentIdx && idx > firstIdx && !visited.has(step.code);
-      })
+      .filter((step, idx) => idx < currentIdx && idx > firstIdx && !visited.has(step.code))
       .map((step) => step.code),
   );
 }
@@ -208,6 +206,7 @@ export function DealStageStepper({
         const skipCount = steps.filter((step) => skipped.has(step.code)).length;
         const doneCount = steps.filter((step) => stageIndexIn(catalog, step.code) <= currentIdx).length - skipCount;
         const skipNote = skipCount > 0 ? ` · ข้าม ${skipCount}` : '';
+        const allSkipped = isDone && skipCount === steps.length;
         const isOpen = !!open[phaseId];
         return (
           <div key={phaseId} className="border-b border-border last:border-b-0">
@@ -219,14 +218,14 @@ export function DealStageStepper({
             >
               <span
                 className={`grid h-6 w-6 shrink-0 place-items-center rounded-lg text-xs font-extrabold ${
-                  isDone
+                  isDone && !allSkipped
                     ? 'bg-success-bg text-success-dark'
                     : isCurrent && !lost
                       ? 'bg-info-bg text-info'
                       : 'bg-surface-subtle text-text-muted'
                 }`}
               >
-                {isDone ? <Icon name="check" size={13} /> : phaseId}
+                {allSkipped ? '–' : isDone ? <Icon name="check" size={13} /> : phaseId}
               </span>
               <span className="min-w-0 flex-1">
                 {/* WCAG AA fix (fix/ui-contrast-tokens): a PHASE_TEXT map used to apply
@@ -245,7 +244,9 @@ export function DealStageStepper({
                   เฟส {phaseId} · {phaseName(phaseId)}
                 </span>
                 <span className="block text-2xs text-text-muted">
-                  {isDone ? 'เสร็จแล้ว' : isCurrent ? `${doneCount}/${steps.length} ขั้นตอน` : `${steps.length} ขั้นตอน`}{skipNote}
+                  {allSkipped
+                    ? `ข้าม ${skipCount}`
+                    : <>{isDone ? 'เสร็จแล้ว' : isCurrent ? `${doneCount}/${steps.length} ขั้นตอน` : `${steps.length} ขั้นตอน`}{skipNote}</>}
                 </span>
               </span>
               <span className={`shrink-0 text-text-muted transition-transform ${isOpen ? 'rotate-180' : ''}`}>
