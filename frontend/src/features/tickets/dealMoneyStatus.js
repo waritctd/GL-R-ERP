@@ -16,6 +16,18 @@ export function depositBypassed(policy) {
   return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
 }
 
+/**
+ * May an import request (ใบขอซื้อ) be issued yet? Mirrors TicketService#requireImportRequestIssuable
+ * (summary, allowAdvancedPayment = true) exactly: notice issued, deposit paid or later, or a
+ * not-required deposit policy that has reached CUSTOMER_CONFIRMED.
+ */
+export function depositReadyForIr(summary) {
+  const { paymentStatus, depositPolicy } = summary ?? {};
+  return paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
+    || DEPOSIT_PAID_STATUSES.includes(paymentStatus)
+    || (depositBypassed(depositPolicy) && paymentStatus === 'CUSTOMER_CONFIRMED');
+}
+
 /** `{ bypassed, paid, noticeIssued }` — the three deposit-status facts both callers key off. */
 export function depositStatus(summary) {
   const bypassed = depositBypassed(summary.depositPolicy);

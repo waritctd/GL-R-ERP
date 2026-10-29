@@ -237,6 +237,10 @@ public class ImportRequestService {
                 "สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น");
         }
 
+        // The payment gate applies at create now (widened gate, same as issue()) and refuses FIRST, so a
+        // deal with no paid deposit is never walked through the country / lead-time prompts.
+        ticketService.requireImportRequestIssuable(requireTicketSummary(ticketId), true);
+
         // 400 before anything is written (the picker and auto-create below both write).
         Map<String, ImportRequestRequests.NewFactoryLeadTimeInput> suppliedLeadTimes =
             validatedLeadTimes(request);
@@ -291,9 +295,6 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว");
         }
-        // The payment gate applies at create now (widened gate, same as issue()).
-        ticketService.requireImportRequestIssuable(requireTicketSummary(ticketId), true);
-
         for (NewRow n : newRows) {
             FactoryGroup group = n.group();
             long id = stored.insertDraft(ticketId, group.factoryId(), group.factoryName(),

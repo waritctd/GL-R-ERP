@@ -141,6 +141,30 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
     }
 
     /**
+     * Review fix: the payment gate refuses FIRST. A deal with no paid deposit whose line also names a
+     * brand-new factory (no country, no lead time) must get the gate's 409, not the missing-country
+     * 409 that would walk sales through both popups before refusing — and nothing is written (no
+     * auto-created factory either).
+     */
+    @Test
+    void createDrafts_paymentGateRefusesBeforeTheCountryAndLeadTimePrompts() {
+        long ticketId = insertTicket("GATE-FIRST", null);
+        insertItem(ticketId, "Brand New Gate Factory Co", "Line", "60x60", "10", "pcs", 0);
+        Long factoriesBefore = jdbc.queryForObject(
+            "SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("รับชำระมัดจำ").doesNotContain("ประเทศ");
+            });
+
+        assertThat(service.list(ticketId, owner)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class))
+            .isEqualTo(factoriesBefore);
+    }
+
+    /**
      * Cheap nit (REVIEW ROUND 3): {@code CUSTOMER_CONFIRMED} on a deposit-REQUIRED policy (the
      * default — {@code insertTicket} never overrides {@code deposit_policy}, so this ticket carries
      * V51's {@code DEFAULT 'REQUIRED'}) is STILL refused even under the WIDENED {@code

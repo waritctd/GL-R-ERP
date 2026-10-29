@@ -9,6 +9,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { depositReadyForIr } from './dealMoneyStatus.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
@@ -391,7 +392,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // any external caller (PR #1189's imperative handle: createIrDrafts() => requestCreateIrDrafts()).
   // Returns false (and says why) while a factory-less line still has no factory, so the picker can
   // never be bypassed.
+  const depositReady = depositReadyForIr(summary);
+  const DEPOSIT_HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
   function requestCreateIrDrafts() {
+    if (!depositReady) {
+      showToast?.('error', DEPOSIT_HINT);
+      return false;
+    }
     if (!allLinesPicked) {
       showToast?.('error', 'เลือกโรงงานให้ครบทุกรายการก่อนออกใบขอซื้อ (IR)');
       document.querySelector('[data-testid="deal-fulfilment-stored-ir"]')?.scrollIntoView?.({ block: 'start' });
@@ -794,7 +801,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {canFullWriteStoredIr ? (
-                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked}
+                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady}
                   onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
                   {/* Nit: once the deal already has rows, "ออกใบขอซื้อ (IR)" read as though it would
                       create a fresh set for every factory again
@@ -805,6 +812,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 </Button>
               ) : null}
             </div>
+            {canFullWriteStoredIr && !depositReady ? (
+              <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-deposit-hint">{DEPOSIT_HINT}</p>
+            ) : null}
             <p className="text-2xs text-text-muted">
               หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
             </p>

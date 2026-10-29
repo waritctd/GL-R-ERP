@@ -12367,6 +12367,11 @@ export const api = {
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
       }
+      // Payment gate FIRST (same predicate as issue() below), before any prompt-producing check.
+      if (!(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
+        || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED'))) {
+        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
+      }
       // Supplied per-factory lead times (10-29): 400 on a bad value, before anything is written.
       const suppliedLeadTimes = new Map();
       for (const lt of request?.leadTimes ?? []) {
@@ -12396,10 +12401,6 @@ export const api = {
         fail(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${missingLeadTime.join(', ')}`, 409);
       }
       if (newGroups.length === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
-      if (!(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)
-        || (depositBypassesNotice(ticket) && ticket.paymentStatus === 'CUSTOMER_CONFIRMED'))) {
-        fail('ออกใบขอนำเข้า (IR) ได้เฉพาะเมื่อรับชำระมัดจำแล้ว (หรือได้รับการยกเว้นมัดจำ) เท่านั้น', 409);
-      }
       const newIds = [];
       for (const group of newGroups) {
         const supplied = suppliedFor(group);

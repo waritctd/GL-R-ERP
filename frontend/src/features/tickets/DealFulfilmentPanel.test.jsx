@@ -76,7 +76,7 @@ function issuedRow(over = {}) {
   };
 }
 
-const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus: null };
+const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus: null, paymentStatus: 'DEPOSIT_PAID' };
 
 // `rows` may be an Error, to render the panel with a failed ใบขอซื้อ fetch.
 function renderPanel(user, rows = [draftRow()], {
@@ -433,6 +433,50 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
 
       await waitFor(() => expect(screen.queryByTestId('factory-lead-time-submit')).toBeNull());
       expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Review fix: the create button mirrors TicketService#requireImportRequestIssuable(summary, true)
+  // (DEPOSIT_NOTICE_ISSUED / DEPOSIT_PAID / AWAITING_FINAL_PAYMENT / FULLY_PAID, or a not-required
+  // deposit policy that has reached CUSTOMER_CONFIRMED) instead of offering a click that can only 409.
+  describe('deposit-ready gate on the create button', () => {
+    const HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
+    const dealAt = (paymentStatus, depositPolicy = 'REQUIRED') => ({ ...summary, paymentStatus, depositPolicy });
+
+    it.each([['CUSTOMER_CONFIRMED'], [null]])('is disabled with the hint at paymentStatus %s', async (paymentStatus) => {
+      renderPanel(OWNER, [], { summary: dealAt(paymentStatus) });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(button.disabled).toBe(true);
+      expect(screen.getByTestId('ir-deposit-hint').textContent).toContain(HINT);
+    });
+
+    it.each([['DEPOSIT_NOTICE_ISSUED'], ['DEPOSIT_PAID'], ['AWAITING_FINAL_PAYMENT'], ['FULLY_PAID']])(
+      'is enabled, no hint, at paymentStatus %s (same set as the server gate)', async (paymentStatus) => {
+        renderPanel(OWNER, [], { summary: dealAt(paymentStatus) });
+        const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+        expect(button.disabled).toBe(false);
+        expect(screen.queryByTestId('ir-deposit-hint')).toBeNull();
+      });
+
+    it.each([['WAIVED'], ['NOT_REQUIRED'], ['CREDIT_CUSTOMER']])(
+      'a %s deposit policy is enabled once CUSTOMER_CONFIRMED, and still disabled before it', async (policy) => {
+        const ok = renderPanel(OWNER, [], { summary: dealAt('CUSTOMER_CONFIRMED', policy) });
+        expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(false);
+        ok.unmount();
+        renderPanel(OWNER, [], { summary: dealAt(null, policy) });
+        expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(true);
+      });
+
+    it('the imperative entry point (ขั้น 11 sticky button) refuses early with the same message', async () => {
+      const showToast = vi.fn();
+      const ref = React.createRef();
+      renderPanel(OWNER, [], { summary: dealAt('CUSTOMER_CONFIRMED'), showToast, ref });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      let started;
+      started = ref.current.createIrDrafts();
+      expect(started).toBe(false);
+      expect(showToast).toHaveBeenCalledWith('error', HINT);
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
     });
   });
 
