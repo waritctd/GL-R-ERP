@@ -9,6 +9,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { depositReadyForIr } from './dealMoneyStatus.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
@@ -16,6 +17,15 @@ import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
 
 const MISSING_COUNTRY_PREFIX = 'กรุณาระบุประเทศให้กับโรงงานใหม่: ';
+// 409 prefix of ImportRequestService#MISSING_LEAD_TIME_PREFIX: the factories listed after it have no lead
+// time from the quotation or the country default (owner ruling 10-29).
+const MISSING_LEAD_TIME_PREFIX = 'กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ';
+
+function parseFactoryNames(message, prefix) {
+  return message.slice(prefix.length).split(',')
+    .map((s) => s.trim().replace(/\s+/g, ' '))
+    .filter(Boolean);
+}
 
 // One factory NAME's country pick, for the createDrafts auto-create path (owner decision 09-18):
 // a real country, or 'ZZ' อื่นๆ with a required typed name — same pairing rule
@@ -42,7 +52,7 @@ function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClo
               countryOther: entries[name].countryCode === 'ZZ' ? entries[name].countryOther.trim() : null,
             })))}
             data-testid="new-factory-country-submit">
-            สร้างใบ IR
+            ออกใบขอซื้อ (IR)
           </Button>
         </>
       )}
@@ -82,6 +92,59 @@ function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClo
                 />
               </FormField>
             ) : null}
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+// One factory NAME's import lead time (min-max days), for a new factory whose lead time comes from
+// neither the quotation nor the country default. Same bounds as the server: whole days 1-365, min <= max.
+function FactoryLeadTimeModal({ factoryNames, onClose, onSubmit, submitting }) {
+  const [entries, setEntries] = useState(() => Object.fromEntries(
+    factoryNames.map((name) => [name, { min: '', max: '' }]),
+  ));
+  const valid = (v) => /^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 365;
+  const ready = factoryNames.every((name) => {
+    const e = entries[name];
+    return e && valid(e.min) && valid(e.max) && Number(e.min) <= Number(e.max);
+  });
+  const set = (name, key, value) => setEntries((d) => ({ ...d, [name]: { ...d[name], [key]: value } }));
+  return (
+    <Modal
+      title="ระบุระยะเวลานำเข้าของโรงงาน"
+      subtitle="โรงงานเหล่านี้ยังไม่มีระยะเวลานำเข้าจากใบเสนอราคาหรือค่าเริ่มต้นของประเทศ"
+      onClose={onClose}
+      footer={(
+        <>
+          <Button type="button" variant="secondary" onClick={onClose} data-testid="factory-lead-time-cancel">ยกเลิก</Button>
+          <Button type="button" variant="primary" disabled={!ready || submitting}
+            onClick={() => onSubmit(factoryNames.map((name) => ({
+              factoryName: name, minDays: Number(entries[name].min), maxDays: Number(entries[name].max),
+            })))}
+            data-testid="factory-lead-time-submit">
+            ออกใบขอซื้อ (IR)
+          </Button>
+        </>
+      )}
+    >
+      <div className="grid gap-3">
+        {factoryNames.map((name) => (
+          <div key={name} className="grid gap-2 rounded-md border border-border-subtle p-2.5">
+            <strong className="text-sm">{name}</strong>
+            <div className="grid grid-cols-2 gap-2">
+              <FormField label="ขั้นต่ำ (วัน)" htmlFor={`factory-lead-time-min-${name}`} required>
+                <input id={`factory-lead-time-min-${name}`} data-testid={`factory-lead-time-min-${name}`}
+                  type="number" min="1" max="365" step="1" inputMode="numeric"
+                  value={entries[name].min} onChange={(e) => set(name, 'min', e.target.value)} />
+              </FormField>
+              <FormField label="สูงสุด (วัน)" htmlFor={`factory-lead-time-max-${name}`} required>
+                <input id={`factory-lead-time-max-${name}`} data-testid={`factory-lead-time-max-${name}`}
+                  type="number" min="1" max="365" step="1" inputMode="numeric"
+                  value={entries[name].max} onChange={(e) => set(name, 'max', e.target.value)} />
+              </FormField>
+            </div>
           </div>
         ))}
       </div>
@@ -273,12 +336,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   //     parse ever drift — it surfaces a plain error instead and lets the rep press "สร้างใบขอซื้อ"
   //     again deliberately.
   const [missingFactoryRetryKey, setMissingFactoryRetryKey] = useState(null);
+  // Same loop guard for the lead-time popup (10-29). `leadTimeCountries` remembers the country picks
+  // already made, so the lead-time retry still carries them when country came first.
+  const [leadTimeNames, setLeadTimeNames] = useState(null); // string[] | null
+  const [leadTimeRetryKey, setLeadTimeRetryKey] = useState(null);
+  const [leadTimeCountries, setLeadTimeCountries] = useState(null);
   const countriesQuery = useQuery({
     queryKey: ['priceImport', 'countries'],
     queryFn: () => api.priceImport.countries(),
     enabled: newFactoryNames != null,
   });
-  // CR-1 (R6 / R9): sales presses สร้างใบ IR, one IR per factory is created, and each PDF downloads
+  // CR-1 (R6 / R9): sales presses ออกใบขอซื้อ (IR), one IR per factory is created, and each PDF downloads
   // straight away so sales can hand it over (import downloads the same IR from /fulfilment). A failed
   // download never undoes the create — the IRs exist, the toast says so, the cards below still carry
   // their own PDF buttons.
@@ -289,7 +357,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       downloadBlob(blob, `IR-${row.docNumber ?? `draft-${row.id}`}-${row.factoryName}`, 'pdf');
     }));
     if (outcomes.some((o) => o.status === 'rejected')) {
-      showToast?.('error', 'สร้างใบ IR แล้ว แต่ดาวน์โหลด PDF ไม่สำเร็จ — ดาวน์โหลดได้จากรายการด้านล่าง');
+      showToast?.('error', 'ออกใบขอซื้อ (IR) แล้ว แต่ดาวน์โหลด PDF ไม่สำเร็จ — ดาวน์โหลดได้จากรายการด้านล่าง');
     }
   }
   // Factory-less lines (W3-03 follow-up, owner ruling 2026-10-29): a free-text line on a direct-
@@ -320,13 +388,19 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     }
     return Object.keys(body).length > 0 ? body : undefined;
   }
-  // The ONE entry point for creating IR drafts: the panel's สร้างใบ IR button calls it, and so must
+  // The ONE entry point for creating IR drafts: the panel's ออกใบขอซื้อ (IR) button calls it, and so must
   // any external caller (PR #1189's imperative handle: createIrDrafts() => requestCreateIrDrafts()).
   // Returns false (and says why) while a factory-less line still has no factory, so the picker can
   // never be bypassed.
+  const depositReady = depositReadyForIr(summary);
+  const DEPOSIT_HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
   function requestCreateIrDrafts() {
+    if (!depositReady) {
+      showToast?.('error', DEPOSIT_HINT);
+      return false;
+    }
     if (!allLinesPicked) {
-      showToast?.('error', 'เลือกโรงงานให้ครบทุกรายการก่อนสร้างใบ IR');
+      showToast?.('error', 'เลือกโรงงานให้ครบทุกรายการก่อนออกใบขอซื้อ (IR)');
       document.querySelector('[data-testid="deal-fulfilment-stored-ir"]')?.scrollIntoView?.({ block: 'start' });
       return false;
     }
@@ -342,25 +416,43 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       return { result, knownIds };
     },
     onSuccess: ({ result, knownIds }) => {
-      showToast?.('success', 'สร้างใบ IR แล้ว');
+      showToast?.('success', 'ออกใบขอซื้อ (IR) แล้ว');
       downloadCreatedIrs((result?.importRequests ?? []).filter((r) => !knownIds.has(r.id) && r.status !== 'SUPERSEDED'));
       setNewFactoryNames(null);
       setMissingFactoryRetryKey(null);
+      setLeadTimeNames(null);
+      setLeadTimeRetryKey(null);
+      setLeadTimeCountries(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
       invalidateAfterFulfilmentChange();
     },
     onError: (err, variables) => {
+      if (typeof err.message === 'string' && err.message.startsWith(MISSING_LEAD_TIME_PREFIX)) {
+        const names = parseFactoryNames(err.message, MISSING_LEAD_TIME_PREFIX);
+        const key = [...names].map((n) => n.toLowerCase()).sort().join('|');
+        setNewFactoryNames(null);
+        setMissingFactoryRetryKey(null);
+        if (variables?.leadTimes?.length && key === leadTimeRetryKey) {
+          setLeadTimeNames(null);
+          setLeadTimeRetryKey(null);
+          setLeadTimeCountries(null);
+          onError(new Error('ยังระบุระยะเวลานำเข้าไม่ครบ — กรุณากดออกใบขอซื้อ (IR) อีกครั้งแล้วลองใหม่'));
+          return;
+        }
+        setLeadTimeCountries(variables?.newFactoryCountries ?? null);
+        setLeadTimeRetryKey(key);
+        setLeadTimeNames(names);
+        return;
+      }
       if (typeof err.message === 'string' && err.message.startsWith(MISSING_COUNTRY_PREFIX)) {
-        const names = err.message.slice(MISSING_COUNTRY_PREFIX.length).split(',')
-          .map((s) => s.trim().replace(/\s+/g, ' '))
-          .filter(Boolean);
+        const names = parseFactoryNames(err.message, MISSING_COUNTRY_PREFIX);
         const key = [...names].map((n) => n.toLowerCase()).sort().join('|');
         const wasARetry = Boolean(variables?.newFactoryCountries?.length);
         if (wasARetry && key === missingFactoryRetryKey) {
           setNewFactoryNames(null);
           setMissingFactoryRetryKey(null);
-          onError(new Error('ยังระบุโรงงานไม่ครบ — กรุณากดสร้างใบ IR อีกครั้งแล้วลองใหม่'));
+          onError(new Error('ยังระบุโรงงานไม่ครบ — กรุณากดออกใบขอซื้อ (IR) อีกครั้งแล้วลองใหม่'));
           return;
         }
         setMissingFactoryRetryKey(key);
@@ -709,24 +801,27 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {canFullWriteStoredIr ? (
-                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked}
+                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady}
                   onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
-                  {/* Nit: once the deal already has rows, "สร้างใบ IR" read as though it would
+                  {/* Nit: once the deal already has rows, "ออกใบขอซื้อ (IR)" read as though it would
                       create a fresh set for every factory again
                       — createDrafts actually SKIPS factories already covered (see its own
                       CONFLICT-on-nothing-new behaviour), so the label now says what it really
                       does the second time. */}
-                  {liveStoredIrRows.length > 0 ? 'สร้างใบ IR โรงงานที่ยังไม่มี' : 'สร้างใบ IR'}
+                  {liveStoredIrRows.length > 0 ? 'ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี' : 'ออกใบขอซื้อ (IR)'}
                 </Button>
               ) : null}
             </div>
+            {canFullWriteStoredIr && !depositReady ? (
+              <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-deposit-hint">{DEPOSIT_HINT}</p>
+            ) : null}
             <p className="text-2xs text-text-muted">
               หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
             </p>
             {canFullWriteStoredIr && factorylessLines.length > 0 ? (
               <div className="grid gap-2 rounded-md border border-dashed border-border-muted p-3" data-testid="ir-line-factory-picker">
                 <p className="m-0 text-xs font-bold text-text-secondary">
-                  รายการต่อไปนี้ยังไม่มีโรงงาน — เลือกโรงงานก่อนสร้างใบ IR
+                  รายการต่อไปนี้ยังไม่มีโรงงาน — เลือกโรงงานก่อนออกใบขอซื้อ (IR)
                 </p>
                 {factoryNamesQuery.isError ? (
                   <p className="m-0 text-xs font-bold text-danger" data-testid="ir-line-factory-error">
@@ -1083,6 +1178,18 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             ))}
           </div>
         </Modal>
+      ) : null}
+
+      {leadTimeNames ? (
+        <FactoryLeadTimeModal
+          key={leadTimeRetryKey}
+          factoryNames={leadTimeNames}
+          submitting={createDraftsMutation.isPending}
+          onClose={() => setLeadTimeNames(null)}
+          onSubmit={(leadTimes) => createDraftsMutation.mutate(buildCreatePayload({
+            ...(leadTimeCountries ? { newFactoryCountries: leadTimeCountries } : {}), leadTimes,
+          }))}
+        />
       ) : null}
 
       {newFactoryNames ? (

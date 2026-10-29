@@ -17,7 +17,6 @@ import {
   declareStockCoverage,
   expectNeverEntered,
   expectRoute,
-  issueImportRequestDraft,
   logActivity,
   readDeal,
   resolveFactory,
@@ -171,12 +170,10 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
     // it is written against the controllers (ImportRequestController) and has not been executed.
     let importRequests;
     await test.step('S10 -> S12 (-> PROCUREMENT): auto, the first per-factory ใบขอซื้อ is issued — S11 (DEPOSIT_RECEIVED) is a real, structural skip here, not an oversight', async () => {
-      const drafts = await createImportRequestDrafts(sessions, deal.id);
-      expect(drafts.length, 'one DRAFT per factory').toBeGreaterThan(0);
-      importRequests = [];
-      for (const draft of drafts) {
-        importRequests.push(await issueImportRequestDraft(sessions, draft.id));
-      }
+      // Create ISSUES one ใบขอซื้อ per factory in the same call (10-29): nothing left to issue.
+      importRequests = await createImportRequestDrafts(sessions, deal.id);
+      expect(importRequests.length, 'one ISSUED ใบขอซื้อ per factory').toBeGreaterThan(0);
+      for (const ir of importRequests) expect(ir.status).toBe('ISSUED');
       const ticket = await readDeal(sessions, 'sales', deal.id);
       expect(ticket.summary.salesStage).toBe('PROCUREMENT');
       expect(ticket.summary.fulfillmentStatus).toBe('IR_ISSUED');

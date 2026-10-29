@@ -4535,7 +4535,7 @@ describe('CR-1 factory card — the factory\'s IR row, read-only for import (R9)
     await waitForLoaded();
     const row = await screen.findByTestId('pcr-ir-91');
     expect(row.textContent).toContain('ฉบับร่าง');
-    expect(screen.queryByRole('button', { name: /สร้างใบ IR|ออกเลข|ออกฉบับแก้ไข/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /สร้างใบ IR|ออกใบขอซื้อ|ออกเลข|ออกฉบับแก้ไข/ })).toBeNull();
   });
 
   it('matches the factory by id when both carry one, and ignores SUPERSEDED rows and other factories', async () => {

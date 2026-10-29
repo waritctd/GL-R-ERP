@@ -146,7 +146,7 @@ async function driveTwoFactoryTicketToOrderReceived() {
 
 describe('mockApi storedImportRequests — S3: rollup requires EVERY required factory issued+received', () => {
   it(
-    'does NOT roll the deal up to GOODS_RECEIVED while a second required factory is still only DRAFT',
+    'does NOT roll the deal up to GOODS_RECEIVED while a second required factory is issued but not yet received',
     async () => {
       const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
 
@@ -159,15 +159,15 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
       // given role), so this used to switch to 'ceo' for the call and is no longer allowed to.
       await api.tickets.setDepositPolicy(ticketId, { policy: 'NOT_REQUIRED', reason: 'ทดสอบ S3' });
 
-      const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
-      expect(drafts).toHaveLength(2); // Panaria SpA + REFIN.
-      const panariaDraft = drafts.find((r) => r.factoryName === 'Panaria SpA');
-      const refinDraft = drafts.find((r) => r.factoryName === 'REFIN');
-      expect(panariaDraft).toBeTruthy();
-      expect(refinDraft).toBeTruthy();
+      // 10-29: create also ISSUES, so both rows come back ISSUED.
+      const { importRequests: created } = await api.storedImportRequests.createDrafts(ticketId, {});
+      expect(created).toHaveLength(2); // Panaria SpA + REFIN.
+      const panariaIssued = created.find((r) => r.factoryName === 'Panaria SpA');
+      const refinIssued = created.find((r) => r.factoryName === 'REFIN');
+      expect(panariaIssued?.status).toBe('ISSUED');
+      expect(refinIssued?.status).toBe('ISSUED');
 
-      // Issue and fully advance ONLY Panaria SpA — REFIN stays a DRAFT, never issued.
-      const { importRequest: panariaIssued } = await api.storedImportRequests.issue(panariaDraft.id, {});
+      // Fully advance ONLY Panaria SpA — REFIN stays issued but not received.
       await api.auth.login({ role: 'import' });
       for (const target of ['ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'AWAITING_CUSTOMS']) {
         await api.storedImportRequests.advanceStep(panariaIssued.id, { targetStep: target });
@@ -185,9 +185,7 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
       expect(afterPanaria.fulfillmentStatus).not.toBe('GOODS_RECEIVED');
       expect(afterPanaria.fulfillmentStatus).toBe('IR_ISSUED');
 
-      // Now issue and receive REFIN too — every required factory has an ISSUED row, all RECEIVED.
-      await api.auth.login({ role: 'sales' });
-      const { importRequest: refinIssued } = await api.storedImportRequests.issue(refinDraft.id, {});
+      // Now receive REFIN too — every required factory has an ISSUED row, all RECEIVED.
       await api.auth.login({ role: 'import' });
       for (const target of ['ORDERED', 'PICKED_UP', 'IN_TRANSIT', 'AWAITING_CUSTOMS', 'RECEIVED']) {
         await api.storedImportRequests.advanceStep(refinIssued.id, { targetStep: target });
@@ -201,7 +199,7 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
 });
 
 describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTLY CUSTOMER_CONFIRMED', () => {
-  it('issue() succeeds once a bypass-policy deal is genuinely CUSTOMER_CONFIRMED', async () => {
+  it('create (which now issues) succeeds once a bypass-policy deal is genuinely CUSTOMER_CONFIRMED', async () => {
     const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
     // driveTwoFactoryTicketToOrderReceived's own confirmOrder already leaves paymentStatus at
     // CUSTOMER_CONFIRMED — setting a bypass policy on TOP of that is exactly the "bypass-policy
@@ -212,9 +210,9 @@ describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTL
     await api.tickets.setDepositPolicy(ticketId, { policy: 'WAIVED', reason: 'ทดสอบ S4' });
 
     const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
-    const draft = drafts[0];
-    const { importRequest: issued } = await api.storedImportRequests.issue(draft.id, {});
-    expect(issued.status).toBe('ISSUED');
+    // 10-29: the payment gate now applies at create, which also issues.
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(drafts[0].status).toBe('ISSUED');
   });
 });
 
