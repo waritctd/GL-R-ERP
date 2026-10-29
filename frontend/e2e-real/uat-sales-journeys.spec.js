@@ -6,20 +6,19 @@ import {
   PRICING_REQUEST_STATUS,
   TICKET_STATUS,
   acceptCustomerQuotation,
+  advanceImportStep,
   advanceStage,
   cancelDeal,
   completeDelivery,
   confirmFinalPayment,
   confirmOrder,
   createDeal,
+  createImportRequestDrafts,
   declareStockCoverage,
   expectNeverEntered,
   expectRoute,
-  issueImportRequest,
+  issueImportRequestDraft,
   logActivity,
-  markGoodsReceived,
-  markIrSent,
-  markShipping,
   readDeal,
   resolveFactory,
   runPricingChainToIssue,
@@ -161,25 +160,46 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       expect(ticket.summary.salesStage).toBe('ORDER_RECEIVED');
     });
 
-    await test.step('waive the deposit — needed BEFORE issueImportRequest below, or its depositReady gate 409s first', async () => {
+    await test.step('waive the deposit — needed BEFORE issuing the per-factory ใบขอซื้อ below, or its deposit gate 409s first', async () => {
       await waiveDeposit(sessions, deal.id, {
         reason: 'e2e Case A: full route proof needs no real DepositNoticeService document',
       });
     });
 
-    await test.step('S10 -> S12 (-> PROCUREMENT): auto, issueImportRequest — S11 (DEPOSIT_RECEIVED) is a real, structural skip here, not an oversight', async () => {
-      const updated = await issueImportRequest(sessions, deal.id);
-      expect(updated.summary.salesStage).toBe('PROCUREMENT');
+    // W3-04: the one-click issueImportRequest / ir-sent / shipping / goods-received chain is closed (409).
+    // Case A's import goes through the per-factory ใบขอซื้อ. NOTE: this spec cannot be run locally —
+    // it is written against the controllers (ImportRequestController) and has not been executed.
+    let importRequests;
+    await test.step('S10 -> S12 (-> PROCUREMENT): auto, the first per-factory ใบขอซื้อ is issued — S11 (DEPOSIT_RECEIVED) is a real, structural skip here, not an oversight', async () => {
+      const drafts = await createImportRequestDrafts(sessions, deal.id);
+      expect(drafts.length, 'one DRAFT per factory').toBeGreaterThan(0);
+      importRequests = [];
+      for (const draft of drafts) {
+        importRequests.push(await issueImportRequestDraft(sessions, draft.id));
+      }
+      const ticket = await readDeal(sessions, 'sales', deal.id);
+      expect(ticket.summary.salesStage).toBe('PROCUREMENT');
+      expect(ticket.summary.fulfillmentStatus).toBe('IR_ISSUED');
     });
 
-    await test.step('the mid-fulfilment walk to SHIPPING (fulfilment axis only — no DealStage change from either call)', async () => {
-      await markIrSent(sessions, deal.id);
-      await markShipping(sessions, deal.id);
+    await test.step('the mid-fulfilment walk (fulfilment axis only — no DealStage change until every factory is received)', async () => {
+      for (const row of importRequests) {
+        await advanceImportStep(sessions, row.id, 'ORDERED');
+        await advanceImportStep(sessions, row.id, 'PICKED_UP');
+        await advanceImportStep(sessions, row.id, 'IN_TRANSIT');
+        await advanceImportStep(sessions, row.id, 'AWAITING_CUSTOMS');
+      }
+      const ticket = await readDeal(sessions, 'sales', deal.id);
+      expect(ticket.summary.salesStage).toBe('PROCUREMENT');
     });
 
-    await test.step('S12 -> S18 (-> DELIVERY_SCHEDULING): auto, markGoodsReceived — the ONLY non-stock path there', async () => {
-      const updated = await markGoodsReceived(sessions, deal.id);
-      expect(updated.summary.salesStage).toBe('DELIVERY_SCHEDULING');
+    await test.step('S12 -> S18 (-> DELIVERY_SCHEDULING): auto, the LAST factory RECEIVED rolls the deal up to GOODS_RECEIVED — the ONLY non-stock path there', async () => {
+      for (const row of importRequests) {
+        await advanceImportStep(sessions, row.id, 'RECEIVED');
+      }
+      const ticket = await readDeal(sessions, 'sales', deal.id);
+      expect(ticket.summary.fulfillmentStatus).toBe('GOODS_RECEIVED');
+      expect(ticket.summary.salesStage).toBe('DELIVERY_SCHEDULING');
     });
 
     await test.step('S18 -> S19 (-> DELIVERED): auto, completeDelivery (WAREHOUSE source — nothing was ever declared from stock on this route)', async () => {
@@ -446,8 +466,8 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
     // chain above has to run FIRST, and stock only substitutes for the import request afterwards.
 
     await test.step(
-      "waive the deposit — MUST happen before issueImportRequest's 409 below, or that 409 would " +
-        'prove the deposit gate rather than the fulfillment-status gate (see waiveDeposit\'s own doc)',
+      'waive the deposit — so the declaration below is the only thing that changed on this deal ' +
+        "(see waiveDeposit's own doc)",
       async () => {
         await waiveDeposit(sessions, deal.id, {
           reason: 'e2e Case D: stock deal, no real DepositNoticeService document',
@@ -474,17 +494,16 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
     });
 
     await test.step(
-      'the import path is now STRUCTURALLY closed — issueImportRequest refuses 409, for the ' +
-        'fulfillment reason specifically, not the deposit one',
+      'the import path is now STRUCTURALLY closed — creating per-factory ใบขอซื้อ refuses 409 because ' +
+        'every line is covered from stock (the one-click legacy IR is closed for every deal, W3-04, so ' +
+        'it can no longer carry this proof)',
       async () => {
-        const refused = await issueImportRequest(sessions, deal.id, { expect: 409 });
+        const refused = await createImportRequestDrafts(sessions, deal.id, { expect: 409 });
         const body = await refused.json();
         expect(
           body.message,
-          'must be the fulfillmentStatus-already-set message ("คำขอนำเข้านี้ถูกออกไปแล้ว"), proving ' +
-            'waiveDeposit above already cleared the OTHER possible 409 cause — this is what makes ' +
-            '"skipped PROCUREMENT" a structural fact rather than an ordering coincidence'
-        ).toContain('คำขอนำเข้านี้ถูกออกไปแล้ว');
+          'must be the nothing-to-order message — fully covered from stock, so PROCUREMENT was skipped'
+        ).toContain('ครอบคลุมจากสต็อกทั้งหมด');
       }
     );
 

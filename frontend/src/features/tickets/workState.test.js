@@ -84,27 +84,22 @@ describe('resolveWorkState', () => {
   });
 
   it('import viewer on an import-gated stage falls through to nextImportAction', () => {
-    const deal = { id: 1, lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', status: 'quotation_issued', fulfillmentStatus: null };
+    const deal = { id: 1, lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', status: 'quotation_issued', fulfillmentStatus: 'IR_SENT' };
     const result = resolveWorkState({ role: 'import' }, deal, []);
     expect(result).not.toHaveProperty('waitingRoleLabel');
-    expect(result.action).toMatchObject({ code: 'issueImportRequest' });
+    expect(result.action).toMatchObject({ code: 'markShipping' });
   });
 
-  // FIX 1 rewrite (backend-verified scenario 2, TicketService.java:702): the
-  // stage only advances to PROCUREMENT once import issues the IR, so while
-  // fulfillmentStatus is still null, the deal sits at DEPOSIT_RECEIVED
-  // (gate: 'account') even though issuing the IR is squarely import's own
-  // pending action. Before FIX 1 this read as "รอฝ่ายบัญชี" with no primary —
-  // resolveWorkState must now surface nextImportAction's real action instead
-  // of gating on the stage first.
-  it('import viewer at DEPOSIT_RECEIVED (gate: account) with fulfillmentStatus null still gets issueImportRequest, not a waiting banner', () => {
+  // W3-01 (owner ruling 2026-10-29): a confirmed deal with no IR yet is not an import to-do any more
+  // (sales raises the per-factory IR), so import gets no primary action — and still no waiting banner.
+  it('import viewer at DEPOSIT_RECEIVED with fulfillmentStatus null has no action and no waiting banner', () => {
     const deal = {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED',
       status: 'quotation_issued', fulfillmentStatus: null,
     };
     const result = resolveWorkState({ role: 'import' }, deal, []);
     expect(result).not.toHaveProperty('waitingRoleLabel');
-    expect(result.action).toMatchObject({ code: 'issueImportRequest' });
+    expect(result.action).toBeNull();
   });
 
   it('import viewer on a sales-gated stage has no action and no waiting banner (nextImportAction runs first, correctly finds nothing — fulfilment hasn\'t started)', () => {

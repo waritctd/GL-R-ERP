@@ -37,7 +37,6 @@
 
 export const IMPORT_ACTION_LABELS = {
   pickupPricingRequest: 'รับงาน · ขอราคา',
-  issueImportRequest: 'ออกคำขอนำเข้า',
   markIrSent: 'ส่งคำขอนำเข้าแล้ว',
   markShipping: 'บันทึกออกเดินทาง',
   markGoodsReceived: 'ยืนยันรับเข้าคลัง',
@@ -50,34 +49,22 @@ export const IMPORT_ACTION_LABELS = {
 // PARTIALLY_DELIVERED mid-delivery).
 const DELIVERY_READY_FULFILMENT_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK', 'PARTIALLY_DELIVERED'];
 
-const DEPOSIT_POLICY_BYPASSES_NOTICE = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
-
-/** Mirrors TicketService#requireImportRequestIssuable's deposit condition: a deposit notice
- * issued or the deposit paid, or a deposit-exempt policy whose customer has confirmed. */
-function importDepositReady(ticket) {
-  return ticket?.paymentStatus === 'DEPOSIT_NOTICE_ISSUED'
-    || ticket?.paymentStatus === 'DEPOSIT_PAID'
-    || (DEPOSIT_POLICY_BYPASSES_NOTICE.has(ticket?.depositPolicy) && ticket?.paymentStatus === 'CUSTOMER_CONFIRMED');
-}
-
 /**
  * The fulfilment-chain-only decision — mirrors DealFulfilmentPanel's
  * `issueImportRequest` / `markIrSent` / `markShipping` / `markGoodsReceived`
  * status conditions byte-for-byte (see DealFulfilmentPanel.jsx `can`).
  * `ticket` needs `status` (ticket.status) and `fulfillmentStatus`.
  *
- * Returns one of 'issueImportRequest' | 'markIrSent' | 'markShipping' |
+ * Returns one of 'markIrSent' | 'markShipping' |
  * 'markGoodsReceived' | 'recordDelivery', or `null` when the deal has not
  * reached the fulfilment chain yet (still pricing) or is past it (fully
  * delivered / closed).
  */
 export function nextFulfilmentActionCode(ticket) {
-  const st = ticket?.status;
   const fs = ticket?.fulfillmentStatus ?? null;
-  // Issuing the IR is gated on the DEPOSIT, not on the ticket reaching quotation_issued (owner
-  // ruling 2026-10-01; mirrors TicketService#requireImportRequestIssuable). quotation_issued keeps
-  // its prior behaviour; any other status needs the deposit condition itself.
-  if (fs == null && (st === 'quotation_issued' || importDepositReady(ticket))) return 'issueImportRequest';
+  // No deal-level "issue the IR" step (W3-01/W3-04, owner ruling 2026-10-29): a deal with no
+  // fulfilment status has no import to-do — sales raises the per-factory IR, and Import's lists start
+  // at an ISSUED IR, exactly like /fulfilment.
   // The three in-flight steps key on fulfillmentStatus ALONE, as the backend does (TicketService
   // markIrSent/markShipping/markGoodsReceived and their availableActions never read ticket.status).
   // Once the IR is out the deal must stay advanceable: the redesigned pricing chain does not always

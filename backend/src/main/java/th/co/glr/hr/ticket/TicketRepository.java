@@ -1441,8 +1441,9 @@ public class TicketRepository {
     }
 
     /**
-     * Whether this deal has at least one ISSUED row in the per-factory {@code sales.import_request}
-     * aggregate (V184) — the same refuse-don't-delegate guard {@link #hasLivePurchaseOrders} provides
+     * Whether this deal has at least one live (DRAFT or ISSUED, not SUPERSEDED) row in the per-factory
+     * {@code sales.import_request} aggregate (V184; widened from ISSUED-only by W3-04, owner ruling
+     * 2026-10-29) — the same refuse-don't-delegate guard {@link #hasLivePurchaseOrders} provides
      * for the (dormant) PO path, used by {@code TicketService#markIrSent}/{@code #markShipping}/
      * {@code #markGoodsReceived} to refuse a ticket-level click that cannot say which factory it
      * concerns once the deal is actually tracked per-factory.
@@ -1450,7 +1451,7 @@ public class TicketRepository {
     public boolean hasLiveImportRequests(long ticketId) {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS (
-                SELECT 1 FROM sales.import_request WHERE ticket_id = :ticketId AND status = 'ISSUED'
+                SELECT 1 FROM sales.import_request WHERE ticket_id = :ticketId AND status <> 'SUPERSEDED'
             )
             """, Map.of("ticketId", ticketId), Boolean.class);
         return Boolean.TRUE.equals(value);

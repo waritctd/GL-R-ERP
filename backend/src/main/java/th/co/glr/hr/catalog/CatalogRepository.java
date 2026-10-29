@@ -110,6 +110,22 @@ public class CatalogRepository {
         return result;
     }
 
+    /** price_id -> price_catalog.factories.name, for the ids that resolve to a factory (absent otherwise). */
+    public Map<Long, String> findFactoryNames(Collection<Long> priceIds) {
+        if (priceIds == null || priceIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> names = new HashMap<>();
+        jdbc.query("""
+            SELECT pp.price_id, f.name
+              FROM price_catalog.product_prices pp
+              JOIN price_catalog.factories f ON f.factory_id = pp.factory_id
+             WHERE pp.price_id IN (:priceIds)
+            """, new MapSqlParameterSource().addValue("priceIds", new ArrayList<>(new LinkedHashSet<>(priceIds))),
+            rs -> { names.put(rs.getLong("price_id"), rs.getString("name")); });
+        return names;
+    }
+
     /** One price row's batched pricing-lookup keys (P1b.2) — a null field means "did not
      * resolve", mirroring the deleted single-row {@code findThicknessMm}/{@code
      * findOriginCountryCode}'s {@code Optional.empty()} exactly (see {@link #findPricingKeys}). */

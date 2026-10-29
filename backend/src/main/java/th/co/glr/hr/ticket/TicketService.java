@@ -1047,14 +1047,14 @@ public class TicketService {
      * extracted (V184) from what was this method's own inline check, so {@link ImportRequestService
      * } (the per-factory stored aggregate's {@code issue}) can share EXACTLY this rule rather than
      * re-deriving it in a sibling package, the same "one predicate, never two copies" discipline this
-     * class already applies elsewhere (e.g. {@link #canIssueImportRequest} documents it for itself).
+     * class already applies elsewhere (e.g. the other action predicates documents it for itself).
      *
      * <p>Deliberately does NOT include the {@code fulfillmentStatus == null} check that used to sit
      * beside this in {@link #issueImportRequest} — that check means "never restart an in-flight
      * DEAL-level fulfilment track", which makes sense for the legacy one-shot deal-level IR but not
      * for a per-factory issue: a deal's second, third, ... factory is issued perfectly legitimately
      * while {@code fulfillment_status} already reads {@code IR_ISSUED} from the first. Callers that DO
-     * need that narrower rule (this method, {@link #canIssueImportRequest}) apply it themselves on top.
+     * need that narrower rule (this method, the other action predicates) apply it themselves on top.
      */
     public void requireImportRequestIssuable(TicketSummaryDto s) {
         requireImportRequestIssuable(s, false);
@@ -1063,9 +1063,8 @@ public class TicketService {
     /**
      * @param allowAdvancedPayment (REVIEW ROUND 2, S-C) {@code false} keeps the ORIGINAL gate — the
      *      three states this method has always accepted, unchanged — for the deal's very-first-IR
-     *      semantics: the legacy one-shot {@link #issueImportRequest} and {@link
-     *      #canIssueImportRequest} (the fulfilment-worklist action-availability check) both call the
-     *      narrow overload above and must keep doing so, since "the deal's FIRST IR may issue" is a
+     *      semantics: the narrow overload above (once used by the now-closed one-shot
+     *      {@link #issueImportRequest}) stays the first-IR gate, since "the deal's FIRST IR may issue" is a
      *      narrower question than "may THIS factory's IR issue" once a deal can have several. {@code
      *      true} — used ONLY by {@link th.co.glr.hr.importrequest.ImportRequestService#issue}, the
      *      per-factory STORED path — WIDENS {@code depositReady} to any payment status AT OR AFTER
@@ -1101,28 +1100,19 @@ public class TicketService {
         }
     }
 
+    /**
+     * CLOSED (W3-04, owner ruling 2026-10-29): the one-click, deal-level "issue IR" put a deal at
+     * IR_ISSUED with no document and no factory. Every deal now raises its import requests per factory
+     * ({@link th.co.glr.hr.importrequest.ImportRequestService#createDrafts} then {@code issue}), which
+     * makes the same deal-level writes ({@link #recordFirstImportRequestIssued}). The role check stays
+     * first so a non-import caller still gets 403, not this 409.
+     */
     @Transactional
     public TicketDto issueImportRequest(long ticketId, UserPrincipal actor) {
         requireRole(actor, FULFILMENT_ROLES);
-        TicketSummaryDto s = requireTicket(ticketId).summary();
-        requireActive(s);
-        requireImportRequestIssuable(s);
-        // Never restart an in-flight fulfillment track: re-issuing the IR would
-        // downgrade IR_SENT/SHIPPING/GOODS_RECEIVED back to IR_ISSUED. Also refuses correctly (V184)
-        // once the per-factory stored aggregate (ImportRequestService) has issued this deal's FIRST
-        // factory IR: that path sets fulfillment_status=IR_ISSUED too (recordFirstImportRequestIssued),
-        // so this legacy one-shot action now 409s exactly as it should on an IR-tracked deal.
-        if (s.fulfillmentStatus() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอนำเข้านี้ถูกออกไปแล้ว");
-        }
-        tickets.updateFulfillmentStatus(ticketId, FulfilmentStatus.IR_ISSUED);
-        tickets.addEvent(ticketId, actor.id(), actor.name(),
-            TicketEventKind.IR_ISSUED, s.status(), s.status(), null);
-        // Deal pipeline (V50): the whole import journey (IR→warehouse) lives inside
-        // PROCUREMENT — later fulfillment transitions render from fulfillment_status
-        // and need no further stage writes. Guarded no-op inside.
-        autoAdvanceStage(s, DealStage.PROCUREMENT, actor);
-        return requireTicket(ticketId);
+        requireTicket(ticketId);
+        throw new ApiException(HttpStatus.CONFLICT,
+            "ออกคำขอนำเข้าทั้งดีลไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน");
     }
 
     /**
@@ -2798,7 +2788,7 @@ public class TicketService {
      * requires {@code paymentStatus} to still be null/{@code CUSTOMER_CONFIRMED}, because once a
      * deposit notice exists {@link #waiveDeposit} 409s (Rule 4) rather than 403s — advertising the
      * action there would offer a button that dies on click, the same "never offer a dead action"
-     * discipline {@link #canIssueImportRequest} documents for its own 409 case.
+     * discipline the other action predicates documents for its own 409 case.
      */
     private boolean canSetDepositPolicy(TicketSummaryDto s, UserPrincipal actor) {
         String role = actor.role();
@@ -3158,13 +3148,10 @@ public class TicketService {
             actions.add(new TicketActionDto("SET_BILLING", "payment", "ตั้งค่าการวางบิล",
                 List.of("dueDate")));
         }
-        if (FULFILMENT_ROLES.contains(actor.role()) && canIssueImportRequest(s)) {
-            actions.add(new TicketActionDto("ISSUE_IMPORT_REQUEST", "fulfillment", "ออก IR"));
-        }
         // V184: once the deal is tracked per-factory (>= 1 ISSUED sales.import_request row), these
         // three deal-level buttons all 409 (see markIrSent/markShipping/markGoodsReceived's own
         // hasLiveImportRequests guard) — advertising a dead action is worse than not offering it,
-        // the same discipline canIssueImportRequest already documents for itself.
+        // the same "never advertise a dead action" discipline.
         boolean irTracked = tickets.hasLiveImportRequests(s.id());
         if (FULFILMENT_ROLES.contains(actor.role()) && !irTracked
                 && FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
@@ -3217,7 +3204,7 @@ public class TicketService {
      * advertised ADVANCE_STAGE into all four fact-gated stages regardless of whether the fact
      * held. Clicking one 409'd on {@code requireStageFactsHold}. Advertising an action that dies
      * on click is worse than not offering it, the same discipline {@link #addOperationalActions}
-     * already documents for the removed legacy actions and {@link #canIssueImportRequest} enforces
+     * already documents for the removed legacy actions and the other action predicates enforces
      * by hand; deriving both verbs from the decisions makes it structural instead of remembered.
      */
     private void addStageActions(List<TicketActionDto> actions, List<StageDecisionDto> decisions) {
@@ -3293,22 +3280,6 @@ public class TicketService {
             && !DepositPolicy.bypassesDepositNotice(s.depositPolicy());
     }
 
-    /**
-     * Shares {@link #requireImportRequestIssuable} EXACTLY (down to the rule-5 null tightening) —
-     * this predicate exists only to decide whether to advertise ISSUE_IMPORT_REQUEST in {@link
-     * #actions}. Letting the two drift would advertise an action that immediately 409s on click,
-     * which is worse than not offering it at all (same "never offer a dead action" discipline
-     * {@link #addOperationalActions} already documents for the removed legacy actions).
-     */
-    private boolean canIssueImportRequest(TicketSummaryDto s) {
-        try {
-            requireImportRequestIssuable(s);
-        } catch (ApiException e) {
-            return false;
-        }
-        return s.fulfillmentStatus() == null;
-    }
-
     private boolean canRecordPayment(TicketSummaryDto s, UserPrincipal actor) {
         // GLA-118 (owner ruling 2026-09-20, part A): account only — see PAYMENT_RECORD_ROLES's own
         // Javadoc. This used to be ACCOUNT_ROLES, which let the CEO through.
@@ -3321,8 +3292,8 @@ public class TicketService {
     /**
      * Who may declare stock coverage on THIS deal — the single source of truth for {@link
      * #reserveStock}'s gate and for whether {@link #actions} advertises RESERVE_STOCK, so the two
-     * cannot drift into offering an action that immediately 403s (the same discipline {@link
-     * #canIssueImportRequest} documents for 409s).
+     * cannot drift into offering an action that immediately 403s (the same "never advertise a dead
+     * action" discipline).
      *
      * <p><strong>S18 is Sales's, not Import's — owner decision 2026-09-28.</strong> The access
      * {@code import} used to have here is removed: scheduling delivery / declaring stock coverage

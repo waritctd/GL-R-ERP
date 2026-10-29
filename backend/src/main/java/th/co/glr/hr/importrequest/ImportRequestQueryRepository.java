@@ -170,6 +170,20 @@ public class ImportRequestQueryRepository {
      * column, not a real factory selection. Deriving a factory from brand would therefore invent a
      * relationship this codebase's own data does not assert.
      */
+    public boolean ticketHasItem(long ticketId, long ticketItemId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS(SELECT 1 FROM sales.ticket_item WHERE item_id = :item AND ticket_id = :ticket)",
+            java.util.Map.of("item", ticketItemId, "ticket", ticketId), Boolean.class));
+    }
+
+    /** Records the factory sales chose for a line that had none; never overwrites an existing name. */
+    public void setItemFactoryIfBlank(long ticketId, long ticketItemId, String factoryName) {
+        jdbc.update("""
+            UPDATE sales.ticket_item SET factory = :name
+             WHERE item_id = :item AND ticket_id = :ticket AND (factory IS NULL OR BTRIM(factory) = '')
+            """, java.util.Map.of("name", factoryName, "item", ticketItemId, "ticket", ticketId));
+    }
+
     public List<LineFactoryCandidate> factoryResolutionCandidates(long ticketId) {
         return jdbc.query("""
             SELECT ti.item_id, ti.brand, ti.model, ti.size, ti.unit,

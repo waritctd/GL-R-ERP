@@ -297,6 +297,8 @@ export const API_ROUTES = {
   },
   factoryConfigs: {
     list: '/api/factory-configs',
+    // Names only (id + factoryName), readable by the IR creators (sales) too — see FactoryConfigController#names.
+    names: '/api/factory-configs/names',
     // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
     // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteContacted.
   },

@@ -2216,6 +2216,10 @@ public class DealQuotationService {
      */
     private List<TicketItemRequest> ticketItemsFromQuotation(DealQuotationDto quotation) {
         List<TicketItemRequest> rows = new ArrayList<>();
+        // W3-03: carry the catalogue link and its factory across, as the pricing-request route does, so
+        // import can raise the per-factory IR. A free-text line has neither and keeps both null.
+        Map<Long, String> factoryByPriceId = catalog.findFactoryNames(quotation.items().stream()
+            .map(DealQuotationItemDto::catalogPriceId).filter(java.util.Objects::nonNull).toList());
         for (DealQuotationItemDto item : quotation.items()) {
             if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
                 continue;
@@ -2235,12 +2239,14 @@ public class DealQuotationService {
                 clip(item.color(), TICKET_ITEM_TEXT_MAX),
                 clip(item.texture(), TICKET_ITEM_TEXT_MAX),
                 clip(item.sizeText(), TICKET_ITEM_TEXT_MAX),
-                null, // factory — a direct quotation line carries none
+                clip(item.catalogPriceId() == null ? null : factoryByPriceId.get(item.catalogPriceId()),
+                    TICKET_ITEM_TEXT_MAX),
                 qty, qtySqm, "PIECE",
                 null, null, // rawPrice/rawCurrency — not a costing input, see Javadoc
                 clip(item.unit(), TICKET_ITEM_RAW_UNIT_MAX),
                 null, // proposedPrice — see Javadoc
-                "THB"));
+                "THB",
+                item.catalogPriceId(), null));
         }
         return rows;
     }

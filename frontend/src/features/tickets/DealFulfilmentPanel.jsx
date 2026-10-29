@@ -292,6 +292,47 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       showToast?.('error', 'สร้างใบ IR แล้ว แต่ดาวน์โหลด PDF ไม่สำเร็จ — ดาวน์โหลดได้จากรายการด้านล่าง');
     }
   }
+  // Factory-less lines (W3-03 follow-up, owner ruling 2026-10-29): a free-text line on a direct-
+  // quotation deal has no catalogue item and so no factory — sales picks one when creating the IR.
+  // Only the direct route is checked (liveDirectQuotation): on the pricing-request route a factory
+  // can sit on the request line rather than on the deal line, so "no factory on the line" proves
+  // nothing there. The server ignores a pick for a line that already has one.
+  const factorylessLines = summary?.liveDirectQuotation
+    ? items.filter((i) => !String(i.factory ?? '').trim() && !i.catalogPriceId
+      // import never orders a line fully reserved from stock (ImportRequestQueryRepository: qty - qty_from_stock > 0)
+      && Number(i.qty ?? 0) - Number(i.qtyFromStock ?? 0) > 0)
+    : [];
+  const [lineFactories, setLineFactories] = useState({});
+  const allLinesPicked = factorylessLines.every((l) => lineFactories[l.id]);
+  const factoryNamesQuery = useQuery({
+    queryKey: queryKeys.factoryNames(),
+    queryFn: () => api.factoryConfigs.names().then((r) => r?.factories ?? []),
+    enabled: canFullWriteStoredIr && factorylessLines.length > 0,
+  });
+  // The create payload: the optional extras (country retry) plus the picked factories. `undefined`
+  // when there is nothing to send, so the request shape for ordinary deals is unchanged.
+  function buildCreatePayload(extra) {
+    const body = { ...extra };
+    if (factorylessLines.length > 0) {
+      body.itemFactories = factorylessLines.map((l) => ({
+        ticketItemId: Number(l.id), factoryId: Number(lineFactories[l.id]),
+      }));
+    }
+    return Object.keys(body).length > 0 ? body : undefined;
+  }
+  // The ONE entry point for creating IR drafts: the panel's สร้างใบ IR button calls it, and so must
+  // any external caller (PR #1189's imperative handle: createIrDrafts() => requestCreateIrDrafts()).
+  // Returns false (and says why) while a factory-less line still has no factory, so the picker can
+  // never be bypassed.
+  function requestCreateIrDrafts() {
+    if (!allLinesPicked) {
+      showToast?.('error', 'เลือกโรงงานให้ครบทุกรายการก่อนสร้างใบ IR');
+      document.querySelector('[data-testid="deal-fulfilment-stored-ir"]')?.scrollIntoView?.({ block: 'start' });
+      return false;
+    }
+    createDraftsMutation.mutate(buildCreatePayload());
+    return true;
+  }
   const createDraftsMutation = useMutation({
     // CR-1 (R6): remember which rows already existed, so only the NEWLY created IRs download — the
     // endpoint answers with every row of the deal, new and old alike.
@@ -429,11 +470,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ');
   }
 
-  const issueIrMutation = useMutation({
-    mutationFn: () => api.tickets.issueImportRequest(ticketId),
-    onSuccess: () => { showToast?.('success', 'ออกคำขอนำเข้าแล้ว'); invalidateAfterFulfilmentChange(); },
-    onError,
-  });
   const markIrSentMutation = useMutation({
     mutationFn: () => api.tickets.markIrSent(ticketId),
     onSuccess: () => { showToast?.('success', 'ส่งคำขอนำเข้าแล้ว'); invalidateAfterFulfilmentChange(); },
@@ -489,7 +525,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // it (list rows don't carry availableActions, so that check stays local).
   const fulfilmentActionCode = nextFulfilmentActionCode({ status: st, fulfillmentStatus: fs });
   const can = {
-    issueImportRequest: hasAction('ISSUE_IMPORT_REQUEST') && fulfilmentActionCode === 'issueImportRequest' && isFulfilment,
     markIrSent:         hasAction('IR_SENT') && fulfilmentActionCode === 'markIrSent' && isFulfilment,
     markShipping:       hasAction('SHIPPING') && fulfilmentActionCode === 'markShipping' && isFulfilment,
     markGoodsReceived:  hasAction('GOODS_RECEIVED') && fulfilmentActionCode === 'markGoodsReceived' && isFulfilment,
@@ -523,13 +558,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     // (TicketService#ITEM_WEIGHT_ROLES) is sales_manager/ceo, never isFulfilment (import/ceo).
     setItemWeight:      hasAction('SET_ITEM_WEIGHT_MULTIPLIER') && (role === 'sales_manager' || role === 'ceo'),
   };
-  // A per-factory DRAFT tracks nothing: the server refuses the deal-level chain only once a row is
-  // ISSUED (TicketRepository#hasLiveImportRequests). So a deal-level step this viewer can still
-  // perform keeps its button when drafts exist — hiding it left no way to advance the deal. Issuing
-  // is left out on purpose: a deal that has not started that chain issues per factory instead.
-  const dealLevelStepPending = can.markIrSent || can.markShipping || can.markGoodsReceived;
-  const showDealLevelChain = !hasStoredIrs
-    || (dealLevelStepPending && issuedIrRows.length === 0 && !storedIrQuery.isError);
+  // W3-04 (owner ruling 2026-10-29): the server refuses the deal-level chain once ANY live per-factory
+  // row exists, DRAFT included (TicketRepository#hasLiveImportRequests), so the buttons go with it.
+  // The one-click issue-IR is gone altogether — a deal issues per factory.
+  const showDealLevelChain = !hasStoredIrs;
 
   function openDeliveryModal() {
     const source = fs === 'FROM_STOCK' ? 'STOCK' : 'WAREHOUSE';
@@ -586,7 +618,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // QA-09: the deal page's sticky ขั้น 11 button drives this panel's own create (modal + PDF download stay here).
   const showIrSection = () => document.getElementById('deal-fulfilment-stored-ir')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   useImperativeHandle(ref, () => ({
-    createIrDrafts: () => { showIrSection(); createDraftsMutation.mutate(undefined); },
+    createIrDrafts: () => { showIrSection(); return requestCreateIrDrafts(); },
     showIrSection,
   }));
 
@@ -628,12 +660,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               <SubstepChips currentCode={fs} fromStock={fromStock} />
 
               <div className="flex flex-wrap gap-2">
-                {can.issueImportRequest ? (
-                  <Button type="button" variant="primary" disabled={issueIrMutation.isPending}
-                    onClick={() => issueIrMutation.mutate()} data-testid="deal-fulfilment-issue-ir">
-                    ออกคำขอนำเข้า (IR)
-                  </Button>
-                ) : can.markIrSent ? (
+                {can.markIrSent ? (
                   <Button type="button" variant="primary" disabled={markIrSentMutation.isPending}
                     onClick={() => markIrSentMutation.mutate()} data-testid="deal-fulfilment-mark-ir-sent">
                     ส่งคำขอนำเข้าแล้ว
@@ -682,8 +709,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {canFullWriteStoredIr ? (
-                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending}
-                  onClick={() => createDraftsMutation.mutate(undefined)} data-testid="deal-fulfilment-create-ir-drafts">
+                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked}
+                  onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
                   {/* Nit: once the deal already has rows, "สร้างใบ IR" read as though it would
                       create a fresh set for every factory again
                       — createDrafts actually SKIPS factories already covered (see its own
@@ -696,6 +723,33 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             <p className="text-2xs text-text-muted">
               หนึ่งใบต่อหนึ่งโรงงาน — สร้างอัตโนมัติจากรายการสินค้าที่ต้องสั่งนำเข้า (ไม่รวมส่วนที่จองจากสต็อก)
             </p>
+            {canFullWriteStoredIr && factorylessLines.length > 0 ? (
+              <div className="grid gap-2 rounded-md border border-dashed border-border-muted p-3" data-testid="ir-line-factory-picker">
+                <p className="m-0 text-xs font-bold text-text-secondary">
+                  รายการต่อไปนี้ยังไม่มีโรงงาน — เลือกโรงงานก่อนสร้างใบ IR
+                </p>
+                {factoryNamesQuery.isError ? (
+                  <p className="m-0 text-xs font-bold text-danger" data-testid="ir-line-factory-error">
+                    โหลดรายชื่อโรงงานไม่สำเร็จ — {factoryNamesQuery.error?.message || 'ลองใหม่อีกครั้ง'}
+                  </p>
+                ) : null}
+                {factorylessLines.map((line) => (
+                  <label key={line.id} className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                    <span className="min-w-40 flex-1">{[line.brand, line.model].filter(Boolean).join(' ') || `รายการ ${line.id}`}</span>
+                    <select
+                      value={lineFactories[line.id] ?? ''}
+                      onChange={(e) => setLineFactories((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                      data-testid={`ir-line-factory-${line.id}`}
+                    >
+                      <option value="">เลือกโรงงาน</option>
+                      {(factoryNamesQuery.data ?? []).map((f) => (
+                        <option key={f.id} value={f.id}>{f.factoryName}</option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            ) : null}
             {canFullWriteStoredIr ? (
               <label className="flex flex-wrap items-center gap-2 text-xs font-bold text-text-secondary">
                 กำหนดวันที่ต้องการของ (ค่าเริ่มต้นสำหรับใบใหม่)
@@ -1045,7 +1099,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           countriesError={countriesQuery.isError ? countriesQuery.error : null}
           submitting={createDraftsMutation.isPending}
           onClose={() => setNewFactoryNames(null)}
-          onSubmit={(newFactoryCountries) => createDraftsMutation.mutate({ newFactoryCountries })}
+          onSubmit={(newFactoryCountries) => createDraftsMutation.mutate(buildCreatePayload({ newFactoryCountries }))}
         />
       ) : null}
     </Panel>

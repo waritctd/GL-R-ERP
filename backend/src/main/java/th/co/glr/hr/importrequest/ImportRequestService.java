@@ -233,6 +233,7 @@ public class ImportRequestService {
                 "สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น");
         }
 
+        applyItemFactoryChoices(ticketId, request);
         List<FactoryGroup> groups = resolveFactoryGroups(ticketId, actor.id(), request);
         if (groups.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -1262,6 +1263,37 @@ public class ImportRequestService {
             max = max == null ? row.maxDays() : Math.max(max, row.maxDays());
         }
         return min == null ? null : new LeadTimeDefaults.Range(min, max);
+    }
+
+    /**
+     * Sales' factory pick for a deal line that has none (free-text line on a direct quotation, owner
+     * ruling 2026-10-29). Validated first (unknown factory / a line outside this deal -> 400), applied
+     * only to a line that resolves to no factory at all — a catalogue, PCR or typed-name line keeps
+     * its own. The name is written to {@code ticket_item.factory} so the normal cascade resolves it to
+     * the existing factory; a line still without one afterwards hits today's 409.
+     */
+    private void applyItemFactoryChoices(long ticketId, CreateImportRequestsRequest request) {
+        if (request == null || request.itemFactories() == null || request.itemFactories().isEmpty()) {
+            return;
+        }
+        Map<Long, LineFactoryCandidate> candidates = repository.factoryResolutionCandidates(ticketId).stream()
+            .collect(Collectors.toMap(LineFactoryCandidate::ticketItemId, c -> c, (a, b) -> a));
+        for (ImportRequestRequests.ItemFactoryInput choice : request.itemFactories()) {
+            FactoryConfigDto factory = freshFactoryLookup(choice.factoryId()).orElseThrow(() ->
+                new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบโรงงานที่เลือก"));
+            LineFactoryCandidate line = candidates.get(choice.ticketItemId());
+            if (line == null) {
+                // Not an import candidate (e.g. fully reserved from stock): nothing to order, so the pick is
+                // ignored. A line of ANOTHER deal is still a bad request.
+                if (!repository.ticketHasItem(ticketId, choice.ticketItemId())) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "รายการที่เลือกไม่ได้อยู่ในดีลนี้");
+                }
+                continue;
+            }
+            if (line.directFactoryId() == null && line.candidateFactoryName() == null) {
+                repository.setItemFactoryIfBlank(ticketId, line.ticketItemId(), factory.factoryName());
+            }
+        }
     }
 
     private Optional<FactoryConfigDto> freshFactoryLookup(long factoryId) {

@@ -3297,20 +3297,20 @@ describe('TicketDetailPage', () => {
           ticket: buildTicket({
             summary: {
               status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID',
-              lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', fulfillmentStatus: null,
+              lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', fulfillmentStatus: 'IR_SENT',
             },
           }),
         });
         api.tickets.actions.mockResolvedValue({
-          currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
-          availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' }],
+          currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'IR_SENT', status: 'quotation_issued' },
+          availableActions: [{ action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' }],
         });
 
         renderTicketDetailPage(importUser);
         await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
 
         const sticky = await screen.findByTestId('ticket-primary-action');
-        expect(sticky.getAttribute('data-action')).toBe('issueImportRequest');
+        expect(sticky.getAttribute('data-action')).toBe('markShipping');
 
         fireEvent.click(sticky);
 
@@ -3422,7 +3422,9 @@ describe('TicketDetailPage', () => {
       });
     });
 
-    it('import issues an Import Request via api.tickets.issueImportRequest', async () => {
+    // W3-04 (owner ruling 2026-10-29): the one-click IR is gone — import is offered no ออกคำขอนำเข้า (IR)
+    // button even when a stale server still advertises ISSUE_IMPORT_REQUEST.
+    it('import is offered no one-click Import Request button', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }),
       });
@@ -3430,15 +3432,11 @@ describe('TicketDetailPage', () => {
         currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
         availableActions: [{ action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' }],
       });
-      api.tickets.issueImportRequest.mockResolvedValue({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' } }),
-      });
 
       renderTicketDetailPage(importUser);
       const section = await fulfilmentSection();
-      fireEvent.click(await section.findByRole('button', { name: 'ออกคำขอนำเข้า (IR)' }));
-
-      await waitFor(() => expect(api.tickets.issueImportRequest).toHaveBeenCalledWith(701));
+      expect(section.queryByRole('button', { name: 'ออกคำขอนำเข้า (IR)' })).toBeNull();
+      expect(api.tickets.issueImportRequest).not.toHaveBeenCalled();
     });
 
     it('account sees the section read-only — no fulfilment action buttons, no factory-PO detail', async () => {

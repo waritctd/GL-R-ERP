@@ -601,7 +601,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             "ลูกค้าเครดิตชั้นดี อนุมัติเทอมเครดิตแทนมัดจำ", salesActor);
         assertThat(waived.summary().depositPolicy()).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
 
-        TicketDto afterIr = ticketService.issueImportRequest(ticketId, importActor);
+        ticketService.recordFirstImportRequestIssued(ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
+        TicketDto afterIr = tickets.findById(ticketId).orElseThrow();
         assertThat(afterIr.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
         assertThat(afterIr.summary().salesStage()).isEqualTo(DealStage.PROCUREMENT);
         // paymentStatus is untouched — no payment was ever recorded on this deal.

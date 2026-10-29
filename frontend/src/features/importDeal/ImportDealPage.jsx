@@ -36,10 +36,6 @@ const LEGACY_ACTIONS = {
     call: (ticketId) => api.tickets.markIrSent(ticketId),
     toast: 'ส่งคำขอนำเข้าแล้ว',
   },
-  issueImportRequest: {
-    call: (ticketId) => api.tickets.issueImportRequest(ticketId),
-    toast: 'ออกคำขอนำเข้าแล้ว',
-  },
   markShipping: {
     call: (ticketId) => api.tickets.markShipping(ticketId),
     toast: 'สินค้าอยู่ระหว่างขนส่ง',
@@ -198,12 +194,11 @@ export function ImportDealPage({ user, showToast }) {
   const canAdvance = role === 'import' || isCeo;
   const canEmailWrite = isCeo || role === 'import';
 
-  // Legacy = no ISSUED per-factory row AND the deal-level chain has a step import performs here.
-  // Keyed on ISSUED rows, not live rows, because that is what the backend refuses on
-  // (TicketRepository#hasLiveImportRequests): a DRAFT row is not tracking anything, and a deal
-  // whose IR went out the legacy way can still hold an unissued draft that only sales/CEO can issue.
+  // Legacy = no LIVE per-factory row (DRAFT or ISSUED — the backend refuses on both, W3-04) AND the
+  // deal-level chain has a step import performs here. Only a pre-V184 deal already in flight
+  // qualifies; nothing starts a legacy track any more.
   const nextAction = nextImportAction(deal);
-  const legacyCode = canAdvance && issuedRows.length === 0 && nextAction && LEGACY_ACTIONS[nextAction.code]
+  const legacyCode = canAdvance && liveRows.length === 0 && nextAction && LEGACY_ACTIONS[nextAction.code]
     ? nextAction.code
     : null;
 
