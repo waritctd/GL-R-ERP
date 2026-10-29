@@ -235,9 +235,10 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
     /** Reissue carry-forward copies READY_FOR_COSTING quotes onto the revision: contacted fields ride along. */
     @Test
     void carryForwardCopiesTheContactedFields() {
-        FactoryQuoteDto copy = carriedForwardCopy();
+        LocalDate yesterday = todayBangkok().minusDays(1);
+        FactoryQuoteDto copy = carriedForwardCopy(yesterday);
 
-        assertThat(copy.contactedOn()).isEqualTo(todayBangkok().minusDays(1));
+        assertThat(copy.contactedOn()).isEqualTo(yesterday);
         assertThat(copy.contactedNote()).isEqualTo("note");
         assertThat(copy.contactedBy()).isEqualTo(importUserId);
         assertThat(copy.contactedAt()).isNotNull();
@@ -246,7 +247,7 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
     /** QA-06: a carried-forward copy is the root of its own chain, so import can re-price it (no NPE). */
     @Test
     void aCarriedForwardQuoteIsItsOwnChainRoot_andImportCanRevisePriceOnIt() {
-        FactoryQuoteDto copy = carriedForwardCopy();
+        FactoryQuoteDto copy = carriedForwardCopy(todayBangkok().minusDays(1));
         assertThat(copy.rootFactoryQuoteId()).isEqualTo(copy.id());
         awaitingFactoryResponse(copy.pricingRequestId());
 
@@ -262,7 +263,7 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
     /** QA-06, Ploy 2026-10-29 (no backfill): a copy saved before the fix, root NULL, can still be re-priced. */
     @Test
     void aLegacyRootlessCarriedForwardQuoteCanStillBeRevised() {
-        FactoryQuoteDto copy = carriedForwardCopy();
+        FactoryQuoteDto copy = carriedForwardCopy(todayBangkok().minusDays(1));
         jdbc.update("UPDATE sales.factory_quote SET root_factory_quote_id = NULL WHERE factory_quote_id = :id",
             Map.of("id", copy.id()));
         FactoryQuoteDto legacy = factoryQuoteService.get(copy.id(), importActor);
@@ -277,11 +278,11 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         assertThat(revised.current()).isTrue();
     }
 
-    /** A READY_FOR_COSTING quote (contacted yesterday, note "note") copied onto a fresh request. */
-    private FactoryQuoteDto carriedForwardCopy() {
+    /** A READY_FOR_COSTING quote (contacted on {@code contactedOn}, note "note") copied onto a fresh request. */
+    private FactoryQuoteDto carriedForwardCopy(LocalDate contactedOn) {
         long fromPr = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(fromPr, importActor), "Factory A");
-        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(todayBangkok().minusDays(1), "note"), importActor);
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(contactedOn, "note"), importActor);
         FactoryQuoteDto received = factoryQuoteService.receive(draft.id(), receiveAll(draft, "THB", "PER_PIECE"), importActor);
         factoryQuoteService.markReadyForCosting(received.id(), importActor);
         long toPr = pricingRequestService.createDraft(ticketId,

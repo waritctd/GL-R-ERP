@@ -233,6 +233,28 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     });
   });
 
+  // Code review of #1195: an in-chain deal whose requests are all dead still needs a new request.
+  it('still offers create_pcr on an order-confirmed deal whose requests are all dead ({SUPERSEDED, CANCELLED})', () => {
+    const deal = baseDeal({ status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED' });
+    const prs = [
+      { id: 11, ticketId: deal.id, status: 'SUPERSEDED', recipientType: 'OWNER' },
+      { id: 12, ticketId: deal.id, status: 'CANCELLED', recipientType: 'OWNER' },
+    ];
+    expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'create_pcr' });
+  });
+
+  // Code review of #1195 (finding 3): with a revision draft and a newer blank one (made by the old
+  // สร้างคำขอราคา beside it), the revision — the customer's change — is the one sent.
+  it('sends the customer-change revision draft, not a newer blank draft beside it', () => {
+    const deal = baseDeal({ salesStage: 'SPEC_APPROVED' });
+    const prs = [
+      { id: 11, ticketId: deal.id, status: 'SUPERSEDED', recipientType: 'OWNER' },
+      { id: 12, ticketId: deal.id, status: 'DRAFT', recipientType: 'OWNER', parentPricingRequestId: 11 },
+      { id: 13, ticketId: deal.id, status: 'DRAFT', recipientType: 'OWNER', parentPricingRequestId: null },
+    ];
+    expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'submit_pricing_request', pricingRequestId: 12 });
+  });
+
   it('still offers create_pcr for an early-stage deal with no payment status and zero pricing requests (the real case the gate must not break)', () => {
     const deal = baseDeal(); // QUOTE_DESIGN_SIDE, status/paymentStatus absent
     const action = nextSalesAction(deal, []);

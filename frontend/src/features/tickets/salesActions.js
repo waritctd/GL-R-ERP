@@ -208,8 +208,6 @@ export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: '�
 const SENT_DOC_STATUSES = new Set(['ISSUED', 'SUPERSEDED', 'REJECTED', 'EXPIRED']);
 const DECLINED_DOC_STATUSES = new Set(['REJECTED', 'EXPIRED']);
 const isDesignerOrOwner = (pr) => pr.recipientType === 'DESIGNER' || pr.recipientType === 'OWNER';
-/** QA-07: the first request's default ผู้รับ — the route's first party (undefined while the route is unknown). */
-export const firstRouteParty = (offRouteParties) => (offRouteParties == null ? undefined : PARTY_ROUTE.find((party) => !offRouteParties.has(party)));
 // Route order, then the newer request: the last one is the furthest along the route.
 const byRoute = (a, b) => PARTY_ROUTE.indexOf(a.recipientType) - PARTY_ROUTE.indexOf(b.recipientType) || a.id - b.id;
 
@@ -379,7 +377,9 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     const pricedOutsidePcrChain = ownPrs.length === 0
       && (QUOTED_STATUSES.has(deal.status) || deal.paymentStatus != null);
     if (!pricedOutsidePcrChain) {
-      const draft = ownPrs.filter((pr) => pr.status === 'DRAFT').sort((a, b) => b.id - a.id)[0];
+      // Several: the customer-change revision's draft (it has a parent) first, then the newest.
+      const draft = ownPrs.filter((pr) => pr.status === 'DRAFT')
+        .sort((a, b) => (b.parentPricingRequestId != null) - (a.parentPricingRequestId != null) || b.id - a.id)[0];
       if (draft) {
         return { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id };
       }

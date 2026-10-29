@@ -63,7 +63,7 @@ import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
 import { nextOnRoute, offRoutePartiesFor, useStageCatalog } from './stageCatalog.js';
-import { PARTY_LABEL, firstRouteParty } from './salesActions.js';
+import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
@@ -1313,7 +1313,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   // The backend refuses a non-owner for both documents (2026-10-28): no main button for them.
   const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'create_import_request'];
-  const workStateAction = OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner ? null : workState.action;
+  // Like the quotation list above: with the deal's request list unread, a DRAFT may be hiding, so no create_pcr.
+  const requestListUnread = canViewPricingRequests && pricingRequestsQuery.data === undefined;
+  const workStateAction = (OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner)
+    || (workState.action?.key === 'create_pcr' && requestListUnread) ? null : workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
   // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
@@ -1402,7 +1405,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // then calls the ref (see this component's own doc comment on
       // `runOnTab`).
       stickyPrimaryAction = (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: firstRouteParty(offRoutePartiesFor(stageCatalog, summary.entryChannel)) }))}>
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
           <Icon name="plus" size={14} />
           {workStateAction.label}
         </Button>

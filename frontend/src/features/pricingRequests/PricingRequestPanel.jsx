@@ -274,7 +274,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           deal={deal}
           showToast={showToast}
           initialRecipientType={createRecipientType}
-          onClose={() => { setCreateOpen(false); setCreateRecipientType(null); }}
+          // The form may have saved a DRAFT whose send then failed: re-read on close too.
+          onClose={() => { setCreateOpen(false); setCreateRecipientType(null); invalidate(); }}
           onCreated={() => { setCreateOpen(false); setCreateRecipientType(null); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}
           submitFn={(id) => api.pricingRequests.submit(id)}

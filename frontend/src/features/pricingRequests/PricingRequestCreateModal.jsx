@@ -8,7 +8,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRow.jsx';
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
 import { focusQuotationField } from '../quotations/QuotationChecklist.jsx';
-import { ceilPieces, defaultLeadTimeForOrigin, originCountryFromCode, piecesPerSqmFromSqmPerPiece, validateQuotationItem } from '../quotations/quotationMeta.js';
+import { ceilPieces, defaultLeadTimeForOrigin, originCountryFromCode, piecesPerSqmFromSqmPerPiece, recipientForEntryChannel, validateQuotationItem } from '../quotations/quotationMeta.js';
 
 // CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
 // change them afterwards. The currency list is the trade currencies this business quotes in (the
@@ -458,7 +458,7 @@ export function PricingRequestCreateModal({
   // (a failed contact create/edit-in-place) — optional, so a caller with no toast plumbing of
   // its own (none currently omit it, but the picker itself tolerates an absent one) still works.
   showToast,
-  // Create mode only: ผู้รับ pre-selected from the deal page's เสนอราคา menu.
+  // Create mode only: ผู้รับ pre-selected from the deal page's เสนอราคา menu (else the deal's entry channel's party).
   initialRecipientType = null,
 }) {
   const isEdit = mode === 'edit';
@@ -470,7 +470,7 @@ export function PricingRequestCreateModal({
   const initialSummary = initialValue?.summary ?? null;
   const seededRecipientType = seedsFromExisting
     ? (initialSummary?.recipientType ?? 'DESIGNER')
-    : (initialRecipientType ?? initialSummary?.recipientType ?? 'DESIGNER');
+    : (initialRecipientType ?? initialSummary?.recipientType ?? (recipientForEntryChannel(deal?.entryChannel) || 'DESIGNER'));
   const [recipientType, setRecipientType] = useState(seededRecipientType);
   const [recipientLabel, setRecipientLabel] = useState(() => (
     seedsFromExisting

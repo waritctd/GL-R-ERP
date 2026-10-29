@@ -2495,6 +2495,34 @@ describe('TicketDetailPage', () => {
       expect(recipients.getByRole('radio', { name: /เจ้าของโครงการ/ }).getAttribute('aria-checked')).toBe('true');
     });
 
+    // Code review of #1195 (finding 4): the pre-fill follows the deal's channel, so it holds while the
+    // stage catalog itself is still loading.
+    it('first สร้างคำขอราคา on an OWNER_DIRECT deal pre-fills เจ้าของโครงการ while the stage catalog is still loading', async () => {
+      api.meta.dealStages.mockReturnValueOnce(new Promise(() => {}));
+      deal({ requests: [], quotations: [], entryChannel: 'OWNER_DIRECT', stage: 'SPEC_APPROVED' });
+      renderTicketDetailPage(salesOwnerUser);
+
+      fireEvent.click(await primaryWithAction('create_pcr'));
+
+      const recipients = within(within(await screen.findByRole('dialog')).getByRole('radiogroup', { name: 'ผู้รับคำขอราคา' }));
+      expect(recipients.getByRole('radio', { name: /เจ้าของโครงการ/ }).getAttribute('aria-checked')).toBe('true');
+    });
+
+    // Code review of #1195 (finding 1): an unread request list is not "no request" — a DRAFT may be
+    // waiting in it, so สร้างคำขอราคา is never offered until the list is read.
+    it.each([
+      ['still loading', () => new Promise(() => {})],
+      ['failed to load', () => Promise.reject(new Error('network'))],
+    ])('no สร้างคำขอราคา while the deal\'s request list is %s', async (_label, list) => {
+      deal({ requests: [], quotations: [], entryChannel: 'OWNER_DIRECT', stage: 'SPEC_APPROVED' });
+      api.pricingRequests.listForTicket.mockImplementation(list);
+      renderTicketDetailPage(salesOwnerUser);
+      await stickyInputsSettled();
+
+      expect(screen.queryByTestId('ticket-primary-action')?.getAttribute('data-action')).not.toBe('create_pcr');
+      expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
+    });
+
     // Review V5: an unreadable list is not "no quotation" — the designer's may be being redone.
     it('while the deal\'s quotation list has never been read: no route choice, and ⋯ still offers บันทึกผลใบเสนอราคา; once read, a failed refetch keeps it', async () => {
       deal();
