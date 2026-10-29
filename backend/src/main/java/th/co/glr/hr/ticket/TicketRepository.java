@@ -2124,6 +2124,21 @@ public class TicketRepository {
     }
 
     /**
+     * The durable record that an import request was issued (the IR_ISSUED event), read instead of
+     * the mutable stage/fulfilment columns for the same reason {@link #hasReceivedGoods} is.
+     */
+    public boolean hasIssuedImportRequest(long ticketId) {
+        Boolean value = jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                  FROM sales.ticket_event
+                 WHERE ticket_id = :ticketId AND kind = 'IR_ISSUED'
+            )
+            """, Map.of("ticketId", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /**
      * Validated ticket-status transition — the ONE way {@code sales.ticket.status} is written
      * (ticket creation's INSERT sets the initial {@code draft} and is not a transition). Mirrors
      * {@code PricingRequestRepository.transition} and {@link #advancePaymentStatus}:
