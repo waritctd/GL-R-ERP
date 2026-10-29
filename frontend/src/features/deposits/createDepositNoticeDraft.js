@@ -5,21 +5,16 @@ import { api } from '../../api/index.js';
 //
 // Prefer the pricing-request-chain endpoint (createDepositNoticeFromQuotation) when this deal has a
 // pricing request whose customer quotation was accepted — it sources items from the accepted
-// quotation and autofills the header from the customer master + ticket project. A failure ANYWHERE
-// in that lookup (network error, permission edge case, no pricing requests at all — a direct-quotation
-// deal) degrades to the ticket-level route; it must never break the button.
+// quotation and autofills the header from the customer master + ticket project. No pricing requests at
+// all (a direct-quotation deal) takes the ticket-level route; a FAILED lookup rejects instead of guessing
+// the route (release review 2026-10-29) — the caller's onError shows it and nothing is created.
 // depositPercent is not sent on either branch: the backend picks the new draft's percent
 // (DepositNoticeService.createDraftFromQuotation; findGoverningQuotation, #1170).
 // `noteTemplates` (already loaded) are optional.
 export async function createDepositNoticeDraft(ticketId, noteTemplates) {
-  let acceptedPricingRequestId = null;
-  try {
-    const { items: pricingRequests } = await api.pricingRequests.listForTicket(ticketId);
-    acceptedPricingRequestId = (pricingRequests ?? [])
-      .find((pr) => pr.status === 'QUOTATION_ACCEPTED')?.id ?? null;
-  } catch {
-    acceptedPricingRequestId = null;
-  }
+  const { items: pricingRequests } = await api.pricingRequests.listForTicket(ticketId);
+  const acceptedPricingRequestId = (pricingRequests ?? [])
+    .find((pr) => pr.status === 'QUOTATION_ACCEPTED')?.id ?? null;
   if (acceptedPricingRequestId != null) {
     return api.pricingRequests.createDepositNoticeFromQuotation(acceptedPricingRequestId, {});
   }
