@@ -242,7 +242,8 @@ public class ImportRequestService {
             uncovered = true;
             String name = factoryId != null ? nameById.get(factoryId)
                 : c.candidateFactoryName() != null ? c.candidateFactoryName().strip() : null;
-            if (name != null && !name.isEmpty()) {
+            // strip() keeps NBSP / BOM, so a name of only those would print as a blank entry in the confirm.
+            if (name != null && !name.codePoints().allMatch(cp -> Character.isWhitespace(cp) || Character.isSpaceChar(cp) || cp == 0xFEFF)) {
                 names.putIfAbsent(factoryId != null ? "id:" + factoryId : "name:" + normalizeFactoryName(name), name);
             }
         }

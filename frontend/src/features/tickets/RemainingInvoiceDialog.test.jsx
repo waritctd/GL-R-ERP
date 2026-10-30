@@ -521,6 +521,28 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
       expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
       expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
     });
+
+    // Both dialogs listen on `document`; one Escape must only dismiss the topmost (the confirm),
+    // never also close the dialog under it and drop the unsaved อ้างอิง/วันที่/หมายเหตุ.
+    it('Escape on the confirm closes only the confirm: the outer dialog stays open with the unsaved edit', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      const { onClose } = renderDialog();
+
+      fireEvent.change(await screen.findByDisplayValue('QT-2026-0099'), { target: { value: 'PO-UNSAVED' } });
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+      await confirmDialog();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).toBeNull());
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByDisplayValue('PO-UNSAVED')).toBeTruthy();
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+
+      // With the confirm gone the outer dialog is topmost again, so Escape closes it.
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('ลบร่าง calls deleteDraft', async () => {

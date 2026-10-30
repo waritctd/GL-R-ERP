@@ -709,7 +709,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
   const coverageLoading = coverageQuery.isFetching;
   let createConfirmMessage = 'กำลังตรวจสอบโรงงาน…';
-  if (!coverageLoading) {
+  if (!coverageLoading && allFactoriesCovered) {
+    // Another session issued the last one since this page loaded: a create now would only 409.
+    createConfirmMessage = 'ทุกโรงงานมีใบขอซื้อแล้ว — ไม่มีใบขอซื้อที่ต้องออก';
+  } else if (!coverageLoading) {
     const what = confirmNames.length > 0
       ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
       : `ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`;
@@ -1168,7 +1171,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         message={createConfirmMessage}
         confirmLabel="ออกใบขอซื้อ (IR)"
         busy={createDraftsMutation.isPending}
-        confirmDisabled={coverageLoading}
+        confirmDisabled={coverageLoading || allFactoriesCovered}
         // Close first: a second click on the open dialog would send twice.
         onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
         onCancel={() => setConfirmingCreate(false)}

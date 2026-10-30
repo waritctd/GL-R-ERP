@@ -288,6 +288,21 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(confirm.disabled).toBe(false);
     });
 
+    // Another session may issue the last IR between page load and click: the fresh read then says nothing is left.
+    it('the re-check says every factory is covered now: the dialog says nothing is left to issue and confirm stays disabled', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'] });
+      await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledTimes(1));
+      api.storedImportRequests.coverage.mockResolvedValueOnce({ hasUncoveredFactories: false, uncoveredFactoryNames: [] });
+      const dialog = await openIrConfirm();
+
+      expect(dialog.textContent).toContain('ไม่มีใบขอซื้อที่ต้องออก');
+      expect(dialog.textContent).not.toContain('หนึ่งใบต่อโรงงาน');
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      expect(confirm.disabled).toBe(true);
+      fireEvent.click(confirm);
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+    });
+
     it('cancel closes the dialog and creates nothing', async () => {
       renderPanel(OWNER, []);
       fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));

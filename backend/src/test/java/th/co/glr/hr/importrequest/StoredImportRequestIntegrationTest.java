@@ -220,6 +220,10 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     void listResponse_hasUncoveredFactories_countsAnUnresolvedFactoryNameAsUncovered_andCreatesNoFactory() {
         service.createDrafts(ticketId, null, owner);
         insertItem(ticketId, "Never Seen Flag Factory Co", "Mystery line", "60x60 cm", "5", "pcs", 3);
+        // A typed name of only Unicode whitespace (NBSP, BOM) survives strip()/BTRIM: the line is still
+        // uncovered, but it has no name to show in the confirm.
+        insertItem(ticketId, "\u00a0", "Blank NBSP line", "60x60 cm", "5", "pcs", 4);
+        insertItem(ticketId, "\uFEFF", "Blank BOM line", "60x60 cm", "5", "pcs", 5);
         Long factoriesBefore = jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
 
         assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);

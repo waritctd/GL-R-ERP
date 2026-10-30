@@ -62,6 +62,12 @@ export function ConfirmDialog({
     target?.focus();
   }, [open, requireReason]);
 
+  // Opened with confirm disabled (caller still loading): the effect above could not focus it, so do it
+  // when it becomes usable -- otherwise Enter lands on ✕/body.
+  useEffect(() => {
+    if (open && !requireReason && !confirmBlocked) confirmButtonRef.current?.focus();
+  }, [open, requireReason, confirmBlocked]);
+
   if (!open) return null;
 
   const reasonRequiredAndEmpty = requireReason && !optionalReason && reason.trim().length === 0;

@@ -4696,6 +4696,8 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(location()).toContain('tab=fulfilment'));
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       await waitFor(() => expect(scrolledToIrSection()).toBe(true));
+      // createIrDrafts() now opens the issue confirm, so "not called" alone no longer pins the branch.
+      expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' })).toBeNull();
     });
 
     it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {
