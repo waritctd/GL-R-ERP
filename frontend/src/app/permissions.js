@@ -1,5 +1,6 @@
 import { ROLE_PERMISSIONS } from '../api/routes.js';
 import { SELF_SERVICE_ONLY } from './features.js';
+import { canCreateDealQuotationStandalone } from '../features/quotations/quotationMeta.js';
 
 export function hasPermission(role, key) {
   return ROLE_PERMISSIONS[key]?.includes(role) ?? false;
@@ -94,6 +95,10 @@ const PATH_GUARDS = [
   // per-employee canCreateQuotation capability grant (owner ruling 2026-09-09) — a
   // grant-holder's role need not be in that role list at all (e.g. `qc`). Per-row "own deals
   // only" scoping for `sales` is enforced server-side, not by this route guard.
+  // RC-06: the create page gets the editor's own create gate (sales, sales_manager, or the grant),
+  // not the wider view audience below -- ceo/import/account reach the list and detail pages only.
+  // Pathname only, so `/quotations/new?ticket=6` is held to it too.
+  { test: (p) => p.split(/[?#]/)[0] === '/quotations/new', can: (u) => canCreateDealQuotationStandalone(u) },
   { test: (p) => p === '/quotations' || p.startsWith('/quotations/'), can: (u) => hasPermission(u.role, 'canViewDealQuotations') || Boolean(u.canCreateQuotation) },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
   // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
@@ -145,9 +150,11 @@ const PATH_GUARDS = [
     test: (p) => p === '/employee-requests' || p === '/overtime',
     can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') || hasPermission(u.role, 'canViewAllSpecialMoney'),
   },
-  // /leave/new (Phase A2, #485): the composer files a request for the SAME "self or an
-  // employeeId-bearing acting employee" audience as /leave itself -- same guard.
-  { test: (p) => p === '/leave' || p === '/leave/new', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
+  { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
+  // /leave/new (Phase A2, #485): the same audience as /leave, minus hr/ceo (RC-05) -- they do not
+  // file leave (LeaveService SELF_SUBMIT_BLOCKED_ROLES), so the composer is refused outright.
+  // Inlined rather than importing canSubmitOwnLeave: leaveSurfaceTabs.js imports this module.
+  { test: (p) => p === '/leave/new', can: (u) => (!!u.employeeId || hasPermission(u.role, 'canViewAllLeave')) && u.role !== 'hr' && u.role !== 'ceo' },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
   // The bare queue (`/pricing-requests`) is Import's work list — canViewPricingRequestQueue
   // only (import/ceo/sales_manager), never sales. Detail sub-paths are a separate rule: a sales

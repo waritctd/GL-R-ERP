@@ -174,7 +174,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         PricingDecisionItemDto item = decisionItemFor(updated, th);
         assertThat(item.netUnitPrice()).isEqualByComparingTo("850.00");
         assertThat(item.listUnitPrice())
-            .as("R6: ราคาตั้ง is required and kept whichever mode then applies").isEqualByComparingTo("1000.00");
+            .as("R6: a typed ราคาตั้ง is kept whichever mode then applies").isEqualByComparingTo("1000.00");
     }
 
     @Test
@@ -251,6 +251,28 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         assertThat(storedDecisionStatus(decisionId)).isEqualTo(PricingDecisionStatus.DRAFT);
         assertThat(status(id)).isEqualTo(PricingRequestStatus.CEO_REVIEWING);
         assertThat(storedApprovedPrice(decisionItemId(decisionId, th))).isNull();
+    }
+
+    /** W5-03 (Ploy 2026-10-30): under SPECIAL_SQM / DIRECT_NET the quotation prints the net as its
+     * ราคา, so a stock line priced by the mode's own input needs no ราคาตั้ง. NET still does (its
+     * net is ราคาตั้ง less the discount) — pinned by the 422 test above. */
+    @ParameterizedTest
+    @ValueSource(strings = {"SPECIAL_SQM", "DIRECT_NET"})
+    void approve_aStockLineWithANetButNoListPrice_succeeds_inSpecialSqmAndDirectNet(String priceMode) {
+        long id = persistDraft(stockLine("Stock TH", IN_THAILAND, 10));
+        long decisionId = seedStockOnlyDecision(id);
+        seedPriceMode(decisionId, priceMode);
+        long th = itemId(id, "Stock TH");
+        jdbc.update("""
+            UPDATE sales.pricing_decision_item SET list_unit_price = NULL, net_unit_price = 399.15
+             WHERE pricing_decision_id = :d AND pricing_request_item_id = :i
+            """, Map.of("d", decisionId, "i", th));
+
+        PricingDecisionDto approved = decisionService.approve(decisionId,
+            new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
+
+        assertThat(approved.status()).isEqualTo(PricingDecisionStatus.APPROVED);
+        assertThat(decisionItemFor(approved, th).approvedSellingPricePerRequestedUnit()).isEqualByComparingTo("399.15");
     }
 
     @Test

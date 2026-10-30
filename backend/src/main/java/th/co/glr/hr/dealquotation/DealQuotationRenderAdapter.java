@@ -113,8 +113,10 @@ public final class DealQuotationRenderAdapter {
         // "Sales/Jannet T.080-7767707", the same shape as the Thai "Sales/เจนเนต".
         // V179 (owner feedback #4, 2026-09-14): salesRepDisplayId overrides BOTH the name and the
         // phone here — see #salesRepDisplayNameOrReal/#salesRepDisplayPhoneOrReal.
+        // QA-31: no phone, no dangling " T.".
+        String salesPhone = nullSafe(salesRepDisplayPhoneOrReal(quotation));
         String salesLine = "Sales/" + nullSafe(salesRepDisplayNameOrReal(quotation, english))
-            + " T." + nullSafe(salesRepDisplayPhoneOrReal(quotation));
+            + (salesPhone.isBlank() ? "" : " T." + salesPhone);
 
         String attnLine;
         String phoneLine;

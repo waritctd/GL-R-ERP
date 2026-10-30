@@ -401,6 +401,32 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/quotations', { role: 'qc', employeeId: 20, canCreateQuotation: true })).toBe(true);
     expect(canAccessPath('/quotations/new', { role: 'qc', employeeId: 20, canCreateQuotation: true })).toBe(true);
   });
+
+  // RC-06: /quotations/new is the create page, so its guard is the editor's own create gate
+  // (canCreateDealQuotationStandalone: sales, sales_manager, or the grant) -- not the wider
+  // view-only audience the list and the detail pages keep.
+  it('admits only quotation creators to /quotations/new; viewers keep the list and detail pages', () => {
+    for (const role of ['ceo', 'import', 'account']) {
+      expect(canAccessPath('/quotations/new', { role, employeeId: 20 }), role).toBe(false);
+      expect(canAccessPath('/quotations/new?ticket=6', { role, employeeId: 20 }), role).toBe(false);
+    }
+    for (const role of ['sales', 'sales_manager']) {
+      expect(canAccessPath('/quotations/new', { role, employeeId: 20 }), role).toBe(true);
+    }
+    expect(canAccessPath('/quotations', { role: 'ceo', employeeId: 20 })).toBe(true);
+    expect(canAccessPath('/quotations/12', { role: 'ceo', employeeId: 20 })).toBe(true);
+  });
+
+  // RC-05: hr/ceo do not file leave (LeaveService SELF_SUBMIT_BLOCKED_ROLES, owner ruling
+  // 2026-08-10; Ploy 2026-10-30: block the composer outright, on-behalf filing included).
+  it('refuses the /leave/new composer to hr and ceo, who keep /leave', () => {
+    for (const role of ['hr', 'ceo']) {
+      expect(canAccessPath('/leave/new', { role, employeeId: 20 }), role).toBe(false);
+      expect(canAccessPath('/leave', { role, employeeId: 20 }), role).toBe(true);
+    }
+    expect(canAccessPath('/leave/new', { role: 'employee', employeeId: 20 })).toBe(true);
+    expect(canAccessPath('/leave/new', { role: 'sales', employeeId: 20 })).toBe(true);
+  });
 });
 
 describe('isDivisionManager', () => {

@@ -6,6 +6,7 @@
 // markers, labels, catalog-autocomplete UI and catalog-pick/hand-edit rules from ONE place so they
 // can never drift apart again the way create and edit had (ชื่อยี่ห้อ vs ยี่ห้อ / โรงงาน, a
 // separate โรงงาน input on edit only, no asterisks on edit at all).
+import { useEffect, useState } from 'react';
 import { api } from '../../api/index.js';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { resolveTileSqmPerPiece, sizeTextFromCatalog } from '../quotations/QuotationItemRow.jsx';
@@ -278,6 +279,21 @@ export function CatalogAutocompleteField({
   onBlur, expanded, results, onPick, error, inputRef,
 }) {
   const errorId = error ? fieldErrorId(id) : undefined;
+  // QA-39: combobox/listbox keyboard pattern of SearchableCombobox (Arrow wrap, Enter picks).
+  const [active, setActive] = useState(-1);
+  useEffect(() => { setActive(-1); }, [results]);
+  const open = expanded && results.length > 0;
+  function onKeyDown(e) {
+    if (!open) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      setActive((i) => (i < 0 ? (step > 0 ? 0 : results.length - 1) : (i + step + results.length) % results.length));
+    } else if (e.key === 'Enter' && results[active]) {
+      e.preventDefault();
+      onPick(results[active]);
+    }
+  }
   return (
     <div className="relative grid content-start gap-[7px]">
       <label htmlFor={id} className="m-0 text-xs">
@@ -290,7 +306,14 @@ export function CatalogAutocompleteField({
         onChange={(e) => onInput(e.target.value)}
         onFocus={onFocusSearch}
         onBlur={onBlur}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
+        role="combobox"
+        autoComplete="off"
+        aria-expanded={open}
+        aria-controls={`${id}-options`}
+        aria-autocomplete="list"
+        aria-activedescendant={open && active >= 0 ? `${id}-option-${active}` : undefined}
         aria-required={required ? 'true' : undefined}
         aria-invalid={error ? true : undefined}
         aria-describedby={errorId}
@@ -298,12 +321,14 @@ export function CatalogAutocompleteField({
       {error ? (
         <p id={errorId} role="alert" className="m-0 text-2xs font-bold text-danger">{error}</p>
       ) : null}
-      {expanded && results.length > 0 && (
-        <div className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
-          {results.map((cat) => (
-            // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- autocomplete option row; onMouseDown (not click) preserves input focus for typeahead
-            <div key={cat.priceId ?? cat.id} onMouseDown={() => onPick(cat)}
-              className="cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active"
+      {open && (
+        <div id={`${id}-options`} role="listbox" aria-label={label} className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
+          {results.map((cat, i) => (
+            // onMouseDown (not click) preserves input focus for typeahead; focus stays on the input (aria-activedescendant), so the row itself is not focusable
+            // eslint-disable-next-line jsx-a11y/interactive-supports-focus
+            <div key={cat.priceId ?? cat.id} id={`${id}-option-${i}`} role="option" aria-selected={i === active}
+              onMouseDown={() => onPick(cat)}
+              className={`cursor-pointer border-b border-surface-subtle px-2.5 py-[7px] text-xs hover:bg-info-row-active ${i === active ? 'bg-info-row-active' : ''}`}
             >
               <CatalogOption cat={cat} />
             </div>

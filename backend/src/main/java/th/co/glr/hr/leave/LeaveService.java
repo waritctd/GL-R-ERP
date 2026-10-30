@@ -2876,6 +2876,8 @@ public class LeaveService {
      * only via a manager-of-record relationship, the same fallback anyone outside
      * {@code REVIEW_ALL_ROLES} still relies on. Filing a paper form on a report's behalf is a real,
      * still-supported HR workflow; only filing for THEMSELVES is what the owner ruling blocks.
+     * The UI no longer offers it, though: RC-05 (Ploy 2026-10-30) closed the /leave/new composer to
+     * hr/ceo outright, so on-behalf filing is API-only.
      */
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         long actorEmployeeId = requireEmployeeId(user);
