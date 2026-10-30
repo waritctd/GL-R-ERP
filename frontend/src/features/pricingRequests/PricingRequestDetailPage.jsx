@@ -75,7 +75,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -4384,7 +4384,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmOrderDialog
         open={confirmingOrder}
-        number={summary?.requestCode}
+        number={shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation)?.number}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}

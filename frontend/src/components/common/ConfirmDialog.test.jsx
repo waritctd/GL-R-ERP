@@ -78,6 +78,17 @@ describe('ConfirmDialog', () => {
     expect(onConfirm).toHaveBeenCalledWith('ประมวลผล');
   });
 
+  // A caller whose confirm starts disabled (waiting on a refetch) must not leave focus on ✕/body:
+  // Enter on it would cancel or do nothing, so focus follows the button once it becomes usable.
+  it('moves focus to the confirm button when confirmDisabled clears while open', () => {
+    const props = { open: true, title: 'ยืนยัน', message: 'x', onConfirm: () => {}, onCancel: () => {} };
+    const { rerender } = render(<ConfirmDialog {...props} confirmDisabled />);
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'ยืนยัน' }));
+
+    rerender(<ConfirmDialog {...props} confirmDisabled={false} />);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'ยืนยัน' }));
+  });
+
   it('renders nothing when closed', () => {
     const { container } = render(
       <ConfirmDialog open={false} title="x" message="y" onConfirm={() => {}} onCancel={() => {}} />,

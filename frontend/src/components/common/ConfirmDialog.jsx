@@ -14,6 +14,10 @@ import { Button } from './Button.jsx';
  * is an optional second gate for consequential flows that require a deliberate
  * typed phrase rather than any non-empty note.
  *
+ * `confirmDisabled` (optional) greys out only the confirm button — unlike `busy`, Cancel and the
+ * dismiss gestures keep working — for a caller whose confirm must wait on, or is refused by, data it
+ * is still loading or has just checked.
+ *
  * `onDismiss` (optional, defaults to `onCancel`): the action for the "gesture" dismissals Modal
  * itself wires to `onClose` — Escape, backdrop mousedown, header ✕ (see Modal.jsx/useDialogFocus.js)
  * — as opposed to a deliberate click on the `cancelLabel` BUTTON. For most callers `cancelLabel`'s
@@ -31,6 +35,7 @@ export function ConfirmDialog({
   cancelLabel = 'ยกเลิก',
   tone = 'default',
   busy = false,
+  confirmDisabled: confirmBlocked = false,
   requireReason = false,
   optionalReason = false,
   reasonLabel = 'เหตุผล',
@@ -57,6 +62,12 @@ export function ConfirmDialog({
     target?.focus();
   }, [open, requireReason]);
 
+  // Opened with confirm disabled (caller still loading): the effect above could not focus it, so do it
+  // when it becomes usable -- otherwise Enter lands on ✕/body.
+  useEffect(() => {
+    if (open && !requireReason && !confirmBlocked) confirmButtonRef.current?.focus();
+  }, [open, requireReason, confirmBlocked]);
+
   if (!open) return null;
 
   const reasonRequiredAndEmpty = requireReason && !optionalReason && reason.trim().length === 0;
@@ -65,7 +76,7 @@ export function ConfirmDialog({
     && reasonTrimmed.length > 0
     && typeof validateReason === 'function'
     && !validateReason(reasonTrimmed);
-  const confirmDisabled = busy || reasonRequiredAndEmpty || reasonInvalid;
+  const confirmDisabled = busy || confirmBlocked || reasonRequiredAndEmpty || reasonInvalid;
 
   function handleConfirm() {
     if (confirmDisabled) return;

@@ -25,6 +25,10 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [ta
 // LAST. The caller's own effect, on an already-mounted component, only ran once and lost the race.
 // Passing the target in HERE avoids the race entirely: it is the same single effect either way, so
 // a StrictMode remount just re-applies the same correct target instead of overriding it.
+// Open dialogs, innermost last. Every dialog listens on `document`, and stopPropagation there does not
+// stop its siblings, so without this one Escape on a nested confirm would also close the dialog under it.
+const openDialogs = [];
+
 export function useDialogFocus({ active, containerRef, onClose, initialFocusRef }) {
   const previouslyFocused = useRef(null);
   const onCloseRef = useRef(onClose);
@@ -41,7 +45,11 @@ export function useDialogFocus({ active, containerRef, onClose, initialFocusRef 
     const initial = focusables();
     (initialFocusRef?.current ?? initial[0] ?? container)?.focus();
 
+    const self = {};
+    openDialogs.push(self);
+
     function onKeyDown(event) {
+      if (openDialogs[openDialogs.length - 1] !== self) return;
       if (event.key === 'Escape') {
         event.stopPropagation();
         onCloseRef.current?.();
@@ -64,6 +72,7 @@ export function useDialogFocus({ active, containerRef, onClose, initialFocusRef 
     document.addEventListener('keydown', onKeyDown);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
+      openDialogs.splice(openDialogs.indexOf(self), 1);
       if (previouslyFocused.current instanceof HTMLElement) {
         // It had focus when the dialog opened, so it is on screen; a scroller that pads its top (the
         // deal page's sticky header) would otherwise jump to "reveal" it.

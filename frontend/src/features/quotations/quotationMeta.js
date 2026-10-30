@@ -422,10 +422,21 @@ export function liveDirectQuotationBlockMessage(live) {
  * shared by the quotation editor and the deal page's sticky CTA so the two never drift. `stage`
  * is the part both render in <strong>. */
 export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
-  lead: (number) => `ระบบจะนำดีลของใบเสนอราคา ${number ?? ''} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
+  lead: (number) => `ระบบจะนำดีลของ${number ? `ใบเสนอราคา ${number}` : 'ใบเสนอราคานี้'} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
   stage: 'ได้รับคำสั่งซื้อ',
   tail: 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้',
 });
+
+// An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
+// non-live set): it does not hide the request's new-engine quotation (review V6).
+const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED']);
+
+/** The quotation a request's deal page and its confirm-order dialog show: the new-engine one, unless a
+ * live old-engine one is open. The engines are never both live, so this is the quotation the server's
+ * confirmOrder uses (the ACCEPTED new-engine one if any, else the old-engine one). */
+export function shownCustomerQuotation(newEngine, legacy) {
+  return newEngine && !(legacy && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(legacy.docStatus)) ? newEngine : legacy ?? null;
+}
 
 // ── เอกสารแนบ (the files attached to a quotation) ─────────────────────────────────────────────
 // What the quotation page DRAWS. DealQuotationAttachmentService decides who gets what, and

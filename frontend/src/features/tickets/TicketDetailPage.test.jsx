@@ -49,6 +49,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         actions: vi.fn(),
         comment: vi.fn(),
         confirmFinalPayment: vi.fn(),
+        verifyClose: vi.fn(),
         // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 2): เลื่อนไป
         // moved into the header overflow menu, whose onSelect calls this via
         // DealStagePanel's own onUpdateStage prop — see the "stage-advance
@@ -2001,6 +2002,51 @@ describe('TicketDetailPage', () => {
       expect(screen.getAllByText('ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย').length).toBeGreaterThan(0);
       expect(screen.queryByText(/ถึงคิวคุณ/)).toBeNull();
     });
+
+    // W4-10 (owner ruling 2026-10-30): the CEO's close is irreversible, so the click only opens a
+    // confirm; verifyClose runs once, on confirm. (The account's ticket-detail-confirm-close stays
+    // one click — deliberately not covered here.)
+    describe('W4-10 CEO ตรวจสอบและปิดงาน asks first', () => {
+      async function renderVerifyClose() {
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              lifecycle: 'ACTIVE', salesStage: 'DELIVERED', status: 'quotation_issued',
+              closeConfirmedAt: '2026-07-20T09:00:00.000Z',
+            },
+          }),
+        });
+        api.tickets.actions.mockResolvedValue({
+          currentState: { lifecycle: 'ACTIVE', salesStage: 'DELIVERED', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued' },
+          availableActions: [{ action: 'VERIFY_CLOSE' }],
+        });
+        api.tickets.verifyClose.mockResolvedValue({ ticket: buildTicket() });
+        renderTicketDetailPage(ceoUser);
+        fireEvent.click(await screen.findByTestId('ticket-detail-verify-close'));
+        return screen.findByRole('dialog', { name: 'ยืนยันตรวจสอบและปิดงาน' });
+      }
+
+      it('click opens a dialog warning it cannot be undone and calls verifyClose only on confirm, once', async () => {
+        const dialog = await renderVerifyClose();
+        expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+        expect(api.tickets.verifyClose).not.toHaveBeenCalled();
+
+        const confirm = within(dialog).getByRole('button', { name: 'ตรวจสอบและปิดงาน' });
+        fireEvent.click(confirm);
+        fireEvent.click(confirm);
+
+        await waitFor(() => expect(api.tickets.verifyClose).toHaveBeenCalledTimes(1));
+        expect(api.tickets.verifyClose).toHaveBeenCalledWith(701);
+      });
+
+      it('cancel closes the dialog and never calls verifyClose', async () => {
+        const dialog = await renderVerifyClose();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันตรวจสอบและปิดงาน' })).toBeNull());
+        expect(api.tickets.verifyClose).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): the
@@ -2191,6 +2237,55 @@ describe('TicketDetailPage', () => {
       expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(
         501, expect.objectContaining({ clientRequestId: expect.any(String) }),
       );
+    });
+
+    // VW-04 (owner ruling 2026-10-30): the dialog names the quotation the panel SHOWS. A new-engine
+    // deal has no old-engine row, so it used to read "ใบเสนอราคา " + a blank.
+    describe('VW-04 the confirm-order dialog names the quotation the panel shows', () => {
+      async function openConfirmOrderDialog({ oldEngineRows = [] } = {}) {
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1, status: 'draft' } }),
+        });
+        api.tickets.actions.mockResolvedValue({
+          currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+          availableActions: [],
+        });
+        api.pricingRequests.listForTicket.mockResolvedValue({
+          items: [{
+            id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
+            status: 'QUOTATION_ACCEPTED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
+          }],
+        });
+        api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: oldEngineRows });
+        api.dealQuotations.listForTicket.mockResolvedValue({
+          items: [{
+            id: 9501, number: 'QT-2026-0501-NEW', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'ACCEPTED',
+            recipientType: 'BUYER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070,
+          }],
+        });
+        renderTicketDetailPage(salesOwnerUser);
+        // Wait until the panel itself shows the quotation it will name, so the click cannot race the loads.
+        await openTab(/เอกสาร/);
+        const panel = within(await screen.findByTestId('deal-quotation-panel'));
+        expect((await panel.findAllByText(oldEngineRows[0]?.number ?? 'QT-2026-0501-NEW')).length).toBeGreaterThan(0);
+        const sticky = await screen.findAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ });
+        fireEvent.click(sticky[0]);
+        return screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+      }
+
+      it('a new-engine deal (no old-engine row): the dialog reads the new-engine quotation number, not a blank', async () => {
+        const dialog = await openConfirmOrderDialog();
+        expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0501-NEW');
+        expect(dialog.textContent).not.toMatch(/ใบเสนอราคา\s{2,}/);
+      });
+
+      it('a live old-engine quotation still wins: the dialog names its number, as the panel does', async () => {
+        const dialog = await openConfirmOrderDialog({
+          oldEngineRows: [{ id: 9301, number: 'QT-2026-0301-1', docStatus: 'ACCEPTED', quotationRevisionNo: 1, grandTotal: 1000 }],
+        });
+        expect(dialog.textContent).toContain('QT-2026-0301-1');
+        expect(dialog.textContent).not.toContain('QT-2026-0501-NEW');
+      });
     });
   });
 
@@ -4566,7 +4661,7 @@ describe('TicketDetailPage', () => {
       delete Element.prototype.scrollIntoView;
     });
 
-    it('owner rep at DEPOSIT_PAID: the main button is สร้างใบขอซื้อ (IR); clicking creates the drafts once and lands on the จัดซื้อ-ส่งมอบ tab', async () => {
+    it('owner rep at DEPOSIT_PAID: the main button is สร้างใบขอซื้อ (IR); clicking asks first (W3-11), confirming creates the drafts once and lands on the จัดซื้อ-ส่งมอบ tab', async () => {
       irStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
@@ -4575,6 +4670,14 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(primary().disabled).toBe(false));
 
       fireEvent.click(primary());
+
+      // W3-11: ออกใบขอซื้อ (IR) is irreversible -> the handle opens the panel's confirm; nothing is sent yet.
+      const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' });
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+      // The confirm re-checks the factories first; it enables once that answers.
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      await waitFor(() => expect(confirm.disabled).toBe(false));
+      fireEvent.click(confirm);
 
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
       expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(701, undefined);
@@ -4593,6 +4696,8 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(location()).toContain('tab=fulfilment'));
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       await waitFor(() => expect(scrolledToIrSection()).toBe(true));
+      // createIrDrafts() now opens the issue confirm, so "not called" alone no longer pins the branch.
+      expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' })).toBeNull();
     });
 
     it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {

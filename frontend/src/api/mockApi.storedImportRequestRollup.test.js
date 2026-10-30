@@ -198,6 +198,21 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
   );
 });
 
+describe('mockApi storedImportRequests — coverage names the uncovered factories (W3-11)', () => {
+  it('lists the deal\'s factories before the IRs are created and none after', async () => {
+    const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
+    const before = await api.storedImportRequests.coverage(ticketId);
+    expect(before.hasUncoveredFactories).toBe(true);
+    expect(before.uncoveredFactoryNames).toHaveLength(2);
+
+    await api.tickets.setDepositPolicy(ticketId, { policy: 'WAIVED', reason: 'ทดสอบ coverage' });
+    await api.storedImportRequests.createDrafts(ticketId, {});
+    const after = await api.storedImportRequests.coverage(ticketId);
+    expect(after.hasUncoveredFactories).toBe(false);
+    expect(after.uncoveredFactoryNames).toEqual([]);
+  });
+});
+
 describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTLY CUSTOMER_CONFIRMED', () => {
   it('create (which now issues) succeeds once a bypass-policy deal is genuinely CUSTOMER_CONFIRMED', async () => {
     const { ticketId } = await driveTwoFactoryTicketToOrderReceived();

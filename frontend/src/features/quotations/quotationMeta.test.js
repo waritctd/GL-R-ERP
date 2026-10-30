@@ -1996,3 +1996,43 @@ describe('newestQuotationByRequest — a deal\'s quotation map (deal page, reque
     expect(byRequest.has(2)).toBe(false);
   });
 });
+
+// VW-04 (owner ruling 2026-10-30): the confirm-order lead used to print "ใบเสนอราคา " + a blank
+// whenever the caller had no number; it must read as a sentence either way.
+describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
+  it('names the quotation number when there is one', () => {
+    expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))
+      .toBe('ระบบจะนำดีลของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+  });
+
+  it.each([undefined, null, ''])('falls back to ใบเสนอราคานี้ with no stray double space when the number is %j', (number) => {
+    const lead = meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number);
+    expect(lead).toBe('ระบบจะนำดีลของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+    expect(lead).not.toMatch(/\s{2,}/);
+  });
+});
+
+// The quotation shown for a request that may hold one of each engine (deal page + PCR confirm-order dialog).
+describe('shownCustomerQuotation', () => {
+  const newEngine = { number: 'QT-2026-0099-1', docStatus: 'ACCEPTED' };
+  const legacy = (docStatus) => ({ number: 'QT-2026-0042', docStatus });
+
+  it('is the new-engine quotation when there is no old-engine one', () => {
+    expect(meta.shownCustomerQuotation(newEngine, null)).toBe(newEngine);
+  });
+
+  it('is the old-engine quotation when there is no new-engine one', () => {
+    const old = legacy('ACCEPTED');
+    expect(meta.shownCustomerQuotation(undefined, old)).toBe(old);
+    expect(meta.shownCustomerQuotation(null, null)).toBeNull();
+  });
+
+  it.each(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED'])('keeps the new-engine quotation over a dead old-engine one (%s)', (status) => {
+    expect(meta.shownCustomerQuotation(newEngine, legacy(status))).toBe(newEngine);
+  });
+
+  it.each(['DRAFT', 'SENT', 'ACCEPTED'])('prefers a live old-engine quotation (%s) over a new-engine row', (status) => {
+    const old = legacy(status);
+    expect(meta.shownCustomerQuotation({ ...newEngine, docStatus: 'REJECTED' }, old)).toBe(old);
+  });
+});

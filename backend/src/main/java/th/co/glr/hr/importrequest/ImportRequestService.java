@@ -21,6 +21,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.SizeUnit;
 import th.co.glr.hr.factory.FactoryConfigDto;
 import th.co.glr.hr.factory.FactoryConfigRepository;
+import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestCoverageResponse;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.importrequest.ImportRequestQueryRepository.BrandLines;
 import th.co.glr.hr.importrequest.ImportRequestQueryRepository.LineFactoryCandidate;
@@ -205,30 +206,48 @@ public class ImportRequestService {
     }
 
     /**
-     * Read-only twin of {@link #createDrafts}'s coverage check, for the list response: is there a factory
-     * on this deal that still needs an IR? Uses the same {@link ImportRequestQueryRepository
+     * Read-only twin of {@link #createDrafts}'s coverage check, for the coverage route: is there a factory
+     * on this deal that still needs an IR, and which ones? Uses the same {@link ImportRequestQueryRepository
      * #factoryResolutionCandidates} cascade, but creates no factory. A typed name that matches no
      * factory (or a line with no factory at all) counts as uncovered; only a LIVE (DRAFT / ISSUED) row
      * covers a factory — a SUPERSEDED one does not. A deal with nothing left to order is not uncovered.
+     *
+     * <p>The names (for the create confirm) are distinct, in line order: a resolved factory by its stored
+     * name, an unresolved typed name as typed (trimmed); a line with no factory at all has no name to
+     * give — the caller adds the factory the rep picks for it.
      */
-    public boolean hasUncoveredFactories(long ticketId, UserPrincipal actor) {
+    public ImportRequestCoverageResponse coverage(long ticketId, UserPrincipal actor) {
         requireTicket(ticketId);
         requireRead(ticketId, actor);
         Set<Long> covered = stored.findByTicket(ticketId).stream()
             .filter(r -> ImportRequestStatus.isLive(r.status()))
             .map(ImportRequestDto::factoryId)
             .collect(Collectors.toSet());
-        Map<String, Long> idByNormalizedName = factories.findAll().stream()
+        List<FactoryConfigDto> allFactories = factories.findAll();
+        Map<String, Long> idByNormalizedName = allFactories.stream()
             .collect(Collectors.toMap(f -> normalizeFactoryName(f.factoryName()), FactoryConfigDto::id, (x, y) -> x));
+        Map<Long, String> nameById = allFactories.stream()
+            .collect(Collectors.toMap(FactoryConfigDto::id, FactoryConfigDto::factoryName, (x, y) -> x));
+        boolean uncovered = false;
+        // Keyed the way createDrafts groups: a resolved factory by id, an unresolved name by its normalized form
+        // (so "Rex" and "rex " are ONE new factory), keeping the first display name.
+        Map<String, String> names = new LinkedHashMap<>();
         for (LineFactoryCandidate c : repository.factoryResolutionCandidates(ticketId)) {
             Long factoryId = c.directFactoryId() != null ? c.directFactoryId()
                 : c.candidateFactoryName() != null ? idByNormalizedName.get(normalizeFactoryName(c.candidateFactoryName()))
                 : null;
-            if (factoryId == null || !covered.contains(factoryId)) {
-                return true;
+            if (factoryId != null && covered.contains(factoryId)) {
+                continue;
+            }
+            uncovered = true;
+            String name = factoryId != null ? nameById.get(factoryId)
+                : c.candidateFactoryName() != null ? c.candidateFactoryName().strip() : null;
+            // strip() keeps NBSP / BOM, so a name of only those would print as a blank entry in the confirm.
+            if (name != null && !name.codePoints().allMatch(cp -> Character.isWhitespace(cp) || Character.isSpaceChar(cp) || cp == 0xFEFF)) {
+                names.putIfAbsent(factoryId != null ? "id:" + factoryId : "name:" + normalizeFactoryName(name), name);
             }
         }
-        return false;
+        return new ImportRequestCoverageResponse(uncovered, List.copyOf(names.values()));
     }
 
     public ImportRequestDto get(long id, UserPrincipal actor) {
