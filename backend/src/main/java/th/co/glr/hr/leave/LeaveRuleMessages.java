@@ -184,7 +184,7 @@ final class LeaveRuleMessages {
 
             // WARN_UNPAID_ALL (V164) -- see this class's WARN_UNPAID_TAIL block comment above.
             case ADVANCE_NOTICE -> format(code, withSection,
-                "การ{leaveTypeNameTh}ต้องยื่นล่วงหน้าอย่างน้อย {noticeDays} วัน (ระเบียบข้อ {section}) "
+                "การ{leaveTypeNameTh}ต้องยื่นล่วงหน้าอย่างน้อย {noticeDays} วันทำงาน (ระเบียบข้อ {section}) "
                     + "คำขอนี้ยื่นไม่ทันกำหนด " + WARN_UNPAID_TAIL,
                 "leaveTypeNameTh", "noticeDays", "section", "days");
 

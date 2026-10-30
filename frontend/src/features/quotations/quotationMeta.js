@@ -312,6 +312,17 @@ export function acceptOutcomeConfirmCopy(recipientType) {
   };
 }
 
+/** ConfirmDialog copy for ปฏิเสธ / ขอแก้ไข (W3-06/QA-35); both ask for the customer's reason. */
+export function outcomeReasonConfirmCopy(outcome) {
+  const rejected = outcome === 'REJECTED';
+  return {
+    title: rejected ? 'ลูกค้าปฏิเสธใบเสนอราคา' : 'ลูกค้าขอแก้ไขใบเสนอราคา',
+    message: 'บันทึกแล้วใบเสนอราคานี้จะไม่อยู่ในสถานะรอลูกค้าตอบรับอีก',
+    tone: rejected ? 'danger' : 'default',
+    reasonLabel: 'เหตุผลจากลูกค้า',
+  };
+}
+
 /** Mirrors TicketService#stageForQuotationRecipient. null for UNSPECIFIED/unknown. */
 export function stageForQuotationRecipient(code) {
   return quotationRecipientOption(code)?.stage ?? null;
@@ -2259,3 +2270,15 @@ export function buildQuotationChecklist({
 export function joinPresent(parts, separator = ' · ') {
   return (parts ?? []).filter((part) => !blankValue(part)).map((part) => String(part).trim()).join(separator);
 }
+
+export function generateClientRequestId() {
+  return crypto.randomUUID?.()
+    ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
+}
+
+/** One idempotency key PER (quotation, outcome): the backend replays a reused key as the FIRST outcome's
+ * success, so a failed ปฏิเสธ followed by ขอแก้ไข on a shared key would record nothing (W3-06/QA-35), and
+ * it 409s a key already used on ANOTHER quotation (code review 10-30). `map` is a useRef object; `scope`
+ * names the quotation (include the engine when ids can collide). Drop the key after a successful record. */
+export const outcomeKeyFor = (map, scope, outcome) => (map[`${scope}:${outcome}`] ??= generateClientRequestId());
+export const dropOutcomeKey = (map, scope, outcome) => { delete map[`${scope}:${outcome}`]; };

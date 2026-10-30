@@ -209,6 +209,7 @@ export const API_ROUTES = {
   // `importRequests` above, which stays the legacy read-only preview-per-brand family.
   storedImportRequests: {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/import-requests`,
+    coverage: (ticketId) => `/api/tickets/${ticketId}/import-requests/coverage`,
     get: (id) => `/api/import-requests/${id}`,
     issue: (id) => `/api/import-requests/${id}/issue`,
     revise: (id) => `/api/import-requests/${id}/revise`,

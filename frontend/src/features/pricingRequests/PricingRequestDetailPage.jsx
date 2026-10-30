@@ -75,7 +75,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, newestQuotationByRequest, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -343,11 +343,6 @@ function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
       {total != null ? <> · รวม <code>{formatCurrency(round2(total), 'THB')}</code></> : null}
     </span>
   );
-}
-
-function generateClientRequestId() {
-  return crypto.randomUUID?.()
-    ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
 }
 
 const QUOTE_UNIT_SUFFIX = { PER_SQM: '/ตร.ม.', PER_PIECE: '/แผ่น', PER_BOX: '/กล่อง', PER_LINEAR_M: '/เมตร' };
@@ -1357,10 +1352,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const [quotationItemDrafts, setQuotationItemDrafts] = useState({});
   const [downloadingQuotationFormat, setDownloadingQuotationFormat] = useState(null);
   // Step 5: Customer Decision and Commercial Revisions.
-  const [outcomeClientRequestId, setOutcomeClientRequestId] = useState(() => generateClientRequestId());
+  // Idempotency keys per (engine, quotation, outcome) (outcomeKeyFor, W3-06/QA-35).
+  const outcomeClientRequestIds = useRef({});
   const [outcomeNote, setOutcomeNote] = useState('');
   // B2: the ACCEPTED outcome a DESIGNER/OWNER request asks about first — { engine, quotation }.
   const [acceptToConfirm, setAcceptToConfirm] = useState(null);
+  // W3-06/QA-35 (owner ruling 2026-10-29): ปฏิเสธ / ขอแก้ไข ask for the customer's reason first, both
+  // engines — { engine, quotation, outcome }.
+  const [outcomeToConfirm, setOutcomeToConfirm] = useState(null);
   // Step 6: Deposit, Payment, and Order Confirmation.
   const [confirmOrderClientRequestId, setConfirmOrderClientRequestId] = useState(() => generateClientRequestId());
   const startCeoReview = useActionMutation(
@@ -1611,13 +1610,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   });
   // Step 5: Customer Decision and Commercial Revisions.
   const recordQuotationOutcome = useMutation({
-    mutationFn: ({ quotation, outcome }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
+    mutationFn: ({ quotation, outcome, note = outcomeNote }) => api.pricingRequests.recordCustomerQuotationOutcome(quotation.id, {
       outcome,
-      customerNote: outcomeNote || null,
-      clientRequestId: outcomeClientRequestId,
+      customerNote: note || null,
+      clientRequestId: outcomeKeyFor(outcomeClientRequestIds.current, `legacy:${quotation.id}`, outcome),
     }),
-    onSuccess: () => {
-      setOutcomeClientRequestId(generateClientRequestId());
+    onSuccess: (_data, { quotation, outcome }) => {
+      dropOutcomeKey(outcomeClientRequestIds.current, `legacy:${quotation.id}`, outcome);
       setOutcomeNote('');
       showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
       invalidate();
@@ -1626,18 +1625,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
   });
   // GLA-123 slice S3 (R9) — the SAME outcome action as recordQuotationOutcome above, on the
   // NEW-engine (PRICING_REQUEST-origin) quotation instead of the legacy one. Shares
-  // outcomeNote/outcomeClientRequestId state with recordQuotationOutcome: M2 already guarantees a
+  // outcomeNote/outcomeClientRequestIds state with recordQuotationOutcome: M2 already guarantees a
   // pricing request can never carry a live quotation on BOTH engines at once, so only one of the
   // two outcome UI blocks below is ever rendered for a given request, and the two mutations never
   // race over the same state.
   const recordDealQuotationOutcome = useMutation({
-    mutationFn: ({ quotation, outcome }) => api.dealQuotations.recordOutcome(quotation.id, {
+    mutationFn: ({ quotation, outcome, note = outcomeNote }) => api.dealQuotations.recordOutcome(quotation.id, {
       outcome,
-      customerNote: outcomeNote || null,
-      clientRequestId: outcomeClientRequestId,
+      customerNote: note || null,
+      clientRequestId: outcomeKeyFor(outcomeClientRequestIds.current, `deal:${quotation.id}`, outcome),
     }),
-    onSuccess: () => {
-      setOutcomeClientRequestId(generateClientRequestId());
+    onSuccess: (_data, { quotation, outcome }) => {
+      dropOutcomeKey(outcomeClientRequestIds.current, `deal:${quotation.id}`, outcome);
       setOutcomeNote('');
       showToast?.('success', 'บันทึกผลใบเสนอราคาแล้ว');
       invalidate();
@@ -1755,7 +1754,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const missingFactoryItems = useMemo(
     () => (request?.items ?? [])
       .map((item, index) => ({ item, position: index + 1 }))
-      .filter((entry) => !itemFactoryName(entry.item)),
+      .filter((entry) => entry.item.stockSource == null && !itemFactoryName(entry.item)),
     [request],
   );
   // Import owns this field, and only while the request is in its hands. NOT an authorization
@@ -1816,7 +1815,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const pricePreviewGroups = useMemo(() => {
     const map = new Map();
     (request?.items ?? [])
-      .filter((item) => !coveredItemIds.has(item.id))
+      .filter((item) => !coveredItemIds.has(item.id) && item.stockSource == null) // stock lines are never quoted by a factory
       .forEach((item) => {
         const name = itemFactoryName(item) || 'ยังไม่ได้ระบุโรงงาน';
         if (!map.has(name)) map.set(name, { key: name, factoryName: name, items: [] });
@@ -1876,6 +1875,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // mirrors PricingDecisionService's own DRAFT + CEO_REVIEWING + canActOnPricingDecision guard.
   const decisionEditable = Boolean(currentDecision) && currentDecision.status === 'DRAFT'
     && canActOnPricingDecision(user, summary);
+  // Returned to import and back READY: the RETURNED decision is history, the CEO starts a fresh one.
+  const needsFreshReview = !currentDecision || currentDecision.status === 'RETURNED';
   // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision
   // item's pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are
   // easy to conflate since a costing item also carries pricingRequestItemId as its own FK). Every
@@ -1933,6 +1934,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // SUPERSEDED edge and the predicate is already false for it.
   const canCreateCustomerRevision = isSales(user)
     && summary?.ticketCreatedById === user?.employeeId
+    && summary?.ticketPaymentStatus == null // order confirmed: no new pricing round (the backend 409s it)
     && canTransition(summary?.status, 'SUPERSEDED');
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
   // Mirrors PricingRequestService.ATTACHMENT_EDITABLE_STATUSES: Sales may only upload/delete its
@@ -2742,6 +2744,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   function renderCeoDecisionActions({ decision, editable, missingBeforeApprove, staleOverrideItems, newForm, missingCeoPrice, missingCost, missingStockListPrice }) {
     if (!editable) return null;
+    // No import line means no import cost to fix, so there is nothing to send back (the server refuses too).
+    const allLinesAreStock = (request.items ?? []).length > 0 && request.items.every((item) => item.stockSource != null);
     return (
       <>
         <div className="mt-3 flex flex-col gap-2 border-t border-border-subtle pt-3">
@@ -2758,14 +2762,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
             >
               อนุมัติราคาขาย
             </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={returnDecisionToImport.isPending}
-              onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
-            >
-              ตีกลับให้ฝ่ายนำเข้าแก้ไข
-            </Button>
+            {allLinesAreStock ? null : (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={returnDecisionToImport.isPending}
+                onClick={() => setConfirmAction({ type: 'returnDecision', decision })}
+              >
+                ตีกลับให้ฝ่ายนำเข้าแก้ไข
+              </Button>
+            )}
           </div>
           {missingBeforeApprove.length > 0 ? (
             <span className="text-xs text-danger">ทุกรายการต้องมีอัตรากำไรก่อนอนุมัติ (หรือปรับราคาเอง)</span>
@@ -2842,7 +2848,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   function renderCeoStartReview() {
     return (
       <>
-        {!currentDecision && canStartCeoReview(user, summary) ? (
+        {needsFreshReview && canStartCeoReview(user, summary) ? (
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-text-muted">
               อัตรากำไรเริ่มต้น
@@ -3078,18 +3084,19 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 key={item.id}
                 className={cn(
                   'rounded-md border bg-surface p-3',
-                  factoryName ? 'border-border' : 'border-warning-border',
+                  factoryName || item.stockSource != null ? 'border-border' : 'border-warning-border',
                 )}
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-bold text-text-muted">{`รายการที่ ${position}`}</span>
                   <strong>{itemDisplayName(item)}</strong>
+                  {item.stockSource != null ? <StatusBadge tone="warning">จากสต็อก</StatusBadge> : null}
                   <span className="text-xs text-text-muted">{item.requestedQty} {item.requestedUnit}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
                   <span>{`โรงงาน (ที่ฝ่ายขายกรอก): ${salesBrandValue ?? '—'}`}</span>
-                  <span className={factoryName ? undefined : 'font-bold text-warning-dark'}>
-                    {`โรงงานที่กำหนด (Import): ${factoryName ?? 'ยังไม่ได้ระบุ'}`}
+                  <span className={factoryName || item.stockSource != null ? undefined : 'font-bold text-warning-dark'}>
+                    {`โรงงานที่กำหนด (Import): ${factoryName ?? (item.stockSource != null ? '—' : 'ยังไม่ได้ระบุ')}`}
                   </span>
                   <span>รหัสสินค้า: {productCode ?? '-'}</span>
                   <span data-testid={`pcr-import-price-${item.id}`}>
@@ -3191,7 +3198,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               {renderCeoDecisionItem(ceoState.decision, d, ceoState.editable)}
             </div>
           ))}
-          {ceoWorkspace && !currentDecision ? (
+          {ceoWorkspace && needsFreshReview ? (
             <div className="flex flex-col gap-2 pt-1">{renderCeoStartReview()}</div>
           ) : null}
           {ceoState?.newForm ? (
@@ -3978,11 +3985,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
-                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REJECTED' })}>
+                    onClick={() => setOutcomeToConfirm({ engine: 'deal', quotation: dealQuotationForPr, outcome: 'REJECTED' })}>
                     ลูกค้าปฏิเสธ
                   </Button>
                   <Button type="button" variant="secondary" disabled={recordDealQuotationOutcome.isPending}
-                    onClick={() => recordDealQuotationOutcome.mutate({ quotation: dealQuotationForPr, outcome: 'REVISION_REQUESTED' })}>
+                    onClick={() => setOutcomeToConfirm({ engine: 'deal', quotation: dealQuotationForPr, outcome: 'REVISION_REQUESTED' })}>
                     ลูกค้าขอแก้ไข
                   </Button>
                 </div>
@@ -4279,11 +4286,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
                           ลูกค้ายอมรับ
                         </Button>
                         <Button type="button" variant="danger" disabled={recordQuotationOutcome.isPending}
-                          onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REJECTED' })}>
+                          onClick={() => setOutcomeToConfirm({ engine: 'legacy', quotation, outcome: 'REJECTED' })}>
                           ลูกค้าปฏิเสธ
                         </Button>
                         <Button type="button" variant="secondary" disabled={recordQuotationOutcome.isPending}
-                          onClick={() => recordQuotationOutcome.mutate({ quotation, outcome: 'REVISION_REQUESTED' })}>
+                          onClick={() => setOutcomeToConfirm({ engine: 'legacy', quotation, outcome: 'REVISION_REQUESTED' })}>
                           ลูกค้าขอแก้ไข
                         </Button>
                       </div>
@@ -4436,6 +4443,20 @@ export function PricingRequestDetailPage({ user, showToast }) {
           const { engine, quotation } = acceptToConfirm;
           setAcceptToConfirm(null);
           recordAccepted(engine, quotation);
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(outcomeToConfirm)}
+        {...outcomeReasonConfirmCopy(outcomeToConfirm?.outcome)}
+        requireReason
+        busy={recordQuotationOutcome.isPending || recordDealQuotationOutcome.isPending}
+        onCancel={() => setOutcomeToConfirm(null)}
+        onConfirm={(reason) => {
+          const { engine, quotation, outcome } = outcomeToConfirm;
+          // Close only on success: a failed call keeps the dialog (and the typed reason) for a same-key retry.
+          (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome)
+            .mutate({ quotation, outcome, note: reason }, { onSuccess: () => setOutcomeToConfirm(null) });
         }}
       />
 

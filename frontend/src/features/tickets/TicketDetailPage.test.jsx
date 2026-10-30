@@ -1359,11 +1359,10 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
   });
 
-  // V183 (stock-sourced deal-line pricing, owner ruling): this is the post-creation edit
-  // screen — TicketCreateModal.jsx only covers deal-creation time, and the product owner asked
-  // for the same "จากสต็อก" flag + price to be settable here too, since TicketDetailPage is the
-  // only route into editItems/mergeEditedItemsPreservingPricing after a deal already exists.
-  it('edit-items: flagging a row "จากสต็อก" without a price blocks save, then submits with the price once filled', async () => {
+  // Walk 4 (W4-09, owner ruling 2026-10-29): "จากสต็อก" is just a flag on the deal line - the
+  // sales-typed ราคาขายจากสต็อก is gone (the deal shows the CEO-approved price). The post-creation edit
+  // screen shows no price input, never blocks save for want of one, and sends no stockSalePrice.
+  it('edit-items: flagging a row "จากสต็อก" shows no price input and saves straight away with no stockSalePrice', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
@@ -1388,27 +1387,18 @@ describe('TicketDetailPage', () => {
     expect(checkbox.checked).toBe(false);
     fireEvent.click(checkbox);
 
-    // Checking the box reveals the required price input, empty by default.
-    const priceInput = document.getElementById('edit-item-stock-sale-price-0');
-    expect(priceInput).toBeTruthy();
+    expect(checkbox.checked).toBe(true);
+    expect(document.getElementById('edit-item-stock-sale-price-0')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
-    expect(await screen.findByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toBeTruthy();
-    expect(priceInput.getAttribute('aria-invalid')).toBe('true');
-    expect(api.tickets.editItems).not.toHaveBeenCalled();
-
-    fireEvent.change(priceInput, { target: { value: '420.50' } });
-    await waitFor(() => expect(priceInput.getAttribute('aria-invalid')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
 
     await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
-    expect(api.tickets.editItems.mock.calls[0][1].items[0]).toMatchObject({
-      sourcedFromStock: true,
-      stockSalePrice: 420.5,
-    });
+    const sent = api.tickets.editItems.mock.calls[0][1].items[0];
+    expect(sent).toMatchObject({ sourcedFromStock: true });
+    expect(sent.stockSalePrice ?? null).toBeNull();
   });
 
-  it('edit-items: unchecking "จากสต็อก" on a previously stock-sourced row sends sourcedFromStock:false and a null price', async () => {
+  it('edit-items: a previously stock-sourced row (an old row that still carries a price) shows no price input, and unchecking sends sourcedFromStock:false', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
@@ -1431,88 +1421,21 @@ describe('TicketDetailPage', () => {
 
     const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
     expect(checkbox.checked).toBe(true);
-    expect(document.getElementById('edit-item-stock-sale-price-0').value).toBe('500');
-
-    fireEvent.click(checkbox);
     expect(document.getElementById('edit-item-stock-sale-price-0')).toBeNull();
 
+    fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
     await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
-    expect(api.tickets.editItems.mock.calls[0][1].items[0]).toMatchObject({
-      sourcedFromStock: false,
-      stockSalePrice: null,
-    });
+    const sent = api.tickets.editItems.mock.calls[0][1].items[0];
+    expect(sent).toMatchObject({ sourcedFromStock: false });
+    expect(sent.stockSalePrice ?? null).toBeNull();
   });
 
-  // Review follow-up (V183): deleting a row must re-key a later row's stockSalePrice error the
-  // same way every other per-row field error is already re-keyed (the reindex regex in
-  // TicketDetailPage.jsx is generic — `/^editItems\.([a-zA-Z]+)\.(\d+)$/` — so no code change was
-  // needed for this field specifically, but the branch had no test at all covering it before this).
-  // Without it a stockSalePrice error would survive a delete under its OLD index and end up
-  // pinned to a row the user never flagged (or to no row at all, silently swallowing a real
-  // validation failure).
-  it('edit-items: deleting a row re-pins a later row\'s "จากสต็อก" price error to its new index', async () => {
-    api.tickets.get.mockResolvedValueOnce({
-      ticket: buildTicket({
-        summary: { status: 'submitted', createdById: 1 },
-        items: [
-          { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
-          { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 5, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, sourcedFromStock: false, stockSalePrice: null },
-        ],
-      }),
-    });
-    api.tickets.actions.mockResolvedValueOnce({
-      currentState: {
-        lifecycle: 'ACTIVE', salesStage: 'LEAD', paymentStatus: null, fulfillmentStatus: null, status: 'submitted',
-      },
-      availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
-    });
-
-    renderTicketDetailPage(salesOwnerUser);
-
-    await openTab(/สินค้าและราคา/);
-    fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
-
-    // Flag the SECOND row only, leaving its required price blank.
-    const checkboxes = await screen.findAllByRole('checkbox', { name: 'จากสต็อก' });
-    expect(checkboxes).toHaveLength(2);
-    fireEvent.click(checkboxes[1]);
-
-    // Save pins the error to row index 1 (both rows' qty is valid, so this is the only error).
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
-    expect(await screen.findByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toBeTruthy();
-    expect(document.getElementById('edit-item-stock-sale-price-1').getAttribute('aria-invalid')).toBe('true');
-    expect(api.tickets.editItems).not.toHaveBeenCalled();
-
-    // Delete the FIRST row — the flagged row shifts from index 1 to index 0, and its error must
-    // travel with it rather than staying pinned to the vacated index.
-    fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
-
-    const movedInput = document.getElementById('edit-item-stock-sale-price-0');
-    expect(movedInput).toBeTruthy();
-    await waitFor(() => expect(movedInput.getAttribute('aria-invalid')).toBe('true'));
-    // Exactly one error, on the one surviving row — not duplicated, not orphaned.
-    expect(screen.getAllByText('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก')).toHaveLength(1);
-    expect(document.getElementById('edit-item-stock-sale-price-1')).toBeNull();
-
-    // And the row still saves correctly once the price is supplied at its new index.
-    fireEvent.change(movedInput, { target: { value: '420.50' } });
-    await waitFor(() => expect(movedInput.getAttribute('aria-invalid')).toBeNull());
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
-
-    await waitFor(() => expect(api.tickets.editItems).toHaveBeenCalledTimes(1));
-    const sent = api.tickets.editItems.mock.calls[0][1].items;
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ model: 'B2', sourcedFromStock: true, stockSalePrice: 420.5 });
-  });
-
-  // Gap B (task): the read-only items table showed no indication of a saved จากสต็อก line at
-  // all — no badge, and the approved-price cell just read "-" whenever a stock-sourced line
-  // happened to have no approvedPrice of its own (nothing downstream sets one yet — the flag is
-  // capture-only today, see ticketItemFields.jsx's own comment — but a flagged line can equally
-  // still go through the ordinary PricingRequest chain and end up with a real approvedPrice; the
-  // "approvedPrice set too" case is covered separately below).
-  it('read mode: a จากสต็อก line shows the orange badge and its stock price; a normal line shows neither', async () => {
+  // Walk 4 (W4-09): the read-only items table still flags a saved จากสต็อก line with the orange badge, but
+  // the deal shows the CEO-approved price - NEVER stock_sale_price. A legacy row that still carries one
+  // (written before the sales-typed price was removed) must not surface it: not as the price, not as a
+  // secondary "ราคาสต็อก" line, in either price cell variant.
+  it('read mode: a จากสต็อก line shows the badge but never its stockSalePrice; a normal line is unchanged', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
@@ -1533,20 +1456,13 @@ describe('TicketDetailPage', () => {
     await openTab(/สินค้าและราคา/);
 
     expect(await screen.findByText('จากสต็อก')).toBeTruthy();
-    expect(screen.getByText('ราคาสต็อก')).toBeTruthy();
-    // formatMoney's ฿-prefixed, 2-decimal shape.
-    expect(screen.getByText('฿420.50')).toBeTruthy();
-    // The non-stock row's own approved price still renders normally, with no "ราคาสต็อก" line.
+    expect(screen.queryByText('฿420.50')).toBeNull();
+    expect(screen.queryByText(/ราคาสต็อก/)).toBeNull();
+    // The non-stock row's own approved price still renders normally.
     expect(screen.getByText('฿300.00')).toBeTruthy();
-    expect(screen.queryByText(/ราคาสต็อก:/)).toBeNull();
   });
 
-  // Gap B, review follow-up: a จากสต็อก flag does not stop a line from ALSO going through the
-  // ordinary PricingRequest chain and picking up a real approvedPrice (the flag is capture-only
-  // today — nothing downstream reads it, see ticketItemFields.jsx). StockAwarePriceCell must not
-  // replace an existing price with the stock one; it only adds the stock price as a secondary
-  // line underneath.
-  it('read mode: a จากสต็อก line with approvedPrice already set shows BOTH — approvedPrice as usual, plus a secondary ราคาสต็อก line', async () => {
+  it('read mode: a จากสต็อก line with approvedPrice set shows the approved price only - no secondary ราคาสต็อก line', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
@@ -1566,19 +1482,12 @@ describe('TicketDetailPage', () => {
     await openTab(/สินค้าและราคา/);
 
     expect(await screen.findByText('จากสต็อก')).toBeTruthy();
-    // approvedPrice still renders as the primary figure, unchanged...
     expect(screen.getByText('฿999.00')).toBeTruthy();
-    // ...with the stock price added as a labelled secondary line, never replacing it.
-    expect(screen.getByText('ราคาสต็อก: ฿420.50')).toBeTruthy();
+    expect(screen.queryByText(/ราคาสต็อก/)).toBeNull();
+    expect(screen.queryByText(/420\.50/)).toBeNull();
   });
 
-  // Gap B, review follow-up: the calc-breakdown variant (CEO view, at least one item on the
-  // ticket has calcedCost set) renders a DIFFERENT ราคาขาย (THB/ชิ้น) cell than the plain
-  // ราคาที่อนุมัติ column the tests above exercise — StockAwarePriceCell is wired into both, and
-  // this pins the calc-breakdown one specifically (a stock line with no calced/manual price of
-  // its own yet, same "fills the placeholder" case as the very first test above, but through the
-  // other cell).
-  it('read mode: calc-breakdown variant (CEO, calcedCost set) also fills the ราคาขาย cell for a stock line with no calced price yet', async () => {
+  it('read mode: calc-breakdown variant (CEO, calcedCost set) does not fill the ราคาขาย cell with a stock price either', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
@@ -1605,9 +1514,8 @@ describe('TicketDetailPage', () => {
     expect(await screen.findByText('ต้นทุน (THB/ชิ้น)')).toBeTruthy();
     expect(screen.getByText('ราคาขาย (THB/ชิ้น)')).toBeTruthy();
     expect(screen.getByText('จากสต็อก')).toBeTruthy();
-    // No calced/manual price yet — the stock price fills the placeholder, with its own label.
-    expect(screen.getByText('฿420.50')).toBeTruthy();
-    expect(screen.getByText('ราคาสต็อก')).toBeTruthy();
+    expect(screen.queryByText('฿420.50')).toBeNull();
+    expect(screen.queryByText(/ราคาสต็อก/)).toBeNull();
   });
 
   // fix/ticket-edit-items-required-markers: the UAT report this branch fixes — "เวลาเรียกดีลมาแก้
@@ -1864,6 +1772,37 @@ describe('TicketDetailPage', () => {
     // Success closes the modal (resetActionDrafts sets showReviseForm false),
     // same as every other action modal on this page.
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ขอแก้ไข' })).toBeNull());
+  });
+
+  // Walk 4 (W4-04): once the customer's order is confirmed (ขั้น 10+) a deal-level ขอแก้ไข would open a new
+  // pricing round the deal can no longer take (the backend refuses it too), so the ⋯ menu does not offer it.
+  // Control: the same owner and status before the order is confirmed still gets it.
+  it('the ⋯ menu offers ขอแก้ไข before the order is confirmed, and not once it is (ขั้น 10+)', async () => {
+    const stage = (paymentStatus, salesStage) => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', createdById: 1, paymentStatus, salesStage } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage, paymentStatus, fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [],
+      });
+    };
+    const reviseOffered = async () => {
+      await screen.findByTestId('deal-state-header');
+      const more = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+      if (!more) return false;
+      fireEvent.click(more);
+      return screen.queryByRole('menuitem', { name: /ขอแก้ไข/ }) != null;
+    };
+
+    stage(null, 'QUOTE_DESIGN_SIDE');
+    const before = renderTicketDetailPage(salesOwnerUser);
+    expect(await reviseOffered()).toBe(true);
+    before.unmount();
+
+    stage('CUSTOMER_CONFIRMED', 'ORDER_RECEIVED');
+    renderTicketDetailPage(salesOwnerUser);
+    expect(await reviseOffered()).toBe(false);
   });
 
   // The actual defect this slice fixes: opening ขอแก้ไข from the header's "⋯"
@@ -2307,12 +2246,14 @@ describe('TicketDetailPage', () => {
     // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
-    it('a sent designer quotation: the primary เสนอราคาเจ้าของโครงการ is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
+    // SK-03 (owner ruling 2026-10-29): the menu's trigger is the neutral เสนอราคา ▾, not the first party.
+    it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
       deal();
       renderTicketDetailPage(salesOwnerUser);
 
       const primary = await primaryWithAction('quote_next_party');
-      expect(primary.textContent).toBe('เสนอราคาเจ้าของโครงการ');
+      expect(primary.textContent).toBe('เสนอราคา');
+      expect(primary.getAttribute('aria-label')).toBe('เสนอราคา');
       expect(primary.getAttribute('aria-haspopup')).toBe('menu');
       expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
 
@@ -2688,6 +2629,49 @@ describe('TicketDetailPage', () => {
 
       expect((await screen.findAllByText(/รอชำระมัดจำ/)).length).toBeGreaterThan(0);
     });
+  });
+
+  // QA-27 (owner ruling 2026-10-29): "รอ CEO ตรวจสอบปิดงาน" is a WAIT, so it stops once the CEO has
+  // verified (lifecycle COMPLETED) — closeConfirmedAt stays set forever, so it cannot be the only test.
+  describe('blocker line "รอ CEO ตรวจสอบปิดงาน" ends when the CEO has verified (QA-27)', () => {
+    const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
+    function closeConfirmedDeal(lifecycle) {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle, salesStage: 'DELIVERED', status: 'quotation_issued', paymentStatus: 'FULLY_PAID',
+            closeConfirmedAt: '2026-07-20T09:00:00.000Z',
+          },
+        }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle, salesStage: 'DELIVERED', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', status: 'quotation_issued' },
+        availableActions: [],
+      });
+    }
+
+    it('still shows to a non-CEO viewer while the deal is ACTIVE and awaiting verification', async () => {
+      closeConfirmedDeal('ACTIVE');
+      renderTicketDetailPage(salesManagerUser);
+      expect((await screen.findAllByText('รอ CEO ตรวจสอบปิดงาน')).length).toBeGreaterThan(0);
+    });
+
+    it('does not show to the CEO once the deal is COMPLETED (the CEO has no verify action left)', async () => {
+      closeConfirmedDeal('COMPLETED');
+      renderTicketDetailPage(ceoUser);
+      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
+    });
+
+    it.each(['COMPLETED', 'CANCELLED', 'CLOSED_LOST'])(
+      'does not show to a non-CEO viewer once the deal is %s (the CEO can only verify an ACTIVE deal)',
+      async (lifecycle) => {
+        closeConfirmedDeal(lifecycle);
+        renderTicketDetailPage(salesManagerUser);
+        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+        expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
+      },
+    );
   });
 
   // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
@@ -3074,6 +3058,129 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
         9301, expect.objectContaining({ outcome: 'ACCEPTED' }),
       ));
+    });
+
+    // W3-06/QA-35 (owner rulings 2026-10-29/30): the panel's ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข ask first with a
+    // required reason (saved as customerNote), and each outcome keeps its own clientRequestId until it
+    // succeeds — the backend replays a reused key as the FIRST outcome's success.
+    describe('W3-06: the panel\'s ปฏิเสธ / ขอแก้ไข confirm with a reason', () => {
+      const record = () => api.pricingRequests.recordCustomerQuotationOutcome;
+      const issuedQuotation = (id, number) => ({ id, number, docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 });
+      let ctx;
+      let showToast;
+      async function renderIssuedPanel() {
+        showToast = vi.fn();
+        api.pricingRequests.listForTicket.mockResolvedValue({
+          items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'BUYER' }],
+        });
+        api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issuedQuotation(9301, 'QT-2026-0301-1')] });
+        ctx = renderTicketDetailPage(salesOwnerUser, showToast);
+        await openTab(/เอกสาร/);
+      }
+      // The panel's current quotation becomes a different ISSUED one (a refetch brings it in).
+      async function switchQuotationTo(id, number) {
+        api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issuedQuotation(id, number)] });
+        await act(async () => { await ctx.queryClient.invalidateQueries(); });
+        await screen.findAllByText(number);
+      }
+      async function openDialog(testId) {
+        fireEvent.click(await screen.findByTestId(testId));
+        return within(await screen.findByRole('dialog'));
+      }
+      // Does NOT assume the dialog closes: on failure it stays open (see the retry test).
+      async function confirmWithReason(testId, reason) {
+        const callsBefore = record().mock.calls.length;
+        const dialog = await openDialog(testId);
+        expect(record()).toHaveBeenCalledTimes(callsBefore);
+        const confirm = dialog.getByRole('button', { name: 'ยืนยัน' });
+        expect(confirm.disabled).toBe(true);
+        fireEvent.change(dialog.getByRole('textbox'), { target: { value: reason } });
+        fireEvent.click(confirm);
+        await waitFor(() => expect(record()).toHaveBeenCalledTimes(callsBefore + 1));
+        return record().mock.calls[callsBefore];
+      }
+      // Back out if the failed call left the dialog open (it should; the key tests don't depend on that).
+      async function cancelDialog() {
+        const open = screen.queryByRole('dialog');
+        if (open) fireEvent.click(within(open).getByRole('button', { name: 'ยกเลิก' }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      }
+      const failureSettled = () => waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'network down'));
+      afterEach(() => { record().mockReset(); });
+
+      it.each([
+        ['deal-quotation-reject', 'REJECTED'],
+        ['deal-quotation-revision', 'REVISION_REQUESTED'],
+      ])('%s opens a dialog; ยืนยัน needs a reason; it records %s with customerNote = the reason, then closes', async (testId, outcome) => {
+        record().mockResolvedValue({ quotation: { id: 9301, docStatus: outcome } });
+        await renderIssuedPanel();
+        const [id, body] = await confirmWithReason(testId, 'ราคาสูงกว่างบ');
+        expect(id).toBe(9301);
+        expect(body).toEqual(expect.objectContaining({ outcome, customerNote: 'ราคาสูงกว่างบ', clientRequestId: expect.any(String) }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      });
+
+      it('ยกเลิก records nothing', async () => {
+        await renderIssuedPanel();
+        const dialog = await openDialog('deal-quotation-reject');
+        fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เปลี่ยนใจ' } });
+        await cancelDialog();
+        expect(record()).not.toHaveBeenCalled();
+      });
+
+      it('a FAILED outcome keeps the dialog open with the typed reason; ยืนยัน again retries with the SAME key and then closes it', async () => {
+        record().mockRejectedValueOnce(new Error('network down')).mockResolvedValue({ quotation: { id: 9301, docStatus: 'REJECTED' } });
+        await renderIssuedPanel();
+        const [, first] = await confirmWithReason('deal-quotation-reject', 'เหตุผล ก');
+        await failureSettled();
+
+        const still = screen.queryByRole('dialog');
+        expect(still, 'dialog must stay open after a failed record').not.toBeNull();
+        expect(within(still).getByRole('textbox').value).toBe('เหตุผล ก');
+
+        fireEvent.click(within(still).getByRole('button', { name: 'ยืนยัน' }));
+        await waitFor(() => expect(record()).toHaveBeenCalledTimes(2));
+        const [, retry] = record().mock.calls[1];
+        expect(retry.clientRequestId).toBe(first.clientRequestId);
+        expect(retry.customerNote).toBe('เหตุผล ก');
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      });
+
+      it('after a FAILED ปฏิเสธ, ขอแก้ไข gets a different key', async () => {
+        record().mockRejectedValueOnce(new Error('network down'));
+        await renderIssuedPanel();
+        const [, first] = await confirmWithReason('deal-quotation-reject', 'เหตุผล ก');
+        await failureSettled();
+        await cancelDialog();
+        const [, revise] = await confirmWithReason('deal-quotation-revision', 'เหตุผล ข');
+        expect(revise.outcome).toBe('REVISION_REQUESTED');
+        expect(revise.clientRequestId).not.toBe(first.clientRequestId);
+      });
+
+      it('the key belongs to the quotation: a failed ปฏิเสธ on 9301, then a different ISSUED quotation 9302, sends 9302 a fresh key', async () => {
+        record().mockRejectedValueOnce(new Error('network down'));
+        await renderIssuedPanel();
+        const [, onA] = await confirmWithReason('deal-quotation-reject', 'เหตุผล ก');
+        await failureSettled();
+        await cancelDialog();
+
+        await switchQuotationTo(9302, 'QT-2026-0302-1');
+        const [idB, onB] = await confirmWithReason('deal-quotation-reject', 'เหตุผล ก');
+        expect(idB).toBe(9302);
+        expect(onB.clientRequestId).not.toBe(onA.clientRequestId);
+      });
+
+      it('records against the quotation shown when ปฏิเสธ was clicked, even if the panel refetches to another one before ยืนยัน', async () => {
+        record().mockResolvedValue({ quotation: { id: 9301, docStatus: 'REJECTED' } });
+        await renderIssuedPanel();
+        const dialog = await openDialog('deal-quotation-reject');
+        fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'เหตุผล ก' } });
+
+        await switchQuotationTo(9302, 'QT-2026-0302-1');
+        fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'ยืนยัน' }));
+        await waitFor(() => expect(record()).toHaveBeenCalledTimes(1));
+        expect(record().mock.calls[0][0]).toBe(9301);
+      });
     });
 
     // Spec F1: the panel sees the quotation the sticky เสนอใบราคา writes (the deal's quotation list,
@@ -3561,21 +3668,12 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
     });
 
-    // ── Issue #732: จองสินค้าจากสต็อก for the deal owner ──────────────────────
+    // ── Walk 4 (owner ruling 2026-10-29): there is no reserve-from-stock feature ─────────
     //
-    // PR #706 widened TicketService.canDeclareStockCoverage to FULFILMENT_ROLES ∪
-    // (SALES_ROLES ∧ deal owner) and actions() advertises RESERVE_STOCK off the
-    // same predicate — so the server already answers "may this viewer declare
-    // stock coverage", carrying the ownership rule, the ORDER_RECEIVED stage
-    // floor and the remaining-delivery check with it. The panel used to AND that
-    // answer with the pre-#706 role set and hide the button from sales entirely.
-    //
-    // ⚠️ These are RENDERING assertions over a mocked `api`. They pin that the
-    // frontend now honours the server's answer instead of overriding it; they say
-    // nothing about who the real service actually grants. That claim needs a
-    // real-DB test through the Java service (StockDeclarationAuthzIntegrationTest
-    // covers the backend half) — see CLAUDE.md.
-    it('shows จองสินค้าจากสต็อก to the sales deal owner when the server advertises RESERVE_STOCK', async () => {
+    // A stock line ends when the CEO confirms the price and then waits for delivery; nobody reserves
+    // anything. The จองสินค้าจากสต็อก control is gone for every role - even if an older server still
+    // advertises RESERVE_STOCK to the deal owner (the endpoint stays for fixtures, the UI does not).
+    it('never shows จองสินค้าจากสต็อก - not even to the sales deal owner when the server still advertises RESERVE_STOCK', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', createdById: 1 } }),
       });
@@ -3587,31 +3685,12 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(salesOwnerUser);
       const section = await fulfilmentSection();
 
-      expect(await section.findByRole('button', { name: 'จองสินค้าจากสต็อก' })).not.toBeNull();
-    });
-
-    // Wrong-way-round, and the one that matters: dropping the local role check
-    // must NOT mean the button is unconditional. When the server withholds
-    // RESERVE_STOCK — below the stage floor, not the owner, nothing left to
-    // deliver — the same sales user must still see nothing.
-    it('hides จองสินค้าจากสต็อก from a sales user the server did not offer RESERVE_STOCK to', async () => {
-      api.tickets.get.mockResolvedValueOnce({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'PROCUREMENT', createdById: 1 } }),
-      });
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued' },
-        availableActions: [],
-      });
-
-      renderTicketDetailPage(salesOwnerUser);
-      const section = await fulfilmentSection();
-
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
     });
 
     // ── Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17 ─────────────
     //
-    // Same shape as the RESERVE_STOCK pair above, one ruling later. TicketService.canWriteDelivery
+    // Same shape as the (since removed) RESERVE_STOCK pair, one ruling later. TicketService.canWriteDelivery
     // is FULFILMENT_ROLES ∪ (sales ∧ deal owner) and actions() advertises
     // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off it, so the panel's own `isFulfilment` check on
     // those two is gone and the server's answer stands.
@@ -3758,6 +3837,50 @@ describe('TicketDetailPage', () => {
       expect(within(header).getByText('ขั้นตอนดีล')).not.toBeNull();
       expect(within(header).getByText('คำขอราคา')).not.toBeNull();
       expect(within(header).getByText('การนำเข้า')).not.toBeNull();
+    });
+  });
+
+  // QA-22: the header's การนำเข้า chip follows the per-factory IR steps, so the page itself reads the stored
+  // IRs (not only the fulfilment tab) for every role the backend lets read them — and passes them down.
+  describe('การนำเข้า header chip follows the stored IRs (QA-22)', () => {
+    function dealWithTwoFactories() {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', fulfillmentStatus: 'IR_ISSUED', createdById: 1 } }),
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: null, fulfillmentStatus: 'IR_ISSUED', status: 'price_proposed' },
+        availableActions: [],
+      });
+      api.storedImportRequests.listForTicket.mockResolvedValue({
+        importRequests: [
+          { id: 31, status: 'ISSUED', ticketId: 701, importStep: 'IN_TRANSIT' },
+          { id: 32, status: 'ISSUED', ticketId: 701, importStep: 'RECEIVED' },
+        ],
+      });
+    }
+    afterEach(() => {
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    });
+    const chip = async () => {
+      const header = await screen.findByTestId('deal-state-header');
+      return within(within(header).getByText('การนำเข้า').parentElement);
+    };
+
+    it.each([
+      ['the owning sales rep', salesOwnerUser],
+      ['import (not the owner)', { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' }],
+      ['sales_manager (not the owner)', { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }],
+    ])('shows the slowest factory step with the arrival count to %s', async (_name, viewer) => {
+      dealWithTwoFactories();
+      renderTicketDetailPage(viewer);
+      expect(await (await chip()).findByText('กำลังเดินทาง · ถึงโกดัง 1/2')).not.toBeNull();
+    });
+
+    it('a non-owner sales rep cannot read stored IRs: the chip keeps the deal-level label and no request is made', async () => {
+      dealWithTwoFactories();
+      renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
+      expect((await chip()).getByText('ออกใบขอซื้อแล้ว')).not.toBeNull();
+      expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
     });
   });
 
@@ -4447,7 +4570,8 @@ describe('TicketDetailPage', () => {
       irStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
-      expect(primary().textContent).toContain('สร้างใบขอซื้อ (IR)');
+      expect(primary().textContent).toContain('ออกใบขอซื้อ (IR)');
+      expect(primary().textContent).not.toContain('สร้างใบขอซื้อ');
       await waitFor(() => expect(primary().disabled).toBe(false));
 
       fireEvent.click(primary());
@@ -4987,6 +5111,42 @@ describe('TicketDetailPage', () => {
       expect(item.textContent).toContain('เลื่อนไป: เจ้าของตกลงตามสเปคแล้ว');
       expect(item.textContent).not.toContain('ผู้ออกแบบอนุมัติสเปค');
     });
+
+    // W3-09 (owner ruling 2026-10-29): ขั้น 12 advances by itself when the IR is issued; the manual
+    // move is a deliberate skip, so it must not read like the normal next step. Other stages keep เลื่อนไป.
+    it('at PROCUREMENT the manual move reads ข้ามไปขั้น 13 ด้วยตนเอง and still sends DELIVERY_SCHEDULING', async () => {
+      const item = await openMenuItem({ channel: 'DESIGNER_LED', salesStage: 'PROCUREMENT' });
+      expect(item.textContent).toContain('ข้ามไปขั้น 13 ด้วยตนเอง');
+      expect(item.textContent).not.toContain('เลื่อนไป');
+
+      fireEvent.click(item);
+      await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'DELIVERY_SCHEDULING' }));
+    });
+  });
+
+  // SK-05: the page hands the deal's own events to the stage track, so an owner skip reads ข้าม.
+  it('ดูขั้นตอนทั้งหมด marks the owner stages ข้าม on a deal that skipped from 4 to 8', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: buildTicket({
+        summary: { salesStage: 'QUOTE_BUYER', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' },
+        events: [
+          { id: 1, kind: 'STAGE_CHANGED', fromStatus: 'SPEC_APPROVED', toStatus: 'QUOTE_DESIGN_SIDE', createdAt: '2026-07-01T09:00:00.000Z' },
+          { id: 2, kind: 'STAGE_CHANGED', fromStatus: 'QUOTE_DESIGN_SIDE', toStatus: 'QUOTE_BUYER', createdAt: '2026-07-02T09:00:00.000Z' },
+        ],
+      }),
+    });
+    api.tickets.actions.mockResolvedValue({
+      currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
+      availableActions: [{ action: 'UPDATE_STAGE' }],
+      stageDecisions: DEAL_STAGE_CATALOG.stages.map((stage) => ({
+        stage: stage.code, no: stage.no, allowed: true, requiresReason: false, blockedReason: null, onRoute: true,
+      })),
+    });
+    api.tickets.listActivities.mockResolvedValue({ items: [] });
+    renderTicketDetailPage(ceoUser);
+    fireEvent.click(await screen.findByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }));
+    const pip = (await screen.findAllByTestId('route-pip')).find((el) => el.getAttribute('data-stage') === 'QUOTE_OWNER');
+    expect(within(pip).getByText('ขั้นที่ 5 ข้าม')).not.toBeNull();
   });
 
   // The gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", and the control that answered it

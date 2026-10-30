@@ -145,6 +145,22 @@ describe('PricingRequestPanel', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
+    it('openCreate() is a no-op once the deal order is confirmed (walk 4: no new pricing round)', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+      const ref = React.createRef();
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <PricingRequestPanel ref={ref} ticketId={701} deal={{ ...deal, paymentStatus: 'CUSTOMER_CONFIRMED' }}
+            ticketItems={[]} user={salesOwner} />
+        </QueryClientProvider>,
+      );
+      await screen.findByText('ยังไม่มีคำขอราคา');
+
+      act(() => ref.current.openCreate());
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
     it('openCreate() opens the create modal for the owning sales rep', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
       const ref = React.createRef();
@@ -247,6 +263,16 @@ describe('PricingRequestPanel', () => {
     fireEvent.click(submitButton);
 
     await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(1));
+  });
+
+  it('offers no "ส่งให้ฝ่ายนำเข้า" on a DRAFT once the deal order is confirmed', async () => {
+    api.pricingRequests.listForTicket.mockResolvedValue({
+      items: [summary({ status: 'DRAFT', ticketPaymentStatus: 'CUSTOMER_CONFIRMED' })],
+    });
+    renderPanel();
+
+    await screen.findByText('PCR-2026-0001');
+    expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
   });
 
   // Regression, reported from UAT 2026-08-11: submit() 422'd and the user saw NOTHING — the

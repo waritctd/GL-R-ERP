@@ -52,7 +52,8 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         TicketDto ticket = tickets.findById(ticketId).orElseThrow();
 
-        assertThat(ticket.summary().code()).startsWith("PR-");
+        // QA-25 (owner ruling 2026-10-29): new deals are numbered DL-<year>-<4 digits>; existing PR- codes keep theirs.
+        assertThat(ticket.summary().code()).matches("DL-\\d{4}-\\d{4}");
         assertThat(ticket.summary().createdById()).isEqualTo(actorId);
         assertThat(ticket.items()).hasSize(2);
         assertThat(ticket.items()).extracting(TicketItemDto::brand)
@@ -179,14 +180,27 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     // would happily "pass" this while the real CHECK constraint / columns did something else.
 
     @Test
-    void createTicket_persistsStockSourcedPriceAndReadsItBack() {
+    void createTicket_stockSourcedLineWithNoPrice_persistsTheFlagAndANullPrice() {
+        // Walk 4 (W4-09): chk_ticket_item_stock_sale_price is relaxed to
+        // `sourced_from_stock OR stock_sale_price IS NULL`, so a flagged line needs no price.
+        long ticketId = tickets.create(sampleTicket(
+            itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", null)),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+
+        TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
+        assertThat(persisted.sourcedFromStock()).isTrue();
+        assertThat(persisted.stockSalePrice()).isNull();
+    }
+
+    @Test
+    void createTicket_aStockSalePriceSentByAnOldClient_isStoredNull() {
         long ticketId = tickets.create(sampleTicket(
             itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", new BigDecimal("555.00"))),
             tickets.nextTicketCode(), actorId, "พนักงานขาย");
 
         TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
         assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isEqualByComparingTo("555.00");
+        assertThat(persisted.stockSalePrice()).isNull();
     }
 
     @Test
@@ -200,7 +214,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void editItems_roundTripsStockSourcedPriceThroughReplaceItemsPreservingPricing() {
+    void editItems_roundTripsTheStockFlagWithNoPriceThroughReplaceItemsPreservingPricing() {
         long ticketId = tickets.create(sampleTicket(
             item("Toyota", "Hilux", "White", "Matte", "L")), tickets.nextTicketCode(), actorId, "พนักงานขาย");
         TicketItemDto existing = tickets.findById(ticketId).orElseThrow().items().get(0);
@@ -216,13 +230,13 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             existing.qtyDelivered(), existing.qtyFromStock(), existing.stockNote(),
             existing.catalogPriceId(), existing.catalogProductCode(),
             null, null, null, null, null, 1,
-            true, new BigDecimal("620.00"));
+            true, null);
 
         tickets.replaceItemsPreservingPricing(ticketId, List.of(edited));
 
         TicketItemDto persisted = tickets.findById(ticketId).orElseThrow().items().get(0);
         assertThat(persisted.sourcedFromStock()).isTrue();
-        assertThat(persisted.stockSalePrice()).isEqualByComparingTo("620.00");
+        assertThat(persisted.stockSalePrice()).isNull();
     }
 
     @Test
@@ -853,6 +867,102 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.syncDepositPolicyFromQuotation(ticket, DepositPolicy.REQUIRED,
             DepositPolicy.NOT_REQUIRED, "ใบเสนอราคา QT-5 ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)")).isZero();
         assertThat(depositPolicyRow(ticket)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
+    }
+
+    // ── QA-16 payment chip (owner ruling 2026-10-29): the derived paymentStage follows the payment
+    // track. Literals, not PaymentStage constants, so this pins the wire value the frontend maps. ──
+
+    @Test
+    void paymentStage_notStarted_whenNoPaymentTrackAndNothingPaid_withOrWithoutAPayable() {
+        long noPayable = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        assertThat(paymentStage(noPayable)).isEqualTo("NOT_STARTED");
+
+        long quotedNotConfirmed = payableTicket(null, DepositPolicy.REQUIRED);
+        assertThat(paymentStage(quotedNotConfirmed)).isEqualTo("NOT_STARTED");
+    }
+
+    @Test
+    void paymentStage_noDeposit_forEveryBypassPolicy_onceTheCustomerConfirmedAndNothingIsPaid() {
+        for (String policy : List.of(DepositPolicy.NOT_REQUIRED, DepositPolicy.WAIVED, DepositPolicy.CREDIT_CUSTOMER)) {
+            assertThat(paymentStage(payableTicket("CUSTOMER_CONFIRMED", policy))).as(policy).isEqualTo("NO_DEPOSIT");
+        }
+    }
+
+    @Test
+    void paymentStage_balancePending_whenTheTrackIsAwaitingFinalPayment_evenWithADepositPaid() {
+        long ticket = payableTicket("AWAITING_FINAL_PAYMENT", DepositPolicy.REQUIRED);
+        pay(ticket, "DEPOSIT", "321.00");
+        assertThat(paymentStage(ticket)).isEqualTo(PaymentStage.BALANCE_PENDING);
+    }
+
+    /** NOT_STARTED means "order not confirmed yet": a legacy deal already at ORDER_RECEIVED or later with a null
+     * track keeps the old derivation. */
+    @Test
+    void paymentStage_nullTrackAtOrAfterOrderReceived_keepsTheOldDerivation() {
+        long procurement = payableTicket(null, DepositPolicy.REQUIRED);
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id", Map.of("id", procurement));
+        assertThat(paymentStage(procurement)).isEqualTo(PaymentStage.BALANCE_PENDING);
+
+        long orderReceived = payableTicket(null, DepositPolicy.REQUIRED);
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :id", Map.of("id", orderReceived));
+        assertThat(paymentStage(orderReceived)).isEqualTo(PaymentStage.BALANCE_PENDING);
+
+        long nothingPayable = tickets.create(sampleTicket(), tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'PROCUREMENT' WHERE ticket_id = :id", Map.of("id", nothingPayable));
+        assertThat(paymentStage(nothingPayable)).isEqualTo(PaymentStage.NOT_REQUIRED);
+    }
+
+    /** The unchanged rows of the chip: the new values must not leak into the REQUIRED-deposit path. */
+    @Test
+    void paymentStage_keepsDepositAndMoneyStates_forRequiredPolicyAndLegacyRows() {
+        assertThat(paymentStage(payableTicket("CUSTOMER_CONFIRMED", DepositPolicy.REQUIRED)))
+            .isEqualTo(PaymentStage.DEPOSIT_PENDING);
+        assertThat(paymentStage(payableTicket("DEPOSIT_NOTICE_ISSUED", DepositPolicy.REQUIRED)))
+            .isEqualTo(PaymentStage.DEPOSIT_PENDING);
+
+        long depositPaid = payableTicket("DEPOSIT_PAID", DepositPolicy.REQUIRED);
+        pay(depositPaid, "DEPOSIT", "321.00");
+        assertThat(paymentStage(depositPaid)).isEqualTo(PaymentStage.DEPOSIT_RECEIVED);
+
+        long partial = payableTicket("AWAITING_FINAL_PAYMENT", DepositPolicy.REQUIRED);
+        pay(partial, "DEPOSIT", "321.00");
+        pay(partial, "BALANCE", "100.00");
+        assertThat(paymentStage(partial)).isEqualTo(PaymentStage.PARTIALLY_PAID);
+
+        long full = payableTicket("FULLY_PAID", DepositPolicy.REQUIRED);
+        pay(full, "BALANCE", "1070.00");
+        assertThat(paymentStage(full)).isEqualTo(PaymentStage.FULLY_PAID);
+
+        // legacy rows: no payment_status but money on file still shows the money state, not NOT_STARTED
+        long legacyDeposit = payableTicket(null, DepositPolicy.REQUIRED);
+        pay(legacyDeposit, "DEPOSIT", "321.00");
+        assertThat(paymentStage(legacyDeposit)).isEqualTo(PaymentStage.DEPOSIT_RECEIVED);
+        long legacyBalance = payableTicket(null, DepositPolicy.REQUIRED);
+        pay(legacyBalance, "BALANCE", "100.00");
+        assertThat(paymentStage(legacyBalance)).isEqualTo(PaymentStage.PARTIALLY_PAID);
+    }
+
+    /** A priced item makes payable 1,000 + 7% VAT = 1,070.00 (ticket-item fallback of payableAmount). */
+    private long payableTicket(String paymentStatus, String depositPolicy) {
+        long ticketId = tickets.create(sampleTicket(item("Toyota", "Hilux", "White", "Matte", "L")),
+            tickets.nextTicketCode(), actorId, "พนักงานขาย");
+        jdbc.update("UPDATE sales.ticket_item SET approved_price = 1000 WHERE ticket_id = :id", Map.of("id", ticketId));
+        jdbc.update("UPDATE sales.ticket SET payment_status = :ps, deposit_policy = :dp WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("ps", paymentStatus).addValue("dp", depositPolicy)
+                .addValue("id", ticketId));
+        return ticketId;
+    }
+
+    private void pay(long ticketId, String kind, String amount) {
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, currency, received_at, recorded_by, receipt_ref)
+            VALUES (:t, :k, :a, 'THB', now(), :by, :ref)""", new MapSqlParameterSource()
+            .addValue("t", ticketId).addValue("k", kind).addValue("a", new BigDecimal(amount))
+            .addValue("by", actorId).addValue("ref", "PS-" + ticketId + "-" + kind + "-" + amount));
+    }
+
+    private String paymentStage(long ticketId) {
+        return tickets.findSummaryById(ticketId).orElseThrow().paymentStage();
     }
 
     private long confirmedTicket() {

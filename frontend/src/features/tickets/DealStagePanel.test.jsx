@@ -349,12 +349,21 @@ describe('DealStagePanel headline names the counterparty', () => {
   );
 
   // One concise line under the title: the department that owns the stage, read off the catalog gate.
-  it.each(['PRESENTATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT', 'CLOSED_PAID'])(
+  it.each(['PRESENTATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'CLOSED_PAID'])(
     'shows "ผู้รับผิดชอบ: <department>" under the title at %s',
     (salesStage) => {
       renderPanel({ summary: baseSummary({ salesStage }) });
       const gate = catalog.stages.find((stage) => stage.code === salesStage).gate;
       expect(screen.getByTestId('deal-stage-owner').textContent).toBe(`ผู้รับผิดชอบ: ${GATE_LABEL[gate]}`);
+    },
+  );
+
+  // Owner ruling 2026-10-29: the sales rep owns ขั้น 12 (they issue the IR); ขั้น 11 stays with accounting.
+  it.each([['DEPOSIT_RECEIVED', 'ฝ่ายบัญชี'], ['PROCUREMENT', 'ฝ่ายขาย']])(
+    'the owner line at %s follows the 2026-10-29 ruling',
+    (salesStage, department) => {
+      renderPanel({ summary: baseSummary({ salesStage }) });
+      expect(screen.getByTestId('deal-stage-owner').textContent).toBe(`ผู้รับผิดชอบ: ${department}`);
     },
   );
 
@@ -446,6 +455,25 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
       }
       : decision
   ));
+
+  // W3-09 (owner ruling 2026-10-29): at ขั้น 12 the deal advances by itself, so the manual move is a
+  // deliberate SECONDARY skip, not the filled primary เลื่อนไป. Every other stage keeps เลื่อนไป.
+  it('at PROCUREMENT the visible manual move is a secondary "ข้ามไปขั้น 13 ด้วยตนเอง"; at ขั้น 2 it stays a primary เลื่อนไป', () => {
+    const blocked = (stage) => allAllowed.map((d) => (
+      d.stage === stage ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
+    ));
+    const { unmount } = renderPanel({
+      summary: baseSummary({ id: 502, salesStage: 'PROCUREMENT' }), availableActions: [], stageDecisions: blocked('DELIVERY_SCHEDULING'),
+    });
+    const skip = screen.getByTestId('guided-advance-open');
+    expect(skip.textContent).toBe('ข้ามไปขั้น 13 ด้วยตนเอง');
+    expect(skip.className).toContain('bg-surface');
+    unmount();
+    renderPanel({ summary: baseSummary({ id: 503 }), availableActions: [], stageDecisions: blocked('SPEC_APPROVED') });
+    const normal = screen.getByTestId('guided-advance-open');
+    expect(normal.textContent).toContain('เลื่อนไป: 3.');
+    expect(normal.className).not.toContain('bg-surface');
+  });
 
   it('replaces the dead hint with a guided button that fills the gate then advances', async () => {
     api.tickets.updateTracking.mockClear();
@@ -564,6 +592,27 @@ describe('DealStagePanel route awareness', () => {
 
   describe('ถัดไป follows the route', () => {
     const nextText = () => screen.getByTestId('deal-stage-next').textContent;
+
+    // Walk 4 (W4-05/W4-02): a deal with no deposit never passes ขั้น 11 - nothing for the account team to
+    // confirm - so ถัดไป must jump from ขั้น 10 to ขั้น 12 and must not promise "ได้รับเงินมัดจำ".
+    it.each(['NOT_REQUIRED', 'WAIVED'])('depositPolicy %s at ORDER_RECEIVED: ถัดไป names 12 (PROCUREMENT), never ขั้น 11 or the account\'s deposit confirmation', (depositPolicy) => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy }),
+      });
+      const text = nextText();
+      expect(text).toContain('12.');
+      expect(text).not.toContain('11.');
+      expect(text).not.toContain('ได้รับเงินมัดจำ');
+      expect(text).not.toContain('ฝ่ายบัญชียืนยันรับมัดจำ');
+    });
+
+    it('depositPolicy REQUIRED at ORDER_RECEIVED still names ขั้น 11 and the account\'s confirmation (wrong-way-round)', () => {
+      renderPanel({
+        summary: baseSummary({ salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }),
+      });
+      expect(nextText()).toContain('11.');
+      expect(nextText()).toContain('ฝ่ายบัญชียืนยันรับมัดจำ');
+    });
 
     it('owner-direct at S3 offers S5 (เสนอราคาเจ้าของโครงการ), not S4', () => {
       renderPanel({

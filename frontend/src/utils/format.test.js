@@ -1,5 +1,8 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  fulfilmentStatusLabel,
   addDaysIso,
   attendanceSourceLabel,
   bangkokMonthStartIso,
@@ -19,6 +22,7 @@ import {
   greetingName,
   overtimeStatusLabel,
   pricingCostingStatusLabel,
+  paymentStageLabel,
   pricingDecisionStatusLabel,
   quotationStatusLabel,
   specialMoneyStatusLabel,
@@ -503,5 +507,43 @@ describe('formatFileSize', () => {
   it('reads "-" when the size is not known', () => {
     expect(formatFileSize(null)).toBe('-');
     expect(formatFileSize(undefined)).toBe('-');
+  });
+});
+
+// QA-16 (owner ruling 2026-10-29): two new neutral payment-chip values, derived by the backend.
+describe('paymentStageLabel — QA-16 chip values', () => {
+  it('labels NOT_STARTED and NO_DEPOSIT, both neutral', () => {
+    expect(paymentStageLabel('NOT_STARTED')).toEqual({ label: 'ยังไม่ถึงขั้นชำระ', tone: 'neutral' });
+    expect(paymentStageLabel('NO_DEPOSIT')).toEqual({ label: 'ไม่เก็บมัดจำ', tone: 'neutral' });
+  });
+
+  it('keeps the existing labels (BALANCE_PENDING is what an awaiting-final-payment deal now shows)', () => {
+    expect(paymentStageLabel('BALANCE_PENDING')).toEqual({ label: 'รอชำระส่วนที่เหลือ', tone: 'warning' });
+    expect(paymentStageLabel('DEPOSIT_PENDING').label).toBe('รอมัดจำ');
+    expect(paymentStageLabel('FULLY_PAID').label).toBe('ชำระครบแล้ว');
+  });
+
+  // statusCatalog.test.js does not cover PaymentStage, so this reads PaymentStage.java directly
+  // (the technique stageCatalog.test.js uses): every backend value must have its own label.
+  it('has a label for every value in PaymentStage.java (never the raw code)', () => {
+    let dir = process.cwd();
+    let source = null;
+    for (let depth = 0; depth < 8 && source === null; depth += 1) {
+      const candidate = resolve(dir, 'backend/src/main/java/th/co/glr/hr/ticket/PaymentStage.java');
+      if (existsSync(candidate)) source = readFileSync(candidate, 'utf8');
+      dir = dirname(dir);
+    }
+    if (source === null) throw new Error('could not find PaymentStage.java above the working directory');
+    const codes = [...source.matchAll(/public static final String \w+ = "([A-Z_]+)";/g)].map((m) => m[1]);
+    expect(codes.length).toBeGreaterThanOrEqual(6);
+    for (const code of codes) {
+      expect(paymentStageLabel(code).label, code).not.toBe(code);
+    }
+  });
+});
+
+describe('fulfilmentStatusLabel — one word for the document: ใบขอซื้อ (owner ruling 2026-10-29)', () => {
+  it('IR_ISSUED reads ออกใบขอซื้อแล้ว, not ออกคำขอนำเข้าแล้ว', () => {
+    expect(fulfilmentStatusLabel('IR_ISSUED').label).toBe('ออกใบขอซื้อแล้ว');
   });
 });

@@ -37,8 +37,17 @@ describe('nextFulfilmentActionCode', () => {
 
   it('returns recordDelivery for every delivery-ready fulfillmentStatus', () => {
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' })).toBe('recordDelivery');
-    expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK' })).toBe('recordDelivery');
+    expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK', paymentStatus: 'DEPOSIT_PAID' })).toBe('recordDelivery');
     expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: 'PARTIALLY_DELIVERED' })).toBe('recordDelivery');
+  });
+
+  // Walk 4: stock goods leave only once the deposit is settled - paid, or a no-deposit policy at CUSTOMER_CONFIRMED.
+  it('FROM_STOCK waits for the deposit: REQUIRED and unpaid -> null; paid, or a no-deposit policy -> recordDelivery', () => {
+    const base = { status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK' };
+    expect(nextFulfilmentActionCode({ ...base, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' })).toBeNull();
+    expect(nextFulfilmentActionCode({ ...base, paymentStatus: 'DEPOSIT_NOTICE_ISSUED', depositPolicy: 'REQUIRED' })).toBeNull();
+    expect(nextFulfilmentActionCode({ ...base, paymentStatus: 'DEPOSIT_PAID', depositPolicy: 'REQUIRED' })).toBe('recordDelivery');
+    expect(nextFulfilmentActionCode({ ...base, paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'NOT_REQUIRED' })).toBe('recordDelivery');
   });
 
   it('returns null before quotation and once delivery is complete', () => {

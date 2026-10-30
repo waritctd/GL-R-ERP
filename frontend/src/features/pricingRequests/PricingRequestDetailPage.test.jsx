@@ -1368,6 +1368,7 @@ describe('PricingRequestDetailPage DRAFT — ส่งให้ฝ่ายน�
     ['the sales manager, on a DRAFT', salesManager, { status: 'DRAFT' }],
     ['import, on a DRAFT', importUser, { status: 'DRAFT' }],
     ['the owning rep, once SUBMITTED', salesOwner, { status: 'SUBMITTED' }],
+    ['the owning rep, once the deal order is confirmed', salesOwner, { status: 'DRAFT', ticketPaymentStatus: 'CUSTOMER_CONFIRMED' }],
   ])('no ส่งให้ฝ่ายนำเข้า for %s', async (_label, user, summary) => {
     const request = buildRequest({ summary });
     renderDetailPage({ user, request });
@@ -3276,12 +3277,14 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     await waitForLoaded(request);
     await screen.findByText(issued.number);
 
+    // W3-06: ปฏิเสธ/ขอแก้ไข take their reason from a dialog; ลูกค้ายอมรับ still sends the inline note.
+    fireEvent.change(screen.getByPlaceholderText('หมายเหตุจากลูกค้า (ถ้ามี)'), { target: { value: 'ส่งของต้นเดือน' } });
     const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
     fireEvent.click(acceptButton);
 
     await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
       issued.id,
-      expect.objectContaining({ outcome: 'ACCEPTED', clientRequestId: expect.any(String) }),
+      expect.objectContaining({ outcome: 'ACCEPTED', customerNote: 'ส่งของต้นเดือน', clientRequestId: expect.any(String) }),
     ));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -3345,7 +3348,11 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     await waitForLoaded();
     await screen.findByText(issued.number);
 
+    // W3-06: ปฏิเสธ now asks for a reason first.
     fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้าปฏิเสธ' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'ลูกค้าไม่เอาแล้ว' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
     await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalled());
 
     await waitFor(() => {
@@ -3468,6 +3475,10 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     const callsBeforeOutcome = api.dealQuotations.findForPricingRequest.mock.calls.length;
     const reviseButton = screen.getByRole('button', { name: 'ลูกค้าขอแก้ไข' });
     fireEvent.click(reviseButton);
+    // W3-06: ขอแก้ไข now asks for a reason first.
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'ลูกค้าขอเปลี่ยนราคา' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
     await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
       issued.id,
@@ -3552,6 +3563,188 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     // the always-present static customer-change section heading elsewhere on the page).
     fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' }));
     expect(await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' })).not.toBeNull();
+  });
+});
+
+// W3-06 / QA-35: ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข are irreversible (the quotation leaves ISSUED), so both engines
+// ask for a reason in the shared ConfirmDialog before recording. Each outcome also owns its own
+// clientRequestId: the backend replays a reused key as the FIRST outcome's success, so one shared key would
+// let a failed ปฏิเสธ followed by ขอแก้ไข silently record nothing/the wrong thing.
+describe.each([
+  {
+    engine: 'new engine (dealQuotations.recordOutcome)',
+    recordMock: () => api.dealQuotations.recordOutcome,
+    setup: () => {
+      const issued = { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED' };
+      api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+      api.dealQuotations.recordOutcome.mockResolvedValue({ quotation: { ...issued, docStatus: 'REJECTED' } });
+      return issued;
+    },
+    // A different ISSUED quotation (B) becomes the request's current one.
+    later: () => {
+      const other = { id: 9102, number: 'QT-2026-0102-1', docStatus: 'ISSUED' };
+      api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: other });
+      return other;
+    },
+  },
+  {
+    engine: 'legacy engine (pricingRequests.recordCustomerQuotationOutcome)',
+    recordMock: () => api.pricingRequests.recordCustomerQuotationOutcome,
+    setup: () => {
+      const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
+      api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { ...issued, docStatus: 'REJECTED' } });
+      return issued;
+    },
+    later: () => {
+      const other = buildCustomerQuotation({ id: 5502, number: 'QT-2026-0002', docStatus: 'ISSUED' });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [other] });
+      return other;
+    },
+  },
+])('PricingRequestDetailPage W3-06/QA-35: ปฏิเสธ / ขอแก้ไข confirm with a reason — $engine', ({ recordMock, setup, later }) => {
+  let page;
+  async function renderIssued() {
+    const issued = setup();
+    page = renderDetailPage({ user: salesOwner });
+    await waitForLoaded();
+    await screen.findByText(issued.number);
+    return issued;
+  }
+
+  // Click the outcome button; the API must not be touched until the dialog is confirmed.
+  async function openDialog(buttonName) {
+    const callsBefore = recordMock().mock.calls.length;
+    fireEvent.click(await screen.findByRole('button', { name: buttonName }));
+    expect(recordMock()).toHaveBeenCalledTimes(callsBefore);
+    return within(await screen.findByRole('dialog'));
+  }
+
+  // Back out of the dialog if the failed call left it open (it should; the key tests don't depend on that).
+  async function cancelDialog() {
+    const open = screen.queryByRole('dialog');
+    if (open) fireEvent.click(within(open).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  }
+
+  // The failed call has settled (its error toast fired) -- only then is "the dialog is still open" meaningful.
+  async function failureSettled() {
+    await waitFor(() => expect(page.showToast).toHaveBeenCalledWith('error', 'network down'));
+  }
+
+  async function submit(dialog, reason) {
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: reason } });
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+  }
+
+  it.each([
+    ['ลูกค้าปฏิเสธ', 'REJECTED'],
+    ['ลูกค้าขอแก้ไข', 'REVISION_REQUESTED'],
+  ])('%s opens a dialog, keeps ยืนยัน disabled until a non-blank reason, then records %s with customerNote = the reason', async (buttonName, outcome) => {
+    const issued = await renderIssued();
+    const dialog = await openDialog(buttonName);
+
+    const confirm = dialog.getByRole('button', { name: 'ยืนยัน' });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: '   ' } });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'ราคาสูงกว่างบ' } });
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
+    expect(recordMock()).toHaveBeenCalledWith(
+      issued.id,
+      expect.objectContaining({ outcome, customerNote: 'ราคาสูงกว่างบ', clientRequestId: expect.any(String) }),
+    );
+  });
+
+  it.each(['ลูกค้าปฏิเสธ', 'ลูกค้าขอแก้ไข'])('%s: ยกเลิก in the dialog records nothing', async (buttonName) => {
+    await renderIssued();
+    const dialog = await openDialog(buttonName);
+    fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'พิมพ์แล้วแต่เปลี่ยนใจ' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'ยกเลิก' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 30); }); });
+    expect(recordMock()).not.toHaveBeenCalled();
+  });
+
+  it('each outcome has its own clientRequestId: after a FAILED ปฏิเสธ, ขอแก้ไข does not reuse its key', async () => {
+    await renderIssued();
+    recordMock().mockRejectedValueOnce(new Error('network down'));
+
+    let dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
+    const rejectKey = recordMock().mock.calls[0][1].clientRequestId;
+    await failureSettled();
+    await cancelDialog();
+
+    dialog = await openDialog('ลูกค้าขอแก้ไข');
+    await submit(dialog, 'เหตุผล ข');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
+    const [, reviseBody] = recordMock().mock.calls[1];
+    expect(reviseBody.outcome).toBe('REVISION_REQUESTED');
+    expect(reviseBody.clientRequestId).not.toBe(rejectKey);
+  });
+
+  it('a FAILED outcome keeps the dialog open with the typed reason; ยืนยัน again retries with the SAME key and then closes it', async () => {
+    await renderIssued();
+    recordMock().mockRejectedValueOnce(new Error('network down'));
+
+    const dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
+    await failureSettled();
+
+    const still = screen.queryByRole('dialog');
+    expect(still, 'dialog must stay open after a failed record').not.toBeNull();
+    expect(within(still).getByRole('textbox').value).toBe('เหตุผล ก');
+
+    fireEvent.click(within(still).getByRole('button', { name: 'ยืนยัน' }));
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
+    const [first, second] = recordMock().mock.calls.map(([, body]) => body.clientRequestId);
+    expect(second).toBe(first);
+    expect(recordMock().mock.calls[1][1].customerNote).toBe('เหตุผล ก');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('a SUCCESSFUL outcome rotates the key, so the next recording is never replayed as the old one', async () => {
+    await renderIssued();
+
+    let dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ข');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
+    const [first, second] = recordMock().mock.calls.map(([, body]) => body.clientRequestId);
+    expect(second).not.toBe(first);
+  });
+
+  it('the key belongs to the quotation: a failed ปฏิเสธ on A, then a different ISSUED quotation B, sends B a fresh key (never A\'s)', async () => {
+    const quotationA = await renderIssued();
+    recordMock().mockRejectedValueOnce(new Error('network down'));
+
+    let dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(1));
+    await failureSettled();
+    await cancelDialog();
+
+    const quotationB = later();
+    await act(async () => { await page.queryClient.invalidateQueries(); });
+    await screen.findByText(quotationB.number);
+
+    dialog = await openDialog('ลูกค้าปฏิเสธ');
+    await submit(dialog, 'เหตุผล ก');
+    await waitFor(() => expect(recordMock()).toHaveBeenCalledTimes(2));
+    const [[idA, bodyA], [idB, bodyB]] = recordMock().mock.calls;
+    expect([idA, idB]).toEqual([quotationA.id, quotationB.id]);
+    expect(bodyB.clientRequestId).not.toBe(bodyA.clientRequestId);
   });
 });
 
@@ -5677,5 +5870,113 @@ describe('PricingRequestDetailPage ยืนยันราคาเสนอ re
     await act(async () => { await queryClient.invalidateQueries(); });
 
     await waitFor(() => expect(notice()).toBeNull());
+  });
+});
+
+// Walk 4 (owner rulings, Ploy 2026-10-29): a stock line (stockSource IN_THAILAND) is priced by the CEO and
+// then waits for delivery - it is never ordered from a factory, so import is not asked to contact one for
+// it; the request page says which lines are stock; and once the deal's order is confirmed no new pricing
+// round starts from it.
+describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4)', () => {
+  const baseItem = buildRequest().items[0];
+  const stockRequestItem = (overrides = {}) => ({
+    ...baseItem, id: 2, model: 'S1', productDescription: 'กระเบื้อง S1 จากสต็อก', stockSource: 'IN_THAILAND',
+    originCountry: null, leadTimeMinDays: null, leadTimeMaxDays: null, resolvedFactoryName: null, ...overrides,
+  });
+  const stockDecisionItem = (overrides = {}) => buildDecisionItem({
+    id: 8002, pricingRequestItemId: 2, pricingCostingItemId: null, stockSource: 'IN_THAILAND',
+    frozenLandedCostPerRequestedUnitThb: null, sqmPerPiece: 0.36, listUnitPrice: 150, netUnitPrice: 150, ...overrides,
+  });
+
+  // W4-03: a return-to-import leaves a RETURNED decision behind; when the request comes back READY, the CEO
+  // starts a fresh review. The page used to show the RETURNED decision instead and no start button.
+  it('W4-03: a READY_FOR_CEO_REVIEW request whose only decision was RETURNED offers เริ่มพิจารณาราคาขาย', async () => {
+    const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision({ status: 'RETURNED' })] });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await waitFor(() => expect(api.pricingRequests.listPricingDecisions).toHaveBeenCalled());
+
+    expect(await screen.findByTestId('pcr-ceo-start-review')).not.toBeNull();
+  });
+
+  // W4-06 (default pending Ploy's confirm): with no import line there is no import cost to fix, so the CEO's
+  // ตีกลับให้ฝ่ายนำเข้าแก้ไข is hidden (the backend 409 stays); with any import line it is still there.
+  async function renderCeoReviewing(requestItems, decisionItems) {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' }, items: requestItems });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ priceMode: 'NET', items: decisionItems })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+    await screen.findByTestId('pcr-ceo-approve');
+  }
+
+  it('W4-06: on a request whose every line is a stock line the CEO is not offered ตีกลับให้ฝ่ายนำเข้าแก้ไข', async () => {
+    await renderCeoReviewing([stockRequestItem({ id: 1 })], [stockDecisionItem({ pricingRequestItemId: 1 })]);
+    expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
+  });
+
+  it('W4-06: on a mixed request the CEO still has ตีกลับให้ฝ่ายนำเข้าแก้ไข (wrong-way-round)', async () => {
+    await renderCeoReviewing([baseItem, stockRequestItem()],
+      [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
+    expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
+  });
+
+  // W4-01: the CEO's line cards say which lines are stock (the badge exists on the deal page already; the
+  // request pages had none).
+  it('W4-01: the CEO pricing panel marks a stock line จากสต็อก and an import line not', async () => {
+    await renderCeoReviewing([baseItem, stockRequestItem()],
+      [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
+    const panel = screen.getByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' }).closest('section');
+    expect(within(panel).getAllByText('จากสต็อก')).toHaveLength(1);
+  });
+
+  describe('import view', () => {
+    const importRequest = (items) => buildRequest({ summary: { status: 'IMPORT_REVIEWING' }, items });
+    const importLine = { ...baseItem, resolvedFactoryName: 'Factory A', factory: null };
+
+    it('W4-01: import sees a จากสต็อก badge on a stock line, and no factory mail/contact group for a stock-only factory', async () => {
+      // The stock line resolves to Factory B through its catalog product - the exact case that used to
+      // put a "Factory B - สร้างเมล / ติดต่อโรงงานแล้ว" group on screen for goods nobody orders from B.
+      const request = importRequest([importLine, stockRequestItem({ resolvedFactoryName: 'Factory B' })]);
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+
+      const groups = await screen.findAllByTestId('pcr-price-preview-group');
+      expect(groups).toHaveLength(1);
+      expect(groups[0].textContent).toContain('Factory A');
+      expect(groups[0].textContent).not.toContain('Factory B');
+      expect(screen.getAllByText('จากสต็อก').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('W4-01: a stock line with no factory is not reported as "ยังไม่ได้ระบุโรงงาน"', async () => {
+      const request = importRequest([importLine, stockRequestItem()]);
+      renderDetailPage({ user: importUser, request });
+      await waitForLoaded(request);
+      await screen.findAllByTestId('pcr-price-preview-group');
+
+      expect(screen.queryByText(/ยังไม่ได้ระบุโรงงาน \d+ รายการ/)).toBeNull();
+    });
+  });
+
+  // W4-04: the PCR summary carries the deal's payment status (null until the order is confirmed); the
+  // backend refuses a new round once it is set, so the page does not offer สร้างรอบแก้ไข.
+  describe('สร้างรอบแก้ไข once the deal order is confirmed', () => {
+    it('is offered to the owner before the order is confirmed', async () => {
+      const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED', ticketPaymentStatus: null } });
+      renderDetailPage({ user: salesOwner, request });
+      await waitForLoaded(request);
+      expect(screen.getByRole('button', { name: 'สร้างรอบแก้ไข' })).not.toBeNull();
+    });
+
+    it('is NOT offered once the deal order is confirmed (ticketPaymentStatus set)', async () => {
+      const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED', ticketPaymentStatus: 'CUSTOMER_CONFIRMED' } });
+      renderDetailPage({ user: salesOwner, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCR-2026-0001');
+      expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไข' })).toBeNull();
+    });
   });
 });

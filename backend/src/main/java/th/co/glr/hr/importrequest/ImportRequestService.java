@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.SizeUnit;
 import th.co.glr.hr.factory.FactoryConfigDto;
 import th.co.glr.hr.factory.FactoryConfigRepository;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
@@ -201,6 +202,33 @@ public class ImportRequestService {
         requireTicket(ticketId);
         requireRead(ticketId, actor);
         return withPageCounts(stored.findByTicket(ticketId));
+    }
+
+    /**
+     * Read-only twin of {@link #createDrafts}'s coverage check, for the list response: is there a factory
+     * on this deal that still needs an IR? Uses the same {@link ImportRequestQueryRepository
+     * #factoryResolutionCandidates} cascade, but creates no factory. A typed name that matches no
+     * factory (or a line with no factory at all) counts as uncovered; only a LIVE (DRAFT / ISSUED) row
+     * covers a factory — a SUPERSEDED one does not. A deal with nothing left to order is not uncovered.
+     */
+    public boolean hasUncoveredFactories(long ticketId, UserPrincipal actor) {
+        requireTicket(ticketId);
+        requireRead(ticketId, actor);
+        Set<Long> covered = stored.findByTicket(ticketId).stream()
+            .filter(r -> ImportRequestStatus.isLive(r.status()))
+            .map(ImportRequestDto::factoryId)
+            .collect(Collectors.toSet());
+        Map<String, Long> idByNormalizedName = factories.findAll().stream()
+            .collect(Collectors.toMap(f -> normalizeFactoryName(f.factoryName()), FactoryConfigDto::id, (x, y) -> x));
+        for (LineFactoryCandidate c : repository.factoryResolutionCandidates(ticketId)) {
+            Long factoryId = c.directFactoryId() != null ? c.directFactoryId()
+                : c.candidateFactoryName() != null ? idByNormalizedName.get(normalizeFactoryName(c.candidateFactoryName()))
+                : null;
+            if (factoryId == null || !covered.contains(factoryId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public ImportRequestDto get(long id, UserPrincipal actor) {
@@ -559,6 +587,12 @@ public class ImportRequestService {
         if (draft.items().isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อยังไม่มีรายการสินค้า");
         }
+        // A draft made before the order was confirmed can name a line that is now covered from stock; issuing it
+        // would order stock the customer already has from the factory.
+        if (stored.anyItemCoveredFromStock(id)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ใบขอซื้อนี้มีรายการที่ครอบคลุมจากสต็อกแล้ว — ไม่ต้องสั่งนำเข้า กรุณาลบฉบับร่างนี้แล้วสร้างใบขอซื้อใหม่");
+        }
         // Owner decision 09-18 #2: "อื่นๆ/unknown must be typed by sales" — a form with no estimate
         // at all may not be issued. Both-or-neither is already the DB invariant
         // (chk_import_request_lead_time), so checking one implies the other.
@@ -800,7 +834,7 @@ public class ImportRequestService {
             details.add("Surface: " + item.texture());
         }
         if (item.size() != null && !item.size().isBlank()) {
-            details.add("Size: " + item.size());
+            details.add("Size: " + SizeUnit.withCmUnit(item.size())); // cm ruling 2026-10-30
         }
         if (!details.isEmpty()) {
             body.append("   ").append(String.join(" | ", details)).append("\n");

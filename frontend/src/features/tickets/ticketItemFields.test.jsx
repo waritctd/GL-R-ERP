@@ -1,20 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
+  CatalogOption,
   isRequiredItemField,
-  isStockSalePriceMissing,
   ITEM_FIELD_META,
   missingQtyMessage,
-  missingStockSalePriceMessage,
   REQUIRED_ITEM_FIELD_LABELS,
   requiredItemFieldErrors,
   requiredQtyField,
   searchCatalog,
-  stockSalePriceError,
 } from './ticketItemFields.jsx';
 
 // fix/ticket-edit-items-required-markers: TicketCreateModal.jsx and TicketDetailPage.jsx both used
@@ -88,57 +87,13 @@ describe('requiredQtyField / missingQtyMessage — PIECE vs SQM basis', () => {
   });
 });
 
-// V183 (stock-sourced deal-line pricing, owner ruling): sales may flag a deal line "จากสต็อก"
-// and type in its own selling price. CAPTURE-ONLY today — nothing downstream reads this pair
-// yet, so a flagged line can still be attached to an ordinary PricingRequest exactly as before.
-// Shared by TicketCreateModal.jsx (create-time) and TicketDetailPage.jsx (edit-items mode).
-describe('isStockSalePriceMissing / stockSalePriceError / missingStockSalePriceMessage', () => {
-  it('not missing when the item is not flagged, regardless of price', () => {
-    expect(isStockSalePriceMissing({ sourcedFromStock: false, stockSalePrice: null })).toBe(false);
-    expect(isStockSalePriceMissing({ sourcedFromStock: false, stockSalePrice: '' })).toBe(false);
-    expect(isStockSalePriceMissing({})).toBe(false);
-  });
-
-  it('missing when flagged and the price is empty/null/zero/negative', () => {
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '' })).toBe(true);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: null })).toBe(true);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 0 })).toBe(true);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '-5' })).toBe(true);
-  });
-
-  it('not missing when flagged and a positive price is set (string or number)', () => {
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '420.50' })).toBe(false);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 420.5 })).toBe(false);
-  });
-
-  // Matches TicketService.isStorablePositivePrice exactly: stock_sale_price is numeric(14,2), and
-  // Postgres rounds HALF_UP to that scale BEFORE chk_ticket_item_stock_sale_price sees the value —
-  // 0.004 stores as 0.00 (rejected by the CHECK), 0.005 stores as 0.01 (accepted). A plain
-  // `Number(price) > 0` would accept 0.004 here and then have the server 400/500 it.
-  it('sub-cent boundary matches Postgres numeric(14,2) HALF_UP rounding (0.004 missing, 0.005 not)', () => {
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '0.004' })).toBe(true);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 0.004 })).toBe(true);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: '0.005' })).toBe(false);
-    expect(isStockSalePriceMissing({ sourcedFromStock: true, stockSalePrice: 0.005 })).toBe(false);
-  });
-
-  it('missingStockSalePriceMessage names the row (create modal convention)', () => {
-    expect(missingStockSalePriceMessage(3)).toBe('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ 3');
-  });
-
-  it('stockSalePriceError has no row-number suffix (edit-page inline convention, matches requiredItemFieldErrors)', () => {
-    expect(stockSalePriceError({ sourcedFromStock: true, stockSalePrice: '' }))
-      .toBe('กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก');
-    expect(stockSalePriceError({ sourcedFromStock: true, stockSalePrice: 100 })).toBeNull();
-    expect(stockSalePriceError({ sourcedFromStock: false, stockSalePrice: null })).toBeNull();
-  });
-});
-
 describe('ITEM_FIELD_META', () => {
   it('carries the canonical labels both surfaces render', () => {
     expect(ITEM_FIELD_META.brand.label).toBe('ยี่ห้อ / โรงงาน');
     expect(ITEM_FIELD_META.model.label).toBe('ชื่อรุ่น / Collection');
-    expect(ITEM_FIELD_META.size.label).toBe('ขนาด');
+    // QA-28: size is centimetres everywhere — the label says so (the required-field message stays 'ขนาด').
+    expect(ITEM_FIELD_META.size.label).toBe('ขนาด (ซม.)');
+    expect(ITEM_FIELD_META.size.placeholder).toBe('เช่น 60x120');
     expect(ITEM_FIELD_META.color.label).toBe('สี');
     expect(ITEM_FIELD_META.texture.label).toBe('เนื้อผิว');
   });
@@ -188,6 +143,28 @@ describe('applyCatalogPick', () => {
     expect(result.catalogPrice).toBe(8.8);
     expect(result.catalogCurrency).toBe('USD');
     expect(result.catalogPriceUnit).toBe('per_sqm');
+  });
+
+  // QA-28: size is cm. The catalogue's raw size text is mixed-unit ('20*20X30,5'); the pick must use
+  // the same cm derivation as the quotation editor (sizeTextFromCatalog).
+  it('QA-28: size is the cm text derived from widthMm/heightMm, not the raw catalogue string', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ widthMm: 200, heightMm: 305, sizeRaw: '20*20X30,5' }));
+    expect(result.size).toBe('20x30.5');
+  });
+
+  it('QA-28: size prefers the catalogue sizeCm column when it is served', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeCm: '60x120', widthMm: 600, heightMm: 1200, sizeRaw: '600x1200' }));
+    expect(result.size).toBe('60x120');
+  });
+
+  it('QA-28: size falls back to sizeRaw when the row has no dimensions', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeRaw: 'Mosaic 30x30', widthMm: null, heightMm: null }));
+    expect(result.size).toBe('Mosaic 30x30');
+  });
+
+  it('QA-28: a blank sizeRaw does not shadow size when the row has no dimensions', () => {
+    const result = applyCatalogPick({ brand: '', qty: '' }, mockCatalogProduct({ sizeRaw: '', size: '60x60' }));
+    expect(result.size).toBe('60x60');
   });
 
   it('resolves sqmPerPiece from the catalog row and cross-fills qtySqm from an existing qty', () => {
@@ -336,4 +313,14 @@ describe('shared usage pin — TicketCreateModal.jsx and TicketDetailPage.jsx bo
       expect(match, `${name} re-declares ${match?.[1]} locally`).toBeNull();
     });
   }
+});
+
+// QA-28 (owner ruling 2026-10-29): the deal form's ขนาด field is cm, so a catalogue row in its dropdown
+// reads in cm too -- the same text a pick writes into the field.
+describe('CatalogOption', () => {
+  it('shows the catalogue size in cm, not the raw factory string', () => {
+    const { container } = render(<CatalogOption cat={{ factoryName: 'Panaria', collection: 'BIOARCH', color: 'BARGE GIALLA', widthMm: 200, heightMm: 305, sizeRaw: '200x305' }} />);
+    expect(container.textContent).toContain('BARGE GIALLA · 20x30.5');
+    expect(container.textContent).not.toContain('200x305');
+  });
 });

@@ -4,8 +4,9 @@ import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import {
   dealLifecycleLabel, dealStageLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
-  paymentStageLabel, pricingRequestStatusLabel, ticketStatusLabel,
+  paymentStageLabel, pricingRequestStatusLabel,
 } from '../../utils/format.js';
+import { importChipLabel, importStepMeta } from '../importProgress/importSteps.js';
 import { activePricingRequestsSummary } from '../pricingRequests/pricingRequestMeta.js';
 import { visibleSections } from './salesViewScope.js';
 
@@ -119,13 +120,14 @@ function lastChipSpanClass(count) {
  * trigger at all.
  */
 export function DealStateHeader({
-  summary, pricingRequests = [], role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false, onMenuOpenChange,
+  summary, pricingRequests = [], importRequests, role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false, onMenuOpenChange,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
-  const status = ticketStatusLabel(summary.status);
   const stage = dealStageLabel(summary.salesStage, summary.entryChannel);
   const payment = paymentStageLabel(summary.paymentStage);
   const fulfilment = summary.fulfillmentStatus ? fulfilmentStatusLabel(summary.fulfillmentStatus) : null;
+  // QA-22: follows the per-factory IR steps while any factory is tracked (the deal rollup lags until ALL arrive).
+  const importChip = importChipLabel(importRequests, summary.fulfillmentStatus);
   const hasDealValue = Number(summary.amountPayable ?? 0) > 0;
 
   // Most-recently-created non-cancelled pricing request stands in for "PCR
@@ -159,8 +161,10 @@ export function DealStateHeader({
     {
       key: 'fulfilment',
       label: 'การนำเข้า',
-      value: fulfilment ? fulfilment.label : 'ยังไม่เริ่ม',
-      tone: fulfilment ? fulfilment.tone : 'neutral',
+      value: importChip ?? (fulfilment ? fulfilment.label : 'ยังไม่ออกใบขอซื้อ'),
+      // Every factory at the warehouse reads as done, like the GOODS_RECEIVED rollup it is about to become.
+      tone: importChip === importStepMeta('RECEIVED').label ? 'success' : importChip ? 'info'
+        : fulfilment ? fulfilment.tone : 'neutral',
     },
     sections.payment && {
       key: 'dealValue',
@@ -238,7 +242,6 @@ export function DealStateHeader({
               <p className="m-0 truncate text-sm text-text-muted">{summary.projectName}</p>
             ) : null}
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">
-              <span className="mobile:hidden"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>
               {summary.hasEdits ? <span className="mobile:hidden"><StatusBadge tone="warning">✎ มีการแก้ไข</StatusBadge></span> : null}
               <span className="mobile:hidden">สร้างโดย <strong className="text-text-secondary">{summary.createdByName || '-'}</strong> · {formatThaiDate(summary.createdAt)}</span>
               {summary.assignedToName ? (

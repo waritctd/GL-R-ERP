@@ -631,6 +631,8 @@ export function depositPolicyLabel(value) {
 
 export function paymentStageLabel(value) {
   const map = {
+    NOT_STARTED: { label: 'ยังไม่ถึงขั้นชำระ', tone: 'neutral' },
+    NO_DEPOSIT: { label: 'ไม่เก็บมัดจำ', tone: 'neutral' },
     NOT_REQUIRED: { label: 'ไม่ต้องชำระ', tone: 'neutral' },
     DEPOSIT_PENDING: { label: 'รอมัดจำ', tone: 'warning' },
     DEPOSIT_RECEIVED: { label: 'รับมัดจำแล้ว', tone: 'success' },
@@ -658,7 +660,7 @@ export function overdueBadgeLabel(overdue) {
  */
 export function fulfilmentStatusLabel(value) {
   const map = {
-    IR_ISSUED: { label: 'ออกคำขอนำเข้าแล้ว', tone: 'info' },
+    IR_ISSUED: { label: 'ออกใบขอซื้อแล้ว', tone: 'info' },
     IR_SENT: { label: 'ส่งคำขอนำเข้าแล้ว', tone: 'info' },
     SHIPPING: { label: 'สินค้าเดินทาง', tone: 'info' },
     GOODS_RECEIVED: { label: 'สินค้าถึงโกดังแล้ว', tone: 'success' },

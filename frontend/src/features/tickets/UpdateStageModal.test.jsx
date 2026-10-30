@@ -116,6 +116,20 @@ describe('UpdateStageModal renders the backend decision', () => {
     renderModal();
     expect(screen.getByRole('option', { name: /เสนอราคาเจ้าของโครงการ/ })).toBeTruthy();
   });
+
+  // SK-06 walk: S1 read 'เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ' here but 'เข้าถึงผู้ออกแบบโครงการ' on the deal page.
+  it('words the stages by the deal\'s channel, in the options and the blocked list alike', () => {
+    renderModal({
+      deal: { salesStage: 'NEGOTIATION', entryChannel: 'OWNER_DIRECT' },
+      stageDecisions: [
+        decision('LEAD_APPROACH', 1),
+        decision('SPEC_APPROVED', 3, { allowed: false, blockedReason: 'ไม่มีสิทธิ์เข้าถึงรายการนี้' }),
+      ],
+    });
+    expect(screen.getByRole('option', { name: '1. เข้าถึงเจ้าของโครงการ' })).toBeTruthy();
+    fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
+    expect(screen.getByText('เจ้าของตกลงตามสเปคแล้ว')).toBeTruthy();
+  });
 });
 
 /**

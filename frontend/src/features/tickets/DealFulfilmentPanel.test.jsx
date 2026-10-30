@@ -20,6 +20,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       importRequests: { brands: vi.fn().mockResolvedValue({ brands: [] }), pages: vi.fn(), download: vi.fn() },
       storedImportRequests: {
         listForTicket: vi.fn(),
+        coverage: vi.fn(),
         createDrafts: vi.fn(),
         update: vi.fn(),
         issue: vi.fn(),
@@ -81,9 +82,15 @@ const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus
 // `rows` may be an Error, to render the panel with a failed ใบขอซื้อ fetch.
 function renderPanel(user, rows = [draftRow()], {
   summary: dealSummary = summary, availableActions = [], showToast = vi.fn(), items = [], ref = undefined,
+  hasUncoveredFactories = undefined, // undefined = an older backend that does not send the flag
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
-  else api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
+  else {
+    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: rows });
+  }
+  // The flag has its own endpoint; undefined = an older backend (no such route -> the call fails).
+  if (hasUncoveredFactories === undefined) api.storedImportRequests.coverage.mockRejectedValue(new Error('404'));
+  else api.storedImportRequests.coverage.mockResolvedValue({ hasUncoveredFactories });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -273,13 +280,23 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.queryByTestId('ir-line-factory-2')).toBeNull();
     });
 
-    it('asks for no factory on a line fully reserved from stock — import never orders it', async () => {
-      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
+    // Walk 4: a stock line is never ordered from a factory, so a deal whose every line is covered from stock has
+    // nothing to create - no ออกใบขอซื้อ (IR) button and no factory picker (the backend 409s it too).
+    it('shows no ออกใบขอซื้อ (IR) button and asks for no factory when every line is covered from stock', async () => {
       const stockLine = { id: 4, brand: 'SCG', model: 'From stock', factory: null, catalogPriceId: null, qty: 5, qtyFromStock: 5 };
       renderPanel(OWNER, [], { summary: directSummary, items: [stockLine] });
-      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByTestId('deal-fulfilment-create-ir-drafts')).toBeNull();
       expect(screen.queryByTestId('ir-line-factory-4')).toBeNull();
+    });
+
+    it('keeps the button when only some lines are covered from stock, and still asks for no factory on the covered one', async () => {
+      const stockLine = { id: 4, brand: 'SCG', model: 'From stock', factory: null, catalogPriceId: null, qty: 5, qtyFromStock: 5 };
+      const ordered = { id: 6, brand: 'SCG', model: 'Ordered', factory: 'Rex Ceramics', catalogPriceId: 90, qty: 8, qtyFromStock: 0 };
+      renderPanel(OWNER, [], { summary: directSummary, items: [stockLine, ordered] });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
       expect(button.disabled).toBe(false);
+      expect(screen.queryByTestId('ir-line-factory-4')).toBeNull();
     });
 
     it('still asks for a factory on a partly-from-stock line (remainder is ordered)', async () => {
@@ -577,13 +594,17 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   });
 
   describe('mark-sent', () => {
-    it('the owning rep can open the email modal and mark it sent', async () => {
-      api.storedImportRequests.markEmailSent.mockResolvedValue({ importRequest: issuedRow({ emailSentAt: '2026-09-19T00:00:00Z' }) });
+    // Owner ruling 2026-10-29: the order email is import's job (งานนำเข้า / import deal page); the sales deal tab shows none of it.
+    it('the owning sales rep: the factory card has no order-email button and no "อีเมลสั่งซื้อ:" line', async () => {
       renderPanel(OWNER, [issuedRow()]);
-      fireEvent.click(await screen.findByTestId('ir-email-open-11'));
-      const sendButton = await screen.findByTestId('ir-email-mark-sent-11');
-      fireEvent.click(sendButton);
-      await waitFor(() => expect(api.storedImportRequests.markEmailSent).toHaveBeenCalledWith(11));
+      await screen.findByTestId('ir-factory-card-11');
+      expect(screen.queryByTestId('ir-email-open-11')).toBeNull();
+      expect(screen.queryByText(/อีเมลสั่งซื้อ/)).toBeNull();
+    });
+
+    it('CEO keeps the order email on the deal tab (the ruling is for the sales rep only)', async () => {
+      renderPanel(CEO, [issuedRow()]);
+      expect((await screen.findByTestId('ir-email-open-11')).textContent).toBe('อีเมลสั่งซื้อ');
     });
 
     it('sales_manager (read-only) sees no email-edit control', async () => {
@@ -655,33 +676,6 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       fireEvent.click(screen.getByTestId('ir-lead-save-11'));
       await waitFor(() => expect(api.storedImportRequests.setLeadTime)
         .toHaveBeenCalledWith(11, { leadTimeMinDays: 20, leadTimeMaxDays: 30 }));
-    });
-  });
-
-  // PR-B REVIEW ROUND 1, B1: the email-draft save must send Java's own field names
-  // (emailTo/emailSubject/emailBody — UpdateEmailDraftRequest), not to/subject/body, which Jackson
-  // silently drops (unknown JSON properties are ignored) and the update's own COALESCE keeps the
-  // OLD value with a 200 OK — a save that looked like it worked but never touched the row.
-  describe('order-email save payload (B1)', () => {
-    it('CLICKING save sends emailTo/emailSubject/emailBody, not to/subject/body', async () => {
-      api.storedImportRequests.updateEmailDraft.mockResolvedValue({ importRequest: issuedRow() });
-      renderPanel(OWNER, [issuedRow()]);
-      fireEvent.click(await screen.findByTestId('ir-email-open-11'));
-      const subjectInput = await screen.findByDisplayValue('Purchase order IR26001 - GL&R');
-      fireEvent.change(subjectInput, { target: { value: 'Purchase order IR26001 - GL&R (revised)' } });
-      fireEvent.click(screen.getByTestId('ir-email-save-11'));
-      await waitFor(() => expect(api.storedImportRequests.updateEmailDraft).toHaveBeenCalledWith(11, {
-        emailTo: 'factory@example.com',
-        emailSubject: 'Purchase order IR26001 - GL&R (revised)',
-        emailBody: 'Dear...',
-      }));
-    });
-
-    it('hides "บันทึก" once the email has already been sent', async () => {
-      renderPanel(OWNER, [issuedRow({ emailSentAt: '2026-09-18T00:00:00Z', emailSentByName: 'สมหญิง' })]);
-      fireEvent.click(await screen.findByTestId('ir-email-open-11'));
-      await screen.findByText(/ส่งแล้ว/);
-      expect(screen.queryByTestId('ir-email-save-11')).toBeNull();
     });
   });
 
@@ -786,6 +780,96 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
 
   // PR-B REVIEW ROUND 1, S5: a failed storedIrQuery fetch must not read as "no IR yet" nor bring
   // back the legacy per-brand buttons.
+  // Owner rulings 2026-10-29 (deal page, ขั้น 12 tab).
+  describe('tab layout before the first IR (5a)', () => {
+    const precedes = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+    it('no issued IR yet: the stored-IR box is shown and the นำเข้าสินค้า progress card is not rendered', async () => {
+      renderPanel(OWNER, [], { summary: { ...summary, fulfillmentStatus: null } });
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByText('นำเข้าสินค้า')).toBeNull();
+      expect(screen.queryByText(/ยังไม่ออกคำขอนำเข้า/)).toBeNull();
+    });
+
+    it('once fulfillmentStatus is set the progress card is back, ahead of the stored-IR box (as today)', async () => {
+      renderPanel(OWNER, [issuedRow()], { summary: { ...summary, fulfillmentStatus: 'IR_ISSUED' } });
+      const stored = await screen.findByTestId('deal-fulfilment-stored-ir');
+      const card = screen.getByText('นำเข้าสินค้า');
+      expect(precedes(card, stored)).toBe(true);
+    });
+  });
+
+  it('before the first IR the commission-weight button stays reachable, below the stored-IR box, and opens its modal; no จองสินค้า beside it', async () => {
+    renderPanel(CEO, [], {
+      summary: { ...summary, fulfillmentStatus: null },
+      availableActions: [{ action: 'SET_ITEM_WEIGHT_MULTIPLIER' }, { action: 'RESERVE_STOCK' }],
+    });
+    const stored = await screen.findByTestId('deal-fulfilment-stored-ir');
+    const weight = await screen.findByTestId('deal-fulfilment-set-item-weight');
+    expect(Boolean(stored.compareDocumentPosition(weight) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    // No reserve-from-stock feature (owner ruling 2026-10-29), even if the server still advertised it.
+    expect(screen.queryByTestId('deal-fulfilment-reserve-stock')).toBeNull();
+    fireEvent.click(weight);
+    expect(await screen.findByTestId('deal-fulfilment-set-item-weight-submit')).not.toBeNull();
+  });
+
+  describe('required-by field is folded behind a toggle (5b)', () => {
+    const TOGGLE = '+ กำหนดวันที่ต้องการของ (ไม่บังคับ)';
+
+    it('hidden until the toggle is clicked', async () => {
+      renderPanel(OWNER, []);
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByTestId('deal-required-by-note')).toBeNull();
+      fireEvent.click(screen.getByText(TOGGLE));
+      expect(screen.getByTestId('deal-required-by-note')).not.toBeNull();
+      expect(screen.getByTestId('deal-required-by-note-save')).not.toBeNull();
+    });
+
+    it('once open, clearing all the text keeps the field open so the empty value can be saved', async () => {
+      renderPanel(OWNER, [draftRow({ requiredByNote: 'Within 21/5/26' })]);
+      const input = await screen.findByTestId('deal-required-by-note');
+      await waitFor(() => expect(input.value).toBe('Within 21/5/26'));
+      fireEvent.change(input, { target: { value: '' } });
+      expect(screen.getByTestId('deal-required-by-note').value).toBe('');
+      expect(screen.getByTestId('deal-required-by-note-save')).not.toBeNull();
+    });
+
+    it('a saved non-empty value shows it expanded, with no toggle needed', async () => {
+      renderPanel(OWNER, [draftRow({ requiredByNote: 'Within 21/5/26' })]);
+      const input = await screen.findByTestId('deal-required-by-note');
+      await waitFor(() => expect(input.value).toBe('Within 21/5/26'));
+    });
+  });
+
+  describe('every factory already covered (5c)', () => {
+    const noCreateControls = () => {
+      expect(screen.queryByTestId('deal-fulfilment-create-ir-drafts')).toBeNull();
+      expect(screen.queryByTestId('deal-required-by-note')).toBeNull();
+      expect(screen.queryByText(/กำหนดวันที่ต้องการของ/)).toBeNull();
+      expect(screen.queryByText(/หนึ่งใบต่อหนึ่งโรงงาน/)).toBeNull();
+    };
+
+    it('hasUncoveredFactories=false: create button, required-by and helper line are gone; ทุกโรงงานออกใบขอซื้อแล้ว shows', async () => {
+      renderPanel(OWNER, [issuedRow()], { hasUncoveredFactories: false });
+      await screen.findByText('ทุกโรงงานออกใบขอซื้อแล้ว');
+      noCreateControls();
+    });
+
+    it('false with no live IR row at all (nothing to import) says ไม่มีรายการที่ต้องออกใบขอซื้อ, not that every factory has one', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: false });
+      await screen.findByText('ไม่มีรายการที่ต้องออกใบขอซื้อ');
+      expect(screen.queryByText('ทุกโรงงานออกใบขอซื้อแล้ว')).toBeNull();
+    });
+
+    it.each([['true', true], ['absent (older backend)', undefined]])('hasUncoveredFactories %s: create controls stay, no all-covered text', async (_n, flag) => {
+      renderPanel(OWNER, [issuedRow()], { hasUncoveredFactories: flag });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      expect(screen.queryByText('ทุกโรงงานออกใบขอซื้อแล้ว')).toBeNull();
+      expect(screen.getByText(/หนึ่งใบต่อหนึ่งโรงงาน/)).not.toBeNull();
+      expect(screen.getByText('+ กำหนดวันที่ต้องการของ (ไม่บังคับ)')).not.toBeNull();
+    });
+  });
+
   describe('storedIrQuery failure (S5)', () => {
     it('shows an error, not "ยังไม่มีใบขอซื้อสำหรับดีลนี้", and does not resurrect the legacy IR block', async () => {
       // IMPORT (isFulfilment): the role the legacy per-brand block is gated on

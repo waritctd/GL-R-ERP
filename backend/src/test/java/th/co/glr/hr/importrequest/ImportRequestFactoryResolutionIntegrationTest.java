@@ -384,6 +384,44 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
             .isEqualTo("สี Bianco");
     }
 
+    /**
+     * Owner ruling 2026-10-30: at IR creation a line linked to a catalogue row WITH dimensions
+     * stores the catalogue's centimetre size ({@code product_prices.size_cm}, V174: 200x305 mm ->
+     * "20x30.5") instead of the deal item's typed size; a line linked to a row WITHOUT dimensions,
+     * and an unlinked hand-typed line, keep the typed size.
+     */
+    @Test
+    void createDrafts_storesTheCatalogueCmSize_forALinkedLineWithDimensions_elseKeepsTheTypedSize() {
+        long withDims = insertCatalogProduct("Size Dims Factory", "IT", "DIMS-1",
+            new BigDecimal("12.50"), "EUR", "per_sqm");
+        jdbc.update("UPDATE price_catalog.product_prices SET width_mm = 200, height_mm = 305 "
+            + "WHERE price_id = :id", Map.of("id", withDims));
+        long noDims = insertCatalogProduct("Size NoDims Factory", "IT", "NODIMS-1",
+            new BigDecimal("12.50"), "EUR", "per_sqm");
+        insertFactory("Size Typed Factory", "IT", null);
+        long ticketId = insertTicket("SIZE-CM-1");
+        insertItemWithCatalogAndColor(ticketId, "B", "Dims line", "200x305", "10", "pcs", 0, null,
+            withDims, null, null);
+        insertItemWithCatalogAndColor(ticketId, "B", "NoDims line", "60x60 cm", "10", "pcs", 1, null,
+            noDims, null, null);
+        insertItemWithCatalogAndColor(ticketId, "B", "Typed line", "30x30", "10", "pcs", 2,
+            "Size Typed Factory", null, null, null);
+
+        List<ImportRequestDto> drafts = service.createDrafts(ticketId, null, owner);
+
+        assertThat(sizeOf(drafts, "Size Dims Factory")).as("catalogue cm size beats typed mm")
+            .isEqualTo("20x30.5");
+        assertThat(sizeOf(drafts, "Size NoDims Factory")).as("no catalogue dims -> typed size")
+            .isEqualTo("60x60 cm");
+        assertThat(sizeOf(drafts, "Size Typed Factory")).as("unlinked hand-typed line")
+            .isEqualTo("30x30");
+    }
+
+    private static String sizeOf(List<ImportRequestDto> drafts, String factoryName) {
+        return drafts.stream().filter(d -> factoryName.equals(d.factoryName())).findFirst()
+            .orElseThrow().items().get(0).size();
+    }
+
     /** Neither colour nor surface known: the note sub-row is omitted entirely, not a blank string. */
     @Test
     void createDrafts_omitsTheNoteEntirely_whenNeitherColourNorSurfaceIsKnown() {

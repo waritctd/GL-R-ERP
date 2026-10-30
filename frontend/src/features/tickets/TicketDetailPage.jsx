@@ -46,7 +46,7 @@ import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { DealDepositPanel, depositNoticesQueryOptions, pickDepositNotice } from './DealDepositPanel.jsx';
 import { createDepositNoticeDraft } from '../deposits/createDepositNoticeDraft.js';
 import { DealDocumentPipeline } from './DealDocumentPipeline.jsx';
-import { DealDocumentRegister } from './DealDocumentRegister.jsx';
+import { DealDocumentRegister, canReadStoredImportRequests } from './DealDocumentRegister.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
@@ -72,7 +72,6 @@ import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
   CatalogAutocompleteField,
-  isStockSalePriceMissing,
   ITEM_FIELD_META,
   ItemField,
   ItemFieldLabel,
@@ -82,8 +81,8 @@ import {
   requiredItemFieldErrors,
   requiredQtyField,
   searchCatalog,
-  stockSalePriceError,
 } from './ticketItemFields.jsx';
+import { manualMoveLabel } from './stageMeta.js';
 import { resolveWorkState, secondaryWorkActions } from './workState.js';
 
 // Ticket-detail IA rebuild Phase 1 (see
@@ -157,47 +156,6 @@ function scrollToSection(id) {
   // only under a real browser's absence of it.
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   el.focus?.({ preventScroll: true });
-}
-
-// Read-only items table (V183, gap B): a saved จากสต็อก line otherwise shows no indication
-// outside edit mode — the ราคาที่อนุมัติ/ราคาขาย cell just reads "-" whenever the line happens to
-// have no approvedPrice/calced price of its own yet. sourcedFromStock is CAPTURE-ONLY today
-// (nothing downstream reads it — see ticketItemFields.jsx's own comment), so a flagged line is
-// NOT guaranteed to lack a real price: it can still be attached to, and priced through, an
-// ordinary PricingRequest exactly like any other line. That is exactly why this component takes
-// BOTH `primary` (today's real price, if any) and `children` (today's rendering of it) instead of
-// assuming primary is always null for a stock-sourced line — see the branches below, which handle
-// primary null and non-null identically regardless of why primary is null. `children` is exactly
-// what this cell renders TODAY for a non-stock-sourced (or already-priced) line — unchanged in
-// every branch except the one gap this fills. `primary` is whatever value that rendering is built
-// from: approvedPrice for the plain ราคาที่อนุมัติ column, manualPrice ?? calcedPrice for the
-// calc-breakdown ราคาขาย (THB/ชิ้น) column — so this can tell "nothing to show yet" (primary ==
-// null) from "already has a real price" without re-deriving either column's own logic.
-// No new grid column (would break itemsGridCols and the mobile card reflow's data-label wiring,
-// which requires data-label on a DIRECT child of .data-row) — this only adds a secondary <small>
-// line inside the existing cell, same nesting the ราคาขาย (THB/ชิ้น) column already uses for its
-// own "override" line.
-function StockAwarePriceCell({ item, primary, children }) {
-  if (!item.sourcedFromStock || item.stockSalePrice == null) return children;
-  if (primary == null) {
-    // formatMoney (not a currency-aware helper): every other price in this table — approvedPrice,
-    // proposedPrice, calcedPrice/manualPrice — already renders through the same ฿-prefixed,
-    // currency-agnostic formatter regardless of the item's own `currency`, so this stays
-    // consistent with the column it fills in for rather than inventing per-item currency display
-    // this table doesn't otherwise have.
-    return (
-      <>
-        <code className="font-bold text-success">{formatMoney(item.stockSalePrice)}</code>
-        <small className="block text-2xs text-text-muted">ราคาสต็อก</small>
-      </>
-    );
-  }
-  return (
-    <>
-      {children}
-      <small className="block text-2xs text-text-muted">ราคาสต็อก: {formatMoney(item.stockSalePrice)}</small>
-    </>
-  );
 }
 
 // Ticket-detail IA rebuild Phase 2: the "ประวัติการดำเนินการ" events panel that
@@ -611,11 +569,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
     enabled: readsDocs,
   });
-  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry (QA-09).
+  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry (QA-09). Read for every role
+  // the backend lets read stored IRs, since the header's การนำเข้า chip (QA-22) follows them on every tab.
   const storedIrQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
-    enabled: readsDocs,
+    enabled: !!ticketId && canReadStoredImportRequests(user, ticket?.summary),
   });
   const importRequests = storedIrQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
@@ -1136,7 +1095,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md), which
     // owns its own mutations against the same hrApi methods rather than
     // routing through this page's shared actionMutation.
-    revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
+    // Not once the order is confirmed (ps set, ขั้น 10+): no new pricing round can start on the deal.
+    revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ps == null && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
     // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. Sales is
     // no longer part of the sequence, so there is no owner/canCreateTickets gate
     // here — the server decides and we mirror its availableActions.
@@ -1224,7 +1184,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // recording/confirming a payment is account-only now (see isMoneyRecorder above), so the CEO no
   // longer clears either wait and must see the same read-only status a sales/import viewer does,
   // not silence.
-  const blocker = closeConfirmedAt && !can.verifyClose
+  // QA-27: the CEO can only verify an ACTIVE deal (canVerifyClose), so on any other lifecycle — COMPLETED
+  // after the verify, or cancelled/lost/paused — there is no CEO step left to wait for.
+  const blocker = closeConfirmedAt && !can.verifyClose && (summary?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
     ? 'รอ CEO ตรวจสอบปิดงาน'
     : ps === 'DEPOSIT_NOTICE_ISSUED' && !isMoneyRecorder ? 'รอชำระมัดจำ'
       : ps === 'AWAITING_FINAL_PAYMENT' && !isMoneyRecorder ? 'รอชำระส่วนที่เหลือ'
@@ -1305,10 +1267,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // treated like an unknown route (no route choice; ⋯ still offers its outcome).
   // (Read once is enough: a failed refetch keeps the rows it read.)
   const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
-  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests });
+  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
   // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
-  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests });
+  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   // The backend refuses a non-owner for both documents (2026-10-28): no main button for them.
@@ -1414,7 +1376,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     } else if (actionKey === 'quote_next_party') {
       // Owner ruling 2026-10-27: "เสนอราคา<next party>" once a designer/owner quotation is sent. More
       // than one party left: a menu, later parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain
-      // button. Each opens the price-request form with ผู้รับ pre-filled.
+      // button. Each opens the price-request form with ผู้รับ pre-filled. SK-03 (2026-10-29): the menu
+      // trigger reads the neutral "เสนอราคา" (it no longer names just the first party).
       const parties = workStateAction.parties;
       const openFor = (party) => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party }));
       stickyPrimaryAction = parties.length > 1 ? (
@@ -1425,8 +1388,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             testId: `quote-party-${party}`,
             onSelect: () => openFor(party),
           }))}
-          label={workStateAction.label}
-          triggerLabel={<>{workStateAction.label}<Icon name="chevronDown" size={14} /></>}
+          label="เสนอราคา"
+          triggerLabel={<>เสนอราคา<Icon name="chevronDown" size={14} /></>}
           triggerIcon={null}
           triggerClassName={buttonVariants({ variant: 'primary' })}
           triggerProps={{ 'data-testid': 'ticket-primary-action', 'data-action': actionKey }}
@@ -1682,7 +1645,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // same fix, so the item doesn't invite a click it's about to reject.
     canAdvance && {
       key: 'advanceStage',
-      label: `เลื่อนไป: ${next ? dealStageLabel(next.code, summary.entryChannel).label : ''}`,
+      label: summary.salesStage === 'PROCUREMENT' && next
+        ? manualMoveLabel(summary.salesStage, next, '')
+        : `เลื่อนไป: ${next ? dealStageLabel(next.code, summary.entryChannel).label : ''}`,
       icon: 'chevronRight',
       disabled: !readyToAdvance || actionLoading,
       disabledReason: !readyToAdvance ? STAGE_ADVANCE_GATE_HINT : undefined,
@@ -1868,6 +1833,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           <DealStateHeader
             summary={summary}
             pricingRequests={pricingRequests}
+            importRequests={importRequests}
             role={role}
             primaryAction={stickyPrimaryAction}
             bannerText={bannerText}
@@ -1913,6 +1879,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         availableActions={availableActions}
         stageDecisions={stageDecisions}
         catalog={stageCatalog}
+        events={ticket.events}
         quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
@@ -2266,16 +2233,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                             onChange={(e) => setEditDraft((d) => d.map((r, i) => i === index ? { ...r, proposedPrice: e.target.value === '' ? null : Number(e.target.value) } : r))} />
                         </label>
                       )}
-                      {/* Stock-sourced pricing (owner ruling, V183): sales may flag this line "from
-                          warehouse" and type in its own selling price — matches
-                          TicketCreateModal.jsx's item editor (same labels/copy/validation), so the
-                          flag can be set/changed both at deal-creation time and afterward here.
-                          CAPTURE-ONLY today: nothing downstream (PricingRequest, quotation,
-                          commission) reads this pair yet, so a flagged line can still be attached
-                          to, and priced through, an ordinary PricingRequest exactly as before —
-                          wiring it into that chain is a later follow-up. Reuses
-                          ticketItemFields.jsx's ItemField for the price input, same as every other
-                          field in this row, so its error markup/aria wiring is identical. */}
+                      {/* "จากสต็อก" is only a flag (walk 4): the price is the CEO-approved one, so no price input. */}
                       <div className="col-span-full flex flex-col gap-1.5 rounded-md border border-border-input bg-surface-muted px-3 py-2.5">
                         <label className="m-0 flex cursor-pointer items-center gap-2 text-sm">
                           <input
@@ -2284,40 +2242,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                             checked={Boolean(item.sourcedFromStock)}
                             onChange={(e) => {
                               const checked = e.target.checked;
-                              setEditDraft((d) => d.map((r, i) => i === index
-                                ? { ...r, sourcedFromStock: checked, stockSalePrice: checked ? r.stockSalePrice : '' }
-                                : r));
-                              // Unchecking clears any stale error the same way every other
-                              // per-row field error is cleared on edit above.
-                              if (!checked) clearFieldError(`editItems.stockSalePrice.${index}`);
+                              setEditDraft((d) => d.map((r, i) => i === index ? { ...r, sourcedFromStock: checked } : r));
                             }} />
                           <strong>จากสต็อก</strong>
                         </label>
                         <p className="m-0 pl-6 text-2xs font-semibold text-text-muted">
-                          สินค้าที่มีอยู่ในคลัง — ฝ่ายขายระบุราคาขายเอง
+                          สินค้าที่มีอยู่ในคลัง — ราคาขายมาจากการอนุมัติของ CEO
                         </p>
-                        {item.sourcedFromStock ? (
-                          <ItemField
-                            id={`edit-item-stock-sale-price-${index}`}
-                            label="ราคาขาย (สต็อก)"
-                            required
-                            error={fieldErrors[`editItems.stockSalePrice.${index}`]}
-                          >
-                            <input type="number" min="0" step="0.01"
-                              id={`edit-item-stock-sale-price-${index}`}
-                              ref={(el) => { fieldRefs.current[`editItems.stockSalePrice.${index}`] = el; }}
-                              value={item.stockSalePrice ?? ''}
-                              placeholder="เช่น 350.00"
-                              onChange={(e) => {
-                                setEditDraft((d) => d.map((r, i) => i === index ? { ...r, stockSalePrice: e.target.value } : r));
-                                clearFieldError(`editItems.stockSalePrice.${index}`);
-                              }}
-                              aria-required="true"
-                              aria-invalid={fieldErrors[`editItems.stockSalePrice.${index}`] ? true : undefined}
-                              aria-describedby={fieldErrors[`editItems.stockSalePrice.${index}`] ? fieldErrorId(`edit-item-stock-sale-price-${index}`) : undefined}
-                            />
-                          </ItemField>
-                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -2325,7 +2256,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 <Button type="button" variant="secondary"
                   onClick={() => setEditDraft((d) => [...d, {
                     brand: '', model: '', color: '', texture: '', size: '', qty: 1, proposedPrice: null,
-                    sourcedFromStock: false, stockSalePrice: '',
+                    sourcedFromStock: false,
                   }])}
                   className="mb-3">
                   <Icon name="plus" size={14} /> เพิ่มรายการ
@@ -2385,17 +2316,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           rowErrors[key] = missingQtyMessage(item.unitBasis, i + 1);
                           order.push(key);
                         }
-                        // V183: a จากสต็อก-flagged row must carry a real, positive price — same
-                        // invariant TicketService enforces server-side in
-                        // mergeEditedItemsPreservingPricing (this is UX, not the source of truth).
-                        // No row-number suffix here — stockSalePriceError() mirrors
-                        // requiredItemFieldErrors' inline-under-the-field convention, not
-                        // missingQtyMessage's toast-style one.
-                        if (isStockSalePriceMissing(item)) {
-                          const key = `editItems.stockSalePrice.${i}`;
-                          rowErrors[key] = stockSalePriceError(item);
-                          order.push(key);
-                        }
                       });
                       if (order.length > 0) {
                         setFieldErrorsForPrefix('editItems.', rowErrors);
@@ -2418,14 +2338,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           // it), and the row inputs above clear it on any descriptive hand-edit.
                           catalogPriceId: item.catalogPriceId ?? null,
                           catalogProductCode: item.catalogProductCode?.trim() || null,
-                          // Stock-sourced pricing (V183) — see this row's own UI comment above.
-                          // Sent unconditionally (both true and false) so an edit that un-flags a
-                          // previously stock-sourced line actually reaches the backend as false,
-                          // not merely as an absent field the merge would read as "unspecified,
-                          // inherit prior".
+                          // Sent unconditionally (true and false) so un-flagging a stock line reaches the
+                          // backend as false, not as an absent field the merge reads as "inherit prior".
                           sourcedFromStock: Boolean(item.sourcedFromStock),
-                          stockSalePrice: item.sourcedFromStock && item.stockSalePrice !== ''
-                            ? Number(item.stockSalePrice) : null,
                         })),
                         note: editNote.trim() || null,
                       }), 'บันทึกการแก้ไขแล้ว');
@@ -2475,9 +2390,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       <strong>{item.brand}</strong>
                       {item.model && <small className="text-text-muted">{item.model}</small>}
                       {item.factory && <small className="text-2xs text-text-muted">{item.factory}</small>}
-                      {/* Gap B (V183): a saved จากสต็อก line otherwise shows no indication in the
-                          read-only table — see StockAwarePriceCell's own comment for the price
-                          side of this fix. */}
+                      {/* A saved จากสต็อก line is flagged here; its price is the CEO-approved one (walk 4). */}
                       {item.sourcedFromStock ? (
                         <span className="mt-0.5 block w-fit"><StatusBadge tone="warning">จากสต็อก</StatusBadge></span>
                       ) : null}
@@ -2518,15 +2431,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         </span>
                         <code data-label="ต้นทุน (THB/ชิ้น)" className="text-info">{item.calcedCost != null ? formatMoney(item.calcedCost) : '—'}</code>
                         <span data-label="ราคาขาย (THB/ชิ้น)">
-                          <StockAwarePriceCell item={item} primary={item.manualPrice ?? item.calcedPrice ?? null}>
-                            <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
-                              {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
-                            </code>
-                            {/* CEO manual-override entry (D10) was ticket-native and retired along
-                                with calculatePrices/approve — this is now a read-only readout of
-                                whatever the 3 stranded legacy tickets already carry. */}
-                            {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
-                          </StockAwarePriceCell>
+                          <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
+                            {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
+                          </code>
+                          {/* CEO manual-override entry (D10) was ticket-native and retired along
+                              with calculatePrices/approve — this is now a read-only readout of
+                              whatever the 3 stranded legacy tickets already carry. */}
+                          {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
                         </span>
                       </>
                     ) : (
@@ -2534,9 +2445,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         {showProposed && <code data-label="ราคาที่เสนอ">{formatMoney(item.proposedPrice)}</code>}
                         {showApproved && (
                           <span data-label="ราคาที่อนุมัติ">
-                            <StockAwarePriceCell item={item} primary={item.approvedPrice}>
-                              <code>{formatMoney(item.approvedPrice)}</code>
-                            </StockAwarePriceCell>
+                            <code>{formatMoney(item.approvedPrice)}</code>
                           </span>
                         )}
                       </>

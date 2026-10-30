@@ -517,9 +517,9 @@ describe('resolveWorkState — forwards importRequests to nextSalesAction (QA-09
   const deal = baseDeal({ status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null });
   const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-10-01T00:00:00Z' }];
 
-  it('sales: a DRAFT importRequests row reaches nextSalesAction (ออกเลขใบขอซื้อ (IR)); without it, สร้างใบขอซื้อ (IR)', () => {
+  it('sales: a DRAFT importRequests row reaches nextSalesAction (ออกเลขใบขอซื้อ (IR)); without it, ออกใบขอซื้อ (IR)', () => {
     expect(resolveWorkState({ role: 'sales' }, deal, prs).action)
-      .toMatchObject({ key: 'create_import_request', label: 'สร้างใบขอซื้อ (IR)' });
+      .toMatchObject({ key: 'create_import_request', label: 'ออกใบขอซื้อ (IR)' });
     expect(resolveWorkState({ role: 'sales' }, deal, prs, { importRequests: [{ id: 1, status: 'DRAFT' }] }).action)
       .toMatchObject({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
   });

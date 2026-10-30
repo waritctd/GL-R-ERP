@@ -226,18 +226,28 @@ public class TicketRepository {
             params.addValue("prTerminalStatuses", PRICING_REQUEST_TERMINAL_STATUSES);
             params.addValue("importStages", IMPORT_STAGE_SCOPE);
         } else if ("account".equals(actorRole)) {
-            sql.append("""
-                   AND (
-                     (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
-                      AND t.status <> 'cancelled'
-                      AND t.sales_stage IN (:accountOrderStages))
-                     OR t.payment_status IN (:accountPendingStatuses)
-                     OR (""")
-               .append(paymentOverduePredicate("t.ticket_id"))
-               .append(")) ");
-            params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
-            params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
+            sql.append(" AND ").append(accountScopePredicate()).append(' ');
+            addAccountScopeParams(params);
         }
+    }
+
+    /**
+     * Account's list scope as a parenthesised predicate over {@code t} ({@code sales.ticket}): the one text
+     * both the account deal list and the dashboard totals run. Needs {@link #addAccountScopeParams}.
+     */
+    public static String accountScopePredicate() {
+        return """
+            (
+              (t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+               AND t.status <> 'cancelled'
+               AND t.sales_stage IN (:accountOrderStages))
+              OR t.payment_status IN (:accountPendingStatuses)
+              OR (""" + paymentOverduePredicate("t.ticket_id") + "))\n";
+    }
+
+    public static void addAccountScopeParams(MapSqlParameterSource params) {
+        params.addValue("accountOrderStages", ACCOUNT_ORDER_STAGE_SCOPE);
+        params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
     }
 
     /**
@@ -308,7 +318,7 @@ public class TicketRepository {
 
     public String nextTicketCode() {
         long seq = jdbc.queryForObject("SELECT nextval('sales.ticket_code_seq')", Map.of(), Long.class);
-        return "PR-" + Year.now() + "-" + String.format("%04d", seq);
+        return "DL-" + Year.now() + "-" + String.format("%04d", seq);
     }
 
     public String nextQuotationCode() {
@@ -513,12 +523,10 @@ public class TicketRepository {
                 // method just persists whatever it was handed, exactly like every other
                 // pricing-adjacent field above (approvedPrice/calcedCost/manualPrice/...).
                 .addValue("weightMultiplier", item.weightMultiplier())
-                // V183: unlike weightMultiplier (guarded, "prior always wins"), sourcedFromStock/
-                // stockSalePrice are sales-writable -- TicketService.mergeEditedItemsPreservingPricing
-                // resolves them from the incoming request with a null-safe fallback to the prior
-                // row (so an edit that says nothing about them does not silently clear a flag set
-                // on a previous save), and validates the pairing before this method ever sees the
-                // TicketItemDto. This method just persists whatever it was handed.
+                // V183: unlike weightMultiplier (guarded, "prior always wins"), sourcedFromStock is
+                // sales-writable -- TicketService.mergeEditedItemsPreservingPricing resolves it from the
+                // request with a null-safe fallback to the prior row. It also resolves stockSalePrice to
+                // NULL (walk 4); this method just persists whatever it was handed.
                 .addValue("sourcedFromStock", item.sourcedFromStock())
                 .addValue("stockSalePrice", item.stockSalePrice());
         }
@@ -1100,25 +1108,10 @@ public class TicketRepository {
                 .addValue("sortOrder", i)
                 .addValue("catalogPriceId", item.catalogPriceId())
                 .addValue("catalogProductCode", item.catalogProductCode())
-                // V183: sourcedFromStock is a Boolean (nullable) on the request record -- a
-                // request that never mentions it (every call site before this feature) means
-                // "not from stock", same as an explicit false. This method persists what it is
-                // given without validating the sourcedFromStock/stockSalePrice pairing -- that
-                // invariant is enforced in TicketService.create before any DB write is attempted
-                // (see its item-validation loop) and backstopped by chk_ticket_item_stock_sale_price.
+                // sourcedFromStock is a nullable Boolean: a request that never mentions it means "not from
+                // stock", same as false. The sales-typed price is gone (walk 4): the column always stays NULL.
                 .addValue("sourcedFromStock", Boolean.TRUE.equals(item.sourcedFromStock()))
-                // Force-null when the flag is false, exactly as
-                // TicketService.mergeEditedItemsPreservingPricing does on the edit path (and as
-                // mockApi.js and TicketCreateModal's submit() already do client-side): never let a
-                // stray price ride along on a line that is not flagged stock-sourced.
-                // TicketService.create validates "flag true => positive price", but it deliberately
-                // does NOT reject the inverse, so without this a malformed request carrying
-                // {sourcedFromStock:false, stockSalePrice:500} reached chk_ticket_item_stock_sale_price
-                // and came back as a 500 (DataIntegrityViolationException -> handleDataAccess) with the
-                // raw driver message, instead of being silently normalised the way every other layer
-                // already normalises it.
-                .addValue("stockSalePrice",
-                    Boolean.TRUE.equals(item.sourcedFromStock()) ? item.stockSalePrice() : null);
+                .addValue("stockSalePrice", null);
         }
         jdbc.batchUpdate("""
             INSERT INTO sales.ticket_item
@@ -1247,7 +1240,8 @@ public class TicketRepository {
             facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
             due == null ? null : due.creditDays(),
-            facts.liveDirectQuotation(), facts.quotedRecipients());
+            facts.liveDirectQuotation(), facts.quotedRecipients(),
+            "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null);
     }
 
     /**
@@ -1275,18 +1269,23 @@ public class TicketRepository {
      * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
      * other, and that test is what catches it if you forget.
      */
-    private static final String HAS_RECORDED_COMMISSION = """
+    public static String hasRecordedCommission(String ticketIdRef) {
+        return """
             EXISTS(
                 SELECT 1 FROM sales.commission_record
-                 WHERE source_ticket_id = :ticketId
+                 WHERE source_ticket_id = %s
                    AND kind = 'SALE'
                    AND status NOT IN ('VOID', 'REJECTED')
             )
-        """;
+        """.formatted(ticketIdRef);
+    }
+
+    private static final String HAS_RECORDED_COMMISSION = hasRecordedCommission(":ticketId");
 
     private record CommissionAndLiveQuotation(boolean commissionRecorded,
                                               LiveDirectQuotationDto liveDirectQuotation,
-                                              Set<String> quotedRecipients) {}
+                                              Set<String> quotedRecipients,
+                                              BigDecimal depositDue) {}
 
     /** A Postgres {@code text[]} as a {@link Set}; empty for SQL NULL, which is what
      * {@code array_agg} returns over no rows. */
@@ -1316,7 +1315,10 @@ public class TicketRepository {
                    (SELECT array_agg(DISTINCT r.recipient_type)
                       FROM sales.quotation r
                      WHERE r.ticket_id = :ticketId
-                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients
+                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients,
+                   (SELECT d.total_payable FROM sales.deposit_notice d
+                     WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
+                     ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1) AS deposit_due
               FROM (SELECT 1) AS one
               LEFT JOIN LATERAL (
             """ + LIVE_DIRECT_QUOTATION_SELECT + """
@@ -1328,7 +1330,7 @@ public class TicketRepository {
                     : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
                         rs.getString("doc_status"), rs.getString("recipient_type"));
                 return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live,
-                    readTextArray(rs, "quoted_recipients"));
+                    readTextArray(rs, "quoted_recipients"), rs.getBigDecimal("deposit_due"));
             });
     }
 
@@ -1352,6 +1354,13 @@ public class TicketRepository {
 
     private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,
                                       BigDecimal outstanding, boolean balanceReceipt) {
+        // QA-16 (owner ruling 2026-10-29): the chip follows the payment track. Before the order is confirmed
+        // (no payment_status, nothing paid, stage before ORDER_RECEIVED) there is no payment step to speak of;
+        // a legacy deal already past that with a null track keeps the derivation below.
+        if (s.paymentStatus() == null && paid.signum() <= 0
+                && DealStage.indexOf(s.salesStage()) < DealStage.indexOf(DealStage.ORDER_RECEIVED)) {
+            return PaymentStage.NOT_STARTED;
+        }
         if (payable.signum() <= 0) {
             return PaymentStage.NOT_REQUIRED;
         }
@@ -1359,11 +1368,18 @@ public class TicketRepository {
             return PaymentStage.FULLY_PAID;
         }
         if (paid.signum() > 0) {
-            return balanceReceipt ? PaymentStage.PARTIALLY_PAID : PaymentStage.DEPOSIT_RECEIVED;
+            if (balanceReceipt) {
+                return PaymentStage.PARTIALLY_PAID;
+            }
+            return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
+                ? PaymentStage.BALANCE_PENDING : PaymentStage.DEPOSIT_RECEIVED;
         }
-        if (!DepositPolicy.bypassesDepositNotice(s.depositPolicy())
-                && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
-                    || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()))) {
+        if (DepositPolicy.bypassesDepositNotice(s.depositPolicy())) {
+            // A 0% quotation: nothing to collect up front, the whole amount is the balance.
+            return "CUSTOMER_CONFIRMED".equals(s.paymentStatus()) ? PaymentStage.NO_DEPOSIT
+                : outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;
+        }
+        if ("CUSTOMER_CONFIRMED".equals(s.paymentStatus()) || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())) {
             return PaymentStage.DEPOSIT_PENDING;
         }
         return outstanding.signum() > 0 ? PaymentStage.BALANCE_PENDING : PaymentStage.NOT_REQUIRED;
@@ -1723,7 +1739,7 @@ public class TicketRepository {
      * bigger SQL statement — see {@link #appendRoleScope}). Single source of truth so the two
      * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
      */
-    private static String payableAmountSelect(String ticketIdRef) {
+    public static String payableAmountSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, true);
     }
 
@@ -1892,13 +1908,21 @@ public class TicketRepository {
     }
 
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
-    private static String paidAmountSelect(String ticketIdRef) {
+    public static String paidAmountSelect(String ticketIdRef) {
         return """
-            SELECT COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)
+            SELECT %2$s
               FROM sales.payment_receipt
              WHERE ticket_id = %1$s
-            """.formatted(ticketIdRef);
+            """.formatted(ticketIdRef, SIGNED_RECEIPT_SUM);
     }
+
+    /**
+     * The one sign rule for money received: DEPOSIT and BALANCE add, ADJUSTMENT (refund / credit note)
+     * subtracts. Shared by the per-deal paid amount and the dashboard's company-wide cash received so
+     * the two can never count a receipt differently.
+     */
+    public static final String SIGNED_RECEIPT_SUM =
+        "COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)";
 
     public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
 
@@ -2456,18 +2480,24 @@ public class TicketRepository {
      *         that FK does not exist (source_ticket_item_id is a plain nullable BIGINT, not an FK
      *         — see V59's own column definition), so this IS defensive, not merely decorative).
      */
-    public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm) {
+    public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm,
+                                    BigDecimal qtyFromStock) {
+        // qty_from_stock moves in the same statement as qty so chk_ticket_item_qty_from_stock never sees a
+        // half-written row. A null qtyFromStock leaves the existing value alone (only stock lines are written).
         return jdbc.update("""
             UPDATE sales.ticket_item
-               SET qty = :qty, qty_sqm = :qtySqm
+               SET qty = :qty, qty_sqm = :qtySqm, qty_from_stock = COALESCE(CAST(:qtyFromStock AS numeric), qty_from_stock)
              WHERE ticket_id = :ticketId AND item_id = :itemId
-               AND qty IS DISTINCT FROM :qty
+               AND (qty IS DISTINCT FROM :qty
+                    OR (CAST(:qtyFromStock AS numeric) IS NOT NULL
+                        AND qty_from_stock IS DISTINCT FROM CAST(:qtyFromStock AS numeric)))
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("itemId", itemId)
                 .addValue("qty", qty)
-                .addValue("qtySqm", qtySqm)) > 0;
+                .addValue("qtySqm", qtySqm)
+                .addValue("qtyFromStock", qtyFromStock)) > 0;
     }
 
     /**
@@ -2541,13 +2571,13 @@ public class TicketRepository {
      */
     public long insertReconciledItem(long ticketId, String brand, String model, String color, String texture,
                                      String size, String factory, BigDecimal qty, BigDecimal qtySqm,
-                                     String unitBasis) {
+                                     String unitBasis, BigDecimal qtyFromStock) {
         return jdbc.queryForObject("""
             INSERT INTO sales.ticket_item
                 (ticket_id, brand, model, color, texture, size, factory, qty, qty_sqm, unit_basis,
-                 currency, sort_order)
+                 qty_from_stock, currency, sort_order)
             VALUES (:ticketId, :brand, :model, :color, :texture, :size, :factory, :qty, :qtySqm,
-                    :unitBasis, 'THB',
+                    :unitBasis, COALESCE(CAST(:qtyFromStock AS numeric), 0), 'THB',
                     (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sales.ticket_item WHERE ticket_id = :ticketId))
             RETURNING item_id
             """,
@@ -2561,7 +2591,8 @@ public class TicketRepository {
                 .addValue("factory", factory)
                 .addValue("qty", qty)
                 .addValue("qtySqm", qtySqm)
-                .addValue("unitBasis", unitBasis),
+                .addValue("unitBasis", unitBasis)
+                .addValue("qtyFromStock", qtyFromStock),
             Long.class);
     }
 

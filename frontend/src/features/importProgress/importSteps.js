@@ -45,3 +45,22 @@ export function stepsAhead(code) {
   const i = importStepIndex(code);
   return i < 0 ? IMPORT_STEPS : IMPORT_STEPS.slice(i + 1);
 }
+
+// Deal rollups at or past goods-received: the deal-level fulfilment label already says it.
+const PAST_IMPORT = new Set(['GOODS_RECEIVED', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'FROM_STOCK']);
+
+/**
+ * The deal header's การนำเข้า chip text from the per-factory IR steps (QA-22): the SLOWEST live tracked
+ * factory's step label, with " · ถึงโกดัง X/Y" appended when more than one factory is tracked. null means
+ * "keep the deal-level fulfilment label" — no live tracked IR, or the rollup is already past import.
+ */
+export function importChipLabel(importRequests, fulfillmentStatus) {
+  if (PAST_IMPORT.has(fulfillmentStatus)) return null;
+  const tracked = (importRequests ?? []).filter((r) => r.status === 'ISSUED' && importStepIndex(r.importStep) >= 0);
+  if (tracked.length === 0) return null;
+  const slowest = tracked.reduce((a, b) => (importStepIndex(b.importStep) < importStepIndex(a.importStep) ? b : a));
+  const label = importStepMeta(slowest.importStep).label;
+  if (tracked.length === 1) return label;
+  const received = tracked.filter((r) => r.importStep === 'RECEIVED').length;
+  return received === tracked.length ? label : `${label} · ถึงโกดัง ${received}/${tracked.length}`;
+}

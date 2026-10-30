@@ -20,11 +20,6 @@ import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js
 // exactly like CommissionPage's own `totals.submitted` does.
 const TEAM_COMMISSIONS_QUERY_KEY = ['commissions', 'list', 'submitted'];
 
-function startOfMonth() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1);
-}
-
 // A deal is "won" once it reaches the terminal pipeline stage, "lost" once
 // its lifecycle/legacy status marks it lost or cancelled, else "open" —
 // mirrors the same three-way split features/tickets/salesViewScope.js's
@@ -39,10 +34,6 @@ function isDealLost(ticket) {
 }
 function isDealOpen(ticket) {
   return !isDealWon(ticket) && !isDealLost(ticket) && ticket.status !== 'closed';
-}
-
-function dealAmount(ticket) {
-  return Number(ticket.amountPayable ?? 0);
 }
 
 /**
@@ -86,7 +77,7 @@ function dealAmount(ticket) {
  * be fabricating business data (CLAUDE.md). Flagged as a follow-up decision
  * for the plan owner, not fabricated here.
  */
-export function ManagerOverview({ user, employee, showToast }) {
+export function ManagerOverview({ user, employee, dashboardSummary, showToast }) {
   const navigate = useNavigate();
 
   const ticketsQuery = useQuery({
@@ -118,21 +109,10 @@ export function ManagerOverview({ user, employee, showToast }) {
 
   const ticketsById = useMemo(() => new Map(tickets.map((t) => [t.id, t])), [tickets]);
 
-  const monthStart = useMemo(() => startOfMonth(), []);
-  const closedThisMonth = useMemo(
-    () => tickets.filter((t) => isDealWon(t) && t.stageUpdatedAt && new Date(t.stageUpdatedAt) >= monthStart),
-    [tickets, monthStart],
-  );
-  const teamMonthValue = useMemo(
-    () => closedThisMonth.reduce((sum, t) => sum + dealAmount(t), 0),
-    [closedThisMonth],
-  );
-
   const openTickets = useMemo(() => tickets.filter(isDealOpen), [tickets]);
-  const openPipelineValue = useMemo(
-    () => openTickets.reduce((sum, t) => sum + dealAmount(t), 0),
-    [openTickets],
-  );
+  const outstanding = dashboardSummary?.financeOutstanding;
+  const forecast = dashboardSummary?.forecastValue;
+  const cashReceived = dashboardSummary?.cashReceivedThisMonth;
 
   // "ดีลต้องดูแล": an open deal with no activity in 7 days (`ticket.stale`,
   // mirrors TicketRepository.enrichSummary's own staleness window — see
@@ -140,8 +120,7 @@ export function ManagerOverview({ user, employee, showToast }) {
   // overdue (`ticket.overdue`), or a follow-up date already in the past.
   const attentionTickets = useMemo(() => {
     // `new Date()` (not `Date.now()`, which the react-hooks purity rule
-    // flags as a well-known impure call inside render) — same pattern this
-    // file's own `startOfMonth()` already uses above.
+    // flags as a well-known impure call inside render).
     const now = new Date();
     return openTickets
       .filter((t) => t.stale || t.overdue || (t.nextFollowUpAt && new Date(t.nextFollowUpAt) < now))
@@ -158,17 +137,13 @@ export function ManagerOverview({ user, employee, showToast }) {
   const lostCount = useMemo(() => tickets.filter(isDealLost).length, [tickets]);
   const closeRate = wonCount + lostCount > 0 ? (wonCount / (wonCount + lostCount)) * 100 : null;
 
-  const leaderboard = useMemo(() => {
-    const byRep = new Map();
-    closedThisMonth.forEach((t) => {
-      const key = t.createdById ?? t.createdByName ?? 'unknown';
-      const current = byRep.get(key) || { id: key, name: t.createdByName || 'ไม่ระบุ', amount: 0, count: 0 };
-      current.amount += dealAmount(t);
-      current.count += 1;
-      byRep.set(key, current);
-    });
-    return [...byRep.values()].sort((a, b) => b.amount - a.amount).slice(0, 5);
-  }, [closedThisMonth]);
+  // Same rows as the CEO's ยอดตามทีม/ฝ่าย panel: this month's cash received per rep, from the summary.
+  const leaderboard = useMemo(
+    () => [...(dashboardSummary?.cashReceivedByRep ?? [])]
+      .map((row) => ({ name: row.repName, amount: Number(row.amount) || 0 }))
+      .sort((a, b) => b.amount - a.amount),
+    [dashboardSummary?.cashReceivedByRep],
+  );
   const leaderboardMax = leaderboard[0]?.amount || 0;
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
@@ -189,6 +164,7 @@ export function ManagerOverview({ user, employee, showToast }) {
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
             <SkeletonCard lines={1} />
+            <SkeletonCard lines={1} />
           </StatGrid>
           <Panel style={{ marginTop: 14 }}>
             <SkeletonText lines={5} />
@@ -200,10 +176,17 @@ export function ManagerOverview({ user, employee, showToast }) {
           <StatGrid>
             <StatCard
               icon="badgeDollar"
-              label="ยอดทีมเดือนนี้"
-              value={formatMoney(teamMonthValue)}
-              helper={`ปิดแล้ว ${closedThisMonth.length} ดีล`}
+              label="เงินรับแล้ว (เดือนนี้)"
+              value={cashReceived == null ? '—' : formatMoney(cashReceived)}
+              helper="รับเงินจริงในเดือนนี้"
               tone="teal"
+            />
+            <StatCard
+              icon="clock"
+              label="ค้างรับ"
+              value={outstanding == null ? '—' : formatMoney(outstanding)}
+              helper="ตามหน้าการเงิน"
+              tone="amber"
             />
             <StatCard
               icon="clock"
@@ -223,9 +206,9 @@ export function ManagerOverview({ user, employee, showToast }) {
             />
             <StatCard
               icon="briefcase"
-              label="pipeline ทีม"
-              value={formatMoney(openPipelineValue)}
-              helper={`${openTickets.length} ดีลเปิดอยู่`}
+              label="ยอดคาดการณ์"
+              value={forecast == null ? '—' : formatMoney(forecast)}
+              helper="ดีลก่อนขั้น 10"
               tone="blue"
               onClick={() => navigate('/tickets')}
             />
@@ -326,11 +309,11 @@ export function ManagerOverview({ user, employee, showToast }) {
             <div className="grid gap-[18px]">
               <Panel title="อันดับทีม (เดือนนี้)">
                 {leaderboard.length === 0 ? (
-                  <p className="m-0 text-sm text-text-muted">ยังไม่มีดีลปิดในเดือนนี้</p>
+                  <p className="m-0 text-sm text-text-muted">ยังไม่มีเงินรับเข้าในเดือนนี้</p>
                 ) : (
                   <div className="grid gap-3">
                     {leaderboard.map((rep, index) => (
-                      <div key={rep.id} className="grid gap-1">
+                      <div key={index} className="grid gap-1">
                         <div className="flex items-center justify-between gap-2 text-sm">
                           <span className="min-w-0 truncate font-bold text-text">{index + 1}. {rep.name}</span>
                           <strong className="tabular-nums text-text">{formatMoney(rep.amount)}</strong>

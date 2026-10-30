@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -132,6 +133,56 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(repository.headcount(DashboardQueryScope.self(salesEmployee)).active()).isNull();
     }
 
+    @Test
+    void cashReceivedByRepSplitsTheSameMonthsCashByTheDealsCreator() {
+        long division = insertDivision("SA", "Sales");
+        long repA = insertEmployee("EMP-001", division, true);
+        long repB = insertEmployee("EMP-002", division, true);
+        long unnamed = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, division_id, is_active)
+            VALUES ('EMP-003', '', :d, TRUE) RETURNING employee_id
+            """, Map.of("d", division), Number.class).longValue();
+        insertTicket("PR-1", "quotation_issued", repA, LocalDate.of(2026, 6, 1));
+        insertTicket("PR-2", "quotation_issued", repA, LocalDate.of(2026, 6, 1));
+        insertTicket("PR-3", "quotation_issued", repB, LocalDate.of(2026, 6, 1));
+        insertTicket("PR-4", "quotation_issued", unnamed, LocalDate.of(2026, 6, 1));
+        // a different rep who happens to share EMP-001's name: kept as its own row
+        long namesake = jdbc.queryForObject("""
+            INSERT INTO hr.employee (employee_code, first_name_th, division_id, is_active)
+            VALUES ('EMP-004', 'EMP-001', :d, TRUE) RETURNING employee_id
+            """, Map.of("d", division), Number.class).longValue();
+        insertTicket("PR-5", "quotation_issued", namesake, LocalDate.of(2026, 6, 1));
+        insertReceipt("PR-5", "DEPOSIT", "50.00", "2026-07-05T09:00:00+07:00", repA);
+
+        insertReceipt("PR-1", "DEPOSIT", "85418.10", "2026-07-02T10:00:00+07:00", repA);
+        insertReceipt("PR-1", "ADJUSTMENT", "1000.00", "2026-07-20T10:00:00+07:00", repA);
+        // two of repA's deals add up; 00:30 on 1 July in Bangkok is still July's
+        insertReceipt("PR-2", "BALANCE", "2000.00", "2026-06-30T17:30:00Z", repA);
+        insertReceipt("PR-3", "DEPOSIT", "10000.00", "2026-07-03T09:00:00+07:00", repB);
+        insertReceipt("PR-4", "BALANCE", "700.00", "2026-07-04T09:00:00+07:00", repB);
+        // outside the Bangkok month: last minute of June, first minute of August
+        insertReceipt("PR-3", "BALANCE", "5000.00", "2026-06-30T23:59:59+07:00", repB);
+        insertReceipt("PR-1", "BALANCE", "300.00", "2026-08-01T00:00:00+07:00", repA);
+
+        List<CashByRepDto> rows = repository.cashReceivedByRep(LocalDate.of(2026, 7, 1));
+
+        assertThat(rows).extracting(CashByRepDto::repName)
+            .containsExactlyInAnyOrder("EMP-001", "EMP-001", "EMP-002", "ไม่ระบุผู้ขาย");
+        assertThat(rows.stream().filter(r -> r.repName().equals("EMP-001")).map(CashByRepDto::amount))
+            .usingComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+            .containsExactlyInAnyOrder(new BigDecimal("86418.10"), new BigDecimal("50.00"));
+        assertThat(amountOf(rows, "EMP-002")).isEqualByComparingTo("10000.00");
+        assertThat(amountOf(rows, "ไม่ระบุผู้ขาย")).isEqualByComparingTo("700.00");
+        // the rows are the whole month's cash (the service totals them for cashReceivedThisMonth)
+        assertThat(rows.stream().map(CashByRepDto::amount).reduce(BigDecimal.ZERO, BigDecimal::add))
+            .isEqualByComparingTo("97168.10");
+        assertThat(repository.cashReceivedByRep(LocalDate.of(2026, 5, 1))).isEmpty();
+    }
+
+    private static BigDecimal amountOf(List<CashByRepDto> rows, String repName) {
+        return rows.stream().filter(r -> r.repName().equals(repName)).findFirst().orElseThrow().amount();
+    }
+
     private long insertDivision(String code, String name) {
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.division (source_code, name_th)
@@ -216,6 +267,16 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
                 .addValue("lateMinutes", lateMinutes)
                 .addValue("punchCount", punchCount)
                 .addValue("absent", absent));
+    }
+
+    private void insertReceipt(String ticketCode, String kind, String amount, String receivedAt, long recordedBy) {
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, currency, received_at, recorded_by)
+            VALUES ((SELECT ticket_id FROM sales.ticket WHERE code = :code), :kind, :amount, 'THB',
+                    :receivedAt, :by)
+            """, new MapSqlParameterSource()
+                .addValue("code", ticketCode).addValue("kind", kind).addValue("amount", new BigDecimal(amount))
+                .addValue("receivedAt", OffsetDateTime.parse(receivedAt)).addValue("by", recordedBy));
     }
 
     private void insertTicket(String code, String status, long createdBy, LocalDate createdDate) {

@@ -8,7 +8,7 @@
 // separate โรงงาน input on edit only, no asterisks on edit at all).
 import { api } from '../../api/index.js';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
-import { resolveTileSqmPerPiece } from '../quotations/QuotationItemRow.jsx';
+import { resolveTileSqmPerPiece, sizeTextFromCatalog } from '../quotations/QuotationItemRow.jsx';
 
 // ── required fields ─────────────────────────────────────────────────────────
 // สี and เนื้อผิว are deliberately NOT here. The live catalog fills `color` on 21% of active rows
@@ -52,7 +52,8 @@ export const ITEM_FIELD_META = {
   model: { label: 'ชื่อรุ่น / Collection', placeholder: 'เช่น Stone Villa, Eco stone' },
   color: { label: 'สี', placeholder: 'เช่น ขาว, เทา, ครีม', hint: '(ไม่บังคับ)' },
   texture: { label: 'เนื้อผิว', placeholder: 'เช่น MATT, GLOSSY, ด้าน', hint: '(ไม่บังคับ)' },
-  size: { label: 'ขนาด', placeholder: 'เช่น 600x1200' },
+  // QA-28 (owner ruling 2026-10-29, extends 2026-09-14): size is centimetres everywhere; existing rows are not rewritten.
+  size: { label: 'ขนาด (ซม.)', placeholder: 'เช่น 60x120' },
 };
 
 // ── quantity requiredness (PIECE vs SQM basis) ──────────────────────────────
@@ -69,45 +70,6 @@ export function missingQtyMessage(unitBasis, rowNumber) {
   return requiredQtyField(unitBasis) === 'qtySqm'
     ? `กรุณากรอกพื้นที่ (ตร.ม.) ในรายการที่ ${rowNumber}`
     : `กรุณากรอกจำนวน (แผ่น) ในรายการที่ ${rowNumber}`;
-}
-
-// ── stock-sourced deal-line pricing (V183) ──────────────────────────────────
-// Owner ruling: sales may flag a deal line "จากสต็อก" (from warehouse) and type in its own
-// selling price at deal-entry OR edit time — see migration V183's header for the full context.
-// CAPTURE-ONLY today: nothing downstream (PricingRequest, quotation, commission) reads this pair
-// yet, so a flagged line can still be attached to, and priced through, an ordinary
-// PricingRequest exactly as before; wiring it into that chain is a later follow-up. Shared by
-// TicketCreateModal.jsx (deal-creation time) and TicketDetailPage.jsx's edit-items mode (after
-// the deal exists) so the flag/price rule can be set from either surface without drifting, the
-// same reason every other item-editor rule above lives here.
-//
-// Mirrors TicketService's own invariant (both TicketService.create's item-validation loop and
-// #mergeEditedItemsPreservingPricing): sourcedFromStock=true requires a real, positive price.
-// The rounding matches TicketService's own isStorablePositivePrice: stock_sale_price is
-// numeric(14,2), and Postgres rounds HALF_UP to that scale before
-// chk_ticket_item_stock_sale_price ever sees the value, so 0.004 (which stores as 0.00) must
-// read as missing here too, or the client would accept a price the server then rejects.
-export function isStockSalePriceMissing(item) {
-  if (!item?.sourcedFromStock) return false;
-  const price = item?.stockSalePrice;
-  if (price === '' || price == null) return true;
-  const n = Number(price);
-  return !(Number.isFinite(n) && Math.round(n * 100) > 0);
-}
-
-/** Mirrors missingQtyMessage's row-numbered convention — used by the create modal's zod schema. */
-export function missingStockSalePriceMessage(rowNumber) {
-  return `กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก ในรายการที่ ${rowNumber}`;
-}
-
-/**
- * No row-number suffix — mirrors requiredItemFieldErrors' convention (the error renders inline
- * under the row's own price field, so which row it belongs to is already visually unambiguous;
- * unlike missingQtyMessage, which the create modal's schema also surfaces as a toast-adjacent
- * message where the row context is lost). Used directly by TicketDetailPage's edit-items mode.
- */
-export function stockSalePriceError(item) {
-  return isStockSalePriceMissing(item) ? 'กรุณากรอกราคาขายเมื่อเลือกสินค้าจากสต็อก' : null;
 }
 
 // ── catalog pick / hand-edit rules ──────────────────────────────────────────
@@ -170,7 +132,6 @@ export function applyCatalogPick(item, cat) {
   // no sqm_per_piece of their own (all of factory Bode, plus LEA's trim pieces) resolve to `null`
   // here — nothing is guessed from the free-text size any more, so the แผ่น↔ตร.ม. toggle simply
   // leaves both quantities editable for those rows.
-  const sizeRaw = cat.sizeRaw || cat.size || '';
   const sqmPerPiece = resolveTileSqmPerPiece(cat);
   const newQtySqm = item.qty && sqmPerPiece ? (Number(item.qty) * sqmPerPiece).toFixed(3) : '';
 
@@ -183,7 +144,8 @@ export function applyCatalogPick(item, cat) {
     // Never substitute a product code or factory name for a colour the catalog lacks.
     color: cat.color || '',
     texture: cat.surface || '',
-    size: sizeRaw,
+    // QA-28: cm text via the quotation editor's derivation, not the raw mixed-unit catalogue string.
+    size: sizeTextFromCatalog(cat),
     sqmPerPiece,
     qtySqm: newQtySqm,
     // UI-only provenance.
@@ -293,7 +255,7 @@ export function CatalogOption({ cat }) {
       {' — '}
       {cat.collection || cat.productName || cat.productCode || '—'}
       <span className="ml-1 text-text-muted">
-        {[cat.color, cat.sizeRaw || cat.size].filter(Boolean).join(' · ')}
+        {[cat.color, sizeTextFromCatalog(cat)].filter(Boolean).join(' · ')}
       </span>
       {cat.price && (
         <span className="ml-1.5 text-2xs font-semibold text-link">

@@ -453,9 +453,12 @@ public class LeaveService {
         // shared by every LeaveDayMath call below (validateSubDayTimes, computeTotalDays,
         // totalDaysByYear) -- see LeaveRepository#workingDayPredicate's javadoc for the fixed query
         // cost (two queries, not one per day) and LeaveDayMath's javadoc for the six-day-department/
-        // holiday defects this closes.
+        // holiday defects this closes. Range starts at today+1 when earlier than the start date so the
+        // advance-notice gate can reuse it (widening only adds holidays outside the leave).
+        LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
+        LocalDate predicateFrom = request.startDate().isBefore(noticeFrom) ? request.startDate() : noticeFrom;
         Predicate<LocalDate> isWorkingDay =
-            leaveRepository.workingDayPredicate(employeeId, request.startDate(), request.endDate());
+            leaveRepository.workingDayPredicate(employeeId, predicateFrom, request.endDate());
         // Partial-day span (V166): resolved ONCE here (at most two extra queries -- one per distinct
         // boundary date, none at all for a whole-day request) and reused by BOTH validateSubDayTimes
         // (time-bound validation) and the spanFractions ledger below, rather than each resolving the
@@ -502,7 +505,7 @@ public class LeaveService {
         // chain, exactly as before Phase A0b added the QUICK-preview skip; see AutoRejectResult's
         // Javadoc and #preview's Javadoc for the only caller that ever passes `false`.
         AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(),
-            hasAttachment, totalDays, purposeCode, requestedAsEmergency, true);
+            hasAttachment, totalDays, purposeCode, requestedAsEmergency, true, isWorkingDay);
         // Phase A0a (structured rejection outcome): `blocking` carries the machine-readable
         // LeaveRuleCode + params alongside the same Thai sentence that used to be the ONLY thing
         // #autoRejectNote returned -- systemNote/status derive from it exactly as before, since
@@ -736,7 +739,10 @@ public class LeaveService {
         }
         validateDateRange(startDate, endDate);
 
-        Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId, startDate, endDate);
+        // Range starts at today+1 when earlier than startDate so the advance-notice gate can reuse it.
+        LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
+        Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId,
+            startDate.isBefore(noticeFrom) ? startDate : noticeFrom, endDate);
         // Partial-day span (V166): LeavePreviewRequest now carries the SAME optional startTime/
         // endTime SubmitLeaveRequest does (widened from the original "no sub-day times in this
         // shape at all" design -- see LeavePreviewRequest's own Javadoc for why), resolved and
@@ -757,7 +763,7 @@ public class LeaveService {
             spanFractions, startDate, endDate, request.startTime(), request.endTime(), leaveType, isWorkingDay);
         boolean evaluateDepartmentCoverage = depth == LeavePreviewDepth.FULL;
         AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, startDate, endDate,
-            hasAttachment, totalDays, purposeCode, requestedAsEmergency, evaluateDepartmentCoverage);
+            hasAttachment, totalDays, purposeCode, requestedAsEmergency, evaluateDepartmentCoverage, isWorkingDay);
         LeaveRuleOutcome outcome = autoReject.blocking();
         boolean approved = outcome == null;
         int quotaYear = startDate.getYear();
@@ -2274,7 +2280,7 @@ public class LeaveService {
      */
     private AutoRejectResult autoRejectNote(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate,
             boolean hasAttachment, BigDecimal totalDays, String purposeCode, boolean requestedAsEmergency,
-            boolean evaluateDepartmentCoverage) {
+            boolean evaluateDepartmentCoverage, Predicate<LocalDate> isWorkingDay) {
         List<LeaveRuleOutcome> warnings = new ArrayList<>();
         // V164: the largest single WARN_UNPAID_EXCESS excess amount seen so far (FIRST_YEAR_MAX_DAYS/
         // WEDDING_MAX_DAYS/MAX_CONSECUTIVE_DAYS below) -- see #dominantUnpaidByRuleDays's Javadoc for
@@ -2461,24 +2467,11 @@ public class LeaveService {
         }
 
         // §5 advance notice, now per-type (hr.leave_type.advance_notice_days) instead of the removed
-        // global app.leave.advance-notice-days property. DECISION: counted in CALENDAR days, not
-        // working days; this is an unchanged behaviour carried over from the original global-property
-        // version, which also compared plain calendar dates. A type with advanceNoticeDays == 0
-        // (SICK, MATERNITY, MILITARY, LEAVE_WITHOUT_PAY as seeded) skips this check entirely, matching
-        // the old code's unconditional SICK exemption.
-        //
-        // RECONFIRMED, not merely carried over (2026-08-03): V116 called this calendar-day counting a
-        // deliberate STOPGAP specifically because working-day counting was not available yet ("§5.2 =
-        // 1 working day, §5.3 = 3 working days" in the source announcement). It is available now --
-        // LeaveDayMath is schedule/holiday-aware (see its javadoc) -- but this branch deliberately does
-        // NOT convert this check, for the opposite reason from the consecutive-days check above: this
-        // is a MINIMUM lead-time requirement, so switching to a true working-day count would TIGHTEN
-        // it whenever the gap between filing and the start date crosses a weekend/holiday (those days
-        // would stop counting toward the required notice, so a request that clears today's calendar-
-        // day check could newly be rejected). That is a real, employee-facing behaviour change with
-        // its own blast radius -- it belongs in its own reviewed change with its own tests, not folded
-        // silently into a branch whose stated purpose is the payroll deduction/day-count fix. Left on
-        // calendar days here; flagged as a separate, explicit follow-up decision.
+        // global app.leave.advance-notice-days property. Counted in the employee's OWN WORKING days
+        // (schedule + hr.holiday aware): the days after today up to the leave's first working day that
+        // the employee would work must number at least noticeDays; today is day 0 and not counted
+        // (owner ruling 2026-10-29). A type with advanceNoticeDays == 0 (SICK, MATERNITY, MILITARY,
+        // LEAVE_WITHOUT_PAY as seeded) skips this check entirely.
         //
         // §5.2 emergency-filing exception (V125), COMBINED notice x emergency decision table:
         //
@@ -2524,8 +2517,13 @@ public class LeaveService {
         // rejection to begin with).
         int noticeDays = Math.max(0, leaveType.advanceNoticeDays());
         if (noticeDays > 0) {
-            LocalDate earliestAllowed = LocalDate.now(clock).plusDays(noticeDays);
-            if (startDate.isBefore(earliestAllowed)) {
+            LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
+            LocalDate firstWorkDay = startDate;
+            while (firstWorkDay.isBefore(endDate) && !isWorkingDay.test(firstWorkDay)) {
+                firstWorkDay = firstWorkDay.plusDays(1);
+            }
+            int workingDaysOfNotice = LeaveDayMath.countWorkingDays(noticeFrom, firstWorkDay, isWorkingDay);
+            if (workingDaysOfNotice < noticeDays) {
                 if (leaveType.emergencyMonthlyAllowance() != null && requestedAsEmergency) {
                     int usedThisMonth = leaveRepository.countEmergencyFilings(
                         employeeId, leaveType.code(), startDate, ACTIVE_QUOTA_STATUSES);

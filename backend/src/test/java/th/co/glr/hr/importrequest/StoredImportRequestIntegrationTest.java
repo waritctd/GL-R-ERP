@@ -8,6 +8,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import org.springframework.mock.web.MockHttpSession;
+import th.co.glr.hr.auth.SessionContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -178,6 +182,56 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(summary.salesStage()).isEqualTo(DealStage.PROCUREMENT);
     }
 
+    // ── owner ruling 2026-10-29 (5c): GET /tickets/{id}/import-requests also says whether a factory is uncovered ──
+
+    /** The flag as the frontend reads it: its own read-only route, so the shared list stays rows-only. */
+    private Object hasUncoveredFactoriesOverHttpShape(long forTicket) {
+        SessionContext sessions = mock(SessionContext.class);
+        MockHttpSession session = new MockHttpSession();
+        when(sessions.requireUser(session)).thenReturn(owner);
+        ImportRequestController controller = new ImportRequestController(service, sessions);
+        assertThat(controller.listForTicket(forTicket, session)).containsOnlyKeys("importRequests");
+        return controller.coverage(forTicket, session).hasUncoveredFactories();
+    }
+
+    @Test
+    void listResponse_hasUncoveredFactories_trueBeforeAnyIr_falseOnceCreateCoversEveryFactory_trueAgainForANewFactoryLine() {
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+
+        service.createDrafts(ticketId, null, owner);
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
+
+        insertFactory("Late Added Flag Factory");
+        insertItem(ticketId, "Late Added Flag Factory", "Late line", "60x60 cm", "5", "pcs", 3);
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void listResponse_hasUncoveredFactories_countsAnUnresolvedFactoryNameAsUncovered_andCreatesNoFactory() {
+        service.createDrafts(ticketId, null, owner);
+        insertItem(ticketId, "Never Seen Flag Factory Co", "Mystery line", "60x60 cm", "5", "pcs", 3);
+        Long factoriesBefore = jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
+
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class))
+            .isEqualTo(factoriesBefore);
+    }
+
+    @Test
+    void listResponse_hasUncoveredFactories_aFactoryCoveredOnlyBySupersededRowsIsUncovered_aLiveRowCovers() {
+        service.createDrafts(ticketId, null, owner);
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
+
+        jdbc.update("UPDATE sales.import_request SET status = 'SUPERSEDED' WHERE ticket_id = :t AND factory_id = :f",
+            Map.of("t", ticketId, "f", leaFactoryId));
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+
+        jdbc.update("UPDATE sales.import_request SET status = 'ISSUED' WHERE ticket_id = :t AND factory_id = :f",
+            Map.of("t", ticketId, "f", leaFactoryId));
+        assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
+    }
+
     @Test
     void createDrafts_isAllOrNothing_whenOneNewFactoryHasNoLeadTime() {
         // country PL has no LeadTimeDefaults entry -> null lead time -> cannot be issued.
@@ -213,6 +267,36 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatThrownBy(() -> service.issue(id, null, owner))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    /**
+     * Walk 4 (owner ruling 2026-10-29: a stock line is never ordered from a factory). A DRAFT form
+     * left over from before the order was confirmed can name a line that is now covered from stock
+     * ({@code qty_from_stock >= qty}, written by order confirmation): issuing it would order stock
+     * the customer already has. ANY covered line refuses the issue (all covered, or one among several -
+     * a legacy mixed draft); nothing is numbered and the form stays a DRAFT.
+     */
+    @Test
+    void issue_ofADraftWithAnyLineNowCoveredFromStock_isRefused409_andBurnsNoNumber() {
+        List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
+        long leaDraft = byFactory(drafts, leaFactoryId).id();
+        long padanaDraft = byFactory(drafts, padanaFactoryId).id();
+        // LEA's only line fully covered; Padana's FIRST of two lines covered (a mixed draft).
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE ticket_id = :t AND factory = 'LEA Stored Test'",
+            Map.of("t", ticketId));
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE ticket_id = :t AND model = 'Lithos Nero Nat'",
+            Map.of("t", ticketId));
+        int seqBefore = sequenceValue();
+
+        for (long draft : new long[] {leaDraft, padanaDraft}) {
+            assertThatThrownBy(() -> service.issue(draft, null, owner))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).contains("สต็อก");
+                });
+            assertThat(service.get(draft, owner).status()).isEqualTo(ImportRequestStatus.DRAFT);
+        }
+        assertThat(sequenceValue()).isEqualTo(seqBefore);
     }
 
     @Test

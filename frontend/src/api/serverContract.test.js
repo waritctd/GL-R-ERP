@@ -540,6 +540,9 @@ describe('controller surface / hrApi.js contract', () => {
  * stale-entry test below deletes the entry for you.
  */
 const UNREACHABLE_FROM_UI = new Set([
+  // Walk 4 (owner ruling 2026-10-29): there is no reserve-from-stock feature, so the จองสินค้าจากสต็อก UI is
+  // gone. The endpoint and hrApi method stay (backend test fixtures and old clients still call it).
+  'POST /api/tickets/{}/reserve-stock',
   // W3-04 (owner ruling 2026-10-29): the one-click legacy "issue IR" is closed — the endpoint now
   // answers 409 for every deal and no screen calls it. Retire the endpoint and hrApi method together
   // in a follow-up.

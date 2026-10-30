@@ -128,6 +128,37 @@ class ImportRequestRendererTest {
     }
 
     /**
+     * Owner ruling 2026-10-30: the IR PDF shows size in centimetres. A size with no unit token
+     * (what a catalogue-linked line now stores, e.g. "20x30.5") prints with " cm"; a size already
+     * carrying a unit prints as typed. Tested at the renderer (the seam every PDF path funnels
+     * through, driven with {@link Line}s directly like the rest of this class).
+     */
+    @Test
+    void aUnitlessSizeIsPrintedInCentimetres() throws Exception {
+        ImportRequestFormData data = withLines(List.of(
+            new Line(1, "Unitless Line", "20x30.5", new BigDecimal("10"), "pcs", null)));
+
+        List<Placed> placed = placedText(renderer.render(data));
+
+        assertBetween(placed, "20x30.5 cm", 241.0f, 305.5f);              // Size column
+    }
+
+    @Test
+    void aSizeThatAlreadyCarriesAUnitIsPrintedAsTyped_neverDoubledOrConverted() throws Exception {
+        ImportRequestFormData data = withLines(List.of(
+            new Line(1, "Cm Line", "60x60 cm", new BigDecimal("10"), "pcs", null),
+            new Line(2, "Mm Line", "600x600 mm", new BigDecimal("10"), "pcs", null),
+            new Line(3, "Thai Line", "60x60 ซม.", new BigDecimal("10"), "pcs", null)));
+
+        try (PDDocument doc = Loader.loadPDF(renderer.render(data))) {
+            assertThat(textOfPage(doc, 1))
+                .contains("60x60 cm").doesNotContain("cm cm")
+                .contains("600x600 mm").doesNotContain("mm cm")
+                .contains("60x60 ซม.").doesNotContain("ซม. cm");
+        }
+    }
+
+    /**
      * The pitch defect, pinned. 13 lines fill all 26 body rows, so any per-row error accumulates to
      * its maximum by the bottom of the page. Each item's baseline must sit the SAME distance above
      * its own rule; with the original 21.35 (the gap between rule edges, not the 22.2077 pitch) the

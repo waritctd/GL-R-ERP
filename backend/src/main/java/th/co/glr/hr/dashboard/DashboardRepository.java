@@ -186,6 +186,68 @@ public class DashboardRepository {
         return summary == null ? TicketSummaryDto.empty(scope.label()) : summary;
     }
 
+    private static final java.time.ZoneId BANGKOK = java.time.ZoneId.of("Asia/Bangkok");
+    /** The Bangkok month window on receipts, shared by every "cash received this month" figure. */
+    private static final String RECEIVED_IN_MONTH = "received_at >= :from AND received_at < :to";
+
+    private static MapSqlParameterSource monthWindow(LocalDate monthStart) {
+        return new MapSqlParameterSource()
+            .addValue("from", monthStart.atStartOfDay(BANGKOK).toOffsetDateTime())
+            .addValue("to", monthStart.plusMonths(1).atStartOfDay(BANGKOK).toOffsetDateTime());
+    }
+
+    /**
+     * Cash received in the Bangkok calendar month starting {@code monthStart} ([start, next month start) on
+     * {@code received_at}, signed by {@link TicketRepository#SIGNED_RECEIPT_SUM}), split by the creator of the
+     * deal each receipt belongs to. The service totals the rows for the month figure. Grouped by creator id, labelled with the creator's name
+     * ({@code ไม่ระบุผู้ขาย} when blank), so two reps with the same name stay separate.
+     */
+    public java.util.List<CashByRepDto> cashReceivedByRep(LocalDate monthStart) {
+        return jdbc.query(
+            "SELECT COALESCE(NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), ''), 'ไม่ระบุผู้ขาย') AS rep_name, "
+                + "SUM(x.amount) AS amount "
+                + "FROM (SELECT ticket_id, " + TicketRepository.SIGNED_RECEIPT_SUM + " AS amount "
+                + "FROM sales.payment_receipt WHERE " + RECEIVED_IN_MONTH + " GROUP BY ticket_id) x "
+                + "JOIN sales.ticket t ON t.ticket_id = x.ticket_id "
+                + "LEFT JOIN hr.employee e ON e.employee_id = t.created_by "
+                + "GROUP BY t.created_by, e.first_name_th, e.last_name_th",
+            monthWindow(monthStart),
+            (rs, n) -> new CashByRepDto(rs.getString("rep_name"), rs.getBigDecimal("amount")));
+    }
+
+    /**
+     * ฝ่ายบัญชี has something to do on the deal: the SQL twin of {@code nextAccountAction} for an account
+     * viewer (accountActions.js) -- overdue; a deposit or final payment to take; or CLOSED_PAID with no
+     * commission recorded yet. Close-ready deals owe nothing, so they add nothing to an outstanding total.
+     * {@code dashboard/money-cases.json} pins this against the JS rule.
+     */
+    private static final String ACCOUNT_HAS_TODO = "("
+        + "(t.status = 'quotation_issued' AND ("
+        + "t.payment_status IN ('DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID') "
+        + "OR (t.deposit_policy IN (:bypassPolicies) AND (t.payment_status IS NULL OR t.payment_status = 'CUSTOMER_CONFIRMED')))) "
+        + "OR (t.sales_stage = 'CLOSED_PAID' AND NOT " + TicketRepository.hasRecordedCommission("t.ticket_id") + ") "
+        + "OR " + TicketRepository.paymentOverduePredicate("t.ticket_id") + ")";
+
+    /** /finance's คงค้างรวม: outstanding on every deal in account's list scope that has an account to-do. */
+    public java.math.BigDecimal financeOutstanding() {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("bypassPolicies", th.co.glr.hr.ticket.DepositPolicy.NON_REQUIRED);
+        TicketRepository.addAccountScopeParams(params);
+        return jdbc.queryForObject("SELECT COALESCE(SUM(GREATEST((" + TicketRepository.payableAmountSelect("t.ticket_id")
+            + ") - (" + TicketRepository.paidAmountSelect("t.ticket_id") + "), 0)), 0) FROM sales.ticket t WHERE "
+            + TicketRepository.accountScopePredicate() + " AND " + ACCOUNT_HAS_TODO, params, java.math.BigDecimal.class);
+    }
+
+    /** ยอดคาดการณ์: payable of live deals that have not reached ORDER_RECEIVED. */
+    public java.math.BigDecimal forecastValue() {
+        MapSqlParameterSource params = new MapSqlParameterSource().addValue("beforeOrder",
+            th.co.glr.hr.ticket.DealStage.ORDER.subList(0,
+                th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED)));
+        return jdbc.queryForObject("SELECT COALESCE(SUM(" + "(" + TicketRepository.payableAmountSelect("t.ticket_id") + ")"
+            + "), 0) FROM sales.ticket t WHERE t.lifecycle = 'ACTIVE' AND t.sales_stage IN (:beforeOrder) "
+            + "AND t.status NOT IN ('closed', 'cancelled')", params, java.math.BigDecimal.class);
+    }
+
     public NotificationSummaryDto notifications(long employeeId) {
         NotificationSummaryDto summary = jdbc.queryForObject("""
             SELECT COUNT(*) FILTER (WHERE is_read = FALSE) AS unread,

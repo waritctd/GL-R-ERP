@@ -6,6 +6,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
@@ -13,7 +14,7 @@ import {
   EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, routePosition,
 } from './stageCatalog.js';
 import {
-  AUTO_STAGE_HINT, GATE_LABEL, routeName, STAGE_HEADLINE,
+  AUTO_STAGE_HINT, GATE_LABEL, manualMoveLabel, routeName, STAGE_HEADLINE, STAGE_OWNER_DISPLAY,
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 import { stageForQuotationRecipient } from '../quotations/quotationMeta.js';
@@ -83,6 +84,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   advanceReady = true, advanceInHeader = false,
   // Owner ruling 2026-10-27: the parties the sticky เสนอราคา menu offers, in route order.
   quoteParties = null,
+  // The ticket's events, oldest first — the stepper reads which stages the deal skipped from them.
+  events = [],
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
 }, ref) {
@@ -107,7 +110,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // this deal's route does not visit. Both are read off the server's answer — `entryChannel` on the
   // summary, `onRoute` on each stage decision — never derived here. Absent => today's behaviour.
   const label = dealStageLabel(summary.salesStage, summary.entryChannel);
-  const next = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  const nextStage = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  // A no-deposit deal never passes ขั้น 11 (nothing for the account team to confirm): step over it.
+  const next = nextStage?.code === 'DEPOSIT_RECEIVED' && depositBypassed(summary.depositPolicy)
+    ? nextOnRoute(catalog, nextStage.code, stageDecisions)
+    : nextStage;
   const route = routeName(summary.entryChannel);
   const position = routePosition(catalog, summary.salesStage, stageDecisions);
   const routeStageCount = routePath(catalog, stageDecisions).length;
@@ -318,9 +325,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="text-base font-extrabold leading-snug text-text">{STAGE_HEADLINE[summary.salesStage] ?? label.label}</div>
-                {meta && GATE_LABEL[meta.gate] ? (
+                {meta && GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate] ? (
                   <div data-testid="deal-stage-owner" className="mt-0.5 text-xs font-bold text-text-muted">
-                    {`ผู้รับผิดชอบ: ${GATE_LABEL[meta.gate]}`}
+                    {`ผู้รับผิดชอบ: ${GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate]}`}
                   </div>
                 ) : null}
                 {/* One text line naming the route and the honest position on it. Nothing at all when
@@ -383,12 +390,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 {showGuidedOpener ? (
                   <Button
                     type="button"
-                    variant="primary"
+                    variant={summary.salesStage === 'PROCUREMENT' ? 'secondary' : 'primary'}
                     disabled={actionLoading}
                     onClick={() => setGuidedOpen(true)}
                     data-testid="guided-advance-open"
                   >
-                    เลื่อนไป: {next.no}. {dealStageLabel(next.code, summary.entryChannel).label}
+                    {manualMoveLabel(summary.salesStage, next, dealStageLabel(next.code, summary.entryChannel).label)}
                   </Button>
                 ) : null}
               </div>
@@ -431,6 +438,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               salesStage={summary.salesStage}
               lost={lost}
               stageDecisions={stageDecisions}
+              events={events}
               entryChannel={summary.entryChannel}
               entryChannelAction={entryChannelAction}
               onSetEntryChannel={onSetEntryChannel}

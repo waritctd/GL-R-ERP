@@ -313,6 +313,22 @@ class DealQuotationEnglishFormTest {
         assertThat(remarks).noneMatch(line -> line.contains("บริษัทฯ"));
     }
 
+    /** Walk 4 (W4-01), English twin: an all-stock quotation prints no "Delivery" import line, even when its
+     * lead-time columns carry a value; a stock line beside an import line is left out of the group. */
+    @Test
+    void remarks_aStockLineIsLeftOutOfTheEnglishLeadTime_andAnAllStockQuotationHasNoDeliveryLine() {
+        DealQuotationItemDto stock = tile().withStockSource("IN_THAILAND");
+        QuotationRenderModel allStock = DealQuotationRenderAdapter.toRenderModel(
+            withItems(englishQuotation(), List.of(stock)), null, null, List.of());
+        assertThat(allStock.remarkLines()).hasSize(7).noneMatch(l -> l.contains("Delivery"));
+
+        DealQuotationItemDto importLine = tile();
+        DealQuotationItemDto stockSecond = tileAtSeq(2).withStockSource("IN_THAILAND");
+        QuotationRenderModel mixed = DealQuotationRenderAdapter.toRenderModel(
+            withItems(englishQuotation(), List.of(importLine, stockSecond)), null, null, List.of());
+        assertThat(mixed.remarkLines().get(2)).isEqualTo("3.Delivery : item 1 approximately 30-45 days");
+    }
+
     /**
      * ⚠️ The remark date is CE too. The Thai block prints 01/09/<b>2569</b> for the same offer
      * date; getting this one wrong is invisible next to a correct header date, because it is
@@ -1465,6 +1481,16 @@ class DealQuotationEnglishFormTest {
             // adjustmentDeadline, specialPriceLine, adjustmentAmount. The last one arrived with
             // #925's F2 fix (a flat adjustment had no DTO field, so a GET→PUT round-trip of one
             // was a hard 400) and is null on a TILE row.
+            WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
+    }
+
+    /** {@link #tile()} at another seq (same 30-45 day lead time), for a second line. */
+    private DealQuotationItemDto tileAtSeq(int seq) {
+        return new DealQuotationItemDto((long) seq, seq, null, null, null, null, "A", null, null, "60x60",
+            new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 1, new BigDecimal("100.00"), null, null, 30, 45, null,
+            new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("100.00"), new BigDecimal("1000.00"),
+            "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 

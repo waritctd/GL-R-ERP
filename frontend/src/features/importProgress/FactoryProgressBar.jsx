@@ -98,7 +98,7 @@ export function FactoryProgressBar({
           <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2 mobile:w-full mobile:justify-start">
             {onOpenEmail ? (
               <Button type="button" variant="text" size="sm" className="whitespace-nowrap" onClick={() => onOpenEmail(row)} data-testid={`order-email-${row.id}`}>
-                ✉ อีเมลสั่งซื้อ
+                อีเมลสั่งซื้อ
               </Button>
             ) : null}
             {editable && ahead.length > 0 ? (

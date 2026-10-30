@@ -754,6 +754,24 @@ describe('FinanceDealPage', () => {
       await waitFor(() => expect(api.finance.revokeCloseConfirmation).toHaveBeenCalledWith(501, { note: 'ยอดไม่ตรง' }));
     });
 
+    // QA-19 (owner ruling 2026-10-29): account only ever moves a money stage FORWARD.
+    async function openStageModal(salesStage) {
+      const deal = makeFinanceDeal({ salesStage, availableActions: [action('UPDATE_STAGE', 'แก้ไขสถานะ')] });
+      api.finance.getDeal.mockResolvedValue({ deal });
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขสถานะ' }));
+      const dialog = await screen.findByRole('dialog');
+      return Array.from(within(dialog).getByLabelText('สถานะที่ต้องการ').querySelectorAll('option')).map((o) => o.value);
+    }
+
+    it('UPDATE_STAGE lists only the money stages AHEAD of the deal (a delivered deal cannot be sent back to deposit)', async () => {
+      expect(await openStageModal('DELIVERY_SCHEDULING')).toEqual(['CLOSED_PAID']);
+    });
+
+    it('UPDATE_STAGE lists both money stages while the deal is still before the deposit stage', async () => {
+      expect(await openStageModal('ORDER_RECEIVED')).toEqual(['DEPOSIT_RECEIVED', 'CLOSED_PAID']);
+    });
+
     it('ADVANCE_STAGE (money stage) confirms, then posts the action targetStage to api.finance.updateStage', async () => {
       const deal = makeFinanceDeal({ availableActions: [action('ADVANCE_STAGE', 'เลื่อนสถานะ', { targetStage: 'CLOSED_PAID' })] });
       api.finance.getDeal.mockResolvedValue({ deal });
