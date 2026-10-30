@@ -1727,9 +1727,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
   function recordAccepted(engine, quotation) {
     (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome).mutate({ quotation, outcome: 'ACCEPTED' });
   }
-  function acceptOutcome(engine, quotation) {
-    setAcceptToConfirm({ engine, quotation });
-  }
   // Step 6: one deposit notice per deal (owner ruling 2026-10-23). Read only when the owner could
   // otherwise be offered "สร้างใบแจ้งยอดเงินรับมัดจำ", so the block can point at an ISSUED one instead.
   const depositNoticesQuery = useQuery({
@@ -3975,7 +3972,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
-                    onClick={() => acceptOutcome('deal', dealQuotationForPr)}>
+                    onClick={() => setAcceptToConfirm({ engine: 'deal', quotation: dealQuotationForPr })}>
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
@@ -4281,7 +4278,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       />
                       <div className="flex flex-wrap gap-2">
                         <Button type="button" variant="primary" disabled={recordQuotationOutcome.isPending}
-                          onClick={() => acceptOutcome('customer', quotation)}>
+                          onClick={() => setAcceptToConfirm({ engine: 'customer', quotation })}>
                           ลูกค้ายอมรับ
                         </Button>
                         <Button type="button" variant="danger" disabled={recordQuotationOutcome.isPending}
