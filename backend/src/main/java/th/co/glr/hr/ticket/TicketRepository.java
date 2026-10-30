@@ -1191,28 +1191,32 @@ public class TicketRepository {
             rs.getString("designer_name"),
             rs.getString("owner_name"),
             rs.getString("buyer_name"),
-            false, // stale — recomputed by enrichSummary, which alone knows deal_activity
-            false, // commissionRecorded — recomputed by enrichSummary, which alone queries commission_record
+            false, // stale — recomputed by enrichSummaries, which alone knows deal_activity
+            false, // commissionRecorded — recomputed by enrichSummaries, which alone queries commission_record
             rs.getTimestamp("reopened_at") != null ? rs.getTimestamp("reopened_at").toInstant() : null,
             rs.getInt("reopen_count"),
             rs.getBoolean("quotation_only")
         );
     }
 
-    /** One row's worth of the enrichment facts {@link #SUMMARY_FACTS_SELECT} computes for a page of deals. */
+    /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
     private record SummaryFacts(BigDecimal payable, BigDecimal paid, boolean balanceReceipt, boolean stale,
-                                PaymentDue due, boolean hasInvoice, CommissionAndLiveQuotation extras) {}
+                                PaymentDue due, boolean hasInvoice, CommissionAndLiveQuotation extras) {
+        /** A deal with no facts row (deleted between the two statements): nothing owed, nothing flagged. */
+        static final SummaryFacts NONE = new SummaryFacts(BigDecimal.ZERO, BigDecimal.ZERO, false, false, null, false,
+            new CommissionAndLiveQuotation(false, null, Set.of(), null));
+    }
 
     private Map<Long, SummaryFacts> summaryFacts(List<Long> ids) {
         Map<Long, SummaryFacts> byId = new HashMap<>();
-        jdbc.query(SUMMARY_FACTS_SELECT, Map.of("ids", ids), rs -> {
+        jdbc.query(SummaryFactsSql.SELECT, Map.of("ids", ids.toArray(Long[]::new)), rs -> {
             BigDecimal payable = rs.getBigDecimal("payable");
             BigDecimal paid = rs.getBigDecimal("paid");
             long quotationId = rs.getLong("quotation_id");
             LiveDirectQuotationDto live = rs.wasNull() ? null
                 : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
                     rs.getString("doc_status"), rs.getString("recipient_type"));
-            // basis null = legacy / free-text terms: nothing structured, so no PaymentDue (as paymentDue()).
+            // basis null = legacy / free-text terms: nothing structured, so no PaymentDue (as paymentTermsRowSql).
             PaymentDue due = null;
             String basis = rs.getString("basis");
             if (basis != null) {
@@ -1237,9 +1241,8 @@ public class TicketRepository {
             return rows;
         }
         Map<Long, SummaryFacts> facts = summaryFacts(rows.stream().map(TicketSummaryDto::id).toList());
-        // A deal deleted between the two statements has no facts row; drop it rather than NPE.
-        return rows.stream().filter(s -> facts.containsKey(s.id()))
-            .map(s -> enrichSummary(s, facts.get(s.id()))).toList();
+        // A deal deleted between the two statements has no facts row: keep it with zero facts so page totals hold.
+        return rows.stream().map(s -> enrichSummary(s, facts.getOrDefault(s.id(), SummaryFacts.NONE))).toList();
     }
 
     private TicketSummaryDto enrichSummary(TicketSummaryDto s, SummaryFacts f) {
@@ -1288,11 +1291,37 @@ public class TicketRepository {
      * close gate can check.
      */
     public boolean hasInvoiceAttachment(long ticketId) {
-        Integer n = jdbc.queryForObject("""
-            SELECT COUNT(*) FROM sales.attachment
-             WHERE ticket_id = :id AND attach_type = 'INVOICE'
-            """, Map.of("id", ticketId), Integer.class);
-        return n != null && n > 0;
+        Boolean value = jdbc.queryForObject("SELECT " + hasInvoiceAttachmentSql(":id"),
+            Map.of("id", ticketId), Boolean.class);
+        return Boolean.TRUE.equals(value);
+    }
+
+    /** Boolean SQL fragment: an INVOICE attachment exists on the deal at {@code ticketIdRef}. */
+    private static String hasInvoiceAttachmentSql(String ticketIdRef) {
+        return """
+            EXISTS(SELECT 1 FROM sales.attachment
+                    WHERE ticket_id = %s AND attach_type = 'INVOICE')
+            """.formatted(ticketIdRef);
+    }
+
+    /** Boolean SQL fragment: a BALANCE receipt exists on the deal at {@code ticketIdRef}. */
+    private static String hasBalanceReceiptSql(String ticketIdRef) {
+        return """
+            EXISTS(SELECT 1 FROM sales.payment_receipt
+                    WHERE ticket_id = %s AND kind = 'BALANCE')
+            """.formatted(ticketIdRef);
+    }
+
+    /**
+     * Boolean SQL fragment: no {@code deal_activity} row was logged (by {@code created_at}) in the last 7 days,
+     * including a deal that has never had one. {@link #enrichSummaries} additionally gates it on
+     * {@code lifecycle == ACTIVE}, so only a live deal is ever flagged.
+     */
+    private static String isStaleSql(String ticketIdRef) {
+        return """
+            NOT EXISTS(SELECT 1 FROM sales.deal_activity
+                        WHERE ticket_id = %s AND created_at >= now() - interval '7 days')
+            """.formatted(ticketIdRef);
     }
 
     /**
@@ -1679,16 +1708,6 @@ public class TicketRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    public boolean hasBalanceReceipt(long ticketId) {
-        Boolean value = jdbc.queryForObject("""
-            SELECT EXISTS(
-                SELECT 1 FROM sales.payment_receipt
-                 WHERE ticket_id = :ticketId AND kind = 'BALANCE'
-            )
-            """, Map.of("ticketId", ticketId), Boolean.class);
-        return Boolean.TRUE.equals(value);
-    }
-
     /**
      * The PRE-VAT quotation total — exactly what {@link #payableAmount} returned before payable became
      * VAT-inclusive (owner ruling 2026-09-30). COMMISSION reads this and only this: commission is
@@ -1891,21 +1910,6 @@ public class TicketRepository {
 
     /** When the balance is due and on what basis; see {@link #paymentTermsRowSql}. */
     public record PaymentDue(LocalDate date /* null until delivered */, String basis, Integer creditDays) {}
-
-    public Optional<PaymentDue> paymentDue(long ticketId) {
-        List<PaymentDue> rows = jdbc.query(paymentTermsRowSql(":ticketId"), Map.of("ticketId", ticketId),
-            (rs, n) -> {
-                String basis = rs.getString("basis");
-                if (basis == null) return null; // legacy / free-text terms: nothing structured
-                int days = rs.getInt("days");
-                java.sql.Date delivered = rs.getDate("delivered_on");
-                int credit = rs.getInt("credit_days");
-                Integer creditDays = rs.wasNull() ? null : credit;
-                // Structured terms but not (fully) delivered yet: the basis is known, the date is not.
-                return new PaymentDue(delivered == null ? null : delivered.toLocalDate().plusDays(days), basis, creditDays);
-            });
-        return rows.stream().filter(java.util.Objects::nonNull).findFirst();
-    }
 
     /** Full "amount paid" SELECT statement — see {@link #payableAmountSelect} for the correlation contract. */
     public static String paidAmountSelect(String ticketIdRef) {
@@ -2257,7 +2261,7 @@ public class TicketRepository {
      * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
      * reorder clone — and the client acts on the one being worked on.
      *
-     * <p>The list/detail field does not call this: {@link #SUMMARY_FACTS_SELECT} reads the same row
+     * <p>The list/detail field does not call this: {@link SummaryFactsSql#SELECT} reads the same row
      * (via {@link #liveDirectQuotationSelect}) for a whole page in one statement. Each call here is an
      * index lookup on {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
      */
@@ -2716,39 +2720,19 @@ public class TicketRepository {
     }
 
     /**
-     * True when no {@code deal_activity} row was logged (by {@code created_at}) in the last 7
-     * days — including a deal that has never had one at all. The caller ({@link #enrichSummaries})
-     * additionally gates this on {@code lifecycle == ACTIVE}, so only a live deal is ever flagged.
-     */
-    public boolean isStale(long ticketId) {
-        Boolean value = jdbc.queryForObject("""
-            SELECT NOT EXISTS (
-                SELECT 1
-                  FROM sales.deal_activity da
-                 WHERE da.ticket_id = :ticketId
-                   AND da.created_at >= now() - interval '7 days'
-            )
-            """, Map.of("ticketId", ticketId), Boolean.class);
-        return Boolean.TRUE.equals(value);
-    }
-
-    /**
      * Every per-deal fact {@code mapSummary} cannot answer from {@code sales.ticket}, for a whole page of
-     * deals in ONE statement (no query per row). Declared last: its builders read static constants above. Each column reuses the single-deal SQL builders with
+     * deals in ONE statement (no query per row). Each column reuses the single-deal SQL builders with
      * {@code t.ticket_id} as the correlation, so the list and the single-deal helpers cannot drift.
+     * A holder class: it initialises on first use, after {@code TicketRepository}'s statics are all set.
      */
-    private static final String SUMMARY_FACTS_SELECT = "SELECT t.ticket_id, ("
-        + payableAmountSelect("t.ticket_id") + ") AS payable, ("
-        + paidAmountSelect("t.ticket_id") + ") AS paid, "
-        + """
-            EXISTS(SELECT 1 FROM sales.payment_receipt pr
-                    WHERE pr.ticket_id = t.ticket_id AND pr.kind = 'BALANCE') AS balance_receipt,
-            NOT EXISTS(SELECT 1 FROM sales.deal_activity da
-                        WHERE da.ticket_id = t.ticket_id
-                          AND da.created_at >= now() - interval '7 days') AS is_stale,
-            EXISTS(SELECT 1 FROM sales.attachment att
-                    WHERE att.ticket_id = t.ticket_id AND att.attach_type = 'INVOICE') AS has_invoice,
-            """ + hasRecordedCommission("t.ticket_id") + """
+    private static final class SummaryFactsSql {
+        static final String SELECT = "SELECT t.ticket_id, ("
+            + payableAmountSelect("t.ticket_id") + ") AS payable, ("
+            + paidAmountSelect("t.ticket_id") + ") AS paid, "
+            + hasBalanceReceiptSql("t.ticket_id") + " AS balance_receipt, "
+            + isStaleSql("t.ticket_id") + " AS is_stale, "
+            + hasInvoiceAttachmentSql("t.ticket_id") + " AS has_invoice, "
+            + hasRecordedCommission("t.ticket_id") + """
              AS commission_recorded,
             pt.days, pt.basis, pt.credit_days, pt.delivered_on,
             q.quotation_id, q.number, q.doc_status, q.recipient_type,
@@ -2766,6 +2750,7 @@ public class TicketRepository {
               LEFT JOIN LATERAL (
             """ + liveDirectQuotationSelect("t.ticket_id") + """
               ) q ON true
-             WHERE t.ticket_id IN (:ids)
+             WHERE t.ticket_id = ANY(:ids)
             """;
+    }
 }
