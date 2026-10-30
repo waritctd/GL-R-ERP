@@ -1161,12 +1161,13 @@ describe('TicketDetailPage', () => {
     // every tab) used to also show this coarse progress — that copy was
     // removed as a straight duplicate of DealFulfilmentPanel's own aggregate
     // (see DealStagePanel.jsx's own doc comment), so it, the delivery HISTORY
-    // rows (WAREHOUSE source), and the record-delivery button are all only
+    // rows (คลังสินค้า source), and the record-delivery button are all only
     // inside DealFulfilmentPanel now, in the "จัดซื้อ-ส่งมอบ" tab.
     await openTab(/จัดซื้อ-ส่งมอบ/);
     expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
-    expect(await screen.findByText('WAREHOUSE')).not.toBeNull();
+    expect(await screen.findByText('คลังสินค้า')).not.toBeNull();
+    expect(screen.getByText(/SCG A1: 40/)).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการส่งสินค้า' })).toBeNull();
   });
 

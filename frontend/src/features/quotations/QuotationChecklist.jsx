@@ -47,14 +47,16 @@ function Entry({ entry, tone }) {
  * "ข้อมูลที่ยังไม่ครบ" — owner, 2026-09-11: "validate with the quotation which field have not been
  * filled yet". Two lists from quotationMeta#buildQuotationChecklist:
  *   - ต้องกรอก (blocking): what the backend already refuses. These disable บันทึกร่าง/ส่งขออนุมัติ.
+ *   - ต้องกรอกก่อนส่งขออนุมัติ (submitBlocking): บันทึกร่างได้ แต่ส่งขออนุมัติไม่ได้จนกว่าจะกรอก.
  *   - ควรกรอก (warning): what the document prints but no rule requires. Never blocking.
  * Each entry with a field moves focus to it. Rendered near the top of the editor so it is seen
  * before ส่งขออนุมัติ, which lives in the page header.
  */
 export function QuotationChecklist({ entries }) {
   const blocking = entries.filter((entry) => entry.blocking);
-  const warnings = entries.filter((entry) => !entry.blocking);
-  if (blocking.length === 0 && warnings.length === 0) {
+  const submitBlocking = entries.filter((entry) => !entry.blocking && entry.submitBlocking);
+  const warnings = entries.filter((entry) => !entry.blocking && !entry.submitBlocking);
+  if (blocking.length === 0 && submitBlocking.length === 0 && warnings.length === 0) {
     return (
       <p role="status" className="m-0 flex items-center gap-1.5 rounded-md border border-success-border bg-success/10 px-3.5 py-2.5 text-xs font-bold text-success">
         <Icon name="badgeCheck" size={14} />
@@ -75,6 +77,14 @@ export function QuotationChecklist({ entries }) {
           <p className="m-0 text-2xs font-extrabold text-danger-dark">ต้องกรอกก่อนบันทึกหรือส่งขออนุมัติ</p>
           <ul className="m-0 grid list-none gap-0.5 pl-0" data-testid="checklist-blocking">
             {blocking.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-danger-dark" />)}
+          </ul>
+        </div>
+      ) : null}
+      {submitBlocking.length ? (
+        <div className="grid gap-1">
+          <p className="m-0 text-2xs font-extrabold text-danger-dark">ต้องกรอกก่อนส่งขออนุมัติ — ยังบันทึกร่างได้</p>
+          <ul className="m-0 grid list-none gap-0.5 pl-0" data-testid="checklist-submit-blocking">
+            {submitBlocking.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-danger-dark" />)}
           </ul>
         </div>
       ) : null}

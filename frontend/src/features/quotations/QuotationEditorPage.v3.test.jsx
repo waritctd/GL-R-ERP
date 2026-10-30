@@ -505,8 +505,10 @@ describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-
     fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
     fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
 
-    const warnings = await screen.findByTestId('checklist-warnings');
-    expect(within(warnings).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
+    // QA-34: it blocks ส่งขออนุมัติ, so it sits in the submit-blocking group, not under ควรกรอก.
+    const submitBlocking = await screen.findByTestId('checklist-submit-blocking');
+    expect(within(submitBlocking).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
+    expect(within(screen.getByTestId('checklist-warnings')).queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
   });
 
   it('ticking "ไม่รับมัดจำ" with no term chosen ALSO blocks ส่งขออนุมัติ (the pre-existing route, unaffected in shape)', async () => {

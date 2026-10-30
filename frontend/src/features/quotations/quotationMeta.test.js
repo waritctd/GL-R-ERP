@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { routeForChannel } from '../tickets/stageCatalog.js';
+import { quotationStatusLabel } from '../../utils/format.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -101,6 +102,19 @@ describe('dealQuotationStatusLabel', () => {
     // GLA-123 slice S2 — only ever reached by a PRICING_REQUEST-origin row.
     expect(dealQuotationStatusLabel('ISSUED')).toEqual({ label: 'ออกใบแล้ว', tone: 'success' });
     expect(dealQuotationStatusLabel('EXPIRED')).toEqual({ label: 'หมดอายุ', tone: 'neutral' });
+  });
+
+  // QA-29d: the customer-response statuses a PRICING_REQUEST-origin row reaches after ISSUED used
+  // to fall through to the raw code ("ACCEPTED" badge). Same Thai wording as the PCR chain's own
+  // quotationStatusLabel, so the two screens never disagree about one document.
+  it.each([
+    ['SENT', 'ส่งแล้ว'],
+    ['ACCEPTED', 'ลูกค้ายอมรับ'],
+    ['REJECTED', 'ลูกค้าปฏิเสธ'],
+    ['REVISION_REQUESTED', 'ลูกค้าขอแก้ไข'],
+  ])('labels %s in Thai, identical to utils/format quotationStatusLabel', (status, label) => {
+    expect(dealQuotationStatusLabel(status).label).toBe(label);
+    expect(dealQuotationStatusLabel(status)).toEqual(quotationStatusLabel(status));
   });
 
   it('falls back gracefully for an unknown status', () => {
@@ -1138,6 +1152,14 @@ describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
     expect(rework.params.status).toBeUndefined();
   });
 
+  // QA-37: ISSUED/SENT/ACCEPTED rows are approved-and-beyond; they sat in no tab but ทั้งหมด.
+  it('อนุมัติแล้ว covers every approved-and-beyond status, still keyed APPROVED', () => {
+    const tab = meta.dealQuotationStatusTab('APPROVED');
+    expect(tab.label).toBe('อนุมัติแล้ว');
+    expect(tab.countKey).toBe('approved');
+    expect(tab.params).toEqual({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] });
+  });
+
   it('sends no params at all for ทั้งหมด', () => {
     expect(meta.dealQuotationStatusTab('all').params).toEqual({});
   });
@@ -1742,7 +1764,7 @@ describe('buildQuotationChecklist', () => {
   it('does NOT block on a missing ที่อยู่ — it is a warning that targets the address field', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, customer: { ...customer, address: '' } });
     expect(blocking(entries)).toEqual([]);
-    expect(entries).toEqual([{ check: 'customerAddress', message: 'ยังไม่ได้กรอกที่อยู่ลูกค้า', targetId: 'deal-customer-address', blocking: false }]);
+    expect(entries).toEqual([{ check: 'customerAddress', message: 'ยังไม่ได้กรอกที่อยู่ลูกค้า', targetId: 'deal-customer-address', blocking: false, submitBlocking: false }]);
   });
 
   it('does NOT block on a missing เลขที่ผู้เสียภาษี (F7: a customer without one stays quotable), nor on any phone', () => {
@@ -1764,8 +1786,8 @@ describe('buildQuotationChecklist', () => {
   it('on the inline path BLOCKS on ลูกค้า and โครงการ, targeting their controls', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, hasProject: false });
     expect(entries.slice(0, 2)).toEqual([
-      { check: 'customer', message: 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', targetId: 'deal-customer', blocking: true },
-      { check: 'project', message: 'ต้องเลือกโครงการก่อนบันทึกร่าง', targetId: 'deal-project', blocking: true },
+      { check: 'customer', message: 'ต้องเลือกลูกค้าก่อนบันทึกร่าง', targetId: 'deal-customer', blocking: true, submitBlocking: false },
+      { check: 'project', message: 'ต้องเลือกโครงการก่อนบันทึกร่าง', targetId: 'deal-project', blocking: true, submitBlocking: false },
     ]);
   });
 
@@ -1774,7 +1796,7 @@ describe('buildQuotationChecklist', () => {
       ...complete, isInlineCreate: true, customer: { id: 5, name: 'x' }, hasProject: true, hasEntryChannel: false,
     });
     expect(entries).toEqual([
-      { check: 'entryChannel', message: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', targetId: 'deal-entry-channel', blocking: true },
+      { check: 'entryChannel', message: 'ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง', targetId: 'deal-entry-channel', blocking: true, submitBlocking: false },
     ]);
   });
 
@@ -1789,7 +1811,7 @@ describe('buildQuotationChecklist', () => {
 
   it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, projectName: null });
-    expect(entries).toEqual([{ check: 'dealProject', message: 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)', targetId: null, blocking: false }]);
+    expect(entries).toEqual([{ check: 'dealProject', message: 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)', targetId: null, blocking: false, submitBlocking: false }]);
   });
 
   it('BLOCKS on an incomplete row and targets its FIRST missing field', () => {
@@ -1830,6 +1852,8 @@ describe('buildQuotationChecklist', () => {
     expect(entries).toEqual([{
       check: 'fullPaymentTerm', message: 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน',
       targetId: 'fullPaymentTerm', blocking: false,
+      // QA-34: save-draft stays allowed (blocking false) but ส่งขออนุมัติ is disabled for it.
+      submitBlocking: true,
     }]);
   });
 
@@ -1860,7 +1884,7 @@ describe('buildQuotationChecklist', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 0 });
     expect(entries).toEqual([{
       check: 'creditDaysInvalid', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
-      targetId: 'creditDays', blocking: true,
+      targetId: 'creditDays', blocking: true, submitBlocking: false,
     }]);
   });
 
@@ -1874,6 +1898,8 @@ describe('buildQuotationChecklist', () => {
     expect(entries).toEqual([{
       check: 'creditDays', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
       targetId: 'creditDays', blocking: false,
+      // QA-34: a blank credit-days count keeps บันทึกร่าง open but disables ส่งขออนุมัติ.
+      submitBlocking: true,
     }]);
   });
 

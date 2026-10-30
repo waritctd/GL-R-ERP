@@ -1230,3 +1230,50 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
     });
   });
 });
+
+// QA-29e / W4-08: the ส่งมอบสินค้า step used to print the raw codes — "WAREHOUSE" and "6: 250" in the
+// history, WAREHOUSE/STOCK in the บันทึกการส่งสินค้า select. The wire value (what recordDelivery
+// sends) stays the code; only what the person reads changes.
+describe('DealFulfilmentPanel — ส่งมอบสินค้า shows words, not codes', () => {
+  const deliveryItems = [{ id: 6, brand: 'Brand X', model: 'Model Y', qty: 500, qtyDelivered: 0 }];
+
+  afterEach(() => {
+    api.tickets.listDeliveries.mockResolvedValue({ items: [] });
+    api.tickets.recordDelivery.mockReset();
+  });
+
+  it('the history names the source in Thai and each line by brand + model (fallback รายการ #id), never "6: 250"', async () => {
+    api.tickets.listDeliveries.mockResolvedValue({
+      items: [
+        { deliveryId: 1, deliveredAt: '2026-10-01T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 6, qty: 250 }, { itemId: 99, qty: 3 }], deliveredByName: 'สมหญิง', note: null },
+        { deliveryId: 2, deliveredAt: '2026-10-02T03:00:00Z', source: 'STOCK', items: [{ itemId: 6, qty: 10 }], deliveredByName: null, note: null },
+      ],
+    });
+    renderPanel(OWNER, [], { items: deliveryItems });
+
+    expect(await screen.findByText(/Brand X Model Y: 250/)).not.toBeNull();
+    expect(screen.getByText(/รายการ #99: 3/)).not.toBeNull();
+    expect(screen.getByText(/Brand X Model Y: 10/)).not.toBeNull();
+    expect(screen.queryByText(/(^|[\s,])6: 250/)).toBeNull();
+    expect(screen.getByText('คลังสินค้า', { selector: 'strong' })).not.toBeNull();
+    expect(screen.getByText('สต็อก', { selector: 'strong' })).not.toBeNull();
+    expect(screen.queryByText('WAREHOUSE')).toBeNull();
+    expect(screen.queryByText('STOCK')).toBeNull();
+  });
+
+  it('the บันทึกการส่งสินค้า select reads คลังสินค้า / สต็อก but still sends the WAREHOUSE / STOCK code', async () => {
+    api.tickets.recordDelivery.mockResolvedValue({});
+    renderPanel(OWNER, [], { items: deliveryItems, availableActions: [{ action: 'RECORD_PARTIAL_DELIVERY' }] });
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-record-delivery'));
+
+    const select = await screen.findByLabelText('แหล่งสินค้า');
+    expect([...select.options].map((o) => [o.value, o.textContent]))
+      .toEqual([['WAREHOUSE', 'คลังสินค้า'], ['STOCK', 'สต็อก']]);
+
+    fireEvent.change(select, { target: { value: 'STOCK' } });
+    fireEvent.click(screen.getByTestId('deal-fulfilment-record-delivery-submit'));
+    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(
+      1, { source: 'STOCK', note: null, lines: [{ itemId: 6, qty: 500 }] },
+    ));
+  });
+});

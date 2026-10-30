@@ -2595,7 +2595,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
           <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
           <span>{item.factoryName ?? '-'}</span>
-          <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+          <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
           {hasPriceOverride ? <span className="font-bold text-override">ราคาปรับเอง</span> : null}
           {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
           {/* V156: the freight table could not be looked up for this line (the
@@ -3385,7 +3385,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <span>จำนวน</span>
                 <span>ราคาที่เสนอ (แก้ไข)</span>
                 <span>ระยะเวลานำเข้า</span>
-                <span>ราคาที่อนุมัติ</span>
+                <span>ราคาที่ยืนยันแล้ว</span>
               </div>
               {factoryGroups.map((group) => {
                 const current = group.current;
@@ -3737,7 +3737,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             )}
                           </div>
                           <div>
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่อนุมัติ</span>
+                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่ยืนยันแล้ว</span>
                             <span className="text-sm font-bold text-text">
                               {approvedPrice != null ? formatCurrency(approvedPrice, serverItem?.currency ?? line.currency) : '–'}
                             </span>
@@ -3914,7 +3914,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
                 <strong>{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                  <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                  <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
                   <span>ราคาขาย (ก่อน VAT): {formatCurrency(item.approvedSellingPricePerRequestedUnit, decisionSalesView.currency)}</span>
                 </div>
               </div>
@@ -4084,7 +4084,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ) : null}
             {!dealQuotationForPr && !currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
-                ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขาย (APPROVED_FOR_QUOTATION) ก่อนจึงจะสร้างได้
+                {summary.status === 'APPROVED_FOR_QUOTATION'
+                  ? 'อนุมัติราคาขายแล้ว — รอฝ่ายขายสร้างใบเสนอราคาลูกค้า'
+                  : 'ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้'}
               </p>
             ) : null}
 
@@ -4135,7 +4137,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             <strong>{item.description || '-'}</strong>
                           )}
                           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                            <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                            <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
                             <span>ราคาที่อนุมัติ: {formatCurrency(item.approvedUnitPrice, quotation.currency)}</span>
                             {discountEditable ? (
                               <label className="flex items-center gap-1">

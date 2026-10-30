@@ -16812,8 +16812,10 @@ export const api = {
     // (mirrors DealQuotationService.list's own comment, #H4).
     async list(params = {}) {
       const list = scopedDealQuotationsFor(requireSession());
+      // `status` may be one code or an array (the อนุมัติแล้ว tab sends several), like the real List<String>.
+      const statuses = params.status ? [].concat(params.status) : null;
       const filtered = list.filter((q) => (
-        (!params.status || q.docStatus === params.status)
+        (!statuses || statuses.includes(q.docStatus))
         && (!params.needsRework || isDealQuotationNeedingRework(q))
       ));
       const viewer = requireSession();
@@ -16840,7 +16842,7 @@ export const api = {
         pendingApproval: list.filter((q) => q.docStatus === 'PENDING_APPROVAL').length,
         needsRework: list.filter(isDealQuotationNeedingRework).length,
         cancelled: list.filter((q) => q.docStatus === 'CANCELLED').length,
-        approved: list.filter((q) => q.docStatus === 'APPROVED').length,
+        approved: list.filter((q) => ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'].includes(q.docStatus)).length,
       });
     },
 

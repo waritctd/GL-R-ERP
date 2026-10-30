@@ -73,6 +73,11 @@ const DEAL_QUOTATION_STATUS_LABELS = {
   // expires and never separately "issues" — its own APPROVED is terminal-until-revised).
   ISSUED: { label: 'ออกใบแล้ว', tone: 'success' },
   EXPIRED: { label: 'หมดอายุ', tone: 'neutral' },
+  // The customer-response statuses after ISSUED (same wording as utils/format's quotationStatusLabel).
+  SENT: { label: 'ส่งแล้ว', tone: 'info' },
+  ACCEPTED: { label: 'ลูกค้ายอมรับ', tone: 'success' },
+  REJECTED: { label: 'ลูกค้าปฏิเสธ', tone: 'danger' },
+  REVISION_REQUESTED: { label: 'ลูกค้าขอแก้ไข', tone: 'warning' },
 };
 
 export function dealQuotationStatusLabel(status) {
@@ -593,7 +598,8 @@ export const DEAL_QUOTATION_STATUS_TABS = [
   // needsRework=true filter, unchanged.
   { key: 'NEEDS_REWORK', label: 'ฉบับแก้', countKey: 'needsRework', params: { needsRework: true } },
   { key: 'CANCELLED', label: 'ยกเลิก', countKey: 'cancelled', params: { status: 'CANCELLED' } },
-  { key: 'APPROVED', label: 'อนุมัติแล้ว', countKey: 'approved', params: { status: 'APPROVED' } },
+  // Approved-and-beyond: ISSUED/SENT/ACCEPTED are an approved document's later life, not another bucket.
+  { key: 'APPROVED', label: 'อนุมัติแล้ว', countKey: 'approved', params: { status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] } },
 ];
 
 /** Approvers (sales_manager/ceo) land on the queue that is waiting on THEM; everyone else on
@@ -2019,6 +2025,13 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.ORDERED_BY_EMAIL,
 ]));
 
+/** Checks that keep บันทึกร่าง open but disable ส่งขออนุมัติ (not in the blocking set above) — mirrors
+ * QuotationEditorPage's hasUnresolvedZeroDeposit / hasMissingCreditDays guards. */
+export const QUOTATION_SUBMIT_BLOCKING_CHECKS = Object.freeze(new Set([
+  QUOTATION_CHECK.FULL_PAYMENT_TERM,
+  QUOTATION_CHECK.CREDIT_DAYS,
+]));
+
 /** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
  * shared CustomerDetailsFields' (the same ids on every entry path — only one path renders at a
  * time). */
@@ -2183,7 +2196,11 @@ export function buildQuotationChecklist({
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
-    entries.push({ check, message, targetId, blocking: QUOTATION_BLOCKING_CHECKS.has(check) });
+    entries.push({
+      check, message, targetId,
+      blocking: QUOTATION_BLOCKING_CHECKS.has(check),
+      submitBlocking: QUOTATION_SUBMIT_BLOCKING_CHECKS.has(check),
+    });
   };
 
   if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);

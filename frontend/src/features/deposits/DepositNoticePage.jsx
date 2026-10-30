@@ -220,6 +220,13 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     queryKey: queryKeys.depositNotices(ticketId),
     queryFn: () => api.depositNotices.listByTicket(ticketId).then((response) => response.depositNotices ?? []),
   });
+  // Advisory only: the draft's reference is the QT number, so its quotation's own deposit % can be
+  // compared with the % typed here. A failed read (e.g. no view access) just shows no hint.
+  const dealQuotationsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketId)),
+    queryFn: () => api.dealQuotations.listForTicket(Number(ticketId)).then((response) => response.items ?? []),
+    retry: false,
+  });
   const doc = useMemo(() => {
     const docs = depositNoticesQuery.data ?? [];
     const draft = docs.find((d) => d.status === 'DRAFT');
@@ -526,6 +533,12 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // DepositNoticeRepository does (HALF_UP), so the screen matches the stored document.
   const subtotal = round2(form.items.reduce((sum, it) => sum + lineNet(it) * (Number(it.qty) || 0), 0));
   const deposit = round2(subtotal * (Number(form.depositPercent) || 0));
+  const referencedQuotation = form.reference
+    ? (dealQuotationsQuery.data ?? []).find((q) => q.number === form.reference)
+    : null;
+  const noticePercent = Math.round(Number(form.depositPercent) * 100);
+  const percentDiffers = form.depositPercent !== '' && referencedQuotation?.depositPercent != null
+    && referencedQuotation.depositPercent !== noticePercent;
   // Issue #756: the served document's own vatPercent always wins once one exists — only
   // before that (no `doc` yet) does this fall back to FALLBACK_VAT_PERCENT above.
   const vatPercent = Number(doc?.vatPercent ?? FALLBACK_VAT_PERCENT);
@@ -563,8 +576,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <Breadcrumbs
         items={[
-          { label: 'คำขอราคา', onClick: onNavigateTickets },
-          { label: form.customerName || 'รายละเอียดคำขอราคา', onClick: onBack },
+          { label: 'ดีล', onClick: onNavigateTickets },
+          { label: form.customerName || 'รายละเอียดดีล', onClick: onBack },
           { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
         ]}
       />
@@ -891,6 +904,11 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   aria-describedby={fieldErrors.depositPercent ? fieldErrorId('doc-deposit-percent') : undefined}
                   className="text-right" />
               </label>
+              {percentDiffers ? (
+                <p data-testid="deposit-percent-differs" className="mx-0 mb-2 mt-0 text-xs text-warning-dark">
+                  ใบเสนอราคา {referencedQuotation.number} ระบุมัดจำ {referencedQuotation.depositPercent}% — ใบแจ้งนี้ใช้ {noticePercent}%
+                </p>
+              ) : null}
               {fieldErrors.depositPercent ? (
                 <p id={fieldErrorId('doc-deposit-percent')} role="alert" className="mx-0 mb-2 mt-0 text-xs font-bold text-danger">
                   {fieldErrors.depositPercent}
@@ -918,7 +936,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
                   `isIssued`), and moves the parent ticket to `document_issued`. */}
               {!isIssued && (
                 <p className="mx-0 mb-0 mt-2.5 text-xs leading-[1.6] text-text-muted">
-                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก และคำขอราคาจะเปลี่ยนสถานะเป็น &quot;ออกใบแจ้งยอดมัดจำแล้ว&quot;
+                  กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก
                 </p>
               )}
             </div>

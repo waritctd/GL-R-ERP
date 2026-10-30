@@ -901,12 +901,19 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
 
   it('counts() reports the same five totals the corresponding list() filters return', async () => {
     await api.auth.login(salesUser);
+    // The seed holds no APPROVED row, so without one the อนุมัติแล้ว pair below would agree on 0.
+    const { quotation: toApprove } = await createOn18({ items: [ONE_ITEM] });
+    await api.dealQuotations.submit(toApprove.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(toApprove.id, {});
+    await api.auth.login(salesUser);
     const counts = await api.dealQuotations.counts();
 
     const all = await api.dealQuotations.list();
     const pending = await api.dealQuotations.list({ status: 'PENDING_APPROVAL' });
     const cancelled = await api.dealQuotations.list({ status: 'CANCELLED' });
-    const approved = await api.dealQuotations.list({ status: 'APPROVED' });
+    // QA-37: the อนุมัติแล้ว tab is approved-and-beyond, sent as a status ARRAY.
+    const approved = await api.dealQuotations.list({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] });
     const rework = await api.dealQuotations.list({ needsRework: true });
 
     // The failure this guards: a count computed over a LOOSER set than the list it labels, so a
@@ -914,6 +921,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(counts.all).toBe(all.items.length);
     expect(counts.pendingApproval).toBe(pending.items.length);
     expect(counts.cancelled).toBe(cancelled.items.length);
+    expect(counts.approved).toBeGreaterThan(0);
     expect(counts.approved).toBe(approved.items.length);
     expect(counts.needsRework).toBe(rework.items.length);
   });

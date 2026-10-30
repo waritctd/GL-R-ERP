@@ -26,6 +26,9 @@ vi.mock('../../api/index.js', () => ({
     customers: {
       search: vi.fn(),
     },
+    dealQuotations: {
+      listForTicket: vi.fn(),
+    },
   },
 }));
 
@@ -69,6 +72,8 @@ describe('DepositNoticePage', () => {
     // below relies on the legacy ticket-level createDraft path, which is exactly the fallback
     // this resolution degrades to.
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+    // QA-32: the page reads the deal's quotations for its non-blocking "% differs" hint.
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
     api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({
       depositNotice: {
         id: 9003, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null,
@@ -414,6 +419,54 @@ describe('DepositNoticePage', () => {
 
     await waitFor(() => expect(screen.queryByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).toBeNull());
     expect(await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+
+    // QA-32: this is a DEAL document, so the trail says ดีล — never คำขอราคา — and the issue
+    // helper no longer talks about a คำขอราคา status change.
+    const trail = within(screen.getByRole('navigation', { name: 'breadcrumb' }));
+    expect(trail.getByText('ดีล')).not.toBeNull();
+    expect(trail.getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+    expect(trail.getByText('ใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
+    expect(trail.queryByText('คำขอราคา')).toBeNull();
+    const helper = screen.getByText(/กด "ออกเอกสาร" เพื่อออกเลขที่เอกสารอย่างเป็นทางการ/);
+    expect(helper.textContent).toMatch(/แก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก$/);
+    expect(helper.textContent).not.toContain('คำขอราคา');
+  });
+
+  // QA-32: sales may type a deposit % that differs from the quotation's (owner ruling 2026-10-23);
+  // the page says so, without blocking ออกเอกสาร. The draft's reference is the QT number.
+  describe('deposit % differs from the quotation (non-blocking hint)', () => {
+    const quotation = { id: 61, number: 'QT-2026-0042', depositPercent: 30 };
+    function draftWith(over = {}) {
+      api.depositNotices.listByTicket.mockResolvedValue({
+        depositNotices: [{ ...validDraftDoc, reference: 'QT-2026-0042', depositPercent: 0.4, ...over }],
+      });
+    }
+
+    it('shows which quotation and which percent, next to the notice percent, and leaves ออกเอกสาร enabled', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ id: 60, number: 'QT-2026-0001', depositPercent: 50 }, quotation] });
+      renderDepositNoticePage();
+
+      const hint = await screen.findByTestId('deposit-percent-differs');
+      expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(701);
+      expect(hint.textContent).toContain('ใบเสนอราคา QT-2026-0042 ระบุมัดจำ 30%');
+      expect(hint.textContent).toContain('40%');
+      expect(screen.getByRole('button', { name: /ออกเอกสาร/ }).disabled).toBe(false);
+    });
+
+    it.each([
+      ['the percents are equal', { depositPercent: 0.3 }, [quotation]],
+      ['no quotation carries the draft reference', { reference: 'PO-001' }, [quotation]],
+      ['the quotation has no deposit percent', {}, [{ ...quotation, depositPercent: null }]],
+    ])('shows no hint when %s', async (_name, docOver, items) => {
+      draftWith(docOver);
+      api.dealQuotations.listForTicket.mockResolvedValue({ items });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ทดสอบ จำกัด');
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      expect(screen.queryByTestId('deposit-percent-differs')).toBeNull();
+    });
   });
 
   // Owner ruling 2026-10-23: on a DRAFT the deposit % is an editable whole-number field (a typed

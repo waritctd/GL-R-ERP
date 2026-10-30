@@ -153,6 +153,9 @@ function FactoryLeadTimeModal({ factoryNames, onClose, onSubmit, submitting }) {
   );
 }
 
+// ที่มาของสินค้าที่ส่งมอบ — the select and the history read the same words; the wire value stays the code.
+const DELIVERY_SOURCE_LABELS = { WAREHOUSE: 'คลังสินค้า', STOCK: 'สต็อก' };
+
 // One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy
 // preview, ②): 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds
 // `border-border-strong` on top of this so it is the one that leads.
@@ -1054,9 +1057,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               deliveryRecords.map((record) => (
                 <div key={record.deliveryId} className="flex flex-wrap items-baseline gap-2 text-xs">
                   <span className="text-text-muted">{formatThaiDate(record.deliveredAt)}</span>
-                  <strong>{record.source}</strong>
+                  <strong>{DELIVERY_SOURCE_LABELS[record.source] ?? record.source}</strong>
                   <span className="text-text-muted">
-                    {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
+                    {(record.items ?? []).map((line) => {
+                      const item = items.find((i) => String(i.id) === String(line.itemId));
+                      const name = [item?.brand, item?.model].filter(Boolean).join(' ') || `รายการ #${line.itemId}`;
+                      return `${name}: ${Number(line.qty).toLocaleString('en-US')}`;
+                    }).join(', ')}
                     {record.deliveredByName ? ` · ${record.deliveredByName}` : ''}
                     {record.note ? ` · ${record.note}` : ''}
                   </span>
@@ -1086,8 +1093,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               แหล่งสินค้า
               <select value={deliveryDraft.source}
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
-                <option value="WAREHOUSE">WAREHOUSE</option>
-                <option value="STOCK">STOCK</option>
+                {Object.entries(DELIVERY_SOURCE_LABELS).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
               </select>
             </label>
             <div className="flex flex-col gap-2">
