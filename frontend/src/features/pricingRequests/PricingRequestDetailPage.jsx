@@ -3398,10 +3398,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // only once a change handler has written to it, so its presence already means
                 // "Import touched this draft since it was last loaded from the server."
                 const dirty = Boolean(unsavedDraft);
-                const importGrid = isImport(user) && current.current
+                // QA-40: past the response window the prices read as plain text, like any read-only grid.
+                const editable = isImport(user) && current.current && inResponseWindow
                   && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
-                // QA-40: past the response window the grid stays on screen but read-only (disabled inputs).
-                const editable = importGrid && inResponseWindow;
                 // CR-1 (GLA-167) R3 / B-R2: the price grid is locked until the factory has been marked
                 // ติดต่อโรงงานแล้ว — a DRAFT quote means "not contacted yet", and FactoryQuoteService#receive
                 // now 409s EVERY DRAFT quote (no exception outside the contact window any more; that
@@ -3646,7 +3645,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             {qty} {unitLabel}
                           </div>
                           <div className="min-w-0">
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
+                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">{editable ? 'ราคาที่เสนอ (แก้ไข)' : 'ราคาที่เสนอ'}</span>
                             {editable && contacted ? (
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {/* Factories sell on different terms: a line Sales asked per ตร.ม. or per แผ่น can be
@@ -3706,14 +3705,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                                 placeholder="ติดต่อโรงงานก่อน"
                                 aria-label={`ราคาที่เสนอ ${itemRef} — ต้องติดต่อโรงงานก่อน`}
                                 data-testid={`pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`}
-                              />
-                            ) : importGrid ? (
-                              <input
-                                className="w-full opacity-50 md:w-32"
-                                type="text"
-                                disabled
-                                value={line.rawUnitPrice ?? ''}
-                                aria-label={`ราคาที่เสนอ ${itemRef}`}
                               />
                             ) : (
                               <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>

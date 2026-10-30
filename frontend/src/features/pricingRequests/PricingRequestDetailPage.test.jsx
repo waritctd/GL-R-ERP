@@ -4283,16 +4283,21 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
 
   // QA-40: FactoryQuoteService#receive only takes prices while the REQUEST is IMPORT_REVIEWING /
   // AWAITING_FACTORY_RESPONSE / READY_FOR_CEO_REVIEW, so past that the grid is read-only.
-  it.each(['QUOTATION_ISSUED', 'CANCELLED'])('QA-40: a %s request shows the factory prices read-only, with no ยกเลิก or ยืนยันราคาเสนอ', async (status) => {
+  // Review fix: read-only means the formatted price as text (like every other read-only cell),
+  // not a greyed input under an "(แก้ไข)" caption.
+  it.each(['QUOTATION_ISSUED', 'CANCELLED'])('QA-40: a %s request shows the factory prices as text, with no ยกเลิก or ยืนยันราคาเสนอ', async (status) => {
     renderDetailPage({
       user: importUser,
       request: crRequest({ summary: { status } }),
-      factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })],
+      factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING', items: [{ ...crQuote().items[0], rawUnitPrice: 12.5 }] })],
     });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
+    // once as the offered price (now text), once in ราคาที่ยืนยันแล้ว
+    expect(screen.getAllByText('12.5 EUR')).toHaveLength(2);
+    expect(screen.queryByText('ราคาที่เสนอ (แก้ไข)', { selector: 'span.md\\:hidden' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
   });
@@ -4300,17 +4305,19 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
   // QA-40 review: an unsaved price typed before the request left the window must not show in the
   // read-only grid as if it were saved (nor linger with no ยกเลิก to discard it).
   it('QA-40: once the request leaves the response window, the read-only grid shows the saved price, not an unsaved edit', async () => {
-    const { queryClient } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
+    const quote = contactedQuote({ status: 'READY_FOR_COSTING', items: [{ ...crQuote().items[0], rawUnitPrice: 12.5 }] });
+    const { queryClient } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
-    const saved = screen.getByLabelText(/^ราคาที่เสนอ/).value;
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '99999' } });
 
     api.pricingRequests.get.mockResolvedValue({ pricingRequest: crRequest({ summary: { status: 'QUOTATION_ISSUED' } }) });
     await act(async () => { await queryClient.invalidateQueries(); });
 
-    await waitFor(() => expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true));
-    expect(screen.getByLabelText(/^ราคาที่เสนอ/).value).toBe(saved);
+    await waitFor(() => expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull());
+    // once as the offered price (now text), once in ราคาที่ยืนยันแล้ว
+    expect(screen.getAllByText('12.5 EUR')).toHaveLength(2);
+    expect(screen.queryByText(/99,?999/)).toBeNull();
   });
 
   // QA-40: after the deal is lost the request is CANCELLED — no mail to build or re-read.

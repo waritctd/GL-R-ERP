@@ -361,6 +361,20 @@ describe('CatalogAutocompleteField keyboard picking', () => {
     expect(onPick).toHaveBeenCalledWith(results[0]);
   });
 
+  // Review fix: 20 results in a ~6-row box — the active option must be scrolled into view.
+  it('scrolls the active option into view', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const { input } = renderField();
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getAllByRole('option')[1]);
+    } finally {
+      delete Element.prototype.scrollIntoView;
+    }
+  });
+
   it('Enter with no active option picks nothing', () => {
     const { input, onPick } = renderField();
     fireEvent.keyDown(input, { key: 'Enter' });

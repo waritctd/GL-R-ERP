@@ -6,7 +6,7 @@
 // markers, labels, catalog-autocomplete UI and catalog-pick/hand-edit rules from ONE place so they
 // can never drift apart again the way create and edit had (ชื่อยี่ห้อ vs ยี่ห้อ / โรงงาน, a
 // separate โรงงาน input on edit only, no asterisks on edit at all).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { resolveTileSqmPerPiece, sizeTextFromCatalog } from '../quotations/QuotationItemRow.jsx';
@@ -281,7 +281,9 @@ export function CatalogAutocompleteField({
   const errorId = error ? fieldErrorId(id) : undefined;
   // QA-39: combobox/listbox keyboard pattern of SearchableCombobox (Arrow wrap, Enter picks).
   const [active, setActive] = useState(-1);
+  const listRef = useRef(null);
   useEffect(() => { setActive(-1); }, [results]);
+  useEffect(() => { listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active]);
   const open = expanded && results.length > 0;
   function onKeyDown(e) {
     if (!open) return;
@@ -322,7 +324,7 @@ export function CatalogAutocompleteField({
         <p id={errorId} role="alert" className="m-0 text-2xs font-bold text-danger">{error}</p>
       ) : null}
       {open && (
-        <div id={`${id}-options`} role="listbox" aria-label={label} className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
+        <div ref={listRef} id={`${id}-options`} role="listbox" aria-label={label} className="absolute left-0 right-0 top-full z-[60] max-h-[200px] overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.12)]">
           {results.map((cat, i) => (
             // onMouseDown (not click) preserves input focus for typeahead; focus stays on the input (aria-activedescendant), so the row itself is not focusable
             // eslint-disable-next-line jsx-a11y/interactive-supports-focus
