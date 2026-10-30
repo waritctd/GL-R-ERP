@@ -2039,6 +2039,26 @@ describe('newestQuotationByRequest — a deal\'s quotation map (deal page, reque
   });
 });
 
+// QA-35 (owner ruling 2026-10-30): every recipient's ลูกค้ายอมรับ asks first. DESIGNER/OWNER keep the
+// "skips the later parties" copy; the BUYER (last party) and an unknown recipient get copy with no skip.
+describe('acceptOutcomeConfirmCopy', () => {
+  it('DESIGNER and OWNER keep the skip-the-later-parties copy', () => {
+    expect(meta.acceptOutcomeConfirmCopy('DESIGNER')).toEqual({
+      title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
+      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
+    });
+    expect(meta.acceptOutcomeConfirmCopy('OWNER').message).toContain('เจ้าของโครงการ');
+  });
+
+  it.each(['BUYER', 'UNSPECIFIED', undefined, null])('%s: asks too (never null), with the same title and no "ข้ามผู้รับรายถัดไป"', (recipient) => {
+    const copy = meta.acceptOutcomeConfirmCopy(recipient);
+    expect(copy).not.toBeNull();
+    expect(copy.title).toBe('ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้');
+    expect(copy.message).toContain('ยืนยันคำสั่งซื้อ');
+    expect(copy.message).not.toContain('ข้าม');
+  });
+});
+
 // VW-04 (owner ruling 2026-10-30): the confirm-order lead used to print "ใบเสนอราคา " + a blank
 // whenever the caller had no number; it must read as a sentence either way.
 describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {

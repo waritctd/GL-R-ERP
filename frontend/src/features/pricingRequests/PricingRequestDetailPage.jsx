@@ -871,6 +871,10 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newFor
   );
 }
 
+// CEO decision's FX line: Thai source (fx_source: 'THB' for baht, 'MANUAL' for a hand-entered rate) and date.
+const FX_SOURCE_LABEL = { THB: 'บาท', MANUAL: 'กรอกเอง', BOT: 'ธปท.' };
+const fxNote = (decision) => `${FX_SOURCE_LABEL[decision.fxSource] ?? decision.fxSource}, ${formatThaiDate(decision.fxEffectiveDate)}`;
+
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
   const pricingRequestId = Number(id);
@@ -1718,14 +1722,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
-  // B2 (owner ruling 2026-10-27): ลูกค้ายอมรับ on a DESIGNER/OWNER request asks first, both engines.
+  // ลูกค้ายอมรับ always asks first, both engines (B2 2026-10-27, QA-35).
   const acceptConfirm = acceptOutcomeConfirmCopy(summary?.recipientType);
   function recordAccepted(engine, quotation) {
     (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome).mutate({ quotation, outcome: 'ACCEPTED' });
   }
   function acceptOutcome(engine, quotation) {
-    if (acceptConfirm) setAcceptToConfirm({ engine, quotation });
-    else recordAccepted(engine, quotation);
+    setAcceptToConfirm({ engine, quotation });
   }
   // Step 6: one deposit notice per deal (owner ruling 2026-10-23). Read only when the owner could
   // otherwise be offered "สร้างใบแจ้งยอดเงินรับมัดจำ", so the block can point at an ISSUED one instead.
@@ -2098,7 +2101,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <StatusBadge tone="neutral">เวอร์ชัน {decision.decisionVersionNo}</StatusBadge>
         <StatusBadge tone={decisionStatus.tone}>{decisionStatus.label}</StatusBadge>
         <span className="text-xs text-text-muted">
-          {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+          {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({fxNote(decision)})
         </span>
       </div>
     );
@@ -2706,7 +2709,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </p>
               {decision.currency !== 'THB' ? (
                 <p className="m-0 mt-1 text-2xs text-text-muted">
-                  อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+                  อัตราแลกเปลี่ยน {decision.fxRateUsed} ({fxNote(decision)})
                 </p>
               ) : null}
             </div>
@@ -4016,6 +4019,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 navigate-on-success behaviour), since the server-side call is identical in every
                 case — only the PR's current state differs. */}
             {['EXPIRED', 'REVISION_REQUESTED', 'REJECTED'].includes(dealQuotationForPr?.docStatus)
+              && !['CANCELLED', 'SUPERSEDED'].includes(summary?.status)
               && canManageCustomerQuotation(user, summary) ? (
               <div className="flex flex-col items-start gap-2">
                 <p className="m-0 text-sm text-warning">
@@ -4257,7 +4261,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         {quotation.docStatus === 'REVISION_REQUESTED' ? 'สร้างรอบแก้ไขราคา/เงื่อนไข' : 'สร้างรอบแก้ไขใหม่'}
                       </Button>
                     ) : null}
-                    {quotation.docStatus === 'REVISION_REQUESTED' && canManageCustomerQuotation(user, summary) ? (
+                    {quotation.docStatus === 'REVISION_REQUESTED' && canCreateCommercialOnlyRevision(user, summary, quotation) ? (
                       <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
                         สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน
                       </Button>
@@ -4379,6 +4383,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       <ConfirmOrderDialog
         open={confirmingOrder}
         number={shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation)?.number}
+        depositPercent={shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation)?.depositPercent}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
@@ -4428,9 +4433,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       />
 
       <ConfirmDialog
-        open={Boolean(acceptToConfirm) && Boolean(acceptConfirm)}
-        title={acceptConfirm?.title}
-        message={acceptConfirm?.message}
+        open={Boolean(acceptToConfirm)}
+        title={acceptConfirm.title}
+        message={acceptConfirm.message}
         busy={recordQuotationOutcome.isPending || recordDealQuotationOutcome.isPending}
         onCancel={() => setAcceptToConfirm(null)}
         onConfirm={() => {

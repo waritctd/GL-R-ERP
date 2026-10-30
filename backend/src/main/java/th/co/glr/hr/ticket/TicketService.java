@@ -1162,8 +1162,8 @@ public class TicketService {
      * firewall</strong>: a deal already {@code PARTIALLY_DELIVERED} (some lines delivered from stock
      * before the imported remainder arrived — Case 8) is on the DELIVERY axis, so the firewall would
      * otherwise skip it entirely and the imported remainder could never become deliverable. For
-     * exactly that one status this method writes ONLY the {@code GOODS_RECEIVED} event — no status,
-     * stage or payment write — so {@code TicketRepository#hasReceivedGoods} flips true and {@code
+     * exactly that one status this method writes the {@code GOODS_RECEIVED} event and a forward-only
+     * advance to ขั้น 13 — no status or payment write — so {@code TicketRepository#hasReceivedGoods} flips true and {@code
      * TicketService#warehouseDeliveryAvailable} lets the remainder be delivered, without disturbing a
      * delivery that is already under way. {@code FULLY_DELIVERED} needs no write at all: the deal is
      * already fully delivered, so there is nothing left to unlock.
@@ -1177,10 +1177,12 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         String cur = s.fulfillmentStatus();
         if (FulfilmentStatus.PARTIALLY_DELIVERED.equals(cur)) {
-            // Owner decision 3: write ONLY the event. No status/stage/payment write — the delivery
+            // Owner decision 3: event + forward-only stage move; no status/payment write — the delivery
             // already under way must not be disturbed.
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
+            // Forward-only stage move (W6-01): the imported remainder has arrived, so the deal reaches ขั้น 13.
+            autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
             return;
         }
         if (FulfilmentStatus.FULLY_DELIVERED.equals(cur)) {

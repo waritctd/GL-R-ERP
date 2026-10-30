@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import {
@@ -10,10 +11,10 @@ import {
 } from '../../utils/format.js';
 import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
-import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
+import { DealStageStepper, PhaseSummary, PhaseTracker, skippedStageCodes } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
-  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath,
+  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, stageIndexIn,
 } from './stageCatalog.js';
 import {
   AUTO_STAGE_HINT, GATE_LABEL, manualMoveLabel, routeName, STAGE_HEADLINE, STAGE_OWNER_DISPLAY,
@@ -101,6 +102,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // Guided advance (owner ask 2026-09-28): the readiness gate stays, but instead of a dead hint the
   // rep gets one flow that collects the two things it needs, then advances.
   const [guidedOpen, setGuidedOpen] = useState(false);
+  const [procurementSkipOpen, setProcurementSkipOpen] = useState(false);
   const [guidedDraft, setGuidedDraft] = useState({ nextFollowUpAt: '', kind: 'CALL', activityNote: '', winProbability: '' });
   const queryClient = useQueryClient();
 
@@ -143,7 +145,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     && Boolean(nextDecision) && !nextDecision.allowed
     && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
   // The page's main button carries เลื่อนไป on ขั้น 1–2; one copy on the page.
-  const showGuidedOpener = readinessBlocked && !advanceInHeader;
+  // SK-08: no เลื่อนไป beside a main button that leads elsewhere (ยืนยันคำสั่งซื้อ → 10).
+  const showGuidedOpener = readinessBlocked && !advanceInHeader && !(ctaStage && ctaStage !== next?.code);
   // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity,
   // then advance through the PARENT's own onUpdateStage so its invalidation + toast still run. The
   // gate itself is unchanged — this just satisfies it in one place instead of two scattered panels.
@@ -203,7 +206,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     // advanceReady were already re-checked here; actionLoading was the one
     // that got dropped when the button moved into the overflow menu — see
     // the FIX 3 note above).
-    openAdvance: () => { if (canAdvance && advanceReady && !actionLoading && next) onUpdateStage({ stage: next.code }); },
+    openAdvance: () => {
+      if (!(canAdvance && advanceReady && !actionLoading && next)) return;
+      if (summary.salesStage === 'PROCUREMENT') setProcurementSkipOpen(true); // W3-09: warn before skipping ahead
+      else onUpdateStage({ stage: next.code });
+    },
     // The page's ขั้น 1–2 main button: move now when ready, else collect the follow-up + activity first.
     startAdvance: () => {
       if (!next || actionLoading) return;
@@ -223,6 +230,10 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // then "หรือข้ามไป" the rest) with the first one's auto hint — not the stage after the current one.
   // The first party's stage missing from the catalog: the plain next-stage line.
   const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
+  // A skipped stage is final (ruling 2026-10-29): แก้ไขสถานะ never offers what the track marks ข้าม.
+  const skipped = skippedStageCodes(catalog, stageIndexIn(catalog, summary.salesStage), events);
+  const goodsNotArrivedWarning = next
+    ? `สินค้าจากโรงงานยังมาไม่ครบ — เลื่อนไปขั้น ${next.no} ก่อนสินค้าถึงโกดังเฉพาะกรณีจำเป็น` : '';
   const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
   const lineStage = choiceStage ?? ctaRow ?? next;
   const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint;
@@ -395,7 +406,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 {showGuidedOpener ? (
                   <Button
                     type="button"
-                    variant={summary.salesStage === 'PROCUREMENT' || (ctaRow && ctaRow.code !== next?.code) ? 'secondary' : 'primary'}
+                    variant={summary.salesStage === 'PROCUREMENT' ? 'secondary' : 'primary'}
                     disabled={actionLoading}
                     onClick={() => setGuidedOpen(true)}
                     data-testid="guided-advance-open"
@@ -456,7 +467,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       {editOpen ? (
         <UpdateStageModal
           deal={summary}
-          stageDecisions={stageDecisions}
+          stageDecisions={stageDecisions.filter((d) => !(skipped.has(d.stage) && d.onRoute !== false))}
           submitting={actionLoading}
           onClose={() => setEditOpen(false)}
           onSubmit={submitStage}
@@ -489,6 +500,14 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           </label>
         </Modal>
       ) : null}
+      <ConfirmDialog
+        open={procurementSkipOpen && Boolean(next)}
+        title={`ข้ามไปขั้น ${next?.no}`}
+        message={goodsNotArrivedWarning}
+        confirmLabel={`ข้ามไปขั้น ${next?.no}`}
+        onCancel={() => setProcurementSkipOpen(false)}
+        onConfirm={() => { setProcurementSkipOpen(false); onUpdateStage({ stage: next.code }); }}
+      />
       {guidedOpen && next ? (
         <Modal
           title={`เลื่อนไปขั้น ${next.no}. ${dealStageLabel(next.code, summary.entryChannel).label}`}
@@ -513,6 +532,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           )}
         >
           <div className="grid gap-3">
+            {summary.salesStage === 'PROCUREMENT' ? <p className="m-0 text-xs font-bold text-warning-dark">{goodsNotArrivedWarning}</p> : null}
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               วันติดตามครั้งถัดไป *
               <input

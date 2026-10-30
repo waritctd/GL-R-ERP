@@ -1992,6 +1992,13 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
         }
+        PricingRequestSummaryDto summary = pricingRequests.findSummary(fresh.pricingRequestId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        // A customer-change revision supersedes the parent PR but leaves its quotation ISSUED.
+        if (PricingRequestStatus.SUPERSEDED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน");
+        }
         if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
@@ -2013,8 +2020,6 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }
 
-        PricingRequestSummaryDto summary = pricingRequests.findSummary(fresh.pricingRequestId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         String eventKind = outcomeEventKind(request.outcome());
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             eventKind, summary.status(), summary.status(),

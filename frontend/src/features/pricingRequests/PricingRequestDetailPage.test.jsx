@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { formatThaiDate } from '../../utils/format.js';
 
 // This component (and PricingRequestCreateModal, which it opens in mode="revision"
 // for the customer-change-revision flow) is exercised here against a hand-rolled
@@ -1516,6 +1517,27 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
   });
 
+  // QA-29 leftover: the decision's FX line printed the raw source enum and an ISO date
+  // ("อัตราแลกเปลี่ยน 1 (MANUAL, 2026-10-30)"); it reads a Thai source and a Thai date.
+  it.each(['MANUAL', 'BOT'])('the CEO decision FX line shows a Thai source label and a Thai date, never %s or the ISO date', async (fxSource) => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ currency: 'USD', fxRateUsed: 35.5, fxSource, fxEffectiveDate: '2026-10-30' })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    const fxLines = screen.getAllByText(/อัตราแลกเปลี่ยน 35\.5/);
+    expect(fxLines.length).toBeGreaterThan(0);
+    fxLines.forEach((line) => {
+      expect(line.textContent).not.toContain(fxSource);
+      expect(line.textContent).not.toContain('2026-10-30');
+      expect(line.textContent).toContain(formatThaiDate('2026-10-30'));
+      expect(line.textContent).toMatch(/\([^)]*[\u0E00-\u0E7F][^)]*\)/); // the source inside the brackets is Thai
+    });
+  });
+
   // V141 ("CEO owns costing", PR #702, commit 1).
   it('lets the CEO recalculate the decision cost, calling recalculatePricingDecisionCost with the decision id and nothing else', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -1918,6 +1940,16 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     // the sales-view line is the second).
     expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
     expect(screen.queryByText(/PER_PIECE/)).toBeNull();
+  });
+
+  // W6-04: no approved decision to show yet (or any more), so no 404 on every load.
+  it.each(['READY_FOR_CEO_REVIEW', 'SUPERSEDED'])('does not fetch the sales-view projection on a %s request', async (status) => {
+    const request = buildRequest({ summary: { status } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await waitFor(() => expect(api.dealQuotations.findForPricingRequest).toHaveBeenCalled());
+    expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
   });
 
   it('does not fetch the sales-view projection for a non-owning sales rep', async () => {
@@ -3296,10 +3328,10 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
   }
 
-  // Owner ruling 2026-10-27 (spec B2): a quotation sent to the BUYER is the last party's — accepting
-  // it is the order as before, one click, no question asked. Review V4: a revision draft cancelled
+  // QA-35 (supersedes the 2026-10-27 B2 "buyer = one click"): every recipient asks first. The buyer's is
+  // the last party, so the question never mentions skipping. Review V4: a revision draft cancelled
   // after แก้ใบเสนอราคา is the server's newest row; the page still records on the quotation it revised.
-  it('ISSUED, a buyer request: ลูกค้ายอมรับ records ACCEPTED at once via dealQuotations.recordOutcome (no confirmation step), even behind a cancelled revision draft', async () => {
+  it('ISSUED, a buyer request: ลูกค้ายอมรับ asks first (no "ข้ามผู้รับรายถัดไป"), then records ACCEPTED via dealQuotations.recordOutcome, even behind a cancelled revision draft', async () => {
     const issued = newEngineQuotation({ docStatus: 'ISSUED', origin: 'PRICING_REQUEST', pricingRequestId: 501 });
     const cancelledRevision = newEngineQuotation({
       id: 9102, number: 'QT-2026-0101-2', docStatus: 'CANCELLED', origin: 'PRICING_REQUEST', pricingRequestId: 501, parentQuotationId: 9101,
@@ -3316,11 +3348,16 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
     fireEvent.click(acceptButton);
 
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.queryByText(/ข้ามผู้รับรายถัดไป/)).toBeNull();
+    expect(dialog.getByText(/ยืนยันคำสั่งซื้อ/)).not.toBeNull();
+    expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+
     await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
       issued.id,
       expect.objectContaining({ outcome: 'ACCEPTED', customerNote: 'ส่งของต้นเดือน', clientRequestId: expect.any(String) }),
     ));
-    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   // Spec B2: accepting a DESIGNER/OWNER quotation makes it the order and skips the later parties, so
@@ -3480,6 +3517,28 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       .toHaveBeenCalledWith(request.summary.id));
   });
 
+  // QA-13 + W6-02: a revision superseded this request. Its quotation may still read ISSUED (owner
+  // ruling 2026-08-13) or carry an earlier outcome, but nothing on it is actionable any more.
+  it('SUPERSEDED request: no outcome buttons on its ISSUED quotation, no recreate on a REJECTED one', async () => {
+    const request = buildRequest({ summary: { status: 'SUPERSEDED' } });
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    const { unmount } = renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+    unmount();
+
+    const rejected = newEngineQuotation({ docStatus: 'REJECTED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: rejected });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(rejected.number);
+    expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).toBeNull();
+  });
+
   // S3 round-5 review fix (NEW-A, MAJOR, 2026-09-23): invalidate() (this file's source, around
   // line 815) invalidated seven query keys after recordDealQuotationOutcome's onSuccess but
   // OMITTED queryKeys.dealQuotationForPricingRequest — the key backing dealQuotationForPrQuery,
@@ -3597,6 +3656,29 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     // the always-present static customer-change section heading elsewhere on the page).
     fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' }));
     expect(await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' })).not.toBeNull();
+  });
+});
+
+// W6-02 sibling (old engine): a request that was cancelled or superseded takes no more revisions — the
+// server 409s them, so the legacy revision buttons are not offered (the new-engine recreate gate already agrees).
+describe('PricingRequestDetailPage legacy revision buttons on a dead request', () => {
+  it.each(['SUPERSEDED', 'CANCELLED'])('%s request: no สร้างรอบแก้ไข* button on an ISSUED or REVISION_REQUESTED quotation', async (status) => {
+    const request = buildRequest({ summary: { status } });
+    const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
+    const first = renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไขใหม่' })).toBeNull();
+    first.unmount();
+
+    const revisionRequested = buildCustomerQuotation({ docStatus: 'REVISION_REQUESTED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [revisionRequested] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(revisionRequested.number);
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไขราคา/เงื่อนไข' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' })).toBeNull();
   });
 });
 
@@ -3829,7 +3911,7 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
   it('VW-04: the confirm dialog names the new-engine quotation number, never the PCR code', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
-      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'ACCEPTED' },
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'ACCEPTED', depositPercent: 0 },
     });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
@@ -3838,6 +3920,7 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
     const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
     expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0099-1');
+    expect(dialog.textContent).toContain('ไม่เก็บมัดจำ'); // W6-03: copy follows the quotation's 0%
     expect(dialog.textContent).not.toContain(request.summary.requestCode);
   });
 

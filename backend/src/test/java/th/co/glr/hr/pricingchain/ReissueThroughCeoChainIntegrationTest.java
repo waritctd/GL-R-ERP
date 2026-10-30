@@ -545,6 +545,16 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", parentId), String.class)).isEqualTo("SUPERSEDED");
         assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.ISSUED);
+        // QA-13: live as a document, but no customer outcome lands on it — the revision is the chain now.
+        assertThatThrownBy(() -> quotationService.recordOutcome(parentQuotation.id(),
+            new RecordQuotationOutcomeRequest(QuotationStatus.REJECTED, "ลูกค้าตอบ", UUID.randomUUID().toString()),
+            salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("รอบแก้ไข");
+            });
+        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.ISSUED);
 
         // Still live all the way through Import and the CEO's fresh decision. The quantity changed
         // (10 -> 25), so this revision takes the ordinary Import path rather than the

@@ -260,7 +260,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordOutcome.isPending}
-                    onClick={() => (acceptConfirm ? setConfirmingAccept(true) : recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }))}
+                    onClick={() => setConfirmingAccept(true)}
                     data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </Button>
@@ -314,14 +314,15 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
       <ConfirmOrderDialog
         open={confirmingOrder}
         number={shownQuotation?.number}
+        depositPercent={shownQuotation?.depositPercent}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
       />
       <ConfirmDialog
-        open={confirmingAccept && Boolean(acceptConfirm)}
-        title={acceptConfirm?.title}
-        message={acceptConfirm?.message}
+        open={confirmingAccept}
+        title={acceptConfirm.title}
+        message={acceptConfirm.message}
         busy={recordOutcome.isPending}
         onCancel={() => setConfirmingAccept(false)}
         onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }); }}

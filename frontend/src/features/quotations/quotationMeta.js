@@ -307,12 +307,15 @@ export function quotationRecipientOption(code) {
   return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.code === code) ?? null;
 }
 
-/** Owner ruling 2026-10-27 (B2): ลูกค้ายอมรับ on a DESIGNER/OWNER request makes that quotation the
- * order and skips the later parties, so every outcome control asks first. null = record at once. */
+/** ลูกค้ายอมรับ always asks first (B2 2026-10-27; QA-35 extends it to the BUYER). DESIGNER/OWNER accepting
+ * makes that quotation the order and skips the later parties; the BUYER is last, so nothing is skipped. */
 export function acceptOutcomeConfirmCopy(recipientType) {
-  if (recipientType !== 'DESIGNER' && recipientType !== 'OWNER') return null;
+  const title = 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้';
+  if (recipientType !== 'DESIGNER' && recipientType !== 'OWNER') {
+    return { title, message: 'ถ้าลูกค้ายอมรับ ขั้นถัดไปคือยืนยันคำสั่งซื้อ' };
+  }
   return {
-    title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
+    title,
     message: `ใบเสนอราคานี้ส่งถึง${quotationRecipientOption(recipientType).label} ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป`,
   };
 }
@@ -429,7 +432,10 @@ export function liveDirectQuotationBlockMessage(live) {
 export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
   lead: (number) => `ระบบจะนำดีลของ${number ? `ใบเสนอราคา ${number}` : 'ใบเสนอราคานี้'} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
   stage: 'ได้รับคำสั่งซื้อ',
-  tail: 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้',
+  // Follows the quotation's deposit %: 0 takes no deposit, unknown (null) keeps the usual wording.
+  tail: (depositPercent) => (depositPercent != null && Number(depositPercent) === 0
+    ? 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — ใบเสนอราคานี้ไม่เก็บมัดจำ สั่งสินค้าและส่งมอบได้เลย การดำเนินการนี้ย้อนกลับไม่ได้'
+    : 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้'),
 });
 
 // An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's

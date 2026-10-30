@@ -469,10 +469,11 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
      * while the imported remainder was still in transit — Case 8) must NOT have its delivery status
      * clobbered back onto the import axis when the last factory's IR reaches RECEIVED. Only the
      * {@code GOODS_RECEIVED} event is written, so {@code TicketRepository#hasReceivedGoods} flips
-     * true without disturbing the delivery already under way.
+     * true without disturbing the delivery already under way. W6-01: the stage still rolls forward
+     * to ขั้น 13 — staying at 12 left the deal jumping 12 → 14 on the last delivery.
      */
     @Test
-    void rollup_onAMixedPartiallyDeliveredDeal_writesOnlyTheEvent_neverTouchesStatus() {
+    void rollup_onAMixedPartiallyDeliveredDeal_keepsTheStatus_writesTheEvent_andMovesToStage13() {
         insertFactory("Mixed Deal Factory", "IT", null);
         long ticketId = insertTicket("RESOLV-6");
         insertItem(ticketId, "Brand", "Import Line", "60x60", "10", "pcs", 0, "Mixed Deal Factory");
@@ -492,6 +493,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.PARTIALLY_DELIVERED);
         // ...but the event fired, so hasReceivedGoods-style reads still see it.
         assertThat(countGoodsReceivedEvents(ticketId)).isEqualTo(eventsBefore + 1);
+        assertThat(jdbc.queryForObject("SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), String.class)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
     }
 
     // ── legacy one-shot actions refuse on an IR-tracked deal ─────────────────────────────────────

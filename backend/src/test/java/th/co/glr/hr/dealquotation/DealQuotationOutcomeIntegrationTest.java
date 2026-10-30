@@ -668,6 +668,37 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
     }
 
+    /** QA-13: a customer-change revision supersedes the request but leaves its ISSUED quotation
+     * live (owner ruling 2026-08-13). No outcome may be recorded on that quotation — the
+     * revision is the live chain now. */
+    @Test
+    void recordOutcome_onIssuedQuotationOfASupersededPricingRequest_refused_writesNothing() {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        pricingRequestService.createCustomerChangeRevision(issued.pricingRequestId(),
+            new PricingRequestRequests.CustomerChangeRevisionRequest("ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(),
+                PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14), null, "THB",
+                "qa-13 revision", List.of(pricingItem(null, new BigDecimal("12")))),
+            salesActor);
+        assertThat(pricingRequests.findSummary(issued.pricingRequestId()).orElseThrow().status())
+            .isEqualTo(PricingRequestStatus.SUPERSEDED);
+
+        for (String outcome : List.of(QuotationStatus.ACCEPTED, QuotationStatus.REJECTED, QuotationStatus.REVISION_REQUESTED)) {
+            assertThatThrownBy(() -> quotationService.recordOutcome(issued.id(),
+                new RecordOutcomeRequest(outcome, "ลูกค้าตอบ", UUID.randomUUID().toString()), salesActor))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).contains("รอบแก้ไข");
+                });
+        }
+        assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id
+               AND event_kind IN ('CUSTOMER_QUOTATION_ACCEPTED', 'CUSTOMER_QUOTATION_REJECTED',
+                                  'CUSTOMER_QUOTATION_REVISION_REQUESTED')
+            """, Map.of("id", issued.pricingRequestId()), Long.class)).isZero();
+    }
+
     /** GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
      * REVISION_REQUESTED was missing from {@code hasLivePricingRequestQuotation}'s non-live set,
      * even though S3 (this slice's own recordOutcome) is what makes that outcome reachable —
@@ -1284,6 +1315,17 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             discountPct, false, null, false, null, false);
     }
 
+    private PricingRequestRequests.PricingRequestItemRequest pricingItem(Long sourceTicketItemId, BigDecimal qty) {
+        return new PricingRequestRequests.PricingRequestItemRequest(
+            sourceTicketItemId, catalogProductId, null, "SCG", "Tile A-S3", "SCG Tile A-S3", "White", "Matte",
+            "60x60", FACTORY,
+            null, null, null, null,
+            QuantityType.CONFIRMED, null, null, null,
+            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
+            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
+    }
+
     private long submittedCostingReadyRequest(String recipient, BigDecimal qty) {
         // Links back to the ticket's own (pre-existing, qty=1) ticket_item — the realistic shape
         // OrderConfirmationService#reconcileTicketItems documents as its main case ("a line that
@@ -1292,14 +1334,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         long sourceTicketItemId = jdbc.queryForObject(
             "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :id ORDER BY item_id LIMIT 1",
             Map.of("id", ticketId), Long.class);
-        PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
-            sourceTicketItemId, catalogProductId, null, "SCG", "Tile A-S3", "SCG Tile A-S3", "White", "Matte",
-            "60x60", FACTORY,
-            null, null, null, null,
-            QuantityType.CONFIRMED, null, null, null,
-            null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
-            null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, "ไทย-สต็อก", 3, 7, null, null, null);
+        PricingRequestRequests.PricingRequestItemRequest item = pricingItem(sourceTicketItemId, qty);
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             recipient, null, "Designer Co.", LocalDate.now().plusDays(14),
             new BigDecimal("1000.00"), "THB", "pcr quotation s3 request", UUID.randomUUID().toString(), List.of(item));

@@ -599,6 +599,12 @@ public class CustomerQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
         }
+        PricingRequestSummaryDto summary = requirePricingRequest(fresh.pricingRequestId());
+        // A customer-change revision supersedes the parent PR but leaves its quotation ISSUED.
+        if (PricingRequestStatus.SUPERSEDED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน");
+        }
         // R8: refused when ANY quotation on this TICKET is already ACCEPTED — the new
         // PRICING_REQUEST-origin engine included, since both write the SAME sales.quotation table.
         if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
@@ -626,7 +632,6 @@ public class CustomerQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }
 
-        PricingRequestSummaryDto summary = requirePricingRequest(fresh.pricingRequestId());
         String eventKind = outcomeEventKind(request.outcome());
         addPricingRequestEvent(summary, actor, eventKind,
             "บันทึกผลใบเสนอราคาลูกค้า " + fresh.number() + ": " + request.outcome()

@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { formatMoney } from '../../utils/format.js';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 
 globalThis.React = React;
@@ -120,5 +121,51 @@ describe('DealHistoryPanel', () => {
     const item = screen.getByRole('listitem').textContent;
     expect(item).toContain('ยืนยันคำสั่งซื้อจากใบเสนอราคา');
     expect(item).not.toContain('DEAL_PROMOTED_FROM_QUOTATION');
+  });
+
+  // QA-29 leftover: kinds TicketEventKind writes that EVENT_KIND_LABEL lacked, so the raw enum showed.
+  it.each([
+    'CLOSE_CONFIRMED', 'CLOSE_CONFIRM_REVOKED', 'ORDER_CONFIRMED_FROM_QUOTATION',
+    'DEAL_QUOTATION_SUBMITTED', 'DEAL_QUOTATION_APPROVED', 'DEAL_QUOTATION_REJECTED',
+    'DEAL_QUOTATION_REVISION_SUBMITTED', 'IMPORT_STEP_ADVANCED', 'IMPORT_REQUEST_EMAIL_SENT',
+  ])('labels %s in Thai rather than the raw kind', (kind) => {
+    render(<DealHistoryPanel events={[{ id: 1, kind, actorName: 'พนักงานขาย', createdAt: '2026-10-30T09:00:00.000Z' }]} activities={[]} />);
+
+    const title = screen.getByRole('listitem').querySelector('strong').textContent;
+    expect(title).not.toBe(kind);
+    expect(title).toMatch(/[\u0E00-\u0E7F]/);
+    expect(screen.getByRole('listitem').textContent).not.toContain(kind);
+  });
+
+  // The backend writes "kind=…, amount=…, paid=…, payable=… — note"; old rows keep it, so the panel formats it.
+  describe('PAYMENT_RECORDED message', () => {
+    const payment = (message) => render(
+      <DealHistoryPanel events={[{ id: 1, kind: 'PAYMENT_RECORDED', actorName: 'บัญชี', message, createdAt: '2026-10-30T09:00:00.000Z' }]} activities={[]} />,
+    );
+
+    it('BALANCE reads ส่วนที่เหลือ with a formatted amount, keeping the note, and shows no kind=/amount= text', () => {
+      payment('kind=BALANCE, amount=440647.94, paid=440647.94, payable=881295.88 — ยืนยันชำระส่วนที่เหลือ');
+      const text = screen.getByRole('listitem').textContent;
+      expect(text).toContain('ส่วนที่เหลือ');
+      expect(text).toContain(formatMoney(440647.94));
+      expect(text).toContain('ยืนยันชำระส่วนที่เหลือ');
+      expect(text).not.toMatch(/kind=|amount=|paid=|payable=|BALANCE/);
+    });
+
+    it.each([
+      ['DEPOSIT', 'มัดจำ'],
+      ['ADJUSTMENT', 'ปรับปรุงยอด/คืนเงิน'],
+    ])('%s reads %s with a formatted amount', (kind, label) => {
+      payment(`kind=${kind}, amount=1500.5, paid=1500.5, payable=5000`);
+      const text = screen.getByRole('listitem').textContent;
+      expect(text).toContain(label);
+      expect(text).toContain(formatMoney(1500.5));
+      expect(text).not.toMatch(new RegExp(`kind=|amount=|${kind}`));
+    });
+
+    it('a message that is not in that format is shown as written', () => {
+      payment('รับโอนเพิ่มเติมจากลูกค้า');
+      expect(screen.getByRole('listitem').textContent).toContain('รับโอนเพิ่มเติมจากลูกค้า');
+    });
   });
 });

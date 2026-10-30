@@ -2269,7 +2269,7 @@ describe('TicketDetailPage', () => {
     // VW-04 (owner ruling 2026-10-30): the dialog names the quotation the panel SHOWS. A new-engine
     // deal has no old-engine row, so it used to read "ใบเสนอราคา " + a blank.
     describe('VW-04 the confirm-order dialog names the quotation the panel shows', () => {
-      async function openConfirmOrderDialog({ oldEngineRows = [] } = {}) {
+      async function openConfirmOrderDialog({ oldEngineRows = [], depositPercent } = {}) {
         api.tickets.get.mockResolvedValue({
           ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', createdById: 1, status: 'draft' } }),
         });
@@ -2288,6 +2288,7 @@ describe('TicketDetailPage', () => {
           items: [{
             id: 9501, number: 'QT-2026-0501-NEW', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'ACCEPTED',
             recipientType: 'BUYER', salesRepId: 1, revisionNo: 1, parentQuotationId: null, grandTotal: 1070,
+            ...(depositPercent === undefined ? {} : { depositPercent }),
           }],
         });
         renderTicketDetailPage(salesOwnerUser);
@@ -2304,6 +2305,19 @@ describe('TicketDetailPage', () => {
         const dialog = await openConfirmOrderDialog();
         expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0501-NEW');
         expect(dialog.textContent).not.toMatch(/ใบเสนอราคา\s{2,}/);
+      });
+
+      // W6-03: the tail follows the quotation's deposit %. 0 -> no deposit wording at all.
+      it('a quotation with no deposit (0%): the dialog says ไม่เก็บมัดจำ and never mentions ใบแจ้งรับมัดจำ', async () => {
+        const dialog = await openConfirmOrderDialog({ depositPercent: 0 });
+        expect(dialog.textContent).toContain('ไม่เก็บมัดจำ');
+        expect(dialog.textContent).not.toContain('ใบแจ้งรับมัดจำ');
+      });
+
+      it('a quotation with a deposit (30%): the dialog still says จากนั้นออกใบแจ้งรับมัดจำ', async () => {
+        const dialog = await openConfirmOrderDialog({ depositPercent: 30 });
+        expect(dialog.textContent).toContain('ใบแจ้งรับมัดจำ');
+        expect(dialog.textContent).not.toContain('ไม่เก็บมัดจำ');
       });
 
       it('a live old-engine quotation still wins: the dialog names its number, as the panel does', async () => {
@@ -2636,6 +2650,77 @@ describe('TicketDetailPage', () => {
       expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled(); // SK-02: dialog first
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(501, expect.anything()));
+    });
+
+    // SK-08 leftover: while ยืนยันคำสั่งซื้อ is the primary, the ⋯ menu must not also offer เลื่อนไป ขั้น 9
+    // (the server still advertises ADVANCE_STAGE, so only the page can hide it).
+    it('an accepted buyer quotation at ขั้น 8: primary is ยืนยันคำสั่งซื้อ and ⋯ offers no เลื่อนไป', async () => {
+      deal({
+        stage: 'QUOTE_BUYER',
+        requests: [sentRequest({ recipientType: 'BUYER', status: 'QUOTATION_ACCEPTED' })],
+        quotations: [requestQuotation({ recipientType: 'BUYER', docStatus: 'ACCEPTED' })],
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_BUYER', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+        availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'NEGOTIATION' }, { action: 'UPDATE_STAGE' }],
+        stageDecisions: DEAL_STAGE_CATALOG.stages.map((s) => ({
+          stage: s.code, no: s.no, allowed: s.code !== 'QUOTE_BUYER', requiresReason: false, blockedReason: null, onRoute: true,
+        })),
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      await primaryWithAction('confirm_order');
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      await screen.findByRole('menu');
+      expect(screen.queryByTestId('deal-stage-advance')).toBeNull();
+      expect(screen.queryByText(/เลื่อนไป:/)).toBeNull();
+    });
+
+    // SK-04: after ข้ามไปเสนอราคาผู้ซื้อ the buyer's request is open in import, so ถัดไป names ITS stage
+    // (ขั้น 8), not the next stage on the route (ขั้น 5). A dead request, or one not ahead, changes nothing.
+    it.each([
+      ['a live buyer request', 'IMPORT_REVIEWING', 'QUOTE_DESIGN_SIDE', '8.', '5.'],
+      ['a CANCELLED buyer request', 'CANCELLED', 'QUOTE_DESIGN_SIDE', '5.', '8.'],
+      ['a SUPERSEDED buyer request', 'SUPERSEDED', 'QUOTE_DESIGN_SIDE', '5.', '8.'],
+    ])('ถัดไป with %s on a deal at ขั้น 4', async (_label, buyerStatus, stage, shown, notShown) => {
+      deal({
+        stage,
+        requests: [
+          sentRequest(),
+          sentRequest({ id: 503, requestCode: 'PCR-2026-0503', recipientType: 'BUYER', status: buyerStatus }),
+        ],
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('deal-stage-next').textContent).toContain(shown));
+      expect(screen.getByTestId('deal-stage-next').textContent).not.toContain(notShown);
+    });
+
+    // "Newest" = highest id among live requests: a newer live request that is not ahead wins over an older buyer one.
+    it('ถัดไป follows the NEWEST live request (highest id), even when an older one is further ahead', async () => {
+      deal({
+        stage: 'QUOTE_DESIGN_SIDE',
+        requests: [
+          sentRequest(),
+          sentRequest({ id: 503, requestCode: 'PCR-2026-0503', recipientType: 'BUYER', status: 'IMPORT_REVIEWING' }),
+          sentRequest({ id: 504, requestCode: 'PCR-2026-0504', recipientType: 'DESIGNER', status: 'IMPORT_REVIEWING' }),
+        ],
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('deal-stage-next').textContent).toContain('5.'));
+      expect(screen.getByTestId('deal-stage-next').textContent).not.toContain('8.');
+    });
+
+    it('ถัดไป stays on the route when the live buyer request is not AHEAD of the deal (deal already at ขั้น 8)', async () => {
+      deal({
+        stage: 'QUOTE_BUYER',
+        requests: [sentRequest({ id: 503, requestCode: 'PCR-2026-0503', recipientType: 'BUYER', status: 'IMPORT_REVIEWING' })],
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('deal-stage-next').textContent).toContain('9.'));
+      expect(screen.getByTestId('deal-stage-next').textContent).not.toContain('8.');
     });
   });
 
@@ -3178,6 +3263,30 @@ describe('TicketDetailPage', () => {
 
       const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
       expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+      expect(api.pricingRequests.recordCustomerQuotationOutcome).not.toHaveBeenCalled();
+      fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+
+      await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
+        9301, expect.objectContaining({ outcome: 'ACCEPTED' }),
+      ));
+    });
+
+    // QA-35: the buyer's (last party's) accept asks too — the panel used to post it on the first click.
+    it('the panel\'s ลูกค้ายอมรับ on a buyer request asks first (no "ข้ามผู้รับรายถัดไป"); records ACCEPTED only after ยืนยัน', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'BUYER' }],
+      });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+        items: [{ id: 9301, number: 'QT-2026-0301-1', docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 }],
+      });
+      api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { id: 9301, docStatus: 'ACCEPTED' } });
+
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/เอกสาร/);
+      fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
+
+      const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+      expect(dialog.queryByText(/ข้ามผู้รับรายถัดไป/)).toBeNull();
       expect(api.pricingRequests.recordCustomerQuotationOutcome).not.toHaveBeenCalled();
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
@@ -4836,6 +4945,8 @@ describe('TicketDetailPage', () => {
 
     it('APPROVED: "ยืนยันคำสั่งซื้อ" confirms first (same copy as the editor), then calls the direct-quotation confirm endpoint', async () => {
       activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      // W6-03: the dialog reads the % off the deal's quotation list (the live summary carries none).
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED', depositPercent: 0 }] });
       api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
       const showToast = vi.fn();
       renderTicketDetailPage(salesOwnerUser, showToast);
@@ -4849,6 +4960,7 @@ describe('TicketDetailPage', () => {
       const dialog = within(screen.getByRole('dialog'));
       expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
       expect(dialog.getByText(/QT-2026-0077-1/)).not.toBeNull();
+      expect(await dialog.findByText(/ไม่เก็บมัดจำ/)).not.toBeNull(); // W6-03: copy follows the quotation's 0%
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว'));
@@ -5259,7 +5371,12 @@ describe('TicketDetailPage', () => {
       expect(item.textContent).toContain('ข้ามไปขั้น 13 ด้วยตนเอง');
       expect(item.textContent).not.toContain('เลื่อนไป');
 
+      // W3-09: moving before the goods arrive asks first.
       fireEvent.click(item);
+      const dialog = await screen.findByRole('dialog');
+      expect(api.tickets.updateStage).not.toHaveBeenCalled();
+      expect(within(dialog).getByText(/สินค้าจากโรงงานยังมาไม่ครบ/)).not.toBeNull();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ข้ามไปขั้น 13' }));
       await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'DELIVERY_SCHEDULING' }));
     });
   });

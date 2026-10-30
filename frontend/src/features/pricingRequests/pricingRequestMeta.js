@@ -189,8 +189,10 @@ export function canSeeRawPricingDecision(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
 
-/** Mirrors PricingDecisionService.salesView's SALES_VIEW_ROLES + owner scoping for 'sales'. */
+/** Mirrors PricingDecisionService.salesView's SALES_VIEW_ROLES + owner scoping for 'sales', and its
+ * 404 outside the post-approval statuses. */
 export function canSeePricingDecisionSalesView(user, pr) {
+  if (!['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED'].includes(pr?.status)) return false;
   if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
   if (user.role === 'sales') return pr?.ticketCreatedById != null && Number(pr.ticketCreatedById) === Number(user.id);
   return true;
@@ -269,7 +271,8 @@ export function canDecideDiscountApproval(user) {
  * while the quotation is ISSUED — the same owner scoping as canManageCustomerQuotation, plus the
  * docStatus gate recordOutcome's own WHERE clause enforces server-side. */
 export function canRecordCustomerQuotationOutcome(user, pr, quotation) {
-  return canManageCustomerQuotation(user, pr) && quotation?.docStatus === 'ISSUED';
+  return canManageCustomerQuotation(user, pr) && quotation?.docStatus === 'ISSUED'
+    && !['SUPERSEDED', 'CANCELLED'].includes(pr?.status);
 }
 
 /** Once a REVISION_REQUESTED outcome is recorded, Sales must explicitly choose commercial-only
@@ -278,7 +281,8 @@ export function canRecordCustomerQuotationOutcome(user, pr, quotation) {
  * see canCreateCustomerRevision's own inline gate in PricingRequestDetailPage). This predicate
  * only covers the commercial-only button's own visibility. */
 export function canCreateCommercialOnlyRevision(user, pr, quotation) {
-  return canManageCustomerQuotation(user, pr) && ['ISSUED', 'REVISION_REQUESTED'].includes(quotation?.docStatus);
+  return canManageCustomerQuotation(user, pr) && ['ISSUED', 'REVISION_REQUESTED'].includes(quotation?.docStatus)
+    && !['SUPERSEDED', 'CANCELLED'].includes(pr?.status);
 }
 
 // ── Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationService. ──

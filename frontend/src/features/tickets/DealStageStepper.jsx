@@ -94,7 +94,7 @@ function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
  * The first change's fromStatus and everything before it are pre-history and count as done; no
  * STAGE_CHANGED at all, or a first fromStatus outside the catalog, means nothing is skipped.
  */
-function skippedStageCodes(catalog, currentIdx, events) {
+export function skippedStageCodes(catalog, currentIdx, events) {
   const changes = (events ?? []).filter((event) => event.kind === 'STAGE_CHANGED');
   if (changes.length === 0) return new Set();
   const visited = new Set(changes.map((event) => event.toStatus));
