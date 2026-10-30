@@ -1642,6 +1642,8 @@ describe('buildQuotationChecklist', () => {
       ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
         'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient'],
     );
+    // The submit-only set: บันทึกร่าง still works, ส่งขออนุมัติ is disabled (QuotationEditorPage guards).
+    expect([...meta.QUOTATION_SUBMIT_BLOCKING_CHECKS].sort()).toEqual(['creditDays', 'fullPaymentTerm', 'leadTime']);
     // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
     // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
     ['customerAddress', 'customerTaxId', 'customerPhone', 'dealProject', 'creditDays']
@@ -1650,6 +1652,17 @@ describe('buildQuotationChecklist', () => {
     expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contact');
     expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contactPhone');
     expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('contactEmail');
+  });
+
+  // The editor already computes these seqs for its ส่งขออนุมัติ gate (hasMissingLeadTimes); the
+  // checklist lists them too, so a draft missing only a lead time never reads as "complete".
+  it('lists missing lead times as a submit-only entry, in the editor\'s own wording', () => {
+    const entries = meta.buildQuotationChecklist({ ...complete, missingLeadTimeSeqs: [1, 3] });
+    expect(entries).toEqual([expect.objectContaining({
+      check: 'leadTime', message: 'กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1, 3',
+      blocking: false, submitBlocking: true,
+    })]);
+    expect(meta.buildQuotationChecklist({ ...complete, missingLeadTimeSeqs: [] })).toEqual([]);
   });
 
   it('is empty for a complete quotation', () => {
@@ -2060,5 +2073,23 @@ describe('shownCustomerQuotation', () => {
   it.each(['DRAFT', 'SENT', 'ACCEPTED'])('prefers a live old-engine quotation (%s) over a new-engine row', (status) => {
     const old = legacy(status);
     expect(meta.shownCustomerQuotation({ ...newEngine, docStatus: 'REJECTED' }, old)).toBe(old);
+  });
+});
+
+describe('splitQuotationChecklist', () => {
+  const entry = (check, blocking, submitBlocking) => ({ check, message: check, targetId: null, blocking, submitBlocking });
+
+  it('sorts entries into blocking / submitBlocking / warnings, keeping order, blocking winning', () => {
+    const entries = [
+      entry('a', false, false), entry('b', true, false), entry('c', false, true), entry('d', true, true), entry('e', false, false),
+    ];
+    const { blocking, submitBlocking, warnings } = meta.splitQuotationChecklist(entries);
+    expect(blocking.map((e) => e.check)).toEqual(['b', 'd']);
+    expect(submitBlocking.map((e) => e.check)).toEqual(['c']);
+    expect(warnings.map((e) => e.check)).toEqual(['a', 'e']);
+  });
+
+  it('returns three empty lists for no entries', () => {
+    expect(meta.splitQuotationChecklist([])).toEqual({ blocking: [], submitBlocking: [], warnings: [] });
   });
 });

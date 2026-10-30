@@ -67,3 +67,23 @@ describe('mockApi tickets.actions — delivery advertisement mirrors canWriteDel
     expect(await deliveryActionsFor({ role: 'sales_manager' })).toEqual([]);
   });
 });
+
+// Mirrors TicketService#deliveryMessage: the DELIVERY_RECORDED event names each line by the item's
+// brand + model + size (not its row id) so the history reads for a person.
+describe('mockApi tickets.recordDelivery — event message names the line', () => {
+  it('writes "brand model size: delivered/ordered", not "<itemId>: …"', async () => {
+    await api.auth.login({ email: 'sales@glr.co.th', password: 'demo1234' });
+    const before = (await api.tickets.get(OWNED_DELIVERY_READY_TICKET)).ticket;
+    const item = before.items[0];
+    await api.tickets.recordDelivery(OWNED_DELIVERY_READY_TICKET, {
+      source: 'WAREHOUSE', lines: [{ itemId: item.id, qty: 1 }],
+    });
+
+    const after = (await api.tickets.get(OWNED_DELIVERY_READY_TICKET)).ticket;
+    const event = [...after.events].reverse().find((e) => e.kind === 'DELIVERY_RECORDED');
+    const name = [item.brand, item.model, item.size].filter(Boolean).join(' ');
+    expect(event.message).toContain(`${name}: `);
+    expect(event.message.startsWith(`${item.id}: `)).toBe(false);
+  });
+});
+

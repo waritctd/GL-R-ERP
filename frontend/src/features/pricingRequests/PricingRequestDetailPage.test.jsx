@@ -3049,12 +3049,15 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   it('shows the new-engine quotation (number, status, link) once one exists, and hides both create buttons', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
-      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'DRAFT' },
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'PENDING_APPROVAL' },
     });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
     await screen.findByText('QT-2026-0099-1');
+    // The deal engine's own status words (PENDING_APPROVAL is not a customer-quotation status).
+    expect(screen.getByText('รออนุมัติ')).not.toBeNull();
+    expect(screen.queryByText(/PENDING_APPROVAL/)).toBeNull();
     const link = screen.getByRole('link', { name: 'เปิดใบเสนอราคา' });
     expect(link.getAttribute('href')).toBe('/quotations/9001');
     expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
@@ -3102,6 +3105,9 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   it.each([
     ['CEO_REVIEWING', 'ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้'],
     ['APPROVED_FOR_QUOTATION', 'อนุมัติราคาขายแล้ว — รอฝ่ายขายสร้างใบเสนอราคาลูกค้า'],
+    // A request that will never get a quotation says why, instead of "wait for approval".
+    ['CANCELLED', 'ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้ยกเลิกแล้ว'],
+    ['SUPERSEDED', 'ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้ถูกแทนที่แล้ว'],
   ])('tells the CEO the no-quotation state in words for %s, with no raw enum', async (status, text) => {
     const request = buildRequest({ summary: { status } });
     renderDetailPage({ user: ceoUser, request });

@@ -335,6 +335,8 @@ describe('DepositNoticePage', () => {
     renderDepositNoticePage();
 
     expect(await screen.findByText('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ')).not.toBeNull();
+    // A deal document: the helper says ดีล, not คำขอราคา.
+    expect(screen.getByText('สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับดีลนี้')).not.toBeNull();
 
     const createButton = screen.getByRole('button', { name: /สร้างเอกสารฉบับร่าง/ });
     fireEvent.click(createButton);
@@ -454,10 +456,21 @@ describe('DepositNoticePage', () => {
       expect(screen.getByRole('button', { name: /ออกเอกสาร/ }).disabled).toBe(false);
     });
 
+    // A quotation with no % stored means the 30% default everywhere else, so 40% differs from it.
+    it('reads a quotation without a stored deposit percent as 30%', async () => {
+      draftWith();
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...quotation, depositPercent: null }] });
+      renderDepositNoticePage();
+
+      const hint = await screen.findByTestId('deposit-percent-differs');
+      expect(hint.textContent).toContain('ใบเสนอราคา QT-2026-0042 ระบุมัดจำ 30%');
+    });
+
     it.each([
       ['the percents are equal', { depositPercent: 0.3 }, [quotation]],
       ['no quotation carries the draft reference', { reference: 'PO-001' }, [quotation]],
-      ['the quotation has no deposit percent', {}, [{ ...quotation, depositPercent: null }]],
+      // An issued notice is a record; the hint is advice for a draft still being edited.
+      ['the notice is already issued', { status: 'ISSUED', docNumber: 'DN-0001' }, [quotation]],
     ])('shows no hint when %s', async (_name, docOver, items) => {
       draftWith(docOver);
       api.dealQuotations.listForTicket.mockResolvedValue({ items });

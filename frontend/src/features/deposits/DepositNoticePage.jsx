@@ -533,12 +533,6 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // DepositNoticeRepository does (HALF_UP), so the screen matches the stored document.
   const subtotal = round2(form.items.reduce((sum, it) => sum + lineNet(it) * (Number(it.qty) || 0), 0));
   const deposit = round2(subtotal * (Number(form.depositPercent) || 0));
-  const referencedQuotation = form.reference
-    ? (dealQuotationsQuery.data ?? []).find((q) => q.number === form.reference)
-    : null;
-  const noticePercent = Math.round(Number(form.depositPercent) * 100);
-  const percentDiffers = form.depositPercent !== '' && referencedQuotation?.depositPercent != null
-    && referencedQuotation.depositPercent !== noticePercent;
   // Issue #756: the served document's own vatPercent always wins once one exists — only
   // before that (no `doc` yet) does this fall back to FALLBACK_VAT_PERCENT above.
   const vatPercent = Number(doc?.vatPercent ?? FALLBACK_VAT_PERCENT);
@@ -571,6 +565,14 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   }
 
   const isIssued = doc?.status === 'ISSUED';
+  const referencedQuotation = form.reference
+    ? (dealQuotationsQuery.data ?? []).find((q) => q.number === form.reference)
+    : null;
+  const noticePercent = Math.round(Number(form.depositPercent) * 100);
+  // A quotation with no % stored means the 30% default (as everywhere else).
+  const quotationPercent = referencedQuotation ? (referencedQuotation.depositPercent ?? 30) : null;
+  const percentDiffers = !isIssued && form.depositPercent !== '' && quotationPercent != null
+    && quotationPercent !== noticePercent;
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
@@ -675,7 +677,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <EmptyState
             icon="fileText"
             title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
-            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับคำขอราคานี้"
+            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับดีลนี้"
           />
           <div className="flex justify-center px-4.5 pb-4.5">
             <Button variant="primary" onClick={handleCreateDraft} disabled={creatingDraft}>
@@ -906,7 +908,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               </label>
               {percentDiffers ? (
                 <p data-testid="deposit-percent-differs" className="mx-0 mb-2 mt-0 text-xs text-warning-dark">
-                  ใบเสนอราคา {referencedQuotation.number} ระบุมัดจำ {referencedQuotation.depositPercent}% — ใบแจ้งนี้ใช้ {noticePercent}%
+                  ใบเสนอราคา {referencedQuotation.number} ระบุมัดจำ {quotationPercent}% — ใบแจ้งนี้ใช้ {noticePercent}%
                 </p>
               ) : null}
               {fieldErrors.depositPercent ? (
@@ -933,7 +935,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               {/* Next-action helper — describes exactly what api.depositNotices.issue
                   does (src/api/mockApi.js ~L2322-2345): assigns a real docNumber,
                   flips this document to ISSUED (fields above become read-only via
-                  `isIssued`), and moves the parent ticket to `document_issued`. */}
+                  `isIssued`). It no longer changes the parent ticket's status. */}
               {!isIssued && (
                 <p className="mx-0 mb-0 mt-2.5 text-xs leading-[1.6] text-text-muted">
                   กด &quot;ออกเอกสาร&quot; เพื่อออกเลขที่เอกสารอย่างเป็นทางการ — หลังจากนี้จะแก้ไขข้อมูลในเอกสารนี้ไม่ได้อีก

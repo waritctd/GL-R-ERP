@@ -4114,7 +4114,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     }
   }
   if (source === 'WAREHOUSE' && !warehouseAvailableFor(ticket)) {
-    fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE', 409);
+    fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า', 409);
   }
   const now = new Date().toISOString();
   const nextId = Math.max(0, ...(db.deliveryRecords ?? []).map((record) => record.deliveryId)) + 1;
@@ -4141,7 +4141,8 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
   });
   const message = recordItems.map((line) => {
     const item = ticket.items.find((it) => it.id === line.itemId);
-    return `${line.itemId}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
+    const name = [item.brand, item.model, item.size].filter(Boolean).join(' ') || `รายการ ${item.id}`;
+    return `${name}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
   }).join(', ');
   pushEvent(ticket, user, 'DELIVERY_RECORDED', ticket.status, ticket.status, message);
   const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0));

@@ -1990,6 +1990,8 @@ export const QUOTATION_CHECK = Object.freeze({
   // submit. Two check names so the two severities can never share one blocking/non-blocking flag.
   CREDIT_DAYS: 'creditDays',
   CREDIT_DAYS_INVALID: 'creditDaysInvalid',
+  // Submit-only, like FULL_PAYMENT_TERM: a draft still saves with no lead time; ส่งขออนุมัติ does not.
+  LEAD_TIME: 'leadTime',
   // Slice 2 (SLICE-2-FLOW-A.md, owner-approved IA D1–D7) — all three blocking, and each mirrors a
   // refusal the server makes on create: no ticket to hang the quotation on at all (DEAL), S2-B1's
   // 400 on a DEAL_DIRECT create with no recipient (RECIPIENT), and S2-B3's N6 409 (LIVE_DIRECT).
@@ -2006,7 +2008,8 @@ export const QUOTATION_CHECK = Object.freeze({
 });
 
 /** THE blocking set — the one place that decides which checklist entries disable บันทึกร่าง and
- * ส่งขออนุมัติ. Every other check is a warning. Change it only on an owner ruling. */
+ * ส่งขออนุมัติ. Every other check is a warning, or submit-only (QUOTATION_SUBMIT_BLOCKING_CHECKS).
+ * Change it only on an owner ruling. */
 export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.DEAL,
   QUOTATION_CHECK.RECIPIENT,
@@ -2030,7 +2033,23 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
 export const QUOTATION_SUBMIT_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.FULL_PAYMENT_TERM,
   QUOTATION_CHECK.CREDIT_DAYS,
+  QUOTATION_CHECK.LEAD_TIME,
 ]));
+
+/** The sentence the editor's ส่งขออนุมัติ gate and the checklist both give for missing lead times
+ * (the EXACT wording DealQuotationService#requireEveryTileItemHasALeadTime's 400 uses). */
+export function missingLeadTimeMessage(seqs) {
+  return `กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${seqs.join(', ')}`;
+}
+
+/** Splits checklist entries into the three groups the editor shows: ต้องกรอก (blocking),
+ * ต้องกรอกก่อนส่งขออนุมัติ (submit-only) and ควรกรอก (warnings). Blocking wins over submit-only. */
+export function splitQuotationChecklist(entries) {
+  const blocking = entries.filter((e) => e.blocking);
+  const submitBlocking = entries.filter((e) => !e.blocking && e.submitBlocking);
+  const warnings = entries.filter((e) => !e.blocking && !e.submitBlocking);
+  return { blocking, submitBlocking, warnings };
+}
 
 /** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
  * shared CustomerDetailsFields' (the same ids on every entry path — only one path renders at a
@@ -2193,6 +2212,9 @@ export function buildQuotationChecklist({
   livePricingRequest = false,
   // V192.3: ผู้ติดต่อ's Email as typed. Blank (the default) is fine — see #orderedByEmailError.
   orderedByEmail = '',
+  // 1-based printed row numbers of TILE/PLAIN rows with no lead time (the editor's own
+  // missingLeadTimeSeqs): submit-only, listed so the checklist never reads "complete" while ส่ง is blocked.
+  missingLeadTimeSeqs = [],
 } = {}) {
   const entries = [];
   const push = (check, message, targetId = null) => {
@@ -2269,6 +2291,12 @@ export function buildQuotationChecklist({
     } else if (blankValue(creditDays)) {
       push(QUOTATION_CHECK.CREDIT_DAYS, 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 'creditDays');
     }
+  }
+
+  if (missingLeadTimeSeqs.length) {
+    const row = missingLeadTimeSeqs[0] - 1;
+    const prefix = (ITEM_FIELD_ID_PREFIX[lineTypeOf(items[row])] ?? ITEM_FIELD_ID_PREFIX.TILE).leadTimeMinDays;
+    push(QUOTATION_CHECK.LEAD_TIME, missingLeadTimeMessage(missingLeadTimeSeqs), `${prefix}-${row}`);
   }
 
   if (items.length === 0) {

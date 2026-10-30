@@ -3003,17 +3003,17 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor).id(), otherSalesActor);
         quotationService.approve(othersPending.id(), new ApproveRequest(null), ceoActor);
         // QA-37: post-approval statuses (the customer-outcome ones included) belong to the approved bucket.
-        jdbc.update("UPDATE sales.quotation SET doc_status = 'ISSUED' WHERE quotation_id = :id",
-            java.util.Map.of("id", laterIssued.id()));
-        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED' WHERE quotation_id = :id",
-            java.util.Map.of("id", othersPending.id()));
+        setDocStatus(laterIssued.id(), "ISSUED");
+        setDocStatus(othersPending.id(), "ACCEPTED");
+        // SENT is its own row: dropping it from the approved bucket's SQL must turn this test red.
+        setDocStatus(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), "SENT");
 
         DealQuotationCountsDto own = quotationService.counts(salesActor);
-        assertThat(own.all()).isEqualTo(5);
+        assertThat(own.all()).isEqualTo(6);
         assertThat(own.pendingApproval()).isEqualTo(1);
         assertThat(own.needsRework()).isEqualTo(1);
         assertThat(own.cancelled()).isEqualTo(1);
-        assertThat(own.approved()).as("APPROVED + the ISSUED row").isEqualTo(2);
+        assertThat(own.approved()).as("APPROVED + the ISSUED row + the SENT row").isEqualTo(3);
         assertCountsMatchLists(own, salesActor);
 
         DealQuotationCountsDto others = quotationService.counts(otherSalesActor);
@@ -3023,8 +3023,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertCountsMatchLists(others, otherSalesActor);
 
         DealQuotationCountsDto queue = quotationService.counts(salesManagerActor);
-        assertThat(queue.all()).isEqualTo(6);
-        assertThat(queue.approved()).isEqualTo(3);
+        assertThat(queue.all()).isEqualTo(7);
+        assertThat(queue.approved()).isEqualTo(4);
         assertCountsMatchLists(queue, salesManagerActor);
 
         // Same gate as search: a role outside VIEW_ROLES with no grant is 403.

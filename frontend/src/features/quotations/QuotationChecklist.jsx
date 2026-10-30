@@ -1,4 +1,5 @@
 import { Icon } from '../../components/common/Icon.jsx';
+import { splitQuotationChecklist } from './quotationMeta.js';
 
 /** DESIGN.md §11/§19 — "Reduced motion is not optional." An explicit `behavior: 'smooth'` passed to
  * `scrollIntoView` is NOT overridden by a CSS `scroll-behavior`, so the preference is read here.
@@ -45,7 +46,7 @@ function Entry({ entry, tone }) {
 
 /**
  * "ข้อมูลที่ยังไม่ครบ" — owner, 2026-09-11: "validate with the quotation which field have not been
- * filled yet". Two lists from quotationMeta#buildQuotationChecklist:
+ * filled yet". Three groups from quotationMeta#buildQuotationChecklist:
  *   - ต้องกรอก (blocking): what the backend already refuses. These disable บันทึกร่าง/ส่งขออนุมัติ.
  *   - ต้องกรอกก่อนส่งขออนุมัติ (submitBlocking): บันทึกร่างได้ แต่ส่งขออนุมัติไม่ได้จนกว่าจะกรอก.
  *   - ควรกรอก (warning): what the document prints but no rule requires. Never blocking.
@@ -53,9 +54,7 @@ function Entry({ entry, tone }) {
  * before ส่งขออนุมัติ, which lives in the page header.
  */
 export function QuotationChecklist({ entries }) {
-  const blocking = entries.filter((entry) => entry.blocking);
-  const submitBlocking = entries.filter((entry) => !entry.blocking && entry.submitBlocking);
-  const warnings = entries.filter((entry) => !entry.blocking && !entry.submitBlocking);
+  const { blocking, submitBlocking, warnings } = splitQuotationChecklist(entries);
   if (blocking.length === 0 && submitBlocking.length === 0 && warnings.length === 0) {
     return (
       <p role="status" className="m-0 flex items-center gap-1.5 rounded-md border border-success-border bg-success/10 px-3.5 py-2.5 text-xs font-bold text-success">
@@ -81,7 +80,7 @@ export function QuotationChecklist({ entries }) {
         </div>
       ) : null}
       {submitBlocking.length ? (
-        <div className="grid gap-1">
+        <div role="alert" className="grid gap-1">
           <p className="m-0 text-2xs font-extrabold text-danger-dark">ต้องกรอกก่อนส่งขออนุมัติ — ยังบันทึกร่างได้</p>
           <ul className="m-0 grid list-none gap-0.5 pl-0" data-testid="checklist-submit-blocking">
             {submitBlocking.map((entry) => <Entry key={`${entry.check}-${entry.message}`} entry={entry} tone="text-danger-dark" />)}

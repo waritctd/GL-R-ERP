@@ -29,6 +29,8 @@ describe('QuotationChecklist', () => {
     // QA-34: an entry that only blocks ส่งขออนุมัติ gets its OWN group, not the "can still submit"
     // ควรกรอก one (which used to promise ส่งขออนุมัติได้ for it).
     const submitGroup = screen.getByText('ต้องกรอกก่อนส่งขออนุมัติ — ยังบันทึกร่างได้').parentElement;
+    // Announced like the blocking group: it disables ส่งขออนุมัติ.
+    expect(submitGroup.getAttribute('role')).toBe('alert');
     expect(within(submitGroup).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
     expect(within(submitGroup).queryByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).toBeNull();
     expect(within(blocking).queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();

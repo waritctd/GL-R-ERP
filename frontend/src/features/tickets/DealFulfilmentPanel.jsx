@@ -1061,7 +1061,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                   <span className="text-text-muted">
                     {(record.items ?? []).map((line) => {
                       const item = items.find((i) => String(i.id) === String(line.itemId));
-                      const name = [item?.brand, item?.model].filter(Boolean).join(' ') || `รายการ #${line.itemId}`;
+                      const name = [item?.brand, item?.model, item?.size].filter(Boolean).join(' ') || `รายการ ${line.itemId}`;
                       return `${name}: ${Number(line.qty).toLocaleString('en-US')}`;
                     }).join(', ')}
                     {record.deliveredByName ? ` · ${record.deliveredByName}` : ''}
