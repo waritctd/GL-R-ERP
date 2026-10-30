@@ -871,7 +871,6 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newFor
   );
 }
 
-// CEO decision's FX line: Thai source (fx_source: 'THB' for baht, 'MANUAL' for a hand-entered rate) and date.
 const FX_SOURCE_LABEL = { THB: 'บาท', MANUAL: 'กรอกเอง', BOT: 'ธปท.' };
 const fxNote = (decision) => `${FX_SOURCE_LABEL[decision.fxSource] ?? decision.fxSource}, ${formatThaiDate(decision.fxEffectiveDate)}`;
 

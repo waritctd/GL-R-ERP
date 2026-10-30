@@ -1177,11 +1177,10 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         String cur = s.fulfillmentStatus();
         if (FulfilmentStatus.PARTIALLY_DELIVERED.equals(cur)) {
-            // Owner decision 3: event + forward-only stage move; no status/payment write — the delivery
-            // already under way must not be disturbed.
+            // Owner decision 3: event + forward-only stage move to ขั้น 13 (W6-01); no status/payment
+            // write — the delivery already under way must not be disturbed.
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
-            // Forward-only stage move (W6-01): the imported remainder has arrived, so the deal reaches ขั้น 13.
             autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
             return;
         }
