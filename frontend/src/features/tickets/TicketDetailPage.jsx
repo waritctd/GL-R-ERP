@@ -1290,7 +1290,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     .reduce((newest, pr) => (newest == null || pr.id > newest.id ? pr : newest), null);
   const requestStage = stageForQuotationRecipient(newestLiveRequest?.recipientType);
   const requestStageAhead = requestStage != null && stageIndexIn(stageCatalog, requestStage) > stageIndexIn(stageCatalog, summary.salesStage);
-  const ctaStage = ['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key) ? 'ORDER_RECEIVED'
+  const confirmOrderCta = ['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key);
+  const ctaStage = confirmOrderCta ? 'ORDER_RECEIVED'
     : requestStageAhead ? requestStage : null;
   // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
   // explicit `isActiveLifecycle` guard DealStagePanel got "for free" from
@@ -1655,7 +1656,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // openDormant) is the actual guard; this is the visible half of the
     // same fix, so the item doesn't invite a click it's about to reject.
     // While ยืนยันคำสั่งซื้อ is the primary, a second เลื่อนไป would compete with it (SK-08).
-    canAdvance && !['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key) && {
+    canAdvance && !confirmOrderCta && {
       key: 'advanceStage',
       label: summary.salesStage === 'PROCUREMENT' && next
         ? manualMoveLabel(summary.salesStage, next, '')

@@ -1911,6 +1911,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // display when it is absent, is what keeps the panel showing "the one that matters" rather than
   // a stale cancelled row.
   const dealQuotationForPr = dealQuotationForPrQuery.data ?? null;
+  const shownQuotation = shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation);
   // CEO discount-approval workflow, Phase 2 (V155): per-line status for the CURRENT quotation
   // only — placed here (not grouped with the other useQuery calls above) because its key/enabled
   // genuinely depend on currentCustomerQuotation's id, and re-deriving that id independently here
@@ -4382,8 +4383,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmOrderDialog
         open={confirmingOrder}
-        number={shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation)?.number}
-        depositPercent={shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation)?.depositPercent}
+        number={shownQuotation?.number}
+        depositPercent={shownQuotation?.depositPercent}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
