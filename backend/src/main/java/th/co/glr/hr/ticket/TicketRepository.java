@@ -7,6 +7,7 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.Year;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -164,7 +165,7 @@ public class TicketRepository {
             params.addValue("limit", page.size());
             params.addValue("offset", page.offset());
         }
-        return jdbc.query(sql.toString(), params, (rs, rowNum) -> enrichSummary(mapSummary(rs)));
+        return enrichSummaries(jdbc.query(sql.toString(), params, (rs, rowNum) -> mapSummary(rs)));
     }
 
     public int countSummaries(String status, Long createdByFilter) {
@@ -795,7 +796,7 @@ public class TicketRepository {
                           ecc.first_name_th, ecc.last_name_th
                 """,
                 Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
-            return Optional.ofNullable(summary).map(this::enrichSummary);
+            return Optional.ofNullable(summary).flatMap(x -> enrichSummaries(List.of(x)).stream().findFirst());
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
@@ -1198,28 +1199,68 @@ public class TicketRepository {
         );
     }
 
-    private TicketSummaryDto enrichSummary(TicketSummaryDto s) {
-        BigDecimal payable = payableAmount(s.id());
-        BigDecimal paid = sumPaid(s.id());
+    /** One row's worth of the enrichment facts {@link #SUMMARY_FACTS_SELECT} computes for a page of deals. */
+    private record SummaryFacts(BigDecimal payable, BigDecimal paid, boolean balanceReceipt, boolean stale,
+                                PaymentDue due, boolean hasInvoice, CommissionAndLiveQuotation extras) {}
+
+    private Map<Long, SummaryFacts> summaryFacts(List<Long> ids) {
+        Map<Long, SummaryFacts> byId = new HashMap<>();
+        jdbc.query(SUMMARY_FACTS_SELECT, Map.of("ids", ids), rs -> {
+            BigDecimal payable = rs.getBigDecimal("payable");
+            BigDecimal paid = rs.getBigDecimal("paid");
+            long quotationId = rs.getLong("quotation_id");
+            LiveDirectQuotationDto live = rs.wasNull() ? null
+                : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
+                    rs.getString("doc_status"), rs.getString("recipient_type"));
+            // basis null = legacy / free-text terms: nothing structured, so no PaymentDue (as paymentDue()).
+            PaymentDue due = null;
+            String basis = rs.getString("basis");
+            if (basis != null) {
+                int days = rs.getInt("days");
+                java.sql.Date delivered = rs.getDate("delivered_on");
+                int credit = rs.getInt("credit_days");
+                Integer creditDays = rs.wasNull() ? null : credit;
+                due = new PaymentDue(delivered == null ? null : delivered.toLocalDate().plusDays(days), basis, creditDays);
+            }
+            byId.put(rs.getLong("ticket_id"), new SummaryFacts(
+                payable == null ? BigDecimal.ZERO : payable, paid == null ? BigDecimal.ZERO : paid,
+                rs.getBoolean("balance_receipt"), rs.getBoolean("is_stale"), due,
+                rs.getBoolean("has_invoice"),
+                new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live,
+                    readTextArray(rs, "quoted_recipients"), rs.getBigDecimal("deposit_due"))));
+        });
+        return byId;
+    }
+
+    private List<TicketSummaryDto> enrichSummaries(List<TicketSummaryDto> rows) {
+        if (rows.isEmpty()) {
+            return rows;
+        }
+        Map<Long, SummaryFacts> facts = summaryFacts(rows.stream().map(TicketSummaryDto::id).toList());
+        // A deal deleted between the two statements has no facts row; drop it rather than NPE.
+        return rows.stream().filter(s -> facts.containsKey(s.id()))
+            .map(s -> enrichSummary(s, facts.get(s.id()))).toList();
+    }
+
+    private TicketSummaryDto enrichSummary(TicketSummaryDto s, SummaryFacts f) {
+        BigDecimal payable = f.payable();
+        BigDecimal paid = f.paid();
         BigDecimal outstanding = payable.subtract(paid);
         if (outstanding.signum() < 0) {
             outstanding = BigDecimal.ZERO;
         }
-        boolean balanceReceipt = hasBalanceReceipt(s.id());
-        String stage = derivePaymentStage(s, payable, paid, outstanding, balanceReceipt);
+        String stage = derivePaymentStage(s, payable, paid, outstanding, f.balanceReceipt());
         // OVERDUE comes from the payable quotation's terms + the delivery date (owner ruling 2026-09-30),
         // never from the stored billing due_date. An unpaid deposit is never overdue.
-        PaymentDue due = paymentDue(s.id()).orElse(null);
+        PaymentDue due = f.due();
         boolean overdue = due != null && due.date() != null
             && LocalDate.now(BANGKOK).isAfter(due.date())
             && outstanding.signum() > 0
             && !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus());
         // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
         // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged (Slice B1, handoff 103).
-        boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && isStale(s.id());
-        // Slice 2 (S2-B4): liveDirectQuotation rides in the SAME statement as commissionRecorded
-        // rather than adding a query of its own — see recordedCommissionAndLiveDirectQuotation.
-        CommissionAndLiveQuotation facts = recordedCommissionAndLiveDirectQuotation(s.id());
+        boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && f.stale();
+        CommissionAndLiveQuotation facts = f.extras();
         return new TicketSummaryDto(
             s.id(), s.code(), s.type(), s.title(), s.status(), s.priority(),
             s.createdById(), s.createdByName(), s.assignedToId(), s.assignedToName(),
@@ -1231,11 +1272,8 @@ public class TicketRepository {
             s.depositPolicyReason(), s.entryChannel(), s.billingDate(), s.dueDate(),
             s.creditTermDays(), s.lastFollowUpAt(), s.nextFollowUpAt(),
             stage, payable, paid, outstanding, overdue,
-            s.closeConfirmedAt(), s.closeConfirmedByName(), hasInvoiceAttachment(s.id()),
+            s.closeConfirmedAt(), s.closeConfirmedByName(), f.hasInvoice(),
             s.cancelReason(), s.cancelledAt(),
-            // commissionRecorded joins payableAmount/sumPaid/hasBalanceReceipt/isStale/
-            // hasInvoiceAttachment above as another per-row query enrichSummary runs to fill in a
-            // field mapSummary alone cannot answer from sales.ticket.
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), stale,
             facts.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             due == null ? null : due.date(), due == null ? null : due.basis(),
@@ -1280,8 +1318,6 @@ public class TicketRepository {
         """.formatted(ticketIdRef);
     }
 
-    private static final String HAS_RECORDED_COMMISSION = hasRecordedCommission(":ticketId");
-
     private record CommissionAndLiveQuotation(boolean commissionRecorded,
                                               LiveDirectQuotationDto liveDirectQuotation,
                                               Set<String> quotedRecipients,
@@ -1296,42 +1332,6 @@ public class TicketRepository {
             return Set.of();
         }
         return Set.of((String[]) array.getArray());
-    }
-
-    /**
-     * {@link #HAS_RECORDED_COMMISSION}, {@link #findLiveDirectQuotation}'s row and the deal's
-     * quoted recipients in ONE statement. Unrelated facts sharing a round trip only because
-     * {@link #enrichSummary} runs on {@code TicketService#actions}' single-deal path, which
-     * {@code TicketActionsQueryCountIntegrationTest} caps below {@code DealStage.ORDER.size()}
-     * statements — each of these was the fifteenth query in turn. Anything else this endpoint needs
-     * per deal belongs here too, not in a query of its own. The LATERAL subquery is
-     * {@link #LIVE_DIRECT_QUOTATION_SELECT}, the very text {@link #findLiveDirectQuotation} runs, so
-     * the list/detail field and the N6 refusal cannot disagree about which row is live.
-     */
-    private CommissionAndLiveQuotation recordedCommissionAndLiveDirectQuotation(long ticketId) {
-        return jdbc.queryForObject("SELECT " + HAS_RECORDED_COMMISSION + """
-                   AS commission_recorded,
-                   q.quotation_id, q.number, q.doc_status, q.recipient_type,
-                   (SELECT array_agg(DISTINCT r.recipient_type)
-                      FROM sales.quotation r
-                     WHERE r.ticket_id = :ticketId
-                       AND r.doc_status <> 'CANCELLED') AS quoted_recipients,
-                   (SELECT d.total_payable FROM sales.deposit_notice d
-                     WHERE d.ticket_id = :ticketId AND d.status = 'ISSUED'
-                     ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1) AS deposit_due
-              FROM (SELECT 1) AS one
-              LEFT JOIN LATERAL (
-            """ + LIVE_DIRECT_QUOTATION_SELECT + """
-              ) q ON true
-            """, Map.of("ticketId", ticketId),
-            (rs, rowNum) -> {
-                long quotationId = rs.getLong("quotation_id");
-                LiveDirectQuotationDto live = rs.wasNull() ? null
-                    : new LiveDirectQuotationDto(quotationId, rs.getString("number"),
-                        rs.getString("doc_status"), rs.getString("recipient_type"));
-                return new CommissionAndLiveQuotation(rs.getBoolean("commission_recorded"), live,
-                    readTextArray(rs, "quoted_recipients"), rs.getBigDecimal("deposit_due"));
-            });
     }
 
     /** ฝ่ายบัญชี signs off that the deal is ready to close; CEO verification still required. */
@@ -2237,15 +2237,19 @@ public class TicketRepository {
                              AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
         """;
 
-    /** The newest live direct quotation's row — see {@link #findLiveDirectQuotation}. */
-    private static final String LIVE_DIRECT_QUOTATION_SELECT = """
+    /** The newest live direct quotation's row for {@code ticketIdRef} — see {@link #findLiveDirectQuotation}. */
+    private static String liveDirectQuotationSelect(String ticketIdRef) {
+        return """
             SELECT quotation_id, number, doc_status, recipient_type
               FROM sales.quotation
-             WHERE ticket_id = :ticketId
-        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             WHERE ticket_id = %s
+        """.formatted(ticketIdRef) + LIVE_DIRECT_QUOTATION_PREDICATE + """
              ORDER BY quotation_id DESC
              LIMIT 1
         """;
+    }
+
+    private static final String LIVE_DIRECT_QUOTATION_SELECT = liveDirectQuotationSelect(":ticketId");
 
     /**
      * Quotation ↔ deal linking slice 2 (S2-B3 / S2-B4) — the NEWEST live direct quotation on the
@@ -2253,15 +2257,9 @@ public class TicketRepository {
      * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
      * reorder clone — and the client acts on the one being worked on.
      *
-     * <p>{@link #enrichSummary} does not call this: it reads the same row through
-     * {@link #recordedCommissionAndLiveDirectQuotation}, sharing the commission flag's statement so
-     * the list/detail field costs no extra query per row. Not batched into
-     * {@link #findSummaries}' SELECT: that query is shared with {@link #findSummaryById} through
-     * {@code SUMMARY_SELECT} and its {@code GROUP BY}, and a LATERAL join there would change the
-     * one query every deal read goes through for one nullable field — the risk is not worth it while
-     * every sibling field is per-row anyway; batching {@code enrichSummary} as a whole is the fix
-     * if list latency ever matters. Each call is an index lookup on
-     * {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
+     * <p>The list/detail field does not call this: {@link #SUMMARY_FACTS_SELECT} reads the same row
+     * (via {@link #liveDirectQuotationSelect}) for a whole page in one statement. Each call here is an
+     * index lookup on {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
      */
     public Optional<LiveDirectQuotationDto> findLiveDirectQuotation(long ticketId) {
         List<LiveDirectQuotationDto> rows = jdbc.query(LIVE_DIRECT_QUOTATION_SELECT, Map.of("ticketId", ticketId),
@@ -2719,7 +2717,7 @@ public class TicketRepository {
 
     /**
      * True when no {@code deal_activity} row was logged (by {@code created_at}) in the last 7
-     * days — including a deal that has never had one at all. The caller ({@link #enrichSummary})
+     * days — including a deal that has never had one at all. The caller ({@link #enrichSummaries})
      * additionally gates this on {@code lifecycle == ACTIVE}, so only a live deal is ever flagged.
      */
     public boolean isStale(long ticketId) {
@@ -2733,4 +2731,41 @@ public class TicketRepository {
             """, Map.of("ticketId", ticketId), Boolean.class);
         return Boolean.TRUE.equals(value);
     }
+
+    /**
+     * Every per-deal fact {@code mapSummary} cannot answer from {@code sales.ticket}, for a whole page of
+     * deals in ONE statement (no query per row). Declared last: its builders read static constants above. Each column reuses the single-deal SQL builders with
+     * {@code t.ticket_id} as the correlation, so the list and the single-deal helpers cannot drift.
+     */
+    private static final String SUMMARY_FACTS_SELECT = "SELECT t.ticket_id, ("
+        + payableAmountSelect("t.ticket_id") + ") AS payable, ("
+        + paidAmountSelect("t.ticket_id") + ") AS paid, "
+        + """
+            EXISTS(SELECT 1 FROM sales.payment_receipt pr
+                    WHERE pr.ticket_id = t.ticket_id AND pr.kind = 'BALANCE') AS balance_receipt,
+            NOT EXISTS(SELECT 1 FROM sales.deal_activity da
+                        WHERE da.ticket_id = t.ticket_id
+                          AND da.created_at >= now() - interval '7 days') AS is_stale,
+            EXISTS(SELECT 1 FROM sales.attachment att
+                    WHERE att.ticket_id = t.ticket_id AND att.attach_type = 'INVOICE') AS has_invoice,
+            """ + hasRecordedCommission("t.ticket_id") + """
+             AS commission_recorded,
+            pt.days, pt.basis, pt.credit_days, pt.delivered_on,
+            q.quotation_id, q.number, q.doc_status, q.recipient_type,
+            (SELECT array_agg(DISTINCT r.recipient_type)
+               FROM sales.quotation r
+              WHERE r.ticket_id = t.ticket_id
+                AND r.doc_status <> 'CANCELLED') AS quoted_recipients,
+            (SELECT d.total_payable FROM sales.deposit_notice d
+              WHERE d.ticket_id = t.ticket_id AND d.status = 'ISSUED'
+              ORDER BY d.version DESC, d.deposit_notice_id DESC LIMIT 1) AS deposit_due
+              FROM sales.ticket t
+              LEFT JOIN LATERAL (
+            """ + paymentTermsRowSql("t.ticket_id") + """
+              ) pt ON true
+              LEFT JOIN LATERAL (
+            """ + liveDirectQuotationSelect("t.ticket_id") + """
+              ) q ON true
+             WHERE t.ticket_id IN (:ids)
+            """;
 }

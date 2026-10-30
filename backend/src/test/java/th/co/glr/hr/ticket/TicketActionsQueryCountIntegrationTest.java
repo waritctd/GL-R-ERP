@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
 import th.co.glr.hr.employee.EmployeeReferenceRepository;
@@ -206,6 +207,30 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
                     label, atFirstStage, DealStage.ORDER.size(), byStage)
                 .isLessThan(DealStage.ORDER.size());
         });
+    }
+
+    /**
+     * GET /api/tickets (listPage) must not run per-deal queries. On prod (2026-10-30) every listed deal
+     * cost ~8 round trips in enrichSummary, so the CEO dashboard's full list of 272 deals took minutes
+     * and every page that loads the deal list sat on its skeleton.
+     */
+    @Test
+    void listPageDoesNotRunAQueryPerDeal() {
+        int deals = 5;
+        for (int i = 0; i < deals; i++) {
+            readyToAdvanceFrom(DealStage.ORDER.get(i));
+        }
+
+        counter.reset();
+        var page = ticketService.listPage(null, null, actors.get("ceo"), PageRequest.resolve(null, null));
+
+        assertThat(page.items()).hasSizeGreaterThanOrEqualTo(deals);
+        assertThat(counter.repeatedStatements())
+            .as("listPage repeated a query per deal — the N+1 shape. %s", counter.describe())
+            .isEmpty();
+        assertThat(counter.total())
+            .as("listPage issued %d statements for %d deals. %s", counter.total(), deals, counter.describe())
+            .isLessThan(deals);
     }
 
     // H1 lockdown: account no longer reaches TicketService.actions (the /tickets path); it reads its action
