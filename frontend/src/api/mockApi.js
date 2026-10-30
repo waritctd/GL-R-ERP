@@ -12493,7 +12493,7 @@ export const api = {
     async coverage(ticketId) {
       const ticket = findTicketRaw(Number(ticketId));
       requireStoredIrRead(ticket, requireSession());
-      // Mirrors ImportRequestService#hasUncoveredFactories: read-only; an unresolved/unknown factory
+      // Mirrors ImportRequestService#coverage: read-only; an unresolved/unknown factory
       // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
       let hasUncoveredFactories = true;
       let uncoveredFactoryNames = [];
