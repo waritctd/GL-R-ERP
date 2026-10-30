@@ -113,9 +113,19 @@ const SALES_MANAGER = { id: 3, name: 'ผจก.ขาย', role: 'sales_manager
 // W3-11 (owner ruling 2026-10-30): ออกใบขอซื้อ (IR) mints one numbered IR per factory and cannot be
 // undone, so the click only opens this confirm; createDrafts runs when it is confirmed.
 const IR_CONFIRM_TITLE = 'ยืนยันการออกใบขอซื้อ (IR)';
-async function createIrAndConfirm(button) {
+// Opening the confirm re-checks which factories are uncovered; the dialog is ready once that settles.
+const IR_COVERAGE_LOADING = 'กำลังตรวจสอบโรงงาน';
+async function openIrConfirm(button) {
   fireEvent.click(button ?? await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+  return settledIrConfirm();
+}
+async function settledIrConfirm() {
   const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+  await waitFor(() => expect(dialog.textContent).not.toContain(IR_COVERAGE_LOADING));
+  return dialog;
+}
+async function createIrAndConfirm(button) {
+  const dialog = await openIrConfirm(button);
   fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
 }
 
@@ -136,9 +146,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('clicking opens a dialog (one IR per factory, cannot be undone) and calls no api; confirming calls createDrafts exactly once', async () => {
       api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [issuedRow()] });
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
-
-      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const dialog = await openIrConfirm();
       expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
       expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
@@ -155,9 +163,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('names the count and the factories the server says are uncovered', async () => {
       renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] });
       await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalled());
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
-
-      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const dialog = await openIrConfirm();
       expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto Industry, Rex Ceramics');
       expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
     });
@@ -176,9 +182,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
       fireEvent.change(select, { target: { value: '7' } });
       await waitFor(() => expect(button.disabled).toBe(false));
-      fireEvent.click(button);
 
-      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const dialog = await openIrConfirm(button);
       expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto, Rex Ceramics');
     });
 
@@ -197,9 +202,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
       fireEvent.change(select, { target: { value: '7' } });
       await waitFor(() => expect(button.disabled).toBe(false));
-      fireEvent.click(button);
 
-      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const dialog = await openIrConfirm(button);
       expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 1 ใบ: Rex Ceramics');
     });
 
@@ -219,9 +223,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
       fireEvent.change(select, { target: { value: '7' } });
       await waitFor(() => expect(button.disabled).toBe(false));
-      fireEvent.click(button);
 
-      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const dialog = await openIrConfirm(button);
       expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 1 ใบ: Cotto');
       expect(dialog.textContent).not.toContain('Rex Ceramics');
     });
@@ -243,15 +246,46 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await act(async () => { finish({ importRequests: [issuedRow()] }); });
     });
 
-    it('an older backend (no names) still shows the generic copy', async () => {
-      renderPanel(OWNER, [], { hasUncoveredFactories: true });
+    // Names unavailable (older backend: the coverage route fails or omits the field): the generic copy,
+    // but a factory the rep picked is still named.
+    it('an older backend (no names) still shows the generic copy, plus the factory the rep picked', async () => {
+      const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+      const lines = [
+        { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+        { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+      ];
+      renderPanel(OWNER, [], { summary: directSummary, items: lines, hasUncoveredFactories: true });
       await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalled());
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '7' } });
+      await waitFor(() => expect(button.disabled).toBe(false));
+
+      const dialog = await openIrConfirm(button);
+      expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
+      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      expect(dialog.textContent).toContain('Rex Ceramics');
+      expect(dialog.textContent).not.toContain('จะออกใบขอซื้อ (IR)');
+    });
+
+    // The names come from a re-check done when the confirm opens: until it answers, no guess and no confirm.
+    it('while the coverage is re-checked the dialog says so with confirm disabled, then names the factories', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'] });
+      await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledTimes(1));
+      let resolveFresh;
+      api.storedImportRequests.coverage.mockReturnValueOnce(new Promise((resolve) => { resolveFresh = resolve; }));
       fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
 
       const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
-      expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
-      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      expect(dialog.textContent).toContain(IR_COVERAGE_LOADING);
       expect(dialog.textContent).not.toContain('จะออกใบขอซื้อ (IR)');
+      expect(confirm.disabled).toBe(true);
+
+      await act(async () => { resolveFresh({ hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] }); });
+      await waitFor(() => expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto Industry, Rex Ceramics'));
+      expect(confirm.disabled).toBe(false);
     });
 
     it('cancel closes the dialog and creates nothing', async () => {
@@ -270,7 +304,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await screen.findByTestId('deal-fulfilment-create-ir-drafts');
 
       act(() => { ref.current.createIrDrafts(); });
-      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const dialog = await settledIrConfirm();
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));

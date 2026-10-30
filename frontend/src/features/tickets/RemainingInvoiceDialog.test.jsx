@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { api } from '../../api/index.js';
@@ -368,37 +368,93 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
       return screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' });
     }
 
-    it('first issue: opens a confirm with the amounts and a "new number on confirm" line, calls no api until confirmed', async () => {
+    // The server re-snapshots money from live data on update + issue, so the confirm shows a FRESH
+    // preview (api.tickets.remainingInvoiceOptions), never the draft's last saved snapshot.
+    it('first issue: refetches the preview, shows ITS amounts (not the draft snapshot) once loaded, calls no issue api until confirmed', async () => {
       api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
       api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow() });
       api.storedRemainingInvoices.issue.mockResolvedValue({ remainingInvoice: docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1' }) });
+      let resolveFresh;
+      api.tickets.remainingInvoiceOptions
+        .mockResolvedValueOnce({ options: baseOptions() })
+        .mockReturnValueOnce(new Promise((resolve) => { resolveFresh = resolve; }));
       renderDialog();
 
       await screen.findByTestId('remaining-invoice-draft-editor');
+      await waitFor(() => expect(api.tickets.remainingInvoiceOptions).toHaveBeenCalledTimes(1));
       fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
 
       const dialog = await confirmDialog();
+      expect(api.tickets.remainingInvoiceOptions).toHaveBeenCalledTimes(2);
+      expect(dialog.textContent).toContain('กำลังคำนวณยอด');
+      expect(dialog.textContent).not.toContain('฿19,856.09');
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' });
+      expect(confirm.disabled).toBe(true);
+
+      await act(async () => {
+        resolveFresh({
+          options: baseOptions({ itemsTotal: 40000, depositAmount: 20000, netAmount: 20000, vatAmount: 1400, totalPayable: 21400 }),
+        });
+      });
+      await waitFor(() => expect(dialog.textContent).toContain('฿21,400.00'));
       const text = dialog.textContent;
       expect(text).toContain('QT-2026-0099');
       expect(text).toContain('ยอดสินค้า');
-      expect(text).toContain('฿37,114.18');
+      expect(text).toContain('฿40,000.00');
       expect(text).toContain('หักมัดจำ');
-      expect(text).toContain('฿18,557.09');
+      expect(text).toContain('฿20,000.00');
       expect(text).toContain('ภาษีมูลค่าเพิ่ม');
-      expect(text).toContain('฿1,299.00');
+      expect(text).toContain('฿1,400.00');
       expect(text).toContain('ยอดชำระ');
-      expect(text).toContain('฿19,856.09');
+      // The draft's stale saved snapshot is not what the server will issue.
+      expect(text).not.toContain('฿19,856.09');
+      expect(text).not.toContain('฿37,114.18');
       expect(text).toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
       expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
       expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
 
-      const confirm = within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' });
+      expect(confirm.disabled).toBe(false);
       fireEvent.click(confirm);
       fireEvent.click(confirm);
 
       await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledTimes(1));
       expect(api.storedRemainingInvoices.update).toHaveBeenCalledTimes(1);
       expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900);
+    });
+
+    // The server's issue would 409 on a blocking reason, so the confirm names it and cannot proceed.
+    it('a blockingReason on the fresh preview is shown and keeps confirm disabled', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      api.tickets.remainingInvoiceOptions.mockResolvedValue({
+        options: baseOptions({ blockingReason: 'ยังไม่มีใบแจ้งยอดเงินรับมัดจำ' }),
+      });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      await waitFor(() => expect(dialog.textContent).toContain('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ'));
+      expect(dialog.textContent).not.toContain('฿19,856.09');
+      expect(within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' }).disabled).toBe(true);
+    });
+
+    // The server recomputes anyway, so a failed preview does not trap the user — but it must not show stale amounts.
+    it('a failed preview refetch shows an error line instead of amounts and leaves confirm enabled', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      api.tickets.remainingInvoiceOptions
+        .mockResolvedValueOnce({ options: baseOptions() })
+        .mockRejectedValueOnce(new Error('boom'));
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      await waitFor(() => expect(api.tickets.remainingInvoiceOptions).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      await waitFor(() => expect(dialog.textContent).toContain('คำนวณยอดไม่สำเร็จ'));
+      expect(dialog.textContent).not.toContain('฿19,856.09');
+      expect(within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' }).disabled).toBe(false);
     });
 
     it('revision: shows the predicted next number from the ISSUED row of the same quotation', async () => {

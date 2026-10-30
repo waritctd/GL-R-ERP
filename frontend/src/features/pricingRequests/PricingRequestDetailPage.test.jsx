@@ -3807,18 +3807,24 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     expect(dialog.textContent).not.toContain(request.summary.requestCode);
   });
 
-  it('VW-04: with only an old-engine quotation the dialog names that number, never the PCR code', async () => {
+  // The server confirms the PR's ACCEPTED new-engine quotation if any, else the legacy one; the deal page
+  // shows a dead new-engine row's request through the live legacy quotation, and so must this dialog.
+  it('VW-04: a dead new-engine row beside a live old-engine quotation names the old-engine number, never the PCR code', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'REJECTED' },
+    });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({
       items: [buildCustomerQuotation({ number: 'QT-2026-0042', docStatus: 'ACCEPTED' })],
     });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
-    await screen.findByText('QT-2026-0042');
+    await screen.findByText('QT-2026-0099-1');
 
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
     const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
-    expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0042');
+    await waitFor(() => expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0042'));
+    expect(dialog.textContent).not.toContain('QT-2026-0099-1');
     expect(dialog.textContent).not.toContain(request.summary.requestCode);
   });
 

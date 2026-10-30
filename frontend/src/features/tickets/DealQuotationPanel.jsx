@@ -23,7 +23,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
-import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, outcomeKeyFor, outcomeReasonConfirmCopy } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, outcomeKeyFor, outcomeReasonConfirmCopy, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 // The customer-quotation tail only ever exists once a PricingRequest reaches
@@ -41,10 +41,6 @@ function pickRelevantPricingRequest(pricingRequests = []) {
   // that one, not a later party's newer request (review V2).
   return tail.find((pr) => pr.status === 'QUOTATION_ACCEPTED') ?? tail[0] ?? null;
 }
-
-// An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
-// non-live set): it does not hide the request's new-engine quotation (review V6).
-const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED']);
 
 /**
  * "ราคาและใบเสนอราคา" (Phase 2 Slice S2 — see
@@ -124,8 +120,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
     [quotations],
   );
   // The quotation this panel shows: the new-engine one, unless a live old-engine one is open.
-  const showsPrQuotation = prQuotation && !(current && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(current.docStatus));
-  const shownQuotation = showsPrQuotation ? prQuotation : current;
+  const shownQuotation = shownCustomerQuotation(prQuotation, current);
+  const showsPrQuotation = Boolean(prQuotation) && shownQuotation === prQuotation;
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pr?.id) });

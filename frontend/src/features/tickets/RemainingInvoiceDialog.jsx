@@ -237,6 +237,12 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     enabled: Boolean(draft.ticketId),
   });
   const depositReferenceOptions = depositReferenceOptionsQuery.data?.depositReferenceOptions ?? [];
+  // The issue confirm shows THIS query's amounts, refetched when it opens: update + issue re-snapshot the money
+  // from live data on the server, so the draft's last saved snapshot may no longer be what gets issued.
+  const freshPreview = depositReferenceOptionsQuery.data;
+  const previewLoading = depositReferenceOptionsQuery.isFetching;
+  const previewFailed = !previewLoading && (depositReferenceOptionsQuery.isError || !freshPreview);
+  const previewBlocking = !previewLoading && !previewFailed ? freshPreview.blockingReason : null;
 
   const [reference, setReference] = useState(draft.reference ?? '');
   const [depositReference, setDepositReference] = useState(draft.depositReference ?? '');
@@ -384,7 +390,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
           data-testid="remaining-invoice-save-draft">
           {saving ? 'กำลังบันทึก…' : 'บันทึก'}
         </Button>
-        <Button type="button" variant="primary" disabled={busy} onClick={() => setConfirmingIssue(true)}
+        <Button type="button" variant="primary" disabled={busy} onClick={() => { depositReferenceOptionsQuery.refetch(); setConfirmingIssue(true); }}
           data-testid="remaining-invoice-issue">
           {issuing ? 'กำลังออกเอกสาร…' : 'ออกใบแจ้งหนี้'}
         </Button>
@@ -404,10 +410,17 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
         message={(
           <div className="flex flex-col gap-1 text-sm">
             <div className="flex justify-between"><span className="text-text-muted">อ้างอิง</span><span>{reference || '-'}</span></div>
-            <div className="flex justify-between"><span className="text-text-muted">ยอดสินค้า</span><span>{formatMoney(draft.itemsTotal)}</span></div>
-            <div className="flex justify-between"><span className="text-text-muted">หักมัดจำ</span><span>{formatMoney(draft.depositDeduction)}</span></div>
-            <div className="flex justify-between"><span className="text-text-muted">ภาษีมูลค่าเพิ่ม 7%</span><span>{formatMoney(draft.vatAmount)}</span></div>
-            <div className="flex justify-between font-bold"><span>ยอดชำระ</span><span>{formatMoney(draft.grandTotal)}</span></div>
+            {previewLoading ? <p className="m-0 text-text-muted">กำลังคำนวณยอด…</p> : null}
+            {previewFailed ? <p className="m-0 font-bold text-danger" role="alert">คำนวณยอดไม่สำเร็จ — ระบบจะคำนวณใหม่ตอนออกเอกสาร</p> : null}
+            {previewBlocking ? <p className="m-0 font-bold text-danger" role="alert">{previewBlocking}</p> : null}
+            {!previewLoading && !previewFailed && !previewBlocking ? (
+              <>
+                <div className="flex justify-between"><span className="text-text-muted">ยอดสินค้า</span><span>{formatMoney(freshPreview.itemsTotal)}</span></div>
+                <div className="flex justify-between"><span className="text-text-muted">หักมัดจำ</span><span>{formatMoney(freshPreview.depositAmount)}</span></div>
+                <div className="flex justify-between"><span className="text-text-muted">ภาษีมูลค่าเพิ่ม 7%</span><span>{formatMoney(freshPreview.vatAmount)}</span></div>
+                <div className="flex justify-between font-bold"><span>ยอดชำระ</span><span>{formatMoney(freshPreview.totalPayable)}</span></div>
+              </>
+            ) : null}
             <p className="m-0 pt-2 text-text-secondary">
               {issuedOfSameQuotation
                 ? `เลขที่เอกสาร ${issuedOfSameQuotation.baseNumber}-${issuedOfSameQuotation.version + 1}`
@@ -417,6 +430,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
         )}
         confirmLabel="ออกใบแจ้งหนี้"
         busy={issuing}
+        confirmDisabled={previewLoading || Boolean(previewBlocking)}
         onConfirm={handleIssue}
         onCancel={() => setConfirmingIssue(false)}
       />

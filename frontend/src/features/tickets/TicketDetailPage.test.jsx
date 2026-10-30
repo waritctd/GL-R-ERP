@@ -4674,7 +4674,10 @@ describe('TicketDetailPage', () => {
       // W3-11: ออกใบขอซื้อ (IR) is irreversible -> the handle opens the panel's confirm; nothing is sent yet.
       const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' });
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
-      fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
+      // The confirm re-checks the factories first; it enables once that answers.
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      await waitFor(() => expect(confirm.disabled).toBe(false));
+      fireEvent.click(confirm);
 
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
       expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(701, undefined);

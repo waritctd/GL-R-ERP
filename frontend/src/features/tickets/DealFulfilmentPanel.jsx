@@ -420,6 +420,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       return false;
     }
     if (createDraftsMutation.isPending) return false;
+    coverageQuery.refetch(); // the confirm names the factories from a fresh read
     setConfirmingCreate(true);
     return true;
   }
@@ -699,15 +700,21 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
   // The create confirm: the factories the server says are uncovered, plus the ones the rep picked for
   // factory-less lines (a pick that already has a live IR, or that the server named, adds nothing).
+  // Names unavailable (older backend, or the re-check failed): the generic line, still naming the picks.
   const pickedNames = factorylessLines
     .map((l) => (factoryNamesQuery.data ?? []).find((f) => String(f.id) === String(lineFactories[l.id])))
     .filter((f) => f && !liveStoredIrRows.some((r) => String(r.factoryId) === String(f.id)))
     .map((f) => f.factoryName);
-  const serverNames = coverageQuery.data?.uncoveredFactoryNames;
+  const serverNames = coverageQuery.isError ? undefined : coverageQuery.data?.uncoveredFactoryNames;
   const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
-  const createConfirmMessage = `${confirmNames.length > 0
-    ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
-    : 'ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน'} — การดำเนินการนี้ย้อนกลับไม่ได้`;
+  const coverageLoading = coverageQuery.isFetching;
+  let createConfirmMessage = 'กำลังตรวจสอบโรงงาน…';
+  if (!coverageLoading) {
+    const what = confirmNames.length > 0
+      ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
+      : `ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`;
+    createConfirmMessage = `${what} — การดำเนินการนี้ย้อนกลับไม่ได้`;
+  }
 
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
@@ -1161,6 +1168,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         message={createConfirmMessage}
         confirmLabel="ออกใบขอซื้อ (IR)"
         busy={createDraftsMutation.isPending}
+        confirmDisabled={coverageLoading}
         // Close first: a second click on the open dialog would send twice.
         onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
         onCancel={() => setConfirmingCreate(false)}
