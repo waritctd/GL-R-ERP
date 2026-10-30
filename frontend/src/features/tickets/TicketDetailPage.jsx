@@ -993,6 +993,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   }
 
   const { summary, items, events, quotations } = ticket;
+  // QA-33: the billing form is the only writer of lastFollowUpAt, so ติดตามล่าสุด is the later of it and the newest activity.
+  const latestFollowUp = [summary.lastFollowUpAt, ...activities.map((a) => a.activityDate)].filter(Boolean).sort().pop() ?? null;
   // B5 fix: when sales.ticket_item is still empty (pre-order-confirmation), the items grid
   // below falls back to the deal's live pricing-request/quotation line items instead of
   // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
@@ -1881,6 +1883,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         catalog={stageCatalog}
         events={ticket.events}
         quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
+        ctaStage={['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key) ? 'ORDER_RECEIVED' : null}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
@@ -1951,7 +1954,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
                 <dl className="m-0">
                   <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
-                  <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
+                  <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(latestFollowUp)} />
                   <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
                   <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
                   <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />

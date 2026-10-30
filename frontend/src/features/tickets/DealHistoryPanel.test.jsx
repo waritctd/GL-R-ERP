@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 
 globalThis.React = React;
@@ -69,6 +69,19 @@ describe('DealHistoryPanel', () => {
     // both, so neither is the two-events case the id tiebreak targets. No
     // crash, and both still render (order unaffected by this fix).
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  // The activity form defaults to today in Bangkok, read when the form renders: at 06:30 Bangkok the
+  // UTC date is still yesterday, and a date fixed when the module loaded goes stale overnight.
+  it('the activity form defaults its date to today in Bangkok, not the UTC date', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
+    try {
+      const { container } = render(<DealHistoryPanel canAddActivity />);
+      expect(container.querySelector('input[type="date"]').value).toBe('2026-10-31');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL

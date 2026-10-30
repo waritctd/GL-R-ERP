@@ -116,10 +116,9 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     return (await r.json()).quotation;
   }
 
-  // The stage badge carries the catalogue's absolute number. The "ขั้นที่ X จาก Y" line is the
-  // position on THIS deal's route (stage 8 reads "ขั้นที่ 4 จาก 11" on BUYER_DIRECT) and shows the
-  // full-spine count until the per-deal route loads, so asserting on it only ever passed by
-  // catching that transient.
+  // The stage badge carries the catalogue's absolute number. The route line no longer prints a
+  // position (W5-02: one numbering); it reads "เส้นทาง · <route> · N ขั้น", and N is the full-spine
+  // count until the per-deal route loads, so the badge is the stable assertion.
   const stageIs = (page, n) => expect(page.getByTestId('deal-stage-no')).toHaveText(String(n));
 
   test.beforeAll(async ({ browser }) => {

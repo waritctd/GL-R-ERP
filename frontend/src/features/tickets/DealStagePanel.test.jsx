@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { nextStageIn } from './stageCatalog.js';
@@ -475,41 +476,82 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     expect(normal.className).not.toContain('bg-surface');
   });
 
+  // SK-08: at ขั้น 8 the page's main button is ยืนยันคำสั่งซื้อ (-> ขั้น 10). ถัดไป must name the stage
+  // that button leads to, and the manual เลื่อนไป ขั้น 9 must not compete as a second primary.
+  it('with ctaStage ORDER_RECEIVED at QUOTE_BUYER, ถัดไป names 10 (not 9) and the guided opener is secondary', () => {
+    const negotiationBlocked = allAllowed.map((d) => (
+      d.stage === 'NEGOTIATION' ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
+    ));
+    const props = {
+      summary: baseSummary({ id: 504, salesStage: 'QUOTE_BUYER' }), availableActions: [], stageDecisions: negotiationBlocked,
+    };
+    const { unmount } = renderPanel(props);
+    // Contrast: without ctaStage the existing behaviour stands (ถัดไป: 9, primary opener).
+    expect(screen.getByTestId('deal-stage-next').textContent).toContain('9.');
+    expect(screen.getByTestId('guided-advance-open').className).not.toContain('bg-surface');
+    unmount();
+
+    renderPanel({ ...props, ctaStage: 'ORDER_RECEIVED' });
+    const text = screen.getByTestId('deal-stage-next').textContent;
+    expect(text).toContain('10.');
+    expect(text).toContain(AUTO_STAGE_HINT.ORDER_RECEIVED);
+    expect(text).not.toContain('9.');
+    const opener = screen.getByTestId('guided-advance-open');
+    expect(opener.className).toContain('bg-surface');
+  });
+
   it('replaces the dead hint with a guided button that fills the gate then advances', async () => {
     api.tickets.updateTracking.mockClear();
     api.tickets.addActivity.mockClear();
     const onUpdateStage = vi.fn().mockResolvedValue({});
-    renderPanel({
-      summary: baseSummary({ id: 501 }),
-      availableActions: [],
-      stageDecisions: readinessBlocked,
-      onUpdateStage,
-    });
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    // 06:30 in Bangkok is still the previous day in UTC: the logged activity must carry the Bangkok date.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
+    try {
+      renderPanel({
+        summary: baseSummary({ id: 501 }),
+        availableActions: [],
+        stageDecisions: readinessBlocked,
+        onUpdateStage,
+      });
 
-    // The misleading "อัปเดตโดย…" hint is gone; the guided opener stands in its place.
-    expect(screen.queryByText(/อัปเดตโดย/)).toBeNull();
-    fireEvent.click(screen.getByTestId('guided-advance-open'));
-    expect(screen.getByTestId('guided-advance-modal')).not.toBeNull();
+      // The misleading "อัปเดตโดย…" hint is gone; the guided opener stands in its place.
+      expect(screen.queryByText(/อัปเดตโดย/)).toBeNull();
+      fireEvent.click(screen.getByTestId('guided-advance-open'));
+      expect(screen.getByTestId('guided-advance-modal')).not.toBeNull();
 
-    // Submit stays disabled until both gate inputs are present.
-    expect(screen.getByTestId('guided-advance-submit').disabled).toBe(true);
-    fireEvent.change(screen.getByTestId('guided-advance-followup'), { target: { value: '2026-10-05' } });
-    fireEvent.change(screen.getByTestId('guided-advance-note'), { target: { value: 'โทรติดตามลูกค้า' } });
-    expect(screen.getByTestId('guided-advance-submit').disabled).toBe(false);
+      // Submit stays disabled until both gate inputs are present.
+      expect(screen.getByTestId('guided-advance-submit').disabled).toBe(true);
+      fireEvent.change(screen.getByTestId('guided-advance-followup'), { target: { value: '2026-10-05' } });
+      fireEvent.change(screen.getByTestId('guided-advance-note'), { target: { value: 'โทรติดตามลูกค้า' } });
+      expect(screen.getByTestId('guided-advance-submit').disabled).toBe(false);
 
-    fireEvent.click(screen.getByTestId('guided-advance-submit'));
+      fireEvent.click(screen.getByTestId('guided-advance-submit'));
 
-    // The move goes through the parent (preserving its invalidation/toast) with the next stage code…
-    await waitFor(() => expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED' }));
-    // …and only after the gate was satisfied first.
-    expect(api.tickets.updateTracking).toHaveBeenCalledWith(
-      501,
-      expect.objectContaining({ nextFollowUpAt: '2026-10-05', winProbability: null }),
-    );
-    expect(api.tickets.addActivity).toHaveBeenCalledWith(
-      501,
-      expect.objectContaining({ kind: 'CALL', note: 'โทรติดตามลูกค้า' }),
-    );
+      // The move goes through the parent (preserving its invalidation/toast) with the next stage code…
+      await waitFor(() => expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED' }));
+      // …and only after the gate was satisfied first.
+      expect(api.tickets.updateTracking).toHaveBeenCalledWith(
+        501,
+        expect.objectContaining({ nextFollowUpAt: '2026-10-05', winProbability: null }),
+      );
+      expect(api.tickets.addActivity).toHaveBeenCalledWith(
+        501,
+        expect.objectContaining({ kind: 'CALL', note: 'โทรติดตามลูกค้า', activityDate: '2026-10-31' }),
+      );
+      // QA-33: the activity just logged must refresh the page's activities list (and the key must be
+      // numeric, since the page keys it with the route param — see the key-normalisation test below).
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tickets', 'activities', 501] });
+    } finally {
+      invalidate.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // QA-33: the page keys activities with a string route param, the panel with the numeric summary.id.
+  it('queryKeys.ticketActivities normalises the id like ticketDetail, so "6" and 6 share a key', () => {
+    expect(queryKeys.ticketActivities('6')).toEqual(queryKeys.ticketActivities(6));
   });
 
   it('does not show the guided opener when the next stage is blocked for another reason', () => {
@@ -554,17 +596,19 @@ describe('DealStagePanel route awareness', () => {
 
   describe('route line', () => {
     it.each([
-      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำดีล', 'ขั้นที่ 8 จาก 15'],
-      ['OWNER_DIRECT', OWNER_OFF, 'SPEC_APPROVED', 'เส้นทาง · เจ้าของติดต่อโดยตรง', 'ขั้นที่ 3 จาก 14'],
-      ['BUYER_DIRECT', BUYER_OFF, 'QUOTE_BUYER', 'เส้นทาง · ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', 'ขั้นที่ 4 จาก 11'],
-    ])('%s names the route and the honest position', (channel, off, salesStage, name, position) => {
+      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำดีล', '15 ขั้น'],
+      ['OWNER_DIRECT', OWNER_OFF, 'SPEC_APPROVED', 'เส้นทาง · เจ้าของติดต่อโดยตรง', '14 ขั้น'],
+      ['BUYER_DIRECT', BUYER_OFF, 'QUOTE_BUYER', 'เส้นทาง · ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', '11 ขั้น'],
+    ])('%s names the route and its stage count, never a route position (W5-02)', (channel, off, salesStage, name, total) => {
       renderPanel({
         summary: baseSummary({ salesStage, entryChannel: channel }),
         stageDecisions: routeDecisions(off),
       });
       expect(routeLine()).not.toBeNull();
       expect(routeLine().textContent).toContain(name);
-      expect(routeLine().textContent).toContain(position);
+      expect(routeLine().textContent).toContain(`${name} · ${total}`);
+      // W5-02: the panel uses ONE numbering (the stage's own 1-15 number), so no route position here.
+      expect(routeLine().textContent).not.toContain('ขั้นที่');
     });
 
     // Never invent a route: UNSPECIFIED, an unknown value and an absent field all render NOTHING.
@@ -580,14 +624,14 @@ describe('DealStagePanel route awareness', () => {
     });
   });
 
-  it('threads the route to PhaseSummary: buyer-direct at S8 reads ขั้นที่ 4 จาก 11, not 8 จาก 15', () => {
+  it('threads the route to PhaseSummary: buyer-direct at S8 reads ผ่านมาแล้ว 4 จาก 11 ขั้น, not 8 จาก 15', () => {
     renderPanel({
       summary: baseSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'BUYER_DIRECT' }),
       stageDecisions: routeDecisions(BUYER_OFF),
     });
     // The bar's own text (PhaseSummary), distinct from the route line's longer sentence.
-    expect(screen.getByText('ขั้นที่ 4 จาก 11')).not.toBeNull();
-    expect(screen.queryByText('ขั้นที่ 8 จาก 15')).toBeNull();
+    expect(screen.getByText('ผ่านมาแล้ว 4 จาก 11 ขั้น')).not.toBeNull();
+    expect(screen.queryByText('ผ่านมาแล้ว 8 จาก 15 ขั้น')).toBeNull();
   });
 
   describe('ถัดไป follows the route', () => {

@@ -9,6 +9,7 @@ import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { formatThaiDate } from '../../utils/format.js';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import * as quotationMeta from '../quotations/quotationMeta.js';
@@ -769,6 +770,31 @@ describe('TicketDetailPage', () => {
     // Wrong-way-round: the deleted roll-up's content must be absent from the
     // whole page while ภาพรวม is active, not just out of these two sections.
     expect(screen.queryByText('บันทึกสำหรับบริบทดีล')).toBeNull();
+  });
+
+  // QA-33: the backend only writes summary.lastFollowUpAt from the CEO billing form, so logging an
+  // activity never moved "ติดตามล่าสุด". The card shows the later of that field and the newest
+  // activity the page already fetched.
+  it.each([
+    ['no billing-form date: the newest activity date', null, '2026-10-25'],
+    ['a billing-form date later than every activity: that date', '2026-11-02', '2026-11-02'],
+    ['a billing-form date older than the newest activity: the activity date', '2026-10-22', '2026-10-25'],
+  ])('วันสำคัญ ติดตามล่าสุด shows the latest follow-up — %s', async (_name, lastFollowUpAt, expectedIso) => {
+    api.tickets.get.mockResolvedValueOnce({
+      ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', lastFollowUpAt } }),
+    });
+    api.tickets.listActivities.mockResolvedValue({
+      items: [
+        { id: 1, ticketId: 701, activityDate: '2026-10-20', kind: 'CALL', note: 'a', createdAt: '2026-10-20T09:00:00.000Z' },
+        { id: 2, ticketId: 701, activityDate: '2026-10-25', kind: 'CALL', note: 'b', createdAt: '2026-10-25T09:00:00.000Z' },
+      ],
+    });
+
+    renderTicketDetailPage(salesOwnerUser);
+
+    const keyDates = (await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ })).closest('section');
+    const row = within(keyDates).getByText('ติดตามล่าสุด').parentElement;
+    await waitFor(() => expect(within(row).getByText(formatThaiDate(expectedIso))).not.toBeNull());
   });
 
   // The core defect this slice fixes: a comment composer that rendered from
@@ -2600,6 +2626,10 @@ describe('TicketDetailPage', () => {
       const primary = await primaryWithAction('confirm_order');
       expect(primary.getAttribute('aria-haspopup')).toBeNull();
       expect(actionBarOf(primary).textContent).not.toMatch(/เสนอ(ใบ)?ราคา(เจ้าของโครงการ|ผู้ซื้อ)/);
+      // SK-08: ถัดไป names the stage this main button leads to (ขั้น 10), not the next stage on the route.
+      const nextLine = screen.getByTestId('deal-stage-next').textContent;
+      expect(nextLine).toContain('10.');
+      expect(nextLine).not.toContain('5.');
 
       fireEvent.click(primary);
       const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
@@ -4810,6 +4840,10 @@ describe('TicketDetailPage', () => {
       const showToast = vi.fn();
       renderTicketDetailPage(salesOwnerUser, showToast);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
+      // SK-08: ถัดไป names ขั้น 10 (where this button leads), not the next stage on the route (ขั้น 3).
+      const nextLine = screen.getByTestId('deal-stage-next').textContent;
+      expect(nextLine).toContain('10.');
+      expect(nextLine).not.toContain('3.');
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
       expect(api.dealQuotations.promoteToDeal).not.toHaveBeenCalled();
       const dialog = within(screen.getByRole('dialog'));

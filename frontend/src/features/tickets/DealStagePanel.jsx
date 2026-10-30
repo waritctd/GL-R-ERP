@@ -5,13 +5,15 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import {
+  bangkokTodayIso, dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel,
+} from '../../utils/format.js';
 import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
-  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, routePosition,
+  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath,
 } from './stageCatalog.js';
 import {
   AUTO_STAGE_HINT, GATE_LABEL, manualMoveLabel, routeName, STAGE_HEADLINE, STAGE_OWNER_DISPLAY,
@@ -84,6 +86,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   advanceReady = true, advanceInHeader = false,
   // Owner ruling 2026-10-27: the parties the sticky เสนอราคา menu offers, in route order.
   quoteParties = null,
+  // SK-08: the stage the page's main button leads to (e.g. ยืนยันคำสั่งซื้อ → ORDER_RECEIVED); ถัดไป names it.
+  ctaStage = null,
   // The ticket's events, oldest first — the stepper reads which stages the deal skipped from them.
   events = [],
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
@@ -116,7 +120,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     ? nextOnRoute(catalog, nextStage.code, stageDecisions)
     : nextStage;
   const route = routeName(summary.entryChannel);
-  const position = routePosition(catalog, summary.salesStage, stageDecisions);
   const routeStageCount = routePath(catalog, stageDecisions).length;
   const days = daysSince(summary.stageUpdatedAt);
   // Every gate below is now read off the server's answer, never recomputed. `hasAction` is the
@@ -151,7 +154,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         winProbability: guidedDraft.winProbability === '' ? null : Number(guidedDraft.winProbability),
       });
       await api.tickets.addActivity(summary.id, {
-        activityDate: new Date().toISOString().slice(0, 10),
+        activityDate: bangkokTodayIso(),
         kind: guidedDraft.kind,
         note: guidedDraft.activityNote.trim() || null,
       });
@@ -160,6 +163,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(summary.id) });
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(summary.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActivities(summary.id) });
       setGuidedOpen(false);
       setGuidedDraft({ nextFollowUpAt: '', kind: 'CALL', activityNote: '', winProbability: '' });
     },
@@ -219,8 +223,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // then "หรือข้ามไป" the rest) with the first one's auto hint — not the stage after the current one.
   // The first party's stage missing from the catalog: the plain next-stage line.
   const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
-  const lineStage = choiceStage ?? next;
-  const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : nextHint;
+  const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
+  const lineStage = choiceStage ?? ctaRow ?? next;
+  const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint;
   const lineSkips = choiceStage ? skipStages.filter(Boolean) : [];
 
   async function submitStage(payload) {
@@ -330,11 +335,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                     {`ผู้รับผิดชอบ: ${GATE_LABEL[STAGE_OWNER_DISPLAY[meta.code] ?? meta.gate]}`}
                   </div>
                 ) : null}
-                {/* One text line naming the route and the honest position on it. Nothing at all when
+                {/* One text line naming the route and its stage count. Nothing at all when
                     the deal has no route (UNSPECIFIED / unknown / absent channel). */}
                 {route ? (
                   <div data-testid="deal-route-line" className="mt-0.5 text-xs font-bold text-text-muted">
-                    เส้นทาง · {route} · ขั้นที่ {position.position} จาก {position.total}
+                    เส้นทาง · {route} · {routeStageCount} ขั้น
                   </div>
                 ) : null}
                 <div className="mt-1">
@@ -390,7 +395,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
                 {showGuidedOpener ? (
                   <Button
                     type="button"
-                    variant={summary.salesStage === 'PROCUREMENT' ? 'secondary' : 'primary'}
+                    variant={summary.salesStage === 'PROCUREMENT' || (ctaRow && ctaRow.code !== next?.code) ? 'secondary' : 'primary'}
                     disabled={actionLoading}
                     onClick={() => setGuidedOpen(true)}
                     data-testid="guided-advance-open"
