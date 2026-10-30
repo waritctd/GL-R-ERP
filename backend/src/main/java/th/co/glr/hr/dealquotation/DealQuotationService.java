@@ -671,16 +671,15 @@ public class DealQuotationService {
      * {@link PricingRequestItemDto}. */
     private ItemInput buildItemInputFromDecisionItem(PricingRequestItemDto pri, PricingDecisionItemDto di,
                                                       String priceMode) {
-        // unitPrice ("ราคาตั้ง") is set for EVERY mode, not just NET: WastageCalculator's own
-        // #requirePriceValidForType requires a positive unitPrice on every non-perSqm TILE row
-        // regardless of priceMode (the direct-deal editor always shows it, even under
-        // SPECIAL_SQM/DIRECT_NET, as the reference figure the chosen mode's own price is compared
-        // against) — buildTileItem itself only ever READS it for NET's own math, so this is safe
-        // for the other two. list_unit_price (V187) is the right source here because it is
-        // ALWAYS auto-calculated regardless of price_mode (see that column's own migration
-        // comment), unlike manualSellingPricePerRequestedUnit, which is NET-only ("ruling B").
-        BigDecimal unitPrice = WastageCalculator.PRICE_MODE_NET.equals(priceMode)
-            && di.manualSellingPricePerRequestedUnit() != null
+        // unitPrice ("ราคา") is set for EVERY mode: WastageCalculator's own #requirePriceValidForType
+        // requires a positive unitPrice on every non-perSqm TILE row regardless of priceMode, and
+        // buildTileItem only READS it for NET's own math.
+        // W5-03/QA-31 (Ploy 2026-10-30): under SPECIAL_SQM / DIRECT_NET the printed ราคา is the net
+        // (the CEO's own figure), so the cost x margin formula list price never reaches the quotation.
+        // NET keeps list_unit_price (V187, always auto-calculated) unless the CEO overrode it
+        // (manualSellingPricePerRequestedUnit, NET-only, "ruling B").
+        BigDecimal unitPrice = !WastageCalculator.PRICE_MODE_NET.equals(priceMode) ? di.netUnitPrice()
+            : di.manualSellingPricePerRequestedUnit() != null
             ? di.manualSellingPricePerRequestedUnit() : di.listUnitPrice();
         BigDecimal discountPct = null;
         BigDecimal specialPriceSqm = null;

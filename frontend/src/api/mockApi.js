@@ -17036,12 +17036,11 @@ export const api = {
       const itemsById = new Map((pr.items ?? []).map((i) => [i.id, i]));
       const items = decision.items.map((di, index) => {
         const pri = itemsById.get(di.pricingRequestItemId) ?? {};
-        // unitPrice ("ราคาตั้ง") is populated for EVERY mode, mirroring
-        // DealQuotationService#buildItemInputFromDecisionItem's own reasoning: list_unit_price is
-        // ALWAYS auto-calculated regardless of price_mode, and the direct-deal item builder here
-        // requires a positive unitPrice on every TILE row.
-        const unitPrice = decision.priceMode === 'NET' && di.manualSellingPricePerRequestedUnit != null
-          ? di.manualSellingPricePerRequestedUnit : di.listUnitPrice;
+        // unitPrice is populated for EVERY mode (the item builder here requires a positive one on
+        // every TILE row), mirroring DealQuotationService#buildItemInputFromDecisionItem. W5-03/QA-31:
+        // under SPECIAL_SQM / DIRECT_NET it is the CEO's net, never the formula list price.
+        const unitPrice = decision.priceMode !== 'NET' ? di.netUnitPrice
+          : di.manualSellingPricePerRequestedUnit != null ? di.manualSellingPricePerRequestedUnit : di.listUnitPrice;
         const input = {
           locationLabel: null, catalogPriceId: pri.catalogPriceId ?? null, productCode: pri.productCode ?? null,
           brand: pri.brand, model: pri.model, color: pri.color, texture: pri.texture, sizeText: pri.size,
@@ -17347,8 +17346,9 @@ export const api = {
       if (!decisionItem) fail('ไม่พบรายการนี้ในคำขอราคาต้นทาง', 404);
       const pr = findPricingRequestRaw(row.pricingRequestId);
       const pri = (pr.items ?? []).find((i) => i.id === decisionItem.pricingRequestItemId) ?? {};
-      const unitPrice = row.priceMode === 'NET' && decisionItem.manualSellingPricePerRequestedUnit != null
-        ? decisionItem.manualSellingPricePerRequestedUnit : decisionItem.listUnitPrice;
+      // W5-03/QA-31: same rule as the create path above -- net, not the formula list price, off NET.
+      const unitPrice = row.priceMode !== 'NET' ? decisionItem.netUnitPrice
+        : decisionItem.manualSellingPricePerRequestedUnit != null ? decisionItem.manualSellingPricePerRequestedUnit : decisionItem.listUnitPrice;
       const input = {
         locationLabel: null, catalogPriceId: pri.catalogPriceId ?? null, productCode: pri.productCode ?? null,
         brand: pri.brand, model: pri.model, color: pri.color, texture: pri.texture, sizeText: pri.size,

@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../../api/index.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
+  CatalogAutocompleteField,
   CatalogOption,
   isRequiredItemField,
   ITEM_FIELD_META,
@@ -322,5 +323,67 @@ describe('CatalogOption', () => {
     const { container } = render(<CatalogOption cat={{ factoryName: 'Panaria', collection: 'BIOARCH', color: 'BARGE GIALLA', widthMm: 200, heightMm: 305, sizeRaw: '200x305' }} />);
     expect(container.textContent).toContain('BARGE GIALLA · 20x30.5');
     expect(container.textContent).not.toContain('200x305');
+  });
+});
+
+// QA-39: the suggestion rows were plain divs picked by onMouseDown only, so a keyboard or
+// screen-reader user could not choose one. The field is now a combobox over a listbox of options.
+describe('CatalogAutocompleteField keyboard picking', () => {
+  const results = [
+    { id: 1, priceId: 11, factoryName: 'Panaria', collection: 'BIOARCH' },
+    { id: 2, priceId: 12, factoryName: 'SCG', collection: 'STONE' },
+  ];
+  function renderField(onPick = vi.fn()) {
+    render(
+      <CatalogAutocompleteField id="brand" label="ยี่ห้อ" value="pa" onInput={() => {}} onFocusSearch={() => {}}
+        onBlur={() => {}} expanded results={results} onPick={onPick} />,
+    );
+    return { onPick, input: screen.getByRole('combobox') };
+  }
+
+  it('exposes the input as a combobox that controls a listbox of options', () => {
+    const { input } = renderField();
+    const listbox = screen.getByRole('listbox');
+    expect(input.getAttribute('aria-expanded')).toBe('true');
+    expect(input.getAttribute('aria-controls')).toBe(listbox.id);
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+  });
+
+  it('ArrowDown/ArrowUp move the active option and Enter picks it', () => {
+    const { input, onPick } = renderField();
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    const second = screen.getAllByRole('option')[1];
+    expect(input.getAttribute('aria-activedescendant')).toBe(second.id);
+    expect(second.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onPick).toHaveBeenCalledWith(results[0]);
+  });
+
+  // Review fix: 20 results in a ~6-row box — the active option must be scrolled into view.
+  it('scrolls the active option into view', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const { input } = renderField();
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(screen.getAllByRole('option')[1]);
+    } finally {
+      delete Element.prototype.scrollIntoView;
+    }
+  });
+
+  it('Enter with no active option picks nothing', () => {
+    const { input, onPick } = renderField();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('a mouse pick still works', () => {
+    const { onPick } = renderField();
+    fireEvent.mouseDown(screen.getAllByRole('option')[1]);
+    expect(onPick).toHaveBeenCalledWith(results[1]);
   });
 });

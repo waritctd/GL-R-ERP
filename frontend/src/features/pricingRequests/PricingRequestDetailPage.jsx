@@ -75,7 +75,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS, shownCustomerQuotation } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, piecesPerSqmFromSqmPerPiece, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -1768,6 +1768,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // because FactoryEmailDraftModal needs it too — its send/save gating is a per-QUOTE status read
   // that has the identical gap the price grid had before the #1062 review fix.
   const inSendWindow = FACTORY_ROUTING_STATUSES.includes(summary?.status);
+  // QA-40: mirrors FactoryQuoteService.RESPONSE_STATUSES -- the only request statuses in which
+  // receive / startNegotiation take prices, so the factory grid is read-only outside them.
+  const inResponseWindow = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW'].includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const ceoGateNotice = useMemo(
     () => (ceoGateCheckedForId === pricingRequestId && confirmingFactoryQuoteIds.size === 0 && !detailQuery.isFetching && !factoryQuery.isFetching
@@ -2080,11 +2083,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
       item.stockSource == null
       && item.frozenLandedCostPerRequestedUnitThb == null
       && !(overrideClearsCostGate && item.manualSellingPricePerRequestedUnit != null));
-    // Java (approve, stockWithoutListPrice): EVERY stock line needs a ราคาตั้ง > 0 whatever the price
-    // mode — under DIRECT_NET/SPECIAL_SQM it is a required reference, the net still comes from the
-    // mode's own input.
-    const missingStockListPrice = decision.items.filter((item) =>
-      item.stockSource != null && !(Number(item.listUnitPrice) > 0));
+    // W5-03 (Ploy 2026-10-30), Java approve stockWithoutListPrice: a stock line needs a ราคาตั้ง > 0
+    // in NET mode only. Under DIRECT_NET/SPECIAL_SQM the quotation prints the net as its ราคา, so
+    // the ราคาตั้ง is neither asked for nor required.
+    const missingStockListPrice = decision.priceMode === 'NET' ? decision.items.filter((item) =>
+      item.stockSource != null && !(Number(item.listUnitPrice) > 0)) : [];
     return { decision, decisionStatus, editable, missingBeforeApprove, staleOverrideItems, newForm, missingCeoPrice, missingCost, missingStockListPrice };
   }
 
@@ -2275,13 +2278,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         ? (!isStockLine && hasPriceOverride)
         : currentList == null || listDraftNumber !== Number(currentList));
       const otherDraftDirty = Object.keys(draft).some((k) => k !== 'listUnitPrice');
-      // A stock line's ราคาตั้ง saved under DIRECT_NET/SPECIAL_SQM makes applyItemUpdates re-derive
-      // the net, which 400s while that mode's own input is still empty — so ask for it first.
-      const modeInputBlank = (value) => value === '' || value == null;
-      const missingModeInputForList = listChanged && isStockLine && (
-        (decision.priceMode === 'DIRECT_NET' && modeInputBlank(draft.directNetPrice ?? item.directNetPrice))
-        || (decision.priceMode === 'SPECIAL_SQM' && modeInputBlank(draft.specialPriceSqm ?? item.specialPriceSqm)));
-      const saveDisabled = listInvalid || marginInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
+      const saveDisabled = listInvalid || marginInvalid || !(otherDraftDirty || listChanged);
       const costForcedOpen = showCost && Boolean(costingItem?.uncostableReason || costingItem?.overrideStale);
       const listPriceField = (
         <div className="flex flex-col gap-1">
@@ -2301,13 +2298,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </FormField>
           {listInvalid ? (
             <span role="alert" className="text-2xs text-danger">ราคาตั้งต้องมากกว่า 0</span>
-          ) : null}
-          {missingModeInputForList ? (
-            <span role="alert" className="text-2xs text-danger">
-              {decision.priceMode === 'DIRECT_NET'
-                ? 'กรอกราคาสุทธิต่อแผ่นด้วยก่อนบันทึก'
-                : 'กรอกราคาพิเศษ บาท/ตร.ม. ด้วยก่อนบันทึก'}
-            </span>
           ) : null}
           {formulaPerPiece != null ? (
             <span className="text-2xs text-text-muted">
@@ -2332,9 +2322,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </Button>
               ) : null}
             </span>
-          ) : null}
-          {decision.priceMode !== 'NET' ? (
-            <span className="text-2xs text-text-muted">ต้องมีราคาตั้งสำหรับรายการสต็อก</span>
           ) : null}
         </div>
       );
@@ -2455,7 +2442,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
               ) : null}
               {decision.priceMode === 'SPECIAL_SQM' ? (
                 <>
-                  {isStockLine ? listPriceField : null}
                   {!isStockLine && formulaPerPiece != null ? (
                     <span className="text-xs text-text-muted" data-testid={`pcr-ceo-formula-list-${item.id}`}>
                       ราคาตั้ง/แผ่น (สูตร): <code className="font-bold text-text">{formatCurrency(formulaPerPiece, decision.currency)}</code>
@@ -2465,7 +2451,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <FormField
                     label="ราคาพิเศษ บาท/ตร.ม. (รวม VAT)"
                     htmlFor={`pcr-ceo-special-sqm-${item.id}`}
-                    hint={item.sqmPerPiece != null ? `ตร.ม./แผ่น ${item.sqmPerPiece}` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
+                    hint={item.sqmPerPiece != null ? `แผ่น/ตร.ม. ${piecesPerSqmFromSqmPerPiece(item.sqmPerPiece)}` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
                   >
                     <input
                       id={`pcr-ceo-special-sqm-${item.id}`}
@@ -2484,7 +2470,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
               ) : null}
               {decision.priceMode === 'DIRECT_NET' ? (
                 <>
-                  {isStockLine ? listPriceField : null}
                   <FormField label="ราคาสุทธิต่อแผ่น" htmlFor={`pcr-ceo-direct-net-${item.id}`}>
                     <input
                       id={`pcr-ceo-direct-net-${item.id}`}
@@ -3393,7 +3378,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // The email-draft fields live in FactoryEmailDraftModal now (its own lookup against
                 // `emailModalQuote`/`emailDrafts`, opened via setEmailModalQuoteId below) — no
                 // per-group emailDraft needed in this closure any more.
-                const draft = responseDrafts[current.id] ?? {
+                // QA-40: outside the response window an unsaved draft is ignored, so the read-only grid
+                // shows what was saved rather than an edit nobody can submit or discard any more.
+                const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
+                const draft = unsavedDraft ?? {
                   supplierQuoteRef: current.supplierQuoteRef ?? '',
                   // R1: when every line is locked to ONE currency, that is the draft's currency too.
                   defaultCurrency: (() => {
@@ -3409,8 +3397,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // See confirmFactoryQuote's own doc comment: `responseDrafts[id]` exists in state
                 // only once a change handler has written to it, so its presence already means
                 // "Import touched this draft since it was last loaded from the server."
-                const dirty = Boolean(responseDrafts[current.id]);
-                const editable = isImport(user) && current.current
+                const dirty = Boolean(unsavedDraft);
+                // QA-40: past the response window the prices read as plain text, like any read-only grid.
+                const editable = isImport(user) && current.current && inResponseWindow
                   && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
                 // CR-1 (GLA-167) R3 / B-R2: the price grid is locked until the factory has been marked
                 // ติดต่อโรงงานแล้ว — a DRAFT quote means "not contacted yet", and FactoryQuoteService#receive
@@ -3422,14 +3411,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // confirmFactoryQuote's doc comment for why an undirtied re-click must not be
                 // offered at all (it would either no-op-fail against markReady's own guard, or,
                 // if this branch called receive() unconditionally, spuriously bump the revision).
-                const canConfirm = isImport(user) && current.current && contacted
+                const canConfirm = isImport(user) && current.current && contacted && inResponseWindow
                   && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
                     || (current.status === 'READY_FOR_COSTING' && dirty));
-                const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
+                const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current && inResponseWindow;
                 // สร้างเมล is offered to import AND the CEO at every status (R5): to build + copy the
                 // mail while DRAFT, or just to re-read what was drafted afterwards. The modal is
                 // read-only once the quote leaves DRAFT or the request leaves the contact window.
-                const canOpenEmailDraft = canContactFactory;
+                // QA-40: except on a dead request (CANCELLED / SUPERSEDED), where there is no mail to build or re-read.
+                const canOpenEmailDraft = canContactFactory && !['CANCELLED', 'SUPERSEDED'].includes(summary?.status);
                 // ติดต่อโรงงานแล้ว: only for a current DRAFT quote inside the window markContacted
                 // accepts (FactoryQuoteService.DRAFT_STATUSES) — and never again after (R7, no undo).
                 const canMarkContacted = canContactFactory && current.current && current.status === 'DRAFT' && inSendWindow;
@@ -3655,7 +3645,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             {qty} {unitLabel}
                           </div>
                           <div className="min-w-0">
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
+                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">{editable ? 'ราคาที่เสนอ (แก้ไข)' : 'ราคาที่เสนอ'}</span>
                             {editable && contacted ? (
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {/* Factories sell on different terms: a line Sales asked per ตร.ม. or per แผ่น can be
@@ -3874,7 +3864,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             เจรจา
                           </Button>
                         ) : null}
-                        {editable ? (
+                        {editable && dirty ? (
                           <Button type="button" variant="secondary" onClick={discardEdits}>
                             ยกเลิก
                           </Button>
