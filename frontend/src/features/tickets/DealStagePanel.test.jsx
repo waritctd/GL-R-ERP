@@ -505,6 +505,9 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     api.tickets.addActivity.mockClear();
     const onUpdateStage = vi.fn().mockResolvedValue({});
     const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    // 06:30 in Bangkok is still the previous day in UTC: the logged activity must carry the Bangkok date.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
     try {
       renderPanel({
         summary: baseSummary({ id: 501 }),
@@ -535,13 +538,14 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
       );
       expect(api.tickets.addActivity).toHaveBeenCalledWith(
         501,
-        expect.objectContaining({ kind: 'CALL', note: 'โทรติดตามลูกค้า' }),
+        expect.objectContaining({ kind: 'CALL', note: 'โทรติดตามลูกค้า', activityDate: '2026-10-31' }),
       );
       // QA-33: the activity just logged must refresh the page's activities list (and the key must be
       // numeric, since the page keys it with the route param — see the key-normalisation test below).
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tickets', 'activities', 501] });
     } finally {
       invalidate.mockRestore();
+      vi.useRealTimers();
     }
   });
 

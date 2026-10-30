@@ -5,7 +5,9 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel } from '../../utils/format.js';
+import {
+  bangkokTodayIso, dealLifecycleLabel, dealLostReasonLabel, dealStageLabel, formatThaiDate, tenderRequirementLabel,
+} from '../../utils/format.js';
 import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker } from './DealStageStepper.jsx';
@@ -152,7 +154,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         winProbability: guidedDraft.winProbability === '' ? null : Number(guidedDraft.winProbability),
       });
       await api.tickets.addActivity(summary.id, {
-        activityDate: new Date().toISOString().slice(0, 10),
+        activityDate: bangkokTodayIso(),
         kind: guidedDraft.kind,
         note: guidedDraft.activityNote.trim() || null,
       });

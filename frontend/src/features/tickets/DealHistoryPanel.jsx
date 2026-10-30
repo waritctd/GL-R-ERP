@@ -6,7 +6,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatThaiDate } from '../../utils/format.js';
+import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
 
 // Moved verbatim from TicketDetailPage.jsx (IA rebuild — see
@@ -99,11 +99,8 @@ export function eventDotClass(kind) {
   return `${EVENT_DOT_BASE} bg-info-dot`;
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-const EMPTY_ACTIVITY_DRAFT = { activityDate: today(), kind: 'CALL', note: '' };
+// Read on every render/reset, not once at module load: today's date in Bangkok, never the UTC date.
+const emptyActivityDraft = () => ({ activityDate: bangkokTodayIso(), kind: 'CALL', note: '' });
 
 /** `Date.parse`-safe timestamp, or `null` for a missing/unparseable value —
  * rows with a `null` timestamp sort last rather than crashing `Array#sort` or
@@ -212,7 +209,7 @@ export function DealHistoryPanel({
   onAddActivity,
   addingActivity = false,
 }) {
-  const [activityDraft, setActivityDraft] = useState(EMPTY_ACTIVITY_DRAFT);
+  const [activityDraft, setActivityDraft] = useState(emptyActivityDraft);
 
   const rows = useMemo(() => {
     const eventRows = events.map((event) => ({ key: `event-${event.id}`, type: 'event', ts: toTimestamp(event.createdAt), event }));
@@ -263,7 +260,7 @@ export function DealHistoryPanel({
       kind: activityDraft.kind,
       note: activityDraft.note.trim() || null,
     });
-    setActivityDraft(EMPTY_ACTIVITY_DRAFT);
+    setActivityDraft(emptyActivityDraft());
   }
 
   return (
