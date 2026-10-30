@@ -1996,3 +1996,18 @@ describe('newestQuotationByRequest — a deal\'s quotation map (deal page, reque
     expect(byRequest.has(2)).toBe(false);
   });
 });
+
+// VW-04 (owner ruling 2026-10-30): the confirm-order lead used to print "ใบเสนอราคา " + a blank
+// whenever the caller had no number; it must read as a sentence either way.
+describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
+  it('names the quotation number when there is one', () => {
+    expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))
+      .toBe('ระบบจะนำดีลของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+  });
+
+  it.each([undefined, null, ''])('falls back to ใบเสนอราคานี้ with no stray double space when the number is %j', (number) => {
+    const lead = meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number);
+    expect(lead).toBe('ระบบจะนำดีลของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+    expect(lead).not.toMatch(/\s{2,}/);
+  });
+});

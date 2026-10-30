@@ -12496,13 +12496,16 @@ export const api = {
       // Mirrors ImportRequestService#hasUncoveredFactories: read-only; an unresolved/unknown factory
       // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
       let hasUncoveredFactories = true;
+      let uncoveredFactoryNames = [];
       try {
         const live = new Set(mockImportRequests
           .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
           .map((r) => r.factoryId));
-        hasUncoveredFactories = mockResolveFactoryGroups(ticket, null).some((g) => !live.has(g.factoryId));
-      } catch { /* unresolved factory -> uncovered */ }
-      return delay({ hasUncoveredFactories });
+        const uncovered = mockResolveFactoryGroups(ticket, null).filter((g) => !live.has(g.factoryId));
+        hasUncoveredFactories = uncovered.length > 0;
+        uncoveredFactoryNames = uncovered.map((g) => g.factoryName);
+      } catch { /* unresolved factory -> uncovered (no names in the mock) */ }
+      return delay({ hasUncoveredFactories, uncoveredFactoryNames });
     },
     async get(id) {
       const row = findStoredImportRequestRaw(id);

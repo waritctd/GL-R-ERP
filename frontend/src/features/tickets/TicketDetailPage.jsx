@@ -1221,7 +1221,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     </Button>
   ) : can.verifyClose ? (
     <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-verify-close"
-      onClick={() => doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว')}>
+      onClick={() => setConfirm({ kind: 'verifyClose' })}>
       <Icon name="check" size={14} />
       ตรวจสอบและปิดงาน
     </Button>
@@ -3041,6 +3041,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         confirmLabel="ยืนยันชำระครบ"
         busy={actionLoading}
         onConfirm={confirmFinalPaymentAction}
+        onCancel={() => setConfirm(null)}
+      />
+
+      {/* W4-10 (owner ruling 2026-10-30): the CEO's close cannot be undone, so it asks first. */}
+      <ConfirmDialog
+        open={confirm?.kind === 'verifyClose'}
+        title="ยืนยันตรวจสอบและปิดงาน"
+        message="เมื่อตรวจสอบและปิดงานแล้ว ดีลนี้จะปิดและย้อนกลับไม่ได้"
+        confirmLabel="ตรวจสอบและปิดงาน"
+        busy={actionLoading}
+        // Close first: a second click on the open dialog would send twice.
+        onConfirm={() => { setConfirm(null); doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว'); }}
         onCancel={() => setConfirm(null)}
       />
 

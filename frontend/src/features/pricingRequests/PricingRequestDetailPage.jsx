@@ -4384,7 +4384,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmOrderDialog
         open={confirmingOrder}
-        number={summary?.requestCode}
+        number={dealQuotationForPr?.number ?? currentCustomerQuotation?.number}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}

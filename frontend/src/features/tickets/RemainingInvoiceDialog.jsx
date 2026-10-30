@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { downloadBlob } from '../../utils/download.js';
@@ -83,7 +84,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
       ) : (
         <>
           {draft && canWrite ? (
-            <DraftEditor draft={draft} onSaved={invalidateList} onIssued={invalidateList}
+            <DraftEditor draft={draft} issuedOfSameQuotation={list.find((d) => d.status === 'ISSUED' && d.customerQuotationId === draft.customerQuotationId)} onSaved={invalidateList} onIssued={invalidateList}
               onDeleted={invalidateList} onDownloaded={onDownloaded} />
           ) : issued ? (
             <IssuedSummary issued={issued} canWrite={canWrite} onRevised={invalidateList} onDownloaded={onDownloaded} />
@@ -210,7 +211,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
 }
 
 /** Editable form for the live DRAFT — save (re-snapshot), issue, or delete. */
-function DraftEditor({ draft, onSaved, onIssued, onDeleted, onDownloaded }) {
+function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDeleted, onDownloaded }) {
   const templatesQuery = useQuery({
     queryKey: queryKeys.depositNoteTemplates(),
     queryFn: () => api.depositNotices.noteTemplates().then((r) => r.templates ?? []),
@@ -243,6 +244,8 @@ function DraftEditor({ draft, onSaved, onIssued, onDeleted, onDownloaded }) {
   const [notes, setNotes] = useState(draft.notes ?? []);
   const [saving, setSaving] = useState(false);
   const [issuing, setIssuing] = useState(false);
+  // Issuing mints the legal document number and cannot be undone, so it asks first (W4-07, owner ruling 2026-10-30).
+  const [confirmingIssue, setConfirmingIssue] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState(null);
@@ -279,6 +282,7 @@ function DraftEditor({ draft, onSaved, onIssued, onDeleted, onDownloaded }) {
   // dialog fields reference/depositReference/docDate/notes are preserved verbatim, never
   // recomputed there). So this saves the CURRENT form state first, then issues.
   async function handleIssue() {
+    setConfirmingIssue(false);
     setError(null);
     setIssuing(true);
     try {
@@ -380,7 +384,7 @@ function DraftEditor({ draft, onSaved, onIssued, onDeleted, onDownloaded }) {
           data-testid="remaining-invoice-save-draft">
           {saving ? 'กำลังบันทึก…' : 'บันทึก'}
         </Button>
-        <Button type="button" variant="primary" disabled={busy} onClick={handleIssue}
+        <Button type="button" variant="primary" disabled={busy} onClick={() => setConfirmingIssue(true)}
           data-testid="remaining-invoice-issue">
           {issuing ? 'กำลังออกเอกสาร…' : 'ออกใบแจ้งหนี้'}
         </Button>
@@ -393,6 +397,29 @@ function DraftEditor({ draft, onSaved, onIssued, onDeleted, onDownloaded }) {
           {deleting ? 'กำลังลบ…' : 'ลบร่าง'}
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmingIssue}
+        title="ยืนยันการออกเอกสาร"
+        message={(
+          <div className="flex flex-col gap-1 text-sm">
+            <div className="flex justify-between"><span className="text-text-muted">อ้างอิง</span><span>{reference || '-'}</span></div>
+            <div className="flex justify-between"><span className="text-text-muted">ยอดสินค้า</span><span>{formatMoney(draft.itemsTotal)}</span></div>
+            <div className="flex justify-between"><span className="text-text-muted">หักมัดจำ</span><span>{formatMoney(draft.depositDeduction)}</span></div>
+            <div className="flex justify-between"><span className="text-text-muted">ภาษีมูลค่าเพิ่ม 7%</span><span>{formatMoney(draft.vatAmount)}</span></div>
+            <div className="flex justify-between font-bold"><span>ยอดชำระ</span><span>{formatMoney(draft.grandTotal)}</span></div>
+            <p className="m-0 pt-2 text-text-secondary">
+              {issuedOfSameQuotation
+                ? `เลขที่เอกสาร ${issuedOfSameQuotation.baseNumber}-${issuedOfSameQuotation.version + 1}`
+                : 'ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน'}
+            </p>
+          </div>
+        )}
+        confirmLabel="ออกใบแจ้งหนี้"
+        busy={issuing}
+        onConfirm={handleIssue}
+        onCancel={() => setConfirmingIssue(false)}
+      />
     </div>
   );
 }

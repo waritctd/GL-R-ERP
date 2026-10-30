@@ -67,6 +67,8 @@ export function ImportRequestFactoryCard({
   // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that
   // component's own Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // ออกเลข mints the document number and cannot be undone, so it asks first (W3-11, owner ruling 2026-10-30).
+  const [issueConfirmOpen, setIssueConfirmOpen] = useState(false);
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
@@ -333,7 +335,7 @@ export function ImportRequestFactoryCard({
           </p>
           {canFullWrite ? (
             <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={issueMutation.isPending}
-              onClick={() => issueMutation.mutate()} data-testid={`ir-issue-${row.id}`}>
+              onClick={() => setIssueConfirmOpen(true)} data-testid={`ir-issue-${row.id}`}>
               ออกเลข
             </Button>
           ) : null}
@@ -506,6 +508,16 @@ export function ImportRequestFactoryCard({
         </Modal>
       ) : null}
 
+      <ConfirmDialog
+        open={issueConfirmOpen}
+        title="ยืนยันการออกเลขใบขอซื้อ"
+        message={`ออกเลขใบขอซื้อของโรงงาน ${row.factoryName}? การออกเลขย้อนกลับไม่ได้`}
+        confirmLabel="ออกเลข"
+        busy={issueMutation.isPending}
+        // Close first: a second click on the open dialog would send twice.
+        onConfirm={() => { setIssueConfirmOpen(false); issueMutation.mutate(); }}
+        onCancel={() => setIssueConfirmOpen(false)}
+      />
       <ConfirmDialog
         open={deleteConfirmOpen}
         title="ลบร่างใบขอซื้อ"

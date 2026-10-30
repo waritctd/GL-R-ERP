@@ -3790,6 +3790,38 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     );
   });
 
+  // VW-04 (owner ruling 2026-10-30): the dialog used to name the PCR code ("ใบเสนอราคา PCR-…"),
+  // which is not a quotation number. It names the quotation the page shows.
+  it('VW-04: the confirm dialog names the new-engine quotation number, never the PCR code', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'ACCEPTED' },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText('QT-2026-0099-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+    expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0099-1');
+    expect(dialog.textContent).not.toContain(request.summary.requestCode);
+  });
+
+  it('VW-04: with only an old-engine quotation the dialog names that number, never the PCR code', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+      items: [buildCustomerQuotation({ number: 'QT-2026-0042', docStatus: 'ACCEPTED' })],
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText('QT-2026-0042');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+    expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0042');
+    expect(dialog.textContent).not.toContain(request.summary.requestCode);
+  });
+
   it('offers "สร้างใบแจ้งยอดเงินรับมัดจำ" (not the confirm button) once the bridge has already run', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' } });
     renderDetailPage({ user: salesOwner, request });

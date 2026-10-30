@@ -123,6 +123,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
     () => quotations.find((q) => isCustomerQuotationEditable(q)) ?? [...quotations].reverse()[0] ?? null,
     [quotations],
   );
+  // The quotation this panel shows: the new-engine one, unless a live old-engine one is open.
+  const shownQuotation = prQuotation && !(current && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(current.docStatus)) ? prQuotation : current;
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pr?.id) });
@@ -200,7 +202,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
 
         {quotationsQuery.isLoading ? (
           <p className="text-sm text-text-muted">กำลังโหลดใบเสนอราคาลูกค้า…</p>
-        ) : prQuotation && !(current && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(current.docStatus)) ? (
+        ) : shownQuotation && shownQuotation === prQuotation ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3">
             <span className="font-mono text-sm font-bold">{prQuotation.number}</span>
             <StatusBadge tone={prQuotationStatus.tone}>
@@ -314,7 +316,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
 
       <ConfirmOrderDialog
         open={confirmingOrder}
-        number={current?.number}
+        number={shownQuotation?.number}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}

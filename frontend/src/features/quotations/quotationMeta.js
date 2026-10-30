@@ -422,7 +422,7 @@ export function liveDirectQuotationBlockMessage(live) {
  * shared by the quotation editor and the deal page's sticky CTA so the two never drift. `stage`
  * is the part both render in <strong>. */
 export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
-  lead: (number) => `ระบบจะนำดีลของใบเสนอราคา ${number ?? ''} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
+  lead: (number) => `ระบบจะนำดีลของ${number ? `ใบเสนอราคา ${number}` : 'ใบเสนอราคานี้'} เข้าสู่ขั้นตอนการขาย ที่ขั้น`,
   stage: 'ได้รับคำสั่งซื้อ',
   tail: 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้',
 });

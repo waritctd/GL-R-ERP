@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -306,13 +307,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   });
   // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
   // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
-  // backend that omits it (undefined) keeps them.
+  // backend that omits it (undefined) keeps them. `uncoveredFactoryNames` feeds the create confirm; an older backend omits it.
   const coverageQuery = useQuery({
     queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage'],
-    queryFn: () => api.storedImportRequests.coverage(ticketId).then((r) => r.hasUncoveredFactories),
+    queryFn: () => api.storedImportRequests.coverage(ticketId),
     enabled: !!ticketId && canReadStoredIr,
   });
-  const allFactoriesCovered = coverageQuery.data === false;
+  const allFactoriesCovered = coverageQuery.data?.hasUncoveredFactories === false;
   const storedIrRows = storedIrQuery.data ?? [];
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
@@ -404,6 +405,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // never be bypassed.
   const depositReady = depositReadyForIr(summary);
   const DEPOSIT_HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
+  // ออกใบขอซื้อ (IR) numbers and issues one IR per factory and cannot be undone, so it asks first
+  // (W3-11, owner ruling 2026-10-30). The country / lead-time popup retries are a continuation of this
+  // confirmed create and call the mutation directly.
+  const [confirmingCreate, setConfirmingCreate] = useState(false);
   function requestCreateIrDrafts() {
     if (!depositReady) {
       showToast?.('error', DEPOSIT_HINT);
@@ -414,7 +419,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       document.querySelector('[data-testid="deal-fulfilment-stored-ir"]')?.scrollIntoView?.({ block: 'start' });
       return false;
     }
-    createDraftsMutation.mutate(buildCreatePayload());
+    if (createDraftsMutation.isPending) return false;
+    setConfirmingCreate(true);
     return true;
   }
   const createDraftsMutation = useMutation({
@@ -690,6 +696,18 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     createIrDrafts: () => { showIrSection(); return requestCreateIrDrafts(); },
     showIrSection,
   }));
+
+  // The create confirm: the factories the server says are uncovered, plus the ones the rep picked for
+  // factory-less lines (a pick that already has a live IR, or that the server named, adds nothing).
+  const pickedNames = factorylessLines
+    .map((l) => (factoryNamesQuery.data ?? []).find((f) => String(f.id) === String(lineFactories[l.id])))
+    .filter((f) => f && !liveStoredIrRows.some((r) => String(r.factoryId) === String(f.id)))
+    .map((f) => f.factoryName);
+  const serverNames = coverageQuery.data?.uncoveredFactoryNames;
+  const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
+  const createConfirmMessage = `${confirmNames.length > 0
+    ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
+    : 'ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน'} — การดำเนินการนี้ย้อนกลับไม่ได้`;
 
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
@@ -1136,6 +1154,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           </div>
         </Modal>
       ) : null}
+
+      <ConfirmDialog
+        open={confirmingCreate}
+        title="ยืนยันการออกใบขอซื้อ (IR)"
+        message={createConfirmMessage}
+        confirmLabel="ออกใบขอซื้อ (IR)"
+        busy={createDraftsMutation.isPending}
+        // Close first: a second click on the open dialog would send twice.
+        onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
+        onCancel={() => setConfirmingCreate(false)}
+      />
 
       {leadTimeNames ? (
         <FactoryLeadTimeModal

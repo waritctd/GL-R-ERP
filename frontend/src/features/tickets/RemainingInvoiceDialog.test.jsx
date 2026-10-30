@@ -356,8 +356,115 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     await screen.findByTestId('remaining-invoice-draft-editor');
     fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).getByRole('button', { name: 'ออกใบแจ้งหนี้' }));
 
     await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900));
+  });
+
+  // W4-07 (owner ruling 2026-10-30): issuing mints a legal document number and cannot be undone,
+  // so the click only opens a confirmation; update+issue run on confirm, exactly once.
+  describe('W4-07 confirm before issuing', () => {
+    function confirmDialog() {
+      return screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' });
+    }
+
+    it('first issue: opens a confirm with the amounts and a "new number on confirm" line, calls no api until confirmed', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow() });
+      api.storedRemainingInvoices.issue.mockResolvedValue({ remainingInvoice: docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1' }) });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      const text = dialog.textContent;
+      expect(text).toContain('QT-2026-0099');
+      expect(text).toContain('ยอดสินค้า');
+      expect(text).toContain('฿37,114.18');
+      expect(text).toContain('หักมัดจำ');
+      expect(text).toContain('฿18,557.09');
+      expect(text).toContain('ภาษีมูลค่าเพิ่ม');
+      expect(text).toContain('฿1,299.00');
+      expect(text).toContain('ยอดชำระ');
+      expect(text).toContain('฿19,856.09');
+      expect(text).toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
+      expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' });
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+
+      await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledTimes(1));
+      expect(api.storedRemainingInvoices.update).toHaveBeenCalledTimes(1);
+      expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900);
+    });
+
+    it('revision: shows the predicted next number from the ISSUED row of the same quotation', async () => {
+      const issuedRow = docRow({
+        id: 880, status: 'ISSUED', docNumber: 'GLR6900004-1', baseNumber: 'GLR6900004', version: 1, customerQuotationId: 55,
+      });
+      const revisionDraft = docRow({ id: 881, status: 'DRAFT', docNumber: null, baseNumber: null, customerQuotationId: 55 });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow, revisionDraft] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(dialog.textContent).toContain('GLR6900004-2');
+      expect(dialog.textContent).not.toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+    });
+
+    it('legacy data with several ISSUED rows: the prediction uses the one of the draft\'s own quotation, not the first ISSUED', async () => {
+      const otherChain = docRow({
+        id: 870, status: 'ISSUED', docNumber: 'GLR6900002-3', baseNumber: 'GLR6900002', version: 3, customerQuotationId: 11,
+      });
+      const ownChain = docRow({
+        id: 880, status: 'ISSUED', docNumber: 'GLR6900004-1', baseNumber: 'GLR6900004', version: 1, customerQuotationId: 55,
+      });
+      const revisionDraft = docRow({ id: 881, status: 'DRAFT', docNumber: null, baseNumber: null, customerQuotationId: 55 });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [otherChain, ownChain, revisionDraft] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(dialog.textContent).toContain('GLR6900004-2');
+      expect(dialog.textContent).not.toContain('GLR6900002-4');
+    });
+
+    it('an ISSUED row of a DIFFERENT quotation does not predict a number (first issue for this quotation)', async () => {
+      const issuedRow = docRow({
+        id: 880, status: 'ISSUED', docNumber: 'GLR6900004-1', baseNumber: 'GLR6900004', version: 1, customerQuotationId: 55,
+      });
+      const draftOther = docRow({ id: 881, status: 'DRAFT', docNumber: null, baseNumber: null, customerQuotationId: 77 });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow, draftOther] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(dialog.textContent).toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
+      expect(dialog.textContent).not.toContain('GLR6900004-2');
+    });
+
+    it('cancel closes the confirm and calls neither update nor issue', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+      fireEvent.click(within(await confirmDialog()).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).toBeNull());
+      expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+    });
   });
 
   it('ลบร่าง calls deleteDraft', async () => {
@@ -387,6 +494,7 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     fireEvent.change(input, { target: { value: 'PO-NEVER-SAVED' } });
     // "บันทึก" is deliberately NEVER clicked here — going straight to issue.
     fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).getByRole('button', { name: 'ออกใบแจ้งหนี้' }));
 
     await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900));
     expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,

@@ -23,6 +23,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.factory.FactoryConfigRepository;
+import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestCoverageResponse;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.IssueImportRequestRequest;
@@ -185,25 +186,34 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
     // ── owner ruling 2026-10-29 (5c): GET /tickets/{id}/import-requests also says whether a factory is uncovered ──
 
     /** The flag as the frontend reads it: its own read-only route, so the shared list stays rows-only. */
-    private Object hasUncoveredFactoriesOverHttpShape(long forTicket) {
+    private ImportRequestCoverageResponse coverageOverHttpShape(long forTicket) {
         SessionContext sessions = mock(SessionContext.class);
         MockHttpSession session = new MockHttpSession();
         when(sessions.requireUser(session)).thenReturn(owner);
         ImportRequestController controller = new ImportRequestController(service, sessions);
         assertThat(controller.listForTicket(forTicket, session)).containsOnlyKeys("importRequests");
-        return controller.coverage(forTicket, session).hasUncoveredFactories();
+        return controller.coverage(forTicket, session);
+    }
+
+    private Object hasUncoveredFactoriesOverHttpShape(long forTicket) {
+        return coverageOverHttpShape(forTicket).hasUncoveredFactories();
     }
 
     @Test
     void listResponse_hasUncoveredFactories_trueBeforeAnyIr_falseOnceCreateCoversEveryFactory_trueAgainForANewFactoryLine() {
         assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+        // W3-11: the create confirm names the factories — distinct, in the deal's line order.
+        assertThat(coverageOverHttpShape(ticketId).uncoveredFactoryNames())
+            .containsExactly("Padana Stored Test", "LEA Stored Test");
 
         service.createDrafts(ticketId, null, owner);
         assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.FALSE);
+        assertThat(coverageOverHttpShape(ticketId).uncoveredFactoryNames()).isEmpty();
 
         insertFactory("Late Added Flag Factory");
         insertItem(ticketId, "Late Added Flag Factory", "Late line", "60x60 cm", "5", "pcs", 3);
         assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+        assertThat(coverageOverHttpShape(ticketId).uncoveredFactoryNames()).containsExactly("Late Added Flag Factory");
     }
 
     @Test
@@ -213,9 +223,22 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         Long factoriesBefore = jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class);
 
         assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+        // A typed name that matches no factory is named as typed (trimmed).
+        assertThat(coverageOverHttpShape(ticketId).uncoveredFactoryNames()).containsExactly("Never Seen Flag Factory Co");
 
         assertThat(jdbc.queryForObject("SELECT count(*) FROM price_catalog.factories", Map.of(), Long.class))
             .isEqualTo(factoriesBefore);
+    }
+
+    @Test
+    void listResponse_uncoveredFactoryNames_unresolvedNamesThatCreateWouldMergeAreNamedOnce() {
+        service.createDrafts(ticketId, null, owner);
+        // createDrafts groups unresolved names by normalizeFactoryName (case / inner whitespace), so the
+        // confirm must count them the same way: one new factory, named as first typed.
+        insertItem(ticketId, " Rex Ceramics Merge Co ", "Line A", "60x60 cm", "5", "pcs", 3);
+        insertItem(ticketId, "rex  ceramics merge co", "Line B", "60x60 cm", "5", "pcs", 4);
+
+        assertThat(coverageOverHttpShape(ticketId).uncoveredFactoryNames()).containsExactly("Rex Ceramics Merge Co");
     }
 
     @Test
@@ -226,6 +249,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         jdbc.update("UPDATE sales.import_request SET status = 'SUPERSEDED' WHERE ticket_id = :t AND factory_id = :f",
             Map.of("t", ticketId, "f", leaFactoryId));
         assertThat(hasUncoveredFactoriesOverHttpShape(ticketId)).isEqualTo(Boolean.TRUE);
+        assertThat(coverageOverHttpShape(ticketId).uncoveredFactoryNames()).containsExactly("LEA Stored Test");
 
         jdbc.update("UPDATE sales.import_request SET status = 'ISSUED' WHERE ticket_id = :t AND factory_id = :f",
             Map.of("t", ticketId, "f", leaFactoryId));
