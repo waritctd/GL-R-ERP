@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,6 +11,11 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.apache.poi.hssf.usermodel.HSSFPicture;
 import org.apache.poi.hssf.usermodel.HSSFSheet;
 import org.apache.poi.ss.usermodel.CellType;
@@ -70,6 +76,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealLostReason;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -745,6 +752,268 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     private List<Long> quotationIdsOnTicket() {
         return jdbc.queryForList("SELECT quotation_id FROM sales.quotation WHERE ticket_id = :t ORDER BY quotation_id",
             java.util.Map.of("t", ticketId), Long.class);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Cancelling the pricing request takes its PENDING_APPROVAL quotation with it. The cancel
+    // cascade (PricingRequestRepository#supersedeOpenPricingDecisionAndQuotation) retired DRAFT and
+    // every issued status but skipped PENDING_APPROVAL, so the quotation stayed in the approvals
+    // queue, and approving it issued an offer on a cancelled request and superseded the deal's live
+    // quotation through the B-4 sweep above.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** The cascade, through PricingRequestService#cancel. The sibling request's quotation is the
+     * control: the supersede is scoped to the cancelled request, never to the deal. */
+    @Test
+    void cancel_supersedesTheRequestsPendingApprovalQuotation_andTakesItOutOfTheApprovalsQueue() {
+        DealQuotationDto sibling = submittedQuotation();
+        DealQuotationDto pending = submittedQuotation();
+        long pricingRequestId = pending.pricingRequestId();
+        assertThat(approvalQueueIds()).contains(sibling.id(), pending.id());
+
+        pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
+
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+        assertThat(approvalQueueIds()).doesNotContain(pending.id()).contains(sibling.id());
+        assertThat(statusOf(sibling.id())).isEqualTo("PENDING_APPROVAL");
+        // The same record the cascade's other statuses get: the request's one cancel event, and no
+        // quotation event of its own.
+        assertThat(cancelEvents(pricingRequestId))
+            .containsExactly("APPROVED_FOR_QUOTATION>CANCELLED:ลูกค้ายกเลิกโครงการ");
+        assertThat(ticketEventCount(th.co.glr.hr.ticket.TicketEventKind.DEAL_QUOTATION_SUPERSEDED)).isZero();
+    }
+
+    /** The defect the 10-27 review found: approving the cancelled request's quotation from the
+     * approvals queue issued it and retired the deal's live offer. Either half of the fix refuses
+     * it on its own (the cascade leaves nothing PENDING_APPROVAL to approve; the guard refuses a
+     * CANCELLED request), so the tests either side of this one pin each half separately. */
+    @Test
+    void approve_afterTheRequestWasCancelled_isRefused_andTheDealsLiveQuotationStaysLive() {
+        DealQuotationDto live = issuedRound();
+        DealQuotationDto pending = submittedQuotation();
+        pricingRequestService.cancel(pending.pricingRequestId(), cancelRequest(), salesActor);
+
+        assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(statusOf(live.id())).isEqualTo("ISSUED");
+        assertThat(statusOf(pending.id())).isNotEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
+        assertThat(pricingRequestStatusOf(pending.pricingRequestId())).isEqualTo(PricingRequestStatus.CANCELLED);
+    }
+
+    /** The approve guard on its own. A request cancelled before this fix kept its PENDING_APPROVAL
+     * quotation and nothing retires that row, so approve refuses any quotation whose request is
+     * CANCELLED, whatever the row's own status. Built through the real cancel; only the quotation
+     * is put back to the PENDING_APPROVAL the old cascade left. The CEO is refused too: the CEO's
+     * early return from the price-change gate must not double as a way past this one. */
+    @Test
+    void approve_ofAPendingQuotationLeftOnACancelledRequest_isRefusedForEitherApprover_andWritesNothing() {
+        DealQuotationDto live = issuedRound();
+        DealQuotationDto pending = submittedQuotation();
+        pricingRequestService.cancel(pending.pricingRequestId(), cancelRequest(), salesActor);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'PENDING_APPROVAL' WHERE quotation_id = :id",
+            java.util.Map.of("id", pending.id()));
+
+        for (UserPrincipal approver : List.of(salesManagerActor, ceoActor)) {
+            assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), approver))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).isEqualTo("คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้");
+                });
+        }
+
+        // Refused before the first write: this suite has no transaction to roll a late refusal back.
+        assertThat(statusOf(pending.id())).isEqualTo("PENDING_APPROVAL");
+        assertThat(approverSnapshotCount(pending.id())).isZero();
+        assertThat(statusOf(live.id())).isEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
+    }
+
+    /** The deal-level cascade (TicketService#markLost -> PricingRequestService#cancelOpenForTicket)
+     * runs the same supersede, so a lost deal's pending quotation leaves the queue too. */
+    @Test
+    void markLost_cancelsTheRequest_andSupersedesItsPendingApprovalQuotation() {
+        DealQuotationDto pending = submittedQuotation();
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesActor);
+
+        assertThat(pricingRequestStatusOf(pending.pricingRequestId())).isEqualTo(PricingRequestStatus.CANCELLED);
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+        assertThat(approvalQueueIds()).doesNotContain(pending.id());
+    }
+
+    /** One lock (owner ruling 2026-10-27): cancel takes the request's advisory lock, the one
+     * approve takes first, so the two serialise instead of updating the quotation and request rows
+     * in opposite orders. Thread A stands in for an approve holding that lock. The cancel must queue
+     * for it while holding no row lock (the NOWAIT probe), then finish once the lock frees. */
+    @Test
+    void cancel_waitsForTheRequestLockAnApproveHolds_beforeItsFirstWrite() throws Exception {
+        DealQuotationDto pending = submittedQuotation();
+        long pricingRequestId = pending.pricingRequestId();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch aHolds = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        try {
+            Future<?> approveInFlight = pool.submit(() -> transactionTemplate.execute(s -> {
+                new th.co.glr.hr.customerquotation.CustomerQuotationRepository(jdbc).lockPricingRequest(pricingRequestId);
+                aHolds.countDown();
+                try {
+                    releaseA.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return null;
+            }));
+            assertThat(aHolds.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<?> cancel = pool.submit(() -> transactionTemplate.execute(s -> {
+                jdbc.getJdbcTemplate().execute("SET LOCAL lock_timeout = '30s'");
+                return pricingRequestService.cancel(pricingRequestId, cancelRequest(), salesActor);
+            }));
+
+            assertThat(awaitWaiterOnRequestLock(pricingRequestId, cancel))
+                .as("cancel queues for the request's advisory lock").isTrue();
+            assertThatCode(() -> transactionTemplate.execute(s -> jdbc.queryForList("""
+                    SELECT pricing_request_id FROM sales.pricing_request
+                     WHERE pricing_request_id = :id FOR UPDATE NOWAIT
+                    """, java.util.Map.of("id", pricingRequestId), Long.class)))
+                .as("cancel queued before writing the request row").doesNotThrowAnyException();
+
+            releaseA.countDown();
+            cancel.get(30, TimeUnit.SECONDS);
+            approveInFlight.get(10, TimeUnit.SECONDS);
+        } finally {
+            releaseA.countDown();
+            pool.shutdown();
+            pool.awaitTermination(30, TimeUnit.SECONDS);
+        }
+        assertThat(pricingRequestStatusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.CANCELLED);
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // A customer-change revision retires the old request's quotation that is still waiting for
+    // approval (owner ruling 2026-10-27), as it already retired a DRAFT. The new round's quotation
+    // then needs ผจก.ขาย/CEO approval like any other. An ISSUED offer stays live until its
+    // replacement is issued (reissue-through-CEO-chain ruling, 2026-08-13).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void customerChangeRevision_supersedesTheOldRequestsPendingApprovalQuotation_andApproveIsRefused() {
+        DealQuotationDto pending = submittedQuotation();
+
+        pricingRequestService.createCustomerChangeRevision(pending.pricingRequestId(), customerChangeRevision(), salesActor);
+
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+        assertThat(approvalQueueIds()).doesNotContain(pending.id());
+        assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+    }
+
+    /** From QUOTATION_ISSUED: the pending quotation revision goes, the issued offer it would have
+     * replaced stays. */
+    @Test
+    void customerChangeRevision_retiresAPendingQuotationRevision_andTheIssuedOfferStaysLive() {
+        DealQuotationDto issued = issuedRound();
+        DealQuotationDto revision = quotationService.createRevision(issued.id(), salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        assertThat(statusOf(revision.id())).isEqualTo("PENDING_APPROVAL");
+
+        pricingRequestService.createCustomerChangeRevision(issued.pricingRequestId(), customerChangeRevision(), salesActor);
+
+        assertThat(statusOf(revision.id())).isEqualTo("SUPERSEDED");
+        assertThat(statusOf(issued.id())).isEqualTo("ISSUED");
+        assertThatThrownBy(() -> quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(statusOf(issued.id())).isEqualTo("ISSUED");
+    }
+
+    /** The approve guard on its own for a SUPERSEDED request, the same way as the CANCELLED test
+     * above: built through the real revision, then the quotation put back to PENDING_APPROVAL. */
+    @Test
+    void approve_ofAPendingQuotationLeftOnASupersededRequest_isRefusedForEitherApprover_andWritesNothing() {
+        DealQuotationDto live = issuedRound();
+        DealQuotationDto pending = submittedQuotation();
+        pricingRequestService.createCustomerChangeRevision(pending.pricingRequestId(), customerChangeRevision(), salesActor);
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'PENDING_APPROVAL' WHERE quotation_id = :id",
+            java.util.Map.of("id", pending.id()));
+
+        for (UserPrincipal approver : List.of(salesManagerActor, ceoActor)) {
+            assertThatThrownBy(() -> quotationService.approve(pending.id(), new ApproveRequest(null), approver))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage())
+                        .isEqualTo("คำขอราคาของใบเสนอราคานี้ถูกแทนที่ด้วยคำขอราคาฉบับแก้ไขแล้ว จึงอนุมัติไม่ได้");
+                });
+        }
+
+        assertThat(statusOf(pending.id())).isEqualTo("PENDING_APPROVAL");
+        assertThat(approverSnapshotCount(pending.id())).isZero();
+        assertThat(statusOf(live.id())).isEqualTo("ISSUED");
+        assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
+    }
+
+    private PricingRequestRequests.CancelPricingRequestRequest cancelRequest() {
+        return new PricingRequestRequests.CancelPricingRequestRequest("ลูกค้ายกเลิกโครงการ");
+    }
+
+    /** A customer-change revision of a request built by {@link #twoItemPricingRequest}: the same
+     * recipient and the same two lines. */
+    private PricingRequestRequests.CustomerChangeRevisionRequest customerChangeRevision() {
+        return new PricingRequestRequests.CustomerChangeRevisionRequest(
+            "ลูกค้าขอเปลี่ยนแปลงรายละเอียด", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
+            "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("1000.00"), "THB", "revision note",
+            null, null, null, null, null, null, null, null,
+            List.of(pricingItem("SCG", "Tile A-S2", "Factory A-S2", new BigDecimal("10")),
+                pricingItem("Cotto", "Tile B-S2", "Factory B-S2", new BigDecimal("5"))));
+    }
+
+    /** Waits until a backend is queued for {@code pricingRequestId}'s advisory lock (the
+     * single-bigint form every request locker uses: classid 0, objid the id, objsubid 1), or until
+     * {@code caller} finishes without ever queueing. */
+    private boolean awaitWaiterOnRequestLock(long pricingRequestId, Future<?> caller) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (System.nanoTime() < deadline && !caller.isDone()) {
+            Long waiting = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pg_locks
+                 WHERE locktype = 'advisory' AND NOT granted
+                   AND classid::bigint = 0 AND objid::bigint = :id AND objsubid = 1
+                """, java.util.Map.of("id", pricingRequestId), Long.class);
+            if (waiting != null && waiting > 0) {
+                return true;
+            }
+            Thread.sleep(50);
+        }
+        return false;
+    }
+
+    /** The approvals queue: every PENDING_APPROVAL quotation, as the sales manager lists them. */
+    private List<Long> approvalQueueIds() {
+        return quotationService.search(List.of(QuotationStatus.PENDING_APPROVAL), false, salesManagerActor)
+            .stream().map(DealQuotationDto::id).toList();
+    }
+
+    private String pricingRequestStatusOf(long pricingRequestId) {
+        return jdbc.queryForObject("SELECT status FROM sales.pricing_request WHERE pricing_request_id = :id",
+            java.util.Map.of("id", pricingRequestId), String.class);
+    }
+
+    private List<String> cancelEvents(long pricingRequestId) {
+        return jdbc.queryForList("""
+            SELECT from_status || '>' || to_status || ':' || message FROM sales.pricing_request_event
+             WHERE pricing_request_id = :id AND event_kind = 'PRICING_REQUEST_CANCELLED'
+            """, java.util.Map.of("id", pricingRequestId), String.class);
+    }
+
+    private long ticketEventCount(String kind) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :t AND kind = :k",
+            java.util.Map.of("t", ticketId, "k", kind), Long.class);
+    }
+
+    private long approverSnapshotCount(long quotationId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation_approver_snapshot WHERE quotation_id = :id",
+            java.util.Map.of("id", quotationId), Long.class);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

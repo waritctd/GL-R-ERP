@@ -99,10 +99,12 @@ public final class PricingRequestStatus {
      * CHILDREN, and cancelling a parent whose children stay live is worse than not cancelling at
      * all. The three statuses added above are exactly the ones that can own a READY_FOR_COSTING
      * factory quote, a SUBMITTED {@code pricing_costing}, a DRAFT/APPROVED
-     * {@code pricing_decision}, and a DRAFT {@code quotation}; {@code
+     * {@code pricing_decision}, and a DRAFT or PENDING_APPROVAL {@code quotation}; {@code
      * PricingRequestRepository#cancelOpenChildrenForDeadRequest} and {@code
      * #supersedeOpenPricingDecisionAndQuotation} were widened in the same change to reach all
-     * four. If a later change admits another status here, check what it can own first.
+     * four. (PENDING_APPROVAL joined later: GLA-123 S2 made it reachable here, and the quotation
+     * predicate missed it until 2026-10-27.) If a later change admits another status here, check
+     * what it can own first.
      */
     private static final Map<String, Set<String>> ALLOWED = Map.ofEntries(
         Map.entry(DRAFT,               Set.of(SUBMITTED, CANCELLED)),

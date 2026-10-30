@@ -1251,7 +1251,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     // DRAFT-supersede behaviour), or S1 would leave it orphaned forever (there is no S2 issue-time
     // supersede for this origin yet). Never touches a LEGACY quotation, which the owner's
     // reissue-through-CEO-chain ruling deliberately keeps live until the replacement is issued —
-    // see supersedeOpenPricingRequestOriginDraft's own Javadoc for the full reasoning.
+    // see supersedeUnissuedPricingRequestOriginQuotations's own Javadoc for the full reasoning.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test

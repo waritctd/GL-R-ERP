@@ -961,6 +961,14 @@ public class PricingRequestRepository {
      * request transition, and put a live offer in front of a customer whose deal was cancelled.
      * Retiring the draft here is what makes that unreachable.
      *
+     * <p><strong>{@code PENDING_APPROVAL} is in the predicate for the same reason.</strong> A
+     * PRICING_REQUEST-origin quotation ({@code th.co.glr.hr.dealquotation}) waits at
+     * PENDING_APPROVAL while the request is still APPROVED_FOR_QUOTATION, a status cancel admits.
+     * Left out of this list, it stayed in the approvals queue, and approving it issued an offer on
+     * the cancelled request and superseded the deal's live quotation through the one-live-offer
+     * sweep. {@code DealQuotationService#approveAndIssuePricingRequestOrigin} now also refuses a
+     * CANCELLED request, for a row orphaned before this status was added here.
+     *
      * <p>Not routed through {@code PricingDecisionRepository}/{@code CustomerQuotationRepository}
      * (this class's own dependency direction stays one-way, same as {@code cancelOpenStep2Children}
      * already reaching into {@code sales.factory_quote}/{@code sales.pricing_costing} directly) —
@@ -973,7 +981,7 @@ public class PricingRequestRepository {
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED'
              WHERE pricing_request_id = :pricingRequestId
-               AND doc_status IN ('DRAFT', 'ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
+               AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'ISSUED', 'READY_TO_ISSUE', 'SENT', 'REVISION_REQUESTED')
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 
@@ -1001,32 +1009,30 @@ public class PricingRequestRepository {
     }
 
     /**
-     * MINOR fix (Opus review, 2026-09-20), GLA-123 slice S1 — a PRICING_REQUEST-origin (the NEW,
-     * {@code th.co.glr.hr.dealquotation} engine) DRAFT quotation orphaned by a customer-change
-     * revision, mirroring {@link #supersedeOpenPricingDecisionAndQuotation}'s own "DRAFT is in the
-     * predicate deliberately, and it closes a real hole" reasoning — but scoped MUCH narrower than
-     * that method, and NOT the same call: {@code createCustomerChangeRevision} deliberately never
-     * calls {@code supersedeOpenPricingDecisionAndQuotation} itself, because the owner's
-     * reissue-through-CEO-chain ruling keeps an ALREADY-ISSUED legacy (origin IS NULL) quotation
-     * live until the replacement is issued (see that method's own Javadoc and this call's own
-     * comment in {@code PricingRequestService#createCustomerChangeRevision}). That ruling is about
-     * an issued, customer-facing document — it has no bearing on this origin, which in S1 can
-     * NEVER reach ISSUED (S1 refused submit for this origin outright; since S2 only {@code createReorder}
-     * is still refused, via {@code DealQuotationService#requireReorderAllowedForOrigin}),
-     * so DRAFT is the ONLY state to ever clean up here, and there is no "stays live until the
-     * replacement issues" concept to preserve for it. Without this, a DRAFT quotation on this
-     * engine would be left attached to a now-SUPERSEDED parent forever — nothing else in S1 ever
-     * retires it (there is no S2 issue-time supersede for this origin yet). {@code origin =
-     * 'PRICING_REQUEST'} in the predicate is what keeps this from ever touching the legacy
-     * quotation the paragraph above is protecting.
+     * The PRICING_REQUEST-origin ({@code th.co.glr.hr.dealquotation}) quotations a customer-change
+     * revision retires on the request it supersedes: every one not yet issued, DRAFT or
+     * PENDING_APPROVAL. Sole caller is {@code PricingRequestService#createCustomerChangeRevision}.
+     *
+     * <p>DRAFT since GLA-123 S1 (Opus review, 2026-09-20), because nothing else would ever retire
+     * it. PENDING_APPROVAL by owner ruling 2026-10-27: the customer has changed what they want, so
+     * the old price must not still be approvable, and issuable, from the superseded request. The
+     * new round's quotation goes through ผจก.ขาย/CEO approval like any other, and {@code
+     * DealQuotationService#approveAndIssuePricingRequestOrigin} also refuses a SUPERSEDED request.
+     *
+     * <p>Narrower than {@link #supersedeOpenPricingDecisionAndQuotation}, and deliberately not that
+     * call: the reissue-through-CEO-chain ruling (2026-08-13) keeps an ISSUED offer live until its
+     * replacement is issued, so ISSUED and REVISION_REQUESTED stay out of this list (the
+     * replacement's issue retires them through the deal-wide one-live-offer sweep), and {@code
+     * origin = 'PRICING_REQUEST'} keeps the legacy (origin IS NULL) quotation that ruling protects
+     * out of reach.
      */
-    public void supersedeOpenPricingRequestOriginDraft(long pricingRequestId) {
+    public void supersedeUnissuedPricingRequestOriginQuotations(long pricingRequestId) {
         jdbc.update("""
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED'
              WHERE pricing_request_id = :pricingRequestId
                AND origin = 'PRICING_REQUEST'
-               AND doc_status = 'DRAFT'
+               AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
             """, Map.of("pricingRequestId", pricingRequestId));
     }
 

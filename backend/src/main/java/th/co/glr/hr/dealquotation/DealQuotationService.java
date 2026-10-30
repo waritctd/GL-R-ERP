@@ -1803,6 +1803,17 @@ public class DealQuotationService {
         quotations.lockTicket(quotation.ticketId());
         PricingRequestSummaryDto summary = pricingRequests.findSummary(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        // A cancelled or superseded request issues nothing (owner ruling 2026-10-27). Its cancel or
+        // customer-change revision supersedes a PENDING_APPROVAL quotation (PricingRequestRepository
+        // #supersedeOpenPricingDecisionAndQuotation, #supersedeUnissuedPricingRequestOriginQuotations);
+        // this refuses one orphaned before they did. Checked before the first write below.
+        if (PricingRequestStatus.CANCELLED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้");
+        }
+        if (PricingRequestStatus.SUPERSEDED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคาของใบเสนอราคานี้ถูกแทนที่ด้วยคำขอราคาฉบับแก้ไขแล้ว จึงอนุมัติไม่ได้");
+        }
         // Same DATE-mode-with-special-pricing / DAYS-mode validity computation #approve already
         // uses for DEAL_DIRECT — reused verbatim rather than forked so the two origins can never
         // compute this differently by accident.
