@@ -1501,6 +1501,10 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
     expect(screen.getByText(byCombinedText(/ต้นทุนรวมนำเข้า.*฿60\.00/))).not.toBeNull();
     expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
+    // QA-29: the requested quantity reads "20 แผ่น", never the raw basis enum "20 (PER_PIECE)".
+    // The request-items list already renders one "20 แผ่น"; the decision line is the second.
+    expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
+    expect(screen.queryByText(/PER_PIECE/)).toBeNull();
     // The old per-item margin/minimum/ceiling grid is gone entirely.
     expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
     expect(screen.queryByPlaceholderText('ราคาขั้นต่ำ')).toBeNull();
@@ -1910,6 +1914,10 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     // this page renders structurally has no cost/margin field at all (design correction 2).
     expect(screen.queryByText(/ต้นทุน/)).toBeNull();
     expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
+    // QA-29: "20 แผ่น", not the raw basis enum (the request-items list renders one already;
+    // the sales-view line is the second).
+    expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
+    expect(screen.queryByText(/PER_PIECE/)).toBeNull();
   });
 
   it('does not fetch the sales-view projection for a non-owning sales rep', async () => {
@@ -3041,12 +3049,15 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   it('shows the new-engine quotation (number, status, link) once one exists, and hides both create buttons', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
-      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'DRAFT' },
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'PENDING_APPROVAL' },
     });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
     await screen.findByText('QT-2026-0099-1');
+    // The deal engine's own status words (PENDING_APPROVAL is not a customer-quotation status).
+    expect(screen.getByText('รออนุมัติ')).not.toBeNull();
+    expect(screen.queryByText(/PENDING_APPROVAL/)).toBeNull();
     const link = screen.getByRole('link', { name: 'เปิดใบเสนอราคา' });
     expect(link.getAttribute('href')).toBe('/quotations/9001');
     expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
@@ -3085,7 +3096,25 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     await waitForLoaded(request);
 
     expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
-    expect(screen.getByText(/ยังไม่มีใบเสนอราคาลูกค้า/)).not.toBeNull();
+    expect(screen.getByText('ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้')).not.toBeNull();
+    expect(screen.queryByText(/APPROVED_FOR_QUOTATION/)).toBeNull();
+  });
+
+  // QA-29b: a viewer who cannot create the quotation (the CEO) used to read
+  // "wait for APPROVED_FOR_QUOTATION" forever — stale after approval, and a raw enum.
+  it.each([
+    ['CEO_REVIEWING', 'ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้'],
+    ['APPROVED_FOR_QUOTATION', 'อนุมัติราคาขายแล้ว — รอฝ่ายขายสร้างใบเสนอราคาลูกค้า'],
+    // A request that will never get a quotation says why, instead of "wait for approval".
+    ['CANCELLED', 'ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้ยกเลิกแล้ว'],
+    ['SUPERSEDED', 'ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้ถูกแทนที่แล้ว'],
+  ])('tells the CEO the no-quotation state in words for %s, with no raw enum', async (status, text) => {
+    const request = buildRequest({ summary: { status } });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+
+    expect(await screen.findByText(text)).not.toBeNull();
+    expect(screen.queryByText(/APPROVED_FOR_QUOTATION/)).toBeNull();
   });
 
   it('lets the owning sales rep edit an item discount, warns below the CEO-approved minimum, and issues via the confirm dialog', async () => {
@@ -3095,6 +3124,11 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
     await screen.findByText(quotation.number);
+
+    // QA-29: the quotation line reads "20 แผ่น", not the raw basis enum (the request-items list
+    // renders one already; the quotation line is the second).
+    expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
+    expect(screen.queryByText(/PER_PIECE/)).toBeNull();
 
     // Editable discount input is present for a DRAFT quotation owned by this sales rep.
     const discountInputs = screen.getAllByRole('spinbutton');
@@ -4241,6 +4275,10 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
     expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยืนยันราคาแล้ว');
+    // QA-29c: Import's confirmed price is not yet the CEO-approved one, so the column (desktop
+    // header + each mobile row label) says ราคาที่ยืนยันแล้ว, never ราคาที่อนุมัติ.
+    expect(screen.getAllByText('ราคาที่ยืนยันแล้ว').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryAllByText('ราคาที่อนุมัติ')).toHaveLength(0);
   });
 
   it('the price payload carries the sales terms (EUR / PER_SQM) — import cannot change them', async () => {

@@ -141,6 +141,18 @@ describe('QuotationListPage', () => {
     await waitFor(() => expect(screen.getByTestId('location-search').textContent).toBe('?status=NEEDS_REWORK'));
   });
 
+  // QA-37: ISSUED/SENT/ACCEPTED are approved-and-beyond; the tab used to ask for APPROVED only.
+  it('drives the อนุมัติแล้ว tab off every approved-and-beyond status, keeping ?status=APPROVED in the URL', async () => {
+    renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    fireEvent.click(screen.getByRole('tab', { name: /^อนุมัติแล้ว/ }));
+
+    await waitFor(() => expect(api.dealQuotations.list)
+      .toHaveBeenCalledWith({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] }));
+    await waitFor(() => expect(screen.getByTestId('location-search').textContent).toBe('?status=APPROVED'));
+  });
+
   it('opens the tab named by ?status= rather than the role default', async () => {
     renderListPage(ceoUser, '/quotations?status=CANCELLED');
     await screen.findByText('QD69-0001');

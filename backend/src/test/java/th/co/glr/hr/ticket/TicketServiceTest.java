@@ -1348,7 +1348,9 @@ class TicketServiceTest {
             argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
         verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(), argThat(msg -> msg.contains("40/100")),
+            // The event names the line by brand + model + size (the fixture's size is "pcs"), not by item id.
+            eq(TicketEventKind.DELIVERY_RECORDED), anyString(), anyString(),
+            argThat(msg -> msg.contains("Brand Model pcs: 40/100") && !msg.contains("1: ")),
             eq(RelatedDocumentType.DELIVERY_RECORD), anyLong());
     }
 
@@ -1399,6 +1401,19 @@ class TicketServiceTest {
         assertForbidden(() -> service.recordPartialDelivery(10L, over, otherSales));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, accountActor));
         assertForbidden(() -> service.recordPartialDelivery(10L, over, salesManagerActor));
+    }
+
+    @Test
+    void recordPartialDelivery_warehouseSourceBeforeGoodsReceivedIsRefusedInThai() {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(deliveryItem(1L, "100.00", "0.00", "0.00")),
+            "FULLY_PAID", FulfilmentStatus.IR_ISSUED, DealStage.PROCUREMENT, null);
+
+        assertThatThrownBy(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
+            List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo("ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
+            });
     }
 
     @Test

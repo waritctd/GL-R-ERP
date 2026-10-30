@@ -655,7 +655,8 @@ public final class DealQuotationDtos {
      * scope rule as {@code GET /api/deal-quotations} (sales: own deals only), computed in ONE SQL
      * statement so the tabs never need a second full fetch. {@code needsRework} = DRAFT rows sent
      * back with a reason ({@code approvalNote}) OR revisions in progress ({@code parentQuotationId}),
-     * exactly the {@code needsRework=true} filter's own definition.
+     * exactly the {@code needsRework=true} filter's own definition. {@code approved} is the อนุมัติแล้ว
+     * tab: {@code APPROVED} plus the later {@code ISSUED}/{@code SENT}/{@code ACCEPTED} statuses.
      */
     public record DealQuotationCountsDto(
         long all,

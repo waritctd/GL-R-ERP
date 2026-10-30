@@ -284,12 +284,12 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             assertThat(counts.cancelled())
                 .isEqualTo(quotationService.search(List.of("CANCELLED"), false, null, actor).size());
             assertThat(counts.approved())
-                .isEqualTo(quotationService.search(List.of("APPROVED"), false, null, actor).size());
+                .isEqualTo(quotationService.search(List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED"), false, null, actor).size());
         }
         // …and they really are widened (not agreeing only because both stayed DEAL_DIRECT-only).
         DealQuotationCountsDto own = quotationService.counts(salesA);
         assertThat(own.all()).isEqualTo(3);
-        assertThat(own.approved()).as("the PRICING_REQUEST row").isEqualTo(1);
+        assertThat(own.approved()).as("the PRICING_REQUEST row + legacy A's ISSUED row (QA-37)").isEqualTo(2);
         DealQuotationCountsDto queue = quotationService.counts(salesManager);
         assertThat(queue.all()).isEqualTo(5);
         assertThat(queue.cancelled()).as("rep B's cancelled PRICING_REQUEST row").isEqualTo(1);

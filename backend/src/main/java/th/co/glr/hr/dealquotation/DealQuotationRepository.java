@@ -1758,7 +1758,7 @@ public class DealQuotationRepository {
                    COUNT(*) FILTER (WHERE q.doc_status = 'PENDING_APPROVAL') AS pending_count,
                    COUNT(*) FILTER (WHERE %s) AS rework_count,
                    COUNT(*) FILTER (WHERE q.doc_status = 'CANCELLED') AS cancelled_count,
-                   COUNT(*) FILTER (WHERE q.doc_status = 'APPROVED') AS approved_count
+                   COUNT(*) FILTER (WHERE q.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED')) AS approved_count
               FROM sales.quotation q
               JOIN sales.ticket t ON t.ticket_id = q.ticket_id
              WHERE %s%s

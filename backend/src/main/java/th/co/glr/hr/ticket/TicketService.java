@@ -1666,7 +1666,7 @@ public class TicketService {
             }
         }
         if ("WAREHOUSE".equals(source) && !warehouseDeliveryAvailable(s, ticket.summary().id())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE");
+            throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
         }
         long deliveryId = tickets.insertDeliveryRecord(
             s.id(), source, actor.id(), request.note(), request.recipientName(), normalized);
@@ -1958,15 +1958,22 @@ public class TicketService {
             .anyMatch(item -> nullToZero(item.qty()).compareTo(nullToZero(item.qtyDelivered())) > 0);
     }
 
+    /** brand model size, as the delivery history shows it; "รายการ <id>" when all three are blank. */
+    private static String deliveryLineName(TicketItemDto item) {
+        String name = Stream.of(item.brand(), item.model(), item.size())
+            .filter(part -> part != null && !part.isBlank()).collect(Collectors.joining(" "));
+        return name.isEmpty() ? "รายการ " + item.id() : name;
+    }
+
     private static String deliveryMessage(List<TicketItemDto> updatedItems, List<RecordDeliveryRequest.Line> lines) {
         Map<Long, TicketItemDto> itemsById = itemMap(updatedItems);
         return lines.stream()
             .map(line -> {
                 TicketItemDto item = itemsById.get(line.itemId());
                 if (item == null) {
-                    return line.itemId() + ": +" + line.qty().stripTrailingZeros().toPlainString();
+                    return "รายการ " + line.itemId() + ": +" + line.qty().stripTrailingZeros().toPlainString();
                 }
-                return line.itemId() + ": "
+                return deliveryLineName(item) + ": "
                     + nullToZero(item.qtyDelivered()).stripTrailingZeros().toPlainString()
                     + "/" + nullToZero(item.qty()).stripTrailingZeros().toPlainString();
             })
