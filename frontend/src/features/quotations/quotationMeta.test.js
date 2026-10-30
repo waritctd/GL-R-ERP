@@ -3,6 +3,7 @@ import * as meta from './quotationMeta.js';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { routeForChannel } from '../tickets/stageCatalog.js';
 import { quotationStatusLabel } from '../../utils/format.js';
+import { API_ROUTES } from '../../api/routes.js';
 import {
   canApproveDealQuotation,
   canCancelDealQuotation,
@@ -1158,6 +1159,8 @@ describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
     expect(tab.label).toBe('อนุมัติแล้ว');
     expect(tab.countKey).toBe('approved');
     expect(tab.params).toEqual({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] });
+    // One comma-joined status param; Spring binds it to DealQuotationController#search's List<String>.
+    expect(API_ROUTES.dealQuotations.list(tab.params)).toBe('/api/deal-quotations?status=APPROVED%2CISSUED%2CSENT%2CACCEPTED');
   });
 
   it('sends no params at all for ทั้งหมด', () => {
