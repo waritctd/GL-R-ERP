@@ -42,7 +42,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         get: vi.fn(),
         listPayments: vi.fn(),
         recordPayment: vi.fn(),
-        setBilling: vi.fn(),
         listDeliveries: vi.fn(),
         reserveStock: vi.fn(),
         recordDelivery: vi.fn(),
@@ -67,13 +66,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listActivities: vi.fn(),
         addActivity: vi.fn(),
         updateTracking: vi.fn(),
-        // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel's own
-        // mutations, self-contained like DealQuotationPanel's.
-        setDepositPolicy: vi.fn(),
-        confirmDepositPaid: vi.fn(),
         // Slice C2b moved the revoke-close-confirm control into the "การเงิน"
         // tab (see TicketDetailPage.jsx's own comment on that section) —
-        // Slice E's DealMoneyTimeline rebuild left it untouched, in place,
+        // the money-section rebuild left it untouched, in place,
         // outside that new component.
         revokeCloseConfirmation: vi.fn(),
         // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel's
@@ -148,13 +143,6 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         revise: vi.fn(),
         deleteDraft: vi.fn(),
         download: vi.fn(),
-      },
-      // The STORED billing note aggregate (V189, GLA-129 step 4 part 2) — DealDocumentPipeline's
-      // own query is gated on `summary.customerId && issuedRemainingInvoice`, both absent from
-      // every fixture below, so this is never actually called by the existing tests; mocked so a
-      // future test that DOES set both doesn't throw on an undefined namespace.
-      billingNotes: {
-        listForCustomer: vi.fn().mockResolvedValue({ billingNotes: [] }),
       },
       // The items table converts a foreign-currency factory price to baht. Mocked because an
       // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
@@ -352,7 +340,6 @@ describe('TicketDetailPage', () => {
     // H1: recordPayment/confirmFinalPayment/confirmCloseReady are re-pointed at the finance routes and
     // return the finance view `{ deal }`, NOT `{ ticket }` (see hrApi.js `tickets.recordPayment`).
     api.tickets.recordPayment.mockResolvedValue({ deal: { id: 701 } });
-    api.tickets.setBilling.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
@@ -750,7 +737,11 @@ describe('TicketDetailPage', () => {
     const keyDatesHeading = await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ });
     const keyDatesSection = keyDatesHeading.closest('section');
     expect(within(keyDatesSection).getByText('20 ก.ค. 2569')).not.toBeNull();
-    expect(within(keyDatesSection).getByText('31 ก.ค. 2569')).not.toBeNull();
+    // วางบิล is out of scope: neither the billing date nor the due date has a row here, even when set.
+    expect(within(keyDatesSection).queryByText('วันวางบิล')).toBeNull();
+    expect(within(keyDatesSection).queryByText('ครบกำหนดชำระ')).toBeNull();
+    expect(within(keyDatesSection).queryByText('21 ก.ค. 2569')).toBeNull();
+    expect(within(keyDatesSection).queryByText('31 ก.ค. 2569')).toBeNull();
 
     const peopleHeading = screen.getByRole('heading', { level: 2, name: /ผู้เกี่ยวข้อง/ });
     const peopleSection = peopleHeading.closest('section');
@@ -969,6 +960,8 @@ describe('TicketDetailPage', () => {
     await openTab(/การเงิน/);
 
     expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
+    // The billing control left this page: even with SET_BILLING offered there is no button for it.
+    expect(screen.queryByRole('button', { name: 'ตั้งค่าการวางบิล' })).toBeNull();
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
     // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
     expect(screen.getAllByText('฿1,000.00').length).toBeGreaterThan(0);
@@ -993,8 +986,8 @@ describe('TicketDetailPage', () => {
 
   // Slice C2b moved this control into the การเงิน tab (see
   // TicketDetailPage.jsx's own comment above the `can.revokeCloseConfirm`
-  // section) — Slice E's DealMoneyTimeline rebuild left it in place, outside
-  // that new component, and untouched. Not previously covered by a dedicated
+  // section) — the money-section rebuild left it in place, outside
+  // that component, and untouched. Not previously covered by a dedicated
   // test; adding one here per the "every existing action must still be
   // present and behave identically" requirement.
   it('renders "ยกเลิกการยืนยันปิดงาน" for account with REVOKE_CLOSE_CONFIRM, and calls revokeCloseConfirmation on click', async () => {
@@ -1023,13 +1016,13 @@ describe('TicketDetailPage', () => {
       currentState: {
         lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued',
       },
-      availableActions: [{ action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' }],
+      availableActions: [],
     });
 
     renderTicketDetailPage(accountUser);
     await openTab(/การเงิน/);
 
-    await screen.findByRole('button', { name: 'ตั้งค่าการวางบิล' });
+    await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
     expect(screen.queryByRole('button', { name: 'ยกเลิกการยืนยันปิดงาน' })).toBeNull();
     expect(api.tickets.revokeCloseConfirmation).not.toHaveBeenCalled();
   });
@@ -1066,7 +1059,7 @@ describe('TicketDetailPage', () => {
         fulfillmentStatus: null,
         status: 'quotation_issued',
       },
-      availableActions: [{ action: 'SET_BILLING', kind: 'payment', label: 'ตั้งค่าการวางบิล' }],
+      availableActions: [],
     });
 
     renderTicketDetailPage(accountUser);
@@ -3499,223 +3492,35 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // "มัดจำ" (Phase 3 Slice S3 — docs/agent-handoffs/105): the unified
-  // policy → notice → payment section, replacing the deposit-policy control
-  // that used to live in DealStagePanel and the deposit doc/payment bits
-  // that used to live directly on this page.
-  describe('deal deposit panel', () => {
-    // DealDepositPanel now lives inside the "การเงิน" tab.
-    async function depositSection() {
+  // Owner ruling 2026-10-31: the "มัดจำ" 3-step card (นโยบายมัดจำ → ใบแจ้งยอดมัดจำ → รับชำระมัดจำ) is gone
+  // from the การเงิน tab. Its controls live elsewhere: the % comes from the quotation, the notice is
+  // created from the main button / เอกสาร tab, and account confirms the money on /finance/deals/:id.
+  describe('การเงิน tab — no มัดจำ card', () => {
+    it.each([['the owning rep', salesOwnerUser], ['account', accountUser]])('%s sees no มัดจำ card and none of its controls', async (_label, user) => {
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', createdById: 1 } }),
+      });
+      // Advertise every action the old card keyed on, so its absence can't be a missing gate.
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' },
+        availableActions: [
+          { action: 'DEPOSIT_PAID', kind: 'payment', label: 'รับมัดจำ' },
+        ],
+      });
+
+      renderTicketDetailPage(user);
       await openTab(/การเงิน/);
-      const heading = await screen.findByRole('heading', { level: 2, name: 'มัดจำ' });
-      return within(heading.closest('section'));
-    }
+      await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
 
-    it('renders the มัดจำ section with the current policy for the default REQUIRED policy', async () => {
-      renderTicketDetailPage(accountUser);
-
-      const section = await depositSection();
-      expect(section.getByText('นโยบายมัดจำ')).not.toBeNull();
-      expect(section.getByText('ต้องเก็บมัดจำ')).not.toBeNull();
-      expect(section.getByText('ใบแจ้งยอดมัดจำ')).not.toBeNull();
-      expect(section.getByText('รับชำระมัดจำ')).not.toBeNull();
+      expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
+      expect(screen.queryByTestId('deal-deposit-panel')).toBeNull();
+      expect(document.getElementById('deal-deposit-panel')).toBeNull();
+      expect(screen.queryByText('นโยบายมัดจำ')).toBeNull();
+      expect(screen.queryByText('รับชำระมัดจำ')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
     });
 
-    // GLA-118 (owner ruling 2026-09-17): deposit policy is set by the OWNING sales rep only now
-    // — not account. This used to be named
-    // 'account can change the deposit policy via api.tickets.setDepositPolicy' and drove it as
-    // accountUser; renamed and switched to salesOwnerUser (id 1, matching buildTicket's default
-    // summary.createdById) because the gate flipped from account/ceo-only to owning-rep-only.
-    it('the owning rep can change the deposit policy via api.tickets.setDepositPolicy', async () => {
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
-        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
-      });
-      api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าประจำ' } }) });
-
-      renderTicketDetailPage(salesOwnerUser);
-      const section = await depositSection();
-      fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
-
-      fireEvent.change(screen.getByLabelText('เหตุผล *'), { target: { value: 'ลูกค้าประจำ' } });
-      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-      await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
-        701, { policy: 'WAIVED', reason: 'ลูกค้าประจำ' },
-      ));
-    });
-
-    // GLA-118 owner ruling 2026-09-20, part B: sales_manager may set the deposit policy too, as a
-    // backup to the owning rep — DealDepositPanel's canSetPolicy now reads
-    // `role === 'sales_manager' || (isSales && isOwner)`, not isOwner alone.
-    it('sales_manager can also change the deposit policy via api.tickets.setDepositPolicy', async () => {
-      const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
-        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
-      });
-      api.tickets.setDepositPolicy.mockResolvedValue({ ticket: buildTicket({ summary: { depositPolicy: 'CREDIT_CUSTOMER', depositPolicyReason: 'สำรองโดยผจก.' } }) });
-
-      renderTicketDetailPage(salesManagerUser);
-      const section = await depositSection();
-      fireEvent.click(await section.findByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' }));
-
-      fireEvent.change(screen.getByLabelText('เหตุผล *'), { target: { value: 'สำรองโดยผจก.' } });
-      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
-
-      await waitFor(() => expect(api.tickets.setDepositPolicy).toHaveBeenCalledWith(
-        701, { policy: 'WAIVED', reason: 'สำรองโดยผจก.' },
-      ));
-    });
-
-    // Wrong-way-round (CLAUDE.md "permission changes must ship evidence"): the component must
-    // not blindly trust an advertised action. Even if the API response advertises WAIVE_DEPOSIT
-    // (e.g. a stale cache, or a bug on the server), account must not see the button — DealDepositPanel's
-    // own isSales/isOwner check (defense in depth) must refuse it independently of hasAction().
-    it('never offers the policy-change button to account, even if the API wrongly advertises WAIVE_DEPOSIT', async () => {
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
-        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
-      });
-
-      renderTicketDetailPage(accountUser);
-      const section = await depositSection();
-
-      expect(section.queryByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' })).toBeNull();
-    });
-
-    // Same wrong-way-round proof for ceo, which lost the fallback entirely (used to be
-    // account/ceo).
-    it('never offers the policy-change button to ceo, even if the API wrongly advertises WAIVE_DEPOSIT', async () => {
-      api.tickets.actions.mockResolvedValueOnce({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
-        availableActions: [{ action: 'WAIVE_DEPOSIT', kind: 'policy', label: 'นโยบายมัดจำ' }],
-      });
-
-      renderTicketDetailPage(ceoUser);
-      const section = await depositSection();
-
-      expect(section.queryByRole('button', { name: 'เปลี่ยนนโยบายมัดจำ…' })).toBeNull();
-    });
-
-    it('a waived deposit policy renders the notice/payment steps as skipped, with the reason', async () => {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { depositPolicy: 'WAIVED', depositPolicyReason: 'ลูกค้าประจำตามข้อตกลง' } }),
-      });
-
-      renderTicketDetailPage(accountUser);
-      const section = await depositSection();
-      await section.findByText('ยกเว้นมัดจำ');
-
-      expect(section.getAllByText(/ข้ามขั้นตอนนี้/).length).toBe(2);
-      expect(section.getAllByText(/ลูกค้าประจำตามข้อตกลง/).length).toBeGreaterThan(0);
-      expect(section.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
-      expect(section.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
-    });
-
-    it('account confirms deposit paid via api.tickets.confirmDepositPaid once the notice is issued', async () => {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } }),
-      });
-      api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' },
-        availableActions: [{ action: 'DEPOSIT_PAID', kind: 'payment', label: 'รับมัดจำ' }],
-      });
-      api.tickets.confirmDepositPaid.mockResolvedValue({ ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }) });
-
-      renderTicketDetailPage(accountUser);
-      const section = await depositSection();
-      fireEvent.click(await section.findByRole('button', { name: 'ยืนยันรับมัดจำ' }));
-
-      await waitFor(() => expect(api.tickets.confirmDepositPaid).toHaveBeenCalledWith(701));
-    });
-
-    // GLA-118: the CEO fallback on confirmDepositPaid is gone. Wrong-way-round + defense in
-    // depth, same shape as the WAIVE_DEPOSIT proofs above: even if the API wrongly advertises
-    // DEPOSIT_PAID to a ceo viewer, DealDepositPanel's own role === 'account' check must still
-    // hide the button.
-    it('never offers the confirm-deposit button to ceo, even if the API wrongly advertises DEPOSIT_PAID', async () => {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } }),
-      });
-      api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' },
-        availableActions: [{ action: 'DEPOSIT_PAID', kind: 'payment', label: 'รับมัดจำ' }],
-      });
-
-      renderTicketDetailPage(ceoUser);
-      const section = await depositSection();
-
-      expect(section.queryByRole('button', { name: 'ยืนยันรับมัดจำ' })).toBeNull();
-    });
-
-    // Owner ruling 2026-10-23: ออกเอกสาร on the deal page goes through a confirm dialog with the
-    // stored percent and amounts (the notice is a numbered customer document from then on).
-    it('the owning rep issues a draft notice only through a confirm dialog showing its % and amounts', async () => {
-      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{
-        id: 9002, ticketId: 701, version: 1, status: 'DRAFT', docNumber: null, customerName: 'บริษัท ทดสอบ จำกัด',
-        depositPercent: 0.4, depositAmount: 200, vatPercent: 0.07, vatAmount: 14, totalPayable: 214, items: [],
-        updatedAt: '2026-10-23T08:57:19.732123Z',
-      }] });
-      api.depositNotices.issue.mockResolvedValue({ depositNotice: { id: 9002, status: 'ISSUED', docNumber: 'GLRD69001' } });
-
-      renderTicketDetailPage(salesOwnerUser);
-      const section = await depositSection();
-      fireEvent.click(await section.findByRole('button', { name: 'ออกเอกสาร' }));
-
-      const dialog = await screen.findByRole('dialog');
-      expect(within(dialog).getByText('ขอรับเงินมัดจำ (40%)')).not.toBeNull();
-      expect(within(dialog).getByText('200.00 บาท')).not.toBeNull();
-      expect(within(dialog).getByText('ภาษีมูลค่าเพิ่ม 7%')).not.toBeNull();
-      expect(within(dialog).getByText('14.00 บาท')).not.toBeNull();
-      expect(within(dialog).getByText('214.00 บาท')).not.toBeNull();
-      expect(api.depositNotices.issue).not.toHaveBeenCalled();
-
-      fireEvent.click(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }));
-      // The amounts in the dialog are the draft as read at that stamp; an edit since is refused server-side.
-      await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledWith(9002, { expectedUpdatedAt: '2026-10-23T08:57:19.732123Z' }));
-    });
-
-    // Owner ruling 2026-10-23: one deposit notice per deal. With one ISSUED the panel never offers
-    // to create another (the backend 409s it), and says so beside the issued number.
-    it('with an ISSUED notice, offers no create action and says the deal already has its notice', async () => {
-      api.pricingRequests.listForTicket.mockResolvedValue({ items: [
-        { id: 501, ticketId: 701, ticketCreatedById: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' },
-      ] });
-      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [{
-        id: 9001, ticketId: 701, version: 1, status: 'ISSUED', docNumber: 'GLRD69001', depositPercent: 0.4,
-        depositAmount: 200, vatPercent: 0.07, vatAmount: 14, totalPayable: 214, items: [],
-      }] });
-
-      renderTicketDetailPage(salesOwnerUser);
-      const section = await depositSection();
-
-      expect(await section.findByText('GLRD69001')).not.toBeNull();
-      expect(section.getByText('ดีลนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว — สร้างฉบับใหม่ไม่ได้')).not.toBeNull();
-      expect(section.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
-    });
-
-    // A ไม่รับมัดจำ (0%) accepted quotation 409s on the server (#1173): the panel passes the deal's
-    // accepted quotation (3rd arg) and the notices (4th) — it used to put the notices in the 3rd slot.
-    it('offers the create action for an accepted quotation, but not when that quotation is 0%', async () => {
-      api.pricingRequests.listForTicket.mockResolvedValue({ items: [
-        { id: 501, ticketId: 701, ticketCreatedById: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-21T00:00:00Z' },
-      ] });
-      const quotation = (depositPercent) => ({ id: 31, origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'ACCEPTED', depositPercent });
-      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation(0)] });
-      const { unmount } = renderTicketDetailPage(salesOwnerUser);
-      const section = await depositSection();
-      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
-      expect(section.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
-      unmount();
-
-      api.dealQuotations.listForTicket.mockResolvedValue({ items: [quotation(0.3)] });
-      renderTicketDetailPage(salesOwnerUser);
-      const section2 = await depositSection();
-      expect(await section2.findByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).not.toBeNull();
-    });
-
-    it('import (no business in the deposit section) never gets a "การเงิน" tab at all', async () => {
+    it('import (no business in the money tab) never gets a "การเงิน" tab at all', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
@@ -3723,8 +3528,24 @@ describe('TicketDetailPage', () => {
       // both money sub-reads deny import, so the whole tab is absent (see
       // ticketDetailTabs.js's "money" gate), not just this one section.
       expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
-      expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
+    });
+
+    // The sticky bar's account jump used to scroll to #deal-deposit-panel (inside the card above).
+    // Account is sent to the finance deal page (nextAccountAction's `to`) now, not to a missing element.
+    it.each([
+      ['confirmDeposit', { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }],
+      ['chaseOverdue', { paymentStatus: 'DEPOSIT_NOTICE_ISSUED', overdue: true, amountOutstanding: 500 }],
+    ])('account\'s %s primary navigates to /finance/deals/701 instead of scrolling to the removed card', async (key, extra) => {
+      const state = { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null, status: 'quotation_issued' };
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1, ...extra } }) });
+      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], accountUser);
+
+      await waitFor(() => expect(screen.queryByTestId('ticket-primary-action')?.getAttribute('data-action')).toBe(key));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/finance/deals/701'));
     });
   });
 
@@ -4543,40 +4364,61 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // GLA-129 step 4 part 2 (review round 2, 2026-09-23): a wiring-level test for the money tab's
-  // new content — nothing previously asserted the "สถานะการเงิน" Panel or DealRemainingInvoiceCard
-  // actually render inside TicketDetailPage, so dropping or renaming the `canManage` prop at this
-  // call site would silently fail closed (the button disappears) with nothing here going red.
-  describe('money tab — GLA-129 status strip / pipeline / remaining-invoice card', () => {
-    it('renders the status strip and pipeline, and shows the remaining-invoice manage button for a ready deal', async () => {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({
-          summary: { status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 },
-        }),
-      });
-
-      renderTicketDetailPage(salesOwnerUser);
-      await openTab(/^การเงิน/);
-
-      expect(await screen.findByText('สถานะการเงิน')).toBeTruthy();
-      expect(await screen.findByRole('button', { name: 'จัดการใบแจ้งหนี้ส่วนที่เหลือ' })).toBeTruthy();
+  // Owner design 2026-10-31: the การเงิน tab is ONE "การชำระเงิน" panel (balance + paid bar, the three
+  // document steps, the timeline). สถานะการเงิน, the ใบวางบิล step and the วางบิล controls are gone.
+  describe('การเงิน tab — one การชำระเงิน panel', () => {
+    const readyDeal = () => api.tickets.get.mockResolvedValue({
+      ticket: buildTicket({
+        summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 },
+      }),
     });
 
-    // Wrong-way-round: the same button must NOT appear once the deal is no longer ready
-    // (isRemainingInvoiceReady false) — canManage must track can.downloadRemainingInvoice exactly,
-    // not just "is this a sales owner".
-    it('hides the remaining-invoice manage button before the deal is ready', async () => {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({
-          summary: { status: 'quotation_issued', fulfillmentStatus: null, createdById: 1 },
-        }),
-      });
+    it.each([['the owning rep', salesOwnerUser], ['account', accountUser]])('%s: a single การชำระเงิน panel, no สถานะการเงิน and no วางบิล anywhere on the tab', async (_label, user) => {
+      readyDeal();
+      renderTicketDetailPage(user);
+      await openTab(/^การเงิน/);
 
+      await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
+      await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
+      const panel = screen.getByRole('tabpanel');
+      expect(within(panel).getAllByRole('heading', { level: 2 })).toHaveLength(1);
+      expect(within(panel).getByTestId('payment-step-deposit')).toBeTruthy();
+      expect(within(panel).getByTestId('payment-step-remaining')).toBeTruthy();
+      expect(within(panel).getByTestId('payment-step-final')).toBeTruthy();
+      expect(panel.textContent).not.toMatch(/สถานะการเงิน|วางบิล|ครบกำหนดชำระ|ใบวางบิล/);
+    });
+
+    it('the owning rep on a ready deal: สร้างใบแจ้งหนี้ส่วนที่เหลือ in the step opens the RemainingInvoiceDialog', async () => {
+      readyDeal();
       renderTicketDetailPage(salesOwnerUser);
       await openTab(/^การเงิน/);
 
-      await screen.findByText('สถานะการเงิน');
-      expect(screen.queryByRole('button', { name: 'จัดการใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
+      const step = within(await screen.findByTestId('payment-step-remaining'));
+      fireEvent.click(await step.findByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' }));
+      expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+    });
+
+    it('with an ISSUED remaining invoice the step offers PDF and จัดการเอกสาร (opens the same dialog)', async () => {
+      readyDeal();
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
+      api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: { docNumber: 'GLRI69001', noteTemplates: [], referenceOptions: [], depositReferenceOptions: [], quotationOptions: [] } });
+      renderTicketDetailPage(salesOwnerUser);
+      await openTab(/^การเงิน/);
+
+      const step = within(await screen.findByTestId('payment-step-remaining'));
+      expect(await step.findByRole('button', { name: 'PDF' })).toBeTruthy();
+      fireEvent.click(step.getByRole('button', { name: 'จัดการเอกสาร' }));
+      expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
+    });
+
+    it('account on a ready deal gets no remaining-invoice control (can.downloadRemainingInvoice is sales only)', async () => {
+      readyDeal();
+      renderTicketDetailPage(accountUser);
+      await openTab(/^การเงิน/);
+
+      const step = within(await screen.findByTestId('payment-step-remaining'));
+      await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
+      expect(step.queryByRole('button', { name: /สร้างใบแจ้งหนี้ส่วนที่เหลือ|จัดการเอกสาร/ })).toBeNull();
     });
   });
 
@@ -4754,15 +4596,25 @@ describe('TicketDetailPage', () => {
       expect(primaryAction()).not.toBe('create_deposit_notice');
     });
 
-    it('การเงิน tab: while the main button offers สร้างใบแจ้งยอดเงินรับมัดจำ the deposit panel has no second copy (deal-deposit-create-notice)', async () => {
+    it('การเงิน tab: the main button is the only สร้างใบแจ้งยอดเงินรับมัดจำ button (the deposit step shows a hint), and from there it still creates the notice and opens /deposit', async () => {
       depositStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
       await openTab(/การเงิน/);
-      await screen.findByRole('heading', { level: 2, name: 'มัดจำ' });
+      await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
       await stickyInputsSettled();
+      expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
       expect(screen.queryByTestId('deal-deposit-create-notice')).toBeNull();
+      // The deposit step is there but carries a hint instead of a second create button.
+      const step = within(screen.getByTestId('payment-step-deposit'));
+      expect(step.getByText(/กดปุ่ม "สร้างใบแจ้งยอดเงินรับมัดจำ" ด้านบน/)).toBeTruthy();
+      expect(step.queryByRole('button', { name: /สร้างใบแจ้งยอดเงินรับมัดจำ/ })).toBeNull();
       expect(screen.getAllByRole('button', { name: /สร้างใบแจ้งยอดเงินรับมัดจำ/ })).toHaveLength(1);
+
+      fireEvent.click(primary());
+
+      await waitFor(() => expect(api.pricingRequests.createDepositNoticeFromQuotation).toHaveBeenCalledWith(501, {}));
+      await waitFor(() => expect(location()).toBe('/tickets/701/deposit'));
     });
 
     it('เอกสาร tab: after the order is confirmed the quotation panel points at the main button, not at the "มัดจำ" section below', async () => {
@@ -4775,14 +4627,26 @@ describe('TicketDetailPage', () => {
       expect(panel.getByText(/สร้างใบแจ้งยอดเงินรับมัดจำ/)).not.toBeNull();
     });
 
-    it('เอกสาร tab: at a later stage (notice already out) the main button no longer offers it, so the quotation panel keeps the neutral copy pointing at the "การเงิน" tab', async () => {
-      depositStageDeal({ summary: { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' } });
+    it('เอกสาร tab: no notice yet and the main button does not offer it (ceo): the quotation panel points at the การเงิน tab, not the (empty) register', async () => {
+      depositStageDeal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await stickyInputsSettled();
+      await openTab(/เอกสาร/);
+      const panel = within(await screen.findByTestId('deal-quotation-panel'));
+      expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
+      expect(panel.getByText(/แท็บ "การเงิน"/)).not.toBeNull();
+      expect(panel.queryByText(/ทะเบียนเอกสาร/)).toBeNull();
+    });
+
+    it('เอกสาร tab: at a later stage (notice already out) the main button no longer offers it, so the quotation panel keeps the neutral copy pointing at the document register of this tab', async () => {
+      depositStageDeal({ summary: { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }, notices: [{ id: 801, status: 'ISSUED', version: 1, docNumber: 'GLRD6900012' }] });
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await stickyInputsSettled();
       await openTab(/เอกสาร/);
       const panel = within(await screen.findByTestId('deal-quotation-panel'));
       expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
-      expect(panel.getByText(/ใบแจ้งยอดเงินรับมัดจำอยู่ที่แท็บ "การเงิน"/)).not.toBeNull();
+      expect(panel.getByText(/ใบแจ้งยอดเงินรับมัดจำดูได้ในทะเบียนเอกสารของแท็บนี้/)).not.toBeNull();
+      expect(panel.queryByText(/แท็บ "การเงิน"/)).toBeNull();
       expect(panel.queryByText(/ด้านบน/)).toBeNull();
     });
 

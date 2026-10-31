@@ -43,17 +43,13 @@ import { CancelDealModal } from './CancelDealModal.jsx';
 import { hasActivitySince, isReadyToAdvance, lastStageChangeAt, STAGE_ADVANCE_GATE_HINT, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
-import { DealDepositPanel, depositNoticesQueryOptions, pickDepositNotice } from './DealDepositPanel.jsx';
-import { createDepositNoticeDraft } from '../deposits/createDepositNoticeDraft.js';
-import { DealDocumentPipeline } from './DealDocumentPipeline.jsx';
+import { createDepositNoticeDraft, depositNoticesQueryOptions, pickDepositNotice } from '../deposits/createDepositNoticeDraft.js';
 import { DealDocumentRegister, canReadStoredImportRequests } from './DealDocumentRegister.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
-import { DealMoneyStatusStrip } from './DealMoneyStatusStrip.jsx';
-import { DealMoneyTimeline } from './DealMoneyTimeline.jsx';
-import { DealRemainingInvoiceCard, pickRemainingInvoice } from './DealRemainingInvoiceCard.jsx';
+import { DealPaymentSection } from './DealPaymentSection.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
   canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
@@ -68,7 +64,7 @@ import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
-import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
+import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
@@ -121,11 +117,9 @@ const IN_PAGE_JUMP_TARGET = {
   markShipping: 'deal-fulfilment-panel',
   markGoodsReceived: 'deal-fulfilment-panel',
   recordDelivery: 'deal-fulfilment-panel',
-  // accountActions.js keys
-  chaseOverdue: 'deal-deposit-panel',
-  confirmDeposit: 'deal-deposit-panel',
-  confirmFinalPayment: 'deal-deposit-panel',
-  confirmCloseReady: 'deal-deposit-panel',
+  // accountActions.js keys (chaseOverdue/confirmDeposit/confirmFinalPayment/confirmCloseReady) are
+  // deliberately absent: account works a deal on /finance/deals/:id, so the sticky bar navigates
+  // to the resolver's `to` instead of scrolling to a control on this page.
 };
 
 // Ticket-detail IA rebuild Phase 2: every one of the jump targets above (and
@@ -146,7 +140,6 @@ const JUMP_TARGET_TAB = {
   // target moves with it, unchanged element id.
   'deal-tracking-panel': 'deal',
   'deal-fulfilment-panel': 'fulfilment',
-  'deal-deposit-panel': 'money',
 };
 
 function scrollToSection(id) {
@@ -171,13 +164,6 @@ const TERMINAL = ['closed', 'cancelled'];
 // docStatusColors (quotation revision docStatus -> StatusBadge-matching
 // tokens) moved into DealLegacyQuotations.jsx (ia-extract Slice C1) — it had
 // exactly one caller and that caller moved with it.
-
-// Slice A "chip diet" moved PaymentSubstepChips out of DealStagePanel (see
-// its own doc comment) into the money tab's own payment section. Slice E
-// moved it again, along with the rest of that section, into
-// DealMoneyTimeline.jsx (see that file's own doc comment for why it stays
-// separate from the merged timeline below it) — nothing here references it
-// or depositBypassesNotice any more.
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
@@ -368,7 +354,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // moved out along with the delivery/stock modals themselves — Phase 3 Slice
   // S4, see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md —
   // DealFulfilmentPanel owns its own, simpler mutation-level error toasts
-  // instead, matching DealDepositPanel/DealQuotationPanel's convention.)
+  // instead, matching DealQuotationPanel's convention.)
   // fieldRefs holds the DOM node for each key so a failed submit can
   // scroll/focus the first invalid control. Same shape as the fieldErrors/
   // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
@@ -417,14 +403,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     note: '',
     receiptRef: '',
     allowOverpayment: false,
-  });
-  const [billingModal, setBillingModal] = useState(false);
-  const [billingDraft, setBillingDraft] = useState({
-    billingDate: '',
-    dueDate: '',
-    creditTermDays: '',
-    lastFollowUpAt: '',
-    nextFollowUpAt: '',
   });
   // Delivery/stock-reservation modal state moved into DealFulfilmentPanel
   // (Phase 3 Slice S4 — see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
@@ -561,7 +539,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
 
   // Owner rulings 2026-10-28: the main button creates the deposit notice / remaining invoice, so the
-  // sales rep's page reads both. Same keys and shapes as DealDepositPanel / DealRemainingInvoiceCard,
+  // sales rep's page reads both. Same keys and shapes as DealPaymentSection's reads,
   // so the cache is shared (one fetch).
   const readsDocs = role === 'sales' && ticket?.summary?.createdById === user.id && !!ticketId;
   const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
@@ -655,7 +633,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setShowReviseForm(false);
     setReviseReason('');
     setPaymentModal(false);
-    setBillingModal(false);
     setCommentText('');
   }
 
@@ -1030,12 +1007,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
-  const isAccount = ROLE_PERMISSIONS.canConfirmPayments.includes(role);
   // GLA-118 (owner ruling 2026-09-20, part A): recording ANY payment — confirmFinalPayment/
-  // recordPayment alike — is account ONLY now, no CEO fallback. `isAccount` above still includes
-  // ceo (canConfirmPayments is unchanged and still backs SET_BILLING, which DID keep its CEO
-  // fallback), so it is deliberately NOT reused for the payment-recording flags below — mirrors
-  // TicketService's new PAYMENT_RECORD_ROLES exactly.
+  // recordPayment alike — is account ONLY now, no CEO fallback (canConfirmPayments still includes
+  // ceo and backs /finance visibility, so it is deliberately NOT used for the flags below) —
+  // mirrors TicketService's new PAYMENT_RECORD_ROLES exactly.
   const isMoneyRecorder = role === 'account';
   // (deliveryDone / dualTrackDone removed with the single-step close: the close
   // gate is now the server's three-party sequence, surfaced via availableActions.)
@@ -1047,8 +1022,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Documents that already exist stay reachable from the deal-stage panel
   // through the later stages: the latest quotation file. The deposit-notice
-  // view/issue affordance moved into DealDepositPanel (Phase 3 Slice S3 — see
-  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
+  // view/issue affordance moved into DealPaymentSection (การเงิน tab).
   const sortedQuotations = [...(quotations ?? [])].sort((a, b) => new Date(b.issuedAt ?? 0) - new Date(a.issuedAt ?? 0));
   const activeQuotations = sortedQuotations.filter((q) => !['SUPERSEDED', 'CANCELLED', 'REJECTED'].includes(q.docStatus));
   const stageRecipientPriority = summary.salesStage === 'QUOTE_BUYER'
@@ -1091,7 +1065,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // for the customer-facing quotation tail + order-confirm). The deposit-notice
     // create/issue/view affordance (formerly generateDocument here) and the
     // deposit-payment confirmation (formerly confirmDepositPaid here) both moved
-    // into DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+    // into DealPaymentSection, and the fulfilment chain
     // (issueImportRequest/markIrSent/markShipping/markGoodsReceived/
     // reserveStock/recordDelivery/completeDelivery, formerly defined here)
     // moved into DealFulfilmentPanel (Phase 3 Slice S4 — see
@@ -1117,7 +1091,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && ps == null && isSales, // not at CUSTOMER_CONFIRMED: a re-confirm moves nothing and would hide สร้างใบแจ้งยอดเงินรับมัดจำ (2026-10-28)
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
     recordPayment:      hasAction('RECORD_PAYMENT') && isMoneyRecorder,
-    setBilling:         hasAction('SET_BILLING') && isAccount,
     downloadRemainingInvoice: isRemainingInvoiceReady({ status: st, fulfillmentStatus: fs }) && isSales,
   };
 
@@ -1155,7 +1128,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const NEXT_ACTION_STEPS = [
     // Dual-track steps: re-issuing/working the customer quotation lives in
     // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
-    // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+    // DealPaymentSection, and the fulfilment chain
     // (issueImportRequest/markIrSent/markShipping/markGoodsReceived) lives in
     // DealFulfilmentPanel (Phase 3 Slice S4) — so this list only covers the
     // operational chain this page's own primaryAction button still drives.
@@ -1199,7 +1172,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). The
   // customer-quotation issue/outcome/confirm-order actions live in
   // DealQuotationPanel, the deposit-notice/deposit-payment actions live in
-  // DealDepositPanel (Phase 3 Slice S3), and the fulfilment chain
+  // DealPaymentSection, and the fulfilment chain
   // (issue IR/mark sent/shipping/goods received) lives in
   // DealFulfilmentPanel (Phase 3 Slice S4 — see
   // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md) — all
@@ -1774,28 +1747,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     await doAction(() => api.tickets.recordPayment(ticketId, payload), 'บันทึกรับชำระเงินแล้ว');
   }
 
-  async function handleSetBilling() {
-    const payload = {
-      billingDate: billingDraft.billingDate || null,
-      dueDate: billingDraft.dueDate || null,
-      creditTermDays: billingDraft.creditTermDays === '' ? null : Number(billingDraft.creditTermDays),
-      lastFollowUpAt: billingDraft.lastFollowUpAt || null,
-      nextFollowUpAt: billingDraft.nextFollowUpAt || null,
-    };
-    await doAction(() => api.tickets.setBilling(ticketId, payload), 'บันทึกข้อมูลวางบิลแล้ว');
-  }
-
-  function openBillingModal() {
-    setBillingDraft({
-      billingDate: summary.billingDate ?? '',
-      dueDate: summary.dueDate ?? '',
-      creditTermDays: summary.creditTermDays != null ? String(summary.creditTermDays) : '',
-      lastFollowUpAt: summary.lastFollowUpAt ?? '',
-      nextFollowUpAt: summary.nextFollowUpAt ?? '',
-    });
-    setBillingModal(true);
-  }
-
   function openPaymentModal() {
     const suggestedKind = summary.amountPaid > 0 ? 'BALANCE' : 'DEPOSIT';
     setPaymentDraft({
@@ -1921,7 +1872,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 quotation download link isn't role-gated by `can.*` —
                 sections.quotation hides it for the role that has no business
                 in that document. The deposit-notice create/issue/view
-                affordance moved to DealDepositPanel (Phase 3 Slice S3); the
+                affordance moved to DealPaymentSection; the
                 Import Request button moved to DealFulfilmentPanel (Phase 3
                 Slice S4). */}
             {sections.quotation && latestQuotation && (
@@ -1972,8 +1923,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 <dl className="m-0">
                   <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
                   <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(latestFollowUp)} />
-                  <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
-                  <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
                   <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />
                 </dl>
               </ContextSection>
@@ -2552,7 +2501,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
               <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast}
-                depositMainButtonLabel={workStateAction?.key === 'create_deposit_notice' ? workStateAction.label : null} />
+                depositMainButtonLabel={workStateAction?.key === 'create_deposit_notice' ? workStateAction.label : null}
+                depositNoticeExists={depositNotice != null} />
             </div>
           ) : null}
           {/* Legacy ticket-native quotation rows (region 12's "docs") join the
@@ -2571,56 +2521,30 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="money" idPrefix="ticket-detail" active={visibleActiveTab === 'money'}>
-          {/* GLA-129 step 4 part 2: status strip + document pipeline — an at-a-glance read of
-              ใบแจ้งมัดจำ → ใบแจ้งหนี้ส่วนที่เหลือ → ใบวางบิล → รับชำระครบ, additive above the
-              existing deposit/remaining-invoice controls and the (unmodified) payment timeline.
-              Same sections.payment gate DealMoneyTimeline already used, since this is the same
-              audience reading the same underlying data. */}
+          {/* Owner design 2026-10-31: the whole การเงิน tab is one "การชำระเงิน" panel (balance, the
+              three document steps, the timeline). Same sections.payment audience the old strip and
+              timeline had. */}
           {sections.payment ? (
-            <Panel title="สถานะการเงิน" className="mb-4">
-              <div className="flex flex-col gap-4">
-                <DealMoneyStatusStrip summary={summary} />
-                <DealDocumentPipeline ticketId={ticketId} summary={summary} user={user} />
-              </div>
-            </Panel>
-          ) : null}
-
-          {/* "มัดจำ" (Phase 3 Slice S3 — see
-              docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
-              the one deposit section — policy (account/CEO) → notice (sales)
-              → payment confirmation (account) — replacing the deposit-policy
-              control that used to live in DealStagePanel and the deposit
-              doc/payment bits that used to live directly on this page.
-              id: the sticky bar's account-role jump target (chaseOverdue/
-              confirmDeposit/confirmFinalPayment/confirmCloseReady). */}
-          <div id="deal-deposit-panel" tabIndex={-1} className="scroll-mt-[300px] mobile:scroll-mt-[420px] outline-none">
-            {sections.depositNotice ? (
-              <DealDepositPanel
+            <div>
+              <DealPaymentSection
                 ticketId={ticketId}
                 user={user}
                 summary={summary}
-                availableActions={availableActions}
+                events={events}
+                paymentReceipts={paymentReceipts}
+                paymentsLoading={paymentsQuery.isLoading}
                 pricingRequests={pricingRequests}
                 dealQuotations={dealQuotationRows}
-                showToast={showToast}
+                availableActions={availableActions}
+                canReadDepositNotices={sections.depositNotice}
+                canManageRemainingInvoice={can.downloadRemainingInvoice}
+                onManageRemainingInvoice={() => setRemainingInvoiceDialogOpen(true)}
                 mainButtonCreatesNotice={workStateAction?.key === 'create_deposit_notice'}
-              />
-            ) : null}
-          </div>
-
-          {/* GLA-129 step 4 part 2: entry point into the existing RemainingInvoiceDialog (GLA-99
-              step 2, unmodified) — reuses the SAME dialog-open state the deal-stage sticky bar's
-              own "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" button controls, see
-              DealRemainingInvoiceCard's own doc comment for why. The card's status summary is
-              visible to the full sections.payment audience; canManage passes the EXACT SAME gate
-              (can.downloadRemainingInvoice) the existing sticky-bar button uses, so this card
-              never offers a control account/ceo/non-sales never had, or on a deal not yet ready. */}
-          {sections.payment ? (
-            <div className="mt-4">
-              <DealRemainingInvoiceCard
-                ticketId={ticketId}
-                canManage={can.downloadRemainingInvoice}
-                onManage={() => setRemainingInvoiceDialogOpen(true)}
+                onCreateDepositNotice={() => createDepositNoticeMutation.mutate()}
+                canRecordPayment={can.recordPayment}
+                actionLoading={actionLoading || createDepositNoticeMutation.isPending}
+                onRecordPayment={openPaymentModal}
+                showToast={showToast}
               />
             </div>
           ) : null}
@@ -2647,26 +2571,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             </Panel>
           )}
 
-          {/* GLA-129 step 4 part 2: moved to the END of the tab (was first) — owner ruling "keep
-              การชำระเงิน timeline as-is" means the COMPONENT stays untouched, not its position; see
-              .design/gla-129-money-tab/INFORMATION_ARCHITECTURE.md's Content Hierarchy for the
-              reasoning (the four items above are "what do I do next", this is the historical
-              record a user checks for detail/verification, not the primary surface). */}
-          {sections.payment ? (
-            <div className="mt-4">
-              <DealMoneyTimeline
-                events={events}
-                paymentReceipts={paymentReceipts}
-                paymentsLoading={paymentsQuery.isLoading}
-                summary={summary}
-                canRecordPayment={can.recordPayment}
-                canSetBilling={can.setBilling}
-                actionLoading={actionLoading}
-                onRecordPayment={openPaymentModal}
-                onSetBilling={openBillingModal}
-              />
-            </div>
-          ) : null}
       </TabPanel>
 
       <TabPanel id="fulfilment" idPrefix="ticket-detail" active={visibleActiveTab === 'fulfilment'}>
@@ -2872,55 +2776,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Modal>
       )}
 
-      {billingModal && (
-        <Modal
-          title="ตั้งค่าการวางบิล"
-          onClose={() => setBillingModal(false)}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={() => setBillingModal(false)}>ยกเลิก</Button>
-              <Button type="button" variant="primary" disabled={actionLoading} onClick={handleSetBilling}>
-                บันทึก
-              </Button>
-            </>
-          )}
-        >
-          <div className="grid gap-3">
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
-              <label className="grid gap-1.5 text-sm font-semibold">
-                วันที่วางบิล
-                <input type="date" value={billingDraft.billingDate}
-                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, billingDate: e.target.value }))} />
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold">
-                วันครบกำหนด
-                <input type="date" value={billingDraft.dueDate}
-                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, dueDate: e.target.value }))} />
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold">
-                เครดิต (วัน)
-                <input type="number" min="0" value={billingDraft.creditTermDays}
-                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, creditTermDays: e.target.value }))} />
-              </label>
-            </div>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
-              <label className="grid gap-1.5 text-sm font-semibold">
-                ติดตามล่าสุด
-                <input type="date" value={billingDraft.lastFollowUpAt}
-                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, lastFollowUpAt: e.target.value }))} />
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold">
-                ติดตามครั้งถัดไป
-                <input type="date" value={billingDraft.nextFollowUpAt}
-                  onChange={(e) => setBillingDraft((draft) => ({ ...draft, nextFollowUpAt: e.target.value }))} />
-              </label>
-            </div>
-          </div>
-        </Modal>
-      )}
-
       {/* ขอแก้ไข (Revise) — Slice C2a: converted from an inline "ภาพรวม" tab
-          section into a modal, same pattern as paymentModal/billingModal
+          section into a modal, same pattern as paymentModal
           above. The old inline version opened ~400px below its overflow-menu
           trigger and forced a tab switch (runOnTab('overview', …)) plus a
           scroll-into-view just to reveal itself — disorienting, and it also
