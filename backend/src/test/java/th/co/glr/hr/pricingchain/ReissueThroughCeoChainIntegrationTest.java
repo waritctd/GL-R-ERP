@@ -581,6 +581,93 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             .isEqualTo(QuotationStatus.ISSUED);
     }
 
+    // QA-13 fallback (Ploy 2026-10-31): a dead revision hands the parent's live offer back.
+
+    @Test
+    void cancellingTheRevision_revivesTheParent_soTheOldIssuedQuoteCanBeAcceptedAgain() {
+        long parentId = approvedPricingRequest(new BigDecimal("10"));
+        CustomerQuotationDto parentQuotation = issueQuotation(parentId);
+        long childId = pricingRequestService.createCustomerChangeRevision(
+            parentId, revisionRequest(new BigDecimal("25")), salesActor).summary().id();
+
+        pricingRequestService.cancel(childId, cancelReason(), salesActor);
+
+        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
+        assertThat(supersededBy(parentId)).isNull();
+        assertThat(jdbc.queryForObject(
+            "SELECT superseded_at FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", parentId), java.sql.Timestamp.class)).isNull();
+        assertThat(decisionStatus(parentId)).isEqualTo("APPROVED");
+        assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.ISSUED);
+        assertThat(quotationService.recordOutcome(parentQuotation.id(), new RecordQuotationOutcomeRequest(
+            QuotationStatus.ACCEPTED, "ลูกค้าตกลง", UUID.randomUUID().toString()), salesActor).docStatus())
+            .isEqualTo(QuotationStatus.ACCEPTED);
+        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.QUOTATION_ACCEPTED);
+    }
+
+    @Test
+    void cancellingTheRevision_leavesAParentThatNeverHadAnIssuedQuoteSuperseded() {
+        long parentId = pricingRequestService.createDraft(ticketId,
+            new PricingRequestRequests.CreatePricingRequestRequest(PricingRequestRecipient.DESIGNER, null,
+                "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB", "no quote yet",
+                UUID.randomUUID().toString(), List.of(pricingItem(new BigDecimal("10")))), salesActor)
+            .summary().id();
+        pricingRequestService.submit(parentId, salesActor);
+        long childId = pricingRequestService.createCustomerChangeRevision(
+            parentId, revisionRequest(new BigDecimal("25")), salesActor).summary().id();
+        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.SUPERSEDED);
+
+        pricingRequestService.cancel(childId, cancelReason(), salesActor);
+
+        assertThat(statusOf(parentId)).isEqualTo(PricingRequestStatus.SUPERSEDED);
+        assertThat(supersededBy(parentId)).isEqualTo(childId);
+    }
+
+    @Test
+    void cancellingTheThirdLink_revivesOnlyTheSecond_andLeavesTheFirstSuperseded() {
+        long p1 = approvedPricingRequest(new BigDecimal("10"));
+        CustomerQuotationDto q1 = issueQuotation(p1);
+        long p2 = pricingRequestService.createCustomerChangeRevision(
+            p1, revisionRequest(new BigDecimal("25")), salesActor).summary().id();
+        pricingRequestService.submit(p2, salesActor);
+        driveSubmittedRequestToApprovedForQuotation(p2, new BigDecimal("25"));
+        CustomerQuotationDto q2 = issueQuotation(p2);
+        assertThat(quotationService.get(q1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+        long p3 = pricingRequestService.createCustomerChangeRevision(
+            p2, revisionRequest(new BigDecimal("30")), salesActor).summary().id();
+        assertThat(statusOf(p2)).isEqualTo(PricingRequestStatus.SUPERSEDED);
+
+        pricingRequestService.cancel(p3, cancelReason(), salesActor);
+
+        assertThat(statusOf(p2)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
+        assertThat(supersededBy(p2)).isNull();
+        assertThat(quotationService.get(q2.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
+        assertThat(statusOf(p1)).isEqualTo(PricingRequestStatus.SUPERSEDED);
+        assertThat(supersededBy(p1)).isEqualTo(p2);
+        assertThat(quotationService.get(q1.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+    }
+
+    private static PricingRequestRequests.CancelPricingRequestRequest cancelReason() {
+        return new PricingRequestRequests.CancelPricingRequestRequest("CEO ไม่อนุมัติราคาใหม่");
+    }
+
+    private String statusOf(long pricingRequestId) {
+        return pricingRequests.findSummary(pricingRequestId).orElseThrow().status();
+    }
+
+    private Long supersededBy(long pricingRequestId) {
+        return jdbc.queryForObject(
+            "SELECT superseded_by_pricing_request_id FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Long.class);
+    }
+
+    private String decisionStatus(long pricingRequestId) {
+        return jdbc.queryForObject(
+            "SELECT status FROM sales.pricing_decision WHERE pricing_request_id = :id ORDER BY pricing_decision_id DESC LIMIT 1",
+            Map.of("id", pricingRequestId), String.class);
+    }
+
     /**
      * Scoping, wrong-way-round: issuing a first quotation must not reach across to some OTHER deal's
      * superseded chain. The chain-scoped UPDATE is keyed on

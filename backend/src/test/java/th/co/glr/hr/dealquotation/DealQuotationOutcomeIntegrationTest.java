@@ -697,6 +697,16 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
                AND event_kind IN ('CUSTOMER_QUOTATION_ACCEPTED', 'CUSTOMER_QUOTATION_REJECTED',
                                   'CUSTOMER_QUOTATION_REVISION_REQUESTED')
             """, Map.of("id", issued.pricingRequestId()), Long.class)).isZero();
+
+        // Fallback: the revision dies (CEO refused the new price) -> the old offer is acceptable again.
+        long revisionId = jdbc.queryForObject(
+            "SELECT superseded_by_pricing_request_id FROM sales.pricing_request WHERE pricing_request_id = :id",
+            Map.of("id", issued.pricingRequestId()), Long.class);
+        pricingRequestService.cancel(revisionId,
+            new PricingRequestRequests.CancelPricingRequestRequest("CEO ไม่อนุมัติราคาใหม่"), salesActor);
+        assertThat(quotationService.recordOutcome(issued.id(),
+            new RecordOutcomeRequest(QuotationStatus.ACCEPTED, "ลูกค้าตกลง", UUID.randomUUID().toString()), salesActor)
+            .docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
     }
 
     /** F4 (QA-13 sibling): revising the ISSUED quotation of a SUPERSEDED or CANCELLED request is refused too. */

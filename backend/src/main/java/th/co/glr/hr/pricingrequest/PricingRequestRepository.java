@@ -978,6 +978,35 @@ public class PricingRequestRepository {
     }
 
     /**
+     * QA-13 fallback: the customer-change revision {@code childId} died (cancelled), so its parent's
+     * still-ISSUED quotation becomes the live offer again. Compare-and-set: only a parent that is
+     * SUPERSEDED by exactly this child and still owns an ISSUED quotation is revived. Returns the
+     * parent id, or empty when nothing matched.
+     */
+    public Optional<Long> reviveParentOfCancelledRevision(long childId) {
+        List<Long> ids = jdbc.queryForList("""
+            UPDATE sales.pricing_request p
+               SET status = 'QUOTATION_ISSUED', superseded_at = NULL,
+                   superseded_by_pricing_request_id = NULL, updated_at = now()
+             WHERE p.superseded_by_pricing_request_id = :childId
+               AND p.status = 'SUPERSEDED'
+               AND EXISTS (SELECT 1 FROM sales.quotation q
+                            WHERE q.pricing_request_id = p.pricing_request_id AND q.doc_status = 'ISSUED')
+            RETURNING p.pricing_request_id
+            """, Map.of("childId", childId), Long.class);
+        if (ids.isEmpty()) {
+            return Optional.empty();
+        }
+        jdbc.update("""
+            UPDATE sales.pricing_decision SET status = 'APPROVED', updated_at = now()
+             WHERE pricing_decision_id = (SELECT pricing_decision_id FROM sales.pricing_decision
+                                           WHERE pricing_request_id = :id AND status = 'SUPERSEDED'
+                                           ORDER BY pricing_decision_id DESC LIMIT 1)
+            """, Map.of("id", ids.get(0)));
+        return Optional.of(ids.get(0));
+    }
+
+    /**
      * The pricing-decision half of {@link #supersedeOpenPricingDecisionAndQuotation}, split out by
      * the reissue-through-CEO-chain change (owner ruling 2026-08-13) so a customer-change revision
      * can supersede the internal decision WITHOUT touching the customer-facing quotation.
