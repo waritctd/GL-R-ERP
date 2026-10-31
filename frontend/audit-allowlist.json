@@ -16,5 +16,12 @@
     "     a fix that exists is always preferred over an exception. See LEGACY note in",
     "     docs/agent-handoffs/114_fix-frontend-audit-advisories.md."
   ],
-  "allow": []
+  "allow": [
+    {
+      "id": "GHSA-g3hv-75wg-m249",
+      "package": "minimatch",
+      "reason": "Dev-only, lint time only. minimatch 3.1.5 arrives through eslint, eslint-plugin-react and eslint-plugin-jsx-a11y. It runs inside `npm run lint` on glob patterns from our own eslint.config.js and on our own repo file paths. It is never bundled into the app, and no user or network input reaches it, so the globparts-amplification DoS has no attacker-controlled pattern to amplify. There is no forward fix: the patched line is minimatch >=11.0.1, but the latest eslint-plugin-react and eslint-plugin-jsx-a11y still require minimatch ^3, and eslint 10 requires ^10.2.6. npm audit's only suggestion is a downgrade to eslint 4. Drop this entry once those plugins move to minimatch >=11.0.1.",
+      "reviewBy": "2027-01-31"
+    }
+  ]
 }
