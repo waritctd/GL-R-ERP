@@ -3645,6 +3645,8 @@ function projectTicketDetailForRole(detail, role) {
 // the deal, OR the deal has reached PROCUREMENT or later. A closed/lost/cancelled
 // deal is never in scope, even at a late stage.
 const IMPORT_STAGE_SCOPE_START = dealStageIndex('PROCUREMENT');
+// Mirrors DealQuotationService#recordOutcome's refusal on a SUPERSEDED request's ISSUED quotation (QA-13).
+const SUPERSEDED_PR_OUTCOME_MESSAGE = 'คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน';
 const PRICING_REQUEST_TERMINAL_STATUSES = ['CANCELLED', 'SUPERSEDED', 'QUOTATION_ACCEPTED'];
 const ACCOUNT_PENDING_PAYMENT_STATUSES = ['DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT'];
 
@@ -4114,7 +4116,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     }
   }
   if (source === 'WAREHOUSE' && !warehouseAvailableFor(ticket)) {
-    fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจาก WAREHOUSE', 409);
+    fail('ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า', 409);
   }
   const now = new Date().toISOString();
   const nextId = Math.max(0, ...(db.deliveryRecords ?? []).map((record) => record.deliveryId)) + 1;
@@ -4141,7 +4143,8 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
   });
   const message = recordItems.map((line) => {
     const item = ticket.items.find((it) => it.id === line.itemId);
-    return `${line.itemId}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
+    const name = [item.brand, item.model, item.size].filter(Boolean).join(' ') || `รายการ ${item.id}`;
+    return `${name}: ${Number(item.qtyDelivered).toLocaleString('en-US')}/${Number(item.qty).toLocaleString('en-US')}`;
   }).join(', ');
   pushEvent(ticket, user, 'DELIVERY_RECORDED', ticket.status, ticket.status, message);
   const full = ticket.items.every((item) => Number(item.qtyDelivered ?? 0) >= Number(item.qty ?? 0));
@@ -4724,6 +4727,7 @@ export function applyImportRequestRollupMock(ticket, actor) {
   const cur = ticket.fulfillmentStatus;
   if (cur === 'PARTIALLY_DELIVERED') {
     pushEvent(ticket, actor, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
+    autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', actor); // TicketService#applyImportRequestRollup does too
     return;
   }
   if (cur === 'FULLY_DELIVERED') return;
@@ -12493,16 +12497,19 @@ export const api = {
     async coverage(ticketId) {
       const ticket = findTicketRaw(Number(ticketId));
       requireStoredIrRead(ticket, requireSession());
-      // Mirrors ImportRequestService#hasUncoveredFactories: read-only; an unresolved/unknown factory
+      // Mirrors ImportRequestService#coverage: read-only; an unresolved/unknown factory
       // (the resolver refuses without a country for a new name) counts as uncovered; only a live row covers.
       let hasUncoveredFactories = true;
+      let uncoveredFactoryNames = [];
       try {
         const live = new Set(mockImportRequests
           .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
           .map((r) => r.factoryId));
-        hasUncoveredFactories = mockResolveFactoryGroups(ticket, null).some((g) => !live.has(g.factoryId));
-      } catch { /* unresolved factory -> uncovered */ }
-      return delay({ hasUncoveredFactories });
+        const uncovered = mockResolveFactoryGroups(ticket, null).filter((g) => !live.has(g.factoryId));
+        hasUncoveredFactories = uncovered.length > 0;
+        uncoveredFactoryNames = uncovered.map((g) => g.factoryName);
+      } catch { /* unresolved factory -> uncovered (no names in the mock) */ }
+      return delay({ hasUncoveredFactories, uncoveredFactoryNames });
     },
     async get(id) {
       const row = findStoredImportRequestRaw(id);
@@ -16809,8 +16816,10 @@ export const api = {
     // (mirrors DealQuotationService.list's own comment, #H4).
     async list(params = {}) {
       const list = scopedDealQuotationsFor(requireSession());
+      // `status` may be one code or an array (the อนุมัติแล้ว tab sends several), like the real List<String>.
+      const statuses = params.status ? [].concat(params.status) : null;
       const filtered = list.filter((q) => (
-        (!params.status || q.docStatus === params.status)
+        (!statuses || statuses.includes(q.docStatus))
         && (!params.needsRework || isDealQuotationNeedingRework(q))
       ));
       const viewer = requireSession();
@@ -16837,7 +16846,7 @@ export const api = {
         pendingApproval: list.filter((q) => q.docStatus === 'PENDING_APPROVAL').length,
         needsRework: list.filter(isDealQuotationNeedingRework).length,
         cancelled: list.filter((q) => q.docStatus === 'CANCELLED').length,
-        approved: list.filter((q) => q.docStatus === 'APPROVED').length,
+        approved: list.filter((q) => ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'].includes(q.docStatus)).length,
       });
     },
 
@@ -17030,12 +17039,11 @@ export const api = {
       const itemsById = new Map((pr.items ?? []).map((i) => [i.id, i]));
       const items = decision.items.map((di, index) => {
         const pri = itemsById.get(di.pricingRequestItemId) ?? {};
-        // unitPrice ("ราคาตั้ง") is populated for EVERY mode, mirroring
-        // DealQuotationService#buildItemInputFromDecisionItem's own reasoning: list_unit_price is
-        // ALWAYS auto-calculated regardless of price_mode, and the direct-deal item builder here
-        // requires a positive unitPrice on every TILE row.
-        const unitPrice = decision.priceMode === 'NET' && di.manualSellingPricePerRequestedUnit != null
-          ? di.manualSellingPricePerRequestedUnit : di.listUnitPrice;
+        // unitPrice is populated for EVERY mode (the item builder here requires a positive one on
+        // every TILE row), mirroring DealQuotationService#buildItemInputFromDecisionItem. W5-03/QA-31:
+        // under SPECIAL_SQM / DIRECT_NET it is the CEO's net, never the formula list price.
+        const unitPrice = decision.priceMode !== 'NET' ? di.netUnitPrice
+          : di.manualSellingPricePerRequestedUnit != null ? di.manualSellingPricePerRequestedUnit : di.listUnitPrice;
         const input = {
           locationLabel: null, catalogPriceId: pri.catalogPriceId ?? null, productCode: pri.productCode ?? null,
           brand: pri.brand, model: pri.model, color: pri.color, texture: pri.texture, sizeText: pri.size,
@@ -17341,8 +17349,9 @@ export const api = {
       if (!decisionItem) fail('ไม่พบรายการนี้ในคำขอราคาต้นทาง', 404);
       const pr = findPricingRequestRaw(row.pricingRequestId);
       const pri = (pr.items ?? []).find((i) => i.id === decisionItem.pricingRequestItemId) ?? {};
-      const unitPrice = row.priceMode === 'NET' && decisionItem.manualSellingPricePerRequestedUnit != null
-        ? decisionItem.manualSellingPricePerRequestedUnit : decisionItem.listUnitPrice;
+      // W5-03/QA-31: same rule as the create path above -- net, not the formula list price, off NET.
+      const unitPrice = row.priceMode !== 'NET' ? decisionItem.netUnitPrice
+        : decisionItem.manualSellingPricePerRequestedUnit != null ? decisionItem.manualSellingPricePerRequestedUnit : decisionItem.listUnitPrice;
       const input = {
         locationLabel: null, catalogPriceId: pri.catalogPriceId ?? null, productCode: pri.productCode ?? null,
         brand: pri.brand, model: pri.model, color: pri.color, texture: pri.texture, sizeText: pri.size,
@@ -17607,6 +17616,9 @@ export const api = {
       if (row.docStatus !== 'ISSUED') {
         fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
       }
+      if (mockPricingRequests.find((p) => p.id === row.pricingRequestId)?.status === 'SUPERSEDED') {
+        fail(SUPERSEDED_PR_OUTCOME_MESSAGE, 409);
+      }
       if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(row.ticketId)) {
         fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
       }
@@ -17651,6 +17663,9 @@ export const api = {
         if (user.role !== 'sales' || ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         if (parent.docStatus !== 'ISSUED' && parent.docStatus !== 'REVISION_REQUESTED') {
           fail('สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ออกแล้วหรือลูกค้าขอแก้ไขเท่านั้น', 409);
+        }
+        if (['SUPERSEDED', 'CANCELLED'].includes(mockPricingRequests.find((p) => p.id === parent.pricingRequestId)?.status)) {
+          fail('คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขหรือถูกยกเลิกแล้ว — สร้างฉบับแก้ไขของใบเสนอราคานี้ไม่ได้', 409);
         }
       } else {
         requireDealQuotationWriteAccess(ticket, user, parent.origin);

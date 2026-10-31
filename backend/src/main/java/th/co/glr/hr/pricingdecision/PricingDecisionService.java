@@ -555,7 +555,9 @@ public class PricingDecisionService {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "รายการจากสต็อกต้องเลือกวิธีกรอกราคา (NET, SPECIAL_SQM หรือ DIRECT_NET) ก่อนอนุมัติ");
         }
-        List<Long> stockWithoutListPrice = stockLines.stream()
+        // W5-03 (Ploy 2026-10-30): the ราคาตั้ง is required in NET mode only. Under SPECIAL_SQM /
+        // DIRECT_NET the quotation prints the net as its ราคา, so a stock line needs no list price.
+        List<Long> stockWithoutListPrice = !WastageCalculator.PRICE_MODE_NET.equals(decision.priceMode()) ? List.<Long>of() : stockLines.stream()
             .filter(item -> item.listUnitPrice() == null || item.listUnitPrice().signum() <= 0)
             .map(PricingDecisionItemDto::id)
             .toList();

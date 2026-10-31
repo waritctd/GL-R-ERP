@@ -2996,29 +2996,35 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.submit(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
         quotationService.cancel(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
             new CancelRequest(null), salesActor);
-        createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor); // plain draft
+        // Becomes ISSUED below: the อนุมัติแล้ว tab (QA-37) counts approved-and-beyond, not APPROVED alone.
+        DealQuotationDto laterIssued = createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         // Rep B's rows must not leak into rep A's counts.
         DealQuotationDto othersPending = quotationService.submit(
             quotationService.create(otherTicketId, upsertRequest(List.of(sampleItem("100.00", 10))), otherSalesActor).id(), otherSalesActor);
         quotationService.approve(othersPending.id(), new ApproveRequest(null), ceoActor);
+        // QA-37: post-approval statuses (the customer-outcome ones included) belong to the approved bucket.
+        setDocStatus(laterIssued.id(), "ISSUED");
+        setDocStatus(othersPending.id(), "ACCEPTED");
+        // SENT is its own row: dropping it from the approved bucket's SQL must turn this test red.
+        setDocStatus(createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), "SENT");
 
         DealQuotationCountsDto own = quotationService.counts(salesActor);
-        assertThat(own.all()).isEqualTo(5);
+        assertThat(own.all()).isEqualTo(6);
         assertThat(own.pendingApproval()).isEqualTo(1);
         assertThat(own.needsRework()).isEqualTo(1);
         assertThat(own.cancelled()).isEqualTo(1);
-        assertThat(own.approved()).isEqualTo(1);
+        assertThat(own.approved()).as("APPROVED + the ISSUED row + the SENT row").isEqualTo(3);
         assertCountsMatchLists(own, salesActor);
 
         DealQuotationCountsDto others = quotationService.counts(otherSalesActor);
         assertThat(others.all()).as("rep B sees only their own row").isEqualTo(1);
-        assertThat(others.approved()).isEqualTo(1);
+        assertThat(others.approved()).as("their row is ACCEPTED").isEqualTo(1);
         assertThat(others.needsRework()).isZero();
         assertCountsMatchLists(others, otherSalesActor);
 
         DealQuotationCountsDto queue = quotationService.counts(salesManagerActor);
-        assertThat(queue.all()).isEqualTo(6);
-        assertThat(queue.approved()).isEqualTo(2);
+        assertThat(queue.all()).isEqualTo(7);
+        assertThat(queue.approved()).isEqualTo(4);
         assertCountsMatchLists(queue, salesManagerActor);
 
         // Same gate as search: a role outside VIEW_ROLES with no grant is 403.
@@ -3030,7 +3036,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(counts.pendingApproval()).isEqualTo(quotationService.search(List.of("PENDING_APPROVAL"), false, actor).size());
         assertThat(counts.needsRework()).isEqualTo(quotationService.search(null, true, actor).size());
         assertThat(counts.cancelled()).isEqualTo(quotationService.search(List.of("CANCELLED"), false, actor).size());
-        assertThat(counts.approved()).isEqualTo(quotationService.search(List.of("APPROVED"), false, actor).size());
+        assertThat(counts.approved()).isEqualTo(
+            quotationService.search(List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED"), false, actor).size());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

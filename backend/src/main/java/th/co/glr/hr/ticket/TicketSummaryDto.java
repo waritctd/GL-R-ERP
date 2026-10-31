@@ -70,7 +70,7 @@ public record TicketSummaryDto(
     String buyerName,
     /**
      * Computed, not stored: true when this ACTIVE deal has no {@code sales.deal_activity} row
-     * logged in the last 7 days (or none ever). See {@code TicketRepository#isStale}.
+     * logged in the last 7 days (or none ever). See {@code TicketRepository#enrichSummaries}.
      */
     boolean stale,
     /**
@@ -133,7 +133,7 @@ public record TicketSummaryDto(
     /**
      * Quotation ↔ deal linking slice 2 (S2-B4): the NEWEST live {@code DEAL_DIRECT} quotation on
      * this deal ({@code {id, number, docStatus, recipientType}}), or {@code null} when there is none.
-     * Filled by {@code TicketRepository#enrichSummary} for list rows AND the single-deal read — the
+     * Filled by {@code TicketRepository#enrichSummaries} for list rows AND the single-deal read — the
      * deal page's CTA cascade and the {@code /quotations/new} deal picker key on it. See
      * {@link LiveDirectQuotationDto} for the one "live" definition.
      */
@@ -141,7 +141,7 @@ public record TicketSummaryDto(
     /**
      * The recipients this deal has a quotation addressed to (a subset of
      * {@code QuotationRecipient.ADDRESSABLE}, plus legacy {@code UNSPECIFIED}); never null, empty
-     * when nobody has been quoted. Filled by {@code TicketRepository#enrichSummary}.
+     * when nobody has been quoted. Filled by {@code TicketRepository#enrichSummaries}.
      *
      * <p>The fact behind the three quote stages (owner ruling 2026-10-16). It rides on the summary
      * rather than being read inside the gate because {@code TicketService#stageDecisions} loops
@@ -160,7 +160,7 @@ public record TicketSummaryDto(
      * of the newest ISSUED deposit notice, while the deal is waiting on it
      * ({@code paymentStatus = DEPOSIT_NOTICE_ISSUED}); {@code null} otherwise. Account's รอรับมัดจำ
      * tile shows this rather than the whole-deal {@link #amountOutstanding}. Filled by
-     * {@code TicketRepository#enrichSummary} in the same statement as {@link #commissionRecorded};
+     * {@code TicketRepository#enrichSummaries} in the same statement as {@link #commissionRecorded};
      * nulled by {@link #withoutMoney()} (it is customer pricing).
      */
     BigDecimal depositDue
@@ -232,7 +232,7 @@ public record TicketSummaryDto(
      * The pre-slice-2 canonical shape — the payment-due fields but no {@link #liveDirectQuotation}
      * (rebase onto #1095, 2026-10-01: both appended to this record) — kept so every call site that
      * builds the full pre-slice-2 shape compiles unchanged. {@code liveDirectQuotation} defaults to
-     * {@code null}; only {@code TicketRepository#enrichSummary} computes the real value.
+     * {@code null}; only {@code TicketRepository#enrichSummaries} computes the real value.
      */
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,

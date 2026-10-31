@@ -831,6 +831,58 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
   });
 
+  // W3-10: at ขั้น 10 the empty deposit section points the OWNING sales rep at the button that creates the
+  // notice — unless the deposit is bypassed, the deal is at another stage, or the viewer is not the owner.
+  it.each([
+    ['ORDER_RECEIVED, deposit required, owner', 'ORDER_RECEIVED', 'REQUIRED', 6, true],
+    ['ORDER_RECEIVED, deposit policy still blank, owner', 'ORDER_RECEIVED', undefined, 6, true],
+    ['ORDER_RECEIVED, deposit NOT_REQUIRED', 'ORDER_RECEIVED', 'NOT_REQUIRED', 6, false],
+    ['ORDER_RECEIVED, deposit WAIVED', 'ORDER_RECEIVED', 'WAIVED', 6, false],
+    ['ORDER_RECEIVED, CREDIT_CUSTOMER', 'ORDER_RECEIVED', 'CREDIT_CUSTOMER', 6, false],
+    ['another stage (QUOTE_BUYER)', 'QUOTE_BUYER', 'REQUIRED', 6, false],
+    ['a sales rep who does not own the deal', 'ORDER_RECEIVED', 'REQUIRED', 99, false],
+    // F7: the page's real signal (the button is up) decides, not a re-derivation from the summary.
+    ['ON_HOLD: stage and policy say yes but the page shows no deposit button', 'ORDER_RECEIVED', 'REQUIRED', 6, false, { depositCtaShown: false }],
+    ['the page shows the deposit button, whatever the summary says', 'QUOTE_BUYER', 'REQUIRED', 6, true, { depositCtaShown: true }],
+  ])('empty deposit section pointer: %s', async (_label, salesStage, depositPolicy, createdById, pointed, override) => {
+    renderRegister({
+      user: { id: 6, role: 'sales' },
+      sections: SALES_SECTIONS,
+      canViewPricingRequests: true,
+      canViewDocumentsTab: true,
+      depositCtaShown: pointed,
+      ...override,
+      summary: { status: 'price_proposed', fulfillmentStatus: null, salesStage, depositPolicy, createdById },
+    });
+
+    const deposit = await screen.findByTestId('register-deposit');
+    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้'));
+    if (pointed) {
+      expect(deposit.textContent).toContain('กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า');
+    } else {
+      expect(deposit.textContent).not.toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
+    }
+  });
+
+  it('empty deposit section pointer: an account user at ORDER_RECEIVED / REQUIRED gets the plain sentence', async () => {
+    renderRegister({ ...ACCOUNT, summary: { status: 'price_proposed', fulfillmentStatus: null, salesStage: 'ORDER_RECEIVED', depositPolicy: 'REQUIRED', createdById: 5 } });
+
+    const deposit = await screen.findByTestId('register-deposit');
+    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้'));
+    expect(deposit.textContent).not.toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
+  });
+
+  // W3-10 / QA-29: the register prints a Thai attachment type too, never the raw enum.
+  it('the ไฟล์แนบ rows show a Thai attachment type, not the raw enum', async () => {
+    renderRegister({
+      ...ACCOUNT,
+      attachments: [{ id: 2, fileName: 'invoice.pdf', attachType: 'INVOICE' }, { id: 3, fileName: 'x.pdf', attachType: 'OTHER' }, { id: 4, fileName: 'qt.pdf', attachType: 'SIGNED_QUOTATION' }],
+    });
+    const section = await screen.findByTestId('register-attachments');
+    expect(section.textContent).not.toMatch(/INVOICE|OTHER|SIGNED_QUOTATION/);
+    expect(section.textContent).toContain('ใบเสนอราคาที่ลูกค้าเซ็น');
+  });
+
   it('deposit groups live only in register-deposit; remaining groups and readiness only in register-remaining-invoice', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ id: 31, status: 'ISSUED', docNumber: 'DN-1', version: 1, depositPercent: 0.5 }],

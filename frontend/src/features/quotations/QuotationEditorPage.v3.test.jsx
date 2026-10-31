@@ -387,6 +387,10 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
 
     expect(submitBtn.disabled).toBe(true);
     expect(submitBtn.title).toBe('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1');
+    // The checklist names the same gap — it must not read "ข้อมูลในเอกสารครบแล้ว" while submit is blocked.
+    expect(within(await screen.findByTestId('checklist-submit-blocking'))
+      .getByText('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1')).not.toBeNull();
+    expect(screen.queryByText('ข้อมูลในเอกสารครบแล้ว')).toBeNull();
     // The SAME rule the server enforces at submit is not a draft-completeness rule -- บันทึกร่าง
     // must stay clickable with no lead time typed anywhere.
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
@@ -505,8 +509,10 @@ describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-
     fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
     fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
 
-    const warnings = await screen.findByTestId('checklist-warnings');
-    expect(within(warnings).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
+    // QA-34: it blocks ส่งขออนุมัติ, so it sits in the submit-blocking group, not under ควรกรอก.
+    const submitBlocking = await screen.findByTestId('checklist-submit-blocking');
+    expect(within(submitBlocking).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
+    expect(within(screen.getByTestId('checklist-warnings')).queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
   });
 
   it('ticking "ไม่รับมัดจำ" with no term chosen ALSO blocks ส่งขออนุมัติ (the pre-existing route, unaffected in shape)', async () => {
@@ -606,6 +612,25 @@ describe('"ข้อมูลที่ยังไม่ครบ" checklist (ow
     await screen.findByTestId('checklist-warnings');
     fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
     expect(within(screen.getByTestId('submit-warnings')).getByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).not.toBeNull();
+  });
+
+  // The dialog's "optional gaps" list must not carry an entry that blocks ส่งขออนุมัติ. Only reachable
+  // by a concurrent edit (the opening button is disabled for it), so blank the field behind the open dialog.
+  it('the ส่งขออนุมัติ dialog\'s optional-gaps list leaves out a submit-blocking entry that appears while it is open', async () => {
+    api.dealQuotations.get.mockResolvedValue({ quotation: draft({ remainderMode: 'CREDIT', creditDays: 30 }) });
+    renderEditor('/quotations/5');
+    await screen.findByTestId('checklist-warnings');
+    fireEvent.click(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }));
+    const optionalGaps = await screen.findByTestId('submit-warnings');
+
+    fireEvent.change(document.getElementById('creditDays'), { target: { value: '' } });
+
+    // The entry exists (the page checklist lists it as submit-blocking)…
+    const creditDays = 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน';
+    expect(within(await screen.findByTestId('checklist-submit-blocking')).getByText(creditDays)).not.toBeNull();
+    // …but the optional-gaps list keeps only the genuinely optional one.
+    expect(within(optionalGaps).getByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).not.toBeNull();
+    expect(within(optionalGaps).queryByText(creditDays)).toBeNull();
   });
 });
 

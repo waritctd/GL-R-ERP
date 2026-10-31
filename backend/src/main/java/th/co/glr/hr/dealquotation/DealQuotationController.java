@@ -119,7 +119,7 @@ public class DealQuotationController {
     }
 
     /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,
-     * needsRework, cancelled, approved}} — so the list page's tabs carry counts without a second
+     * needsRework, cancelled, approved}} ({@code approved} = APPROVED/ISSUED/SENT/ACCEPTED) — so the list page's tabs carry counts without a second
      * full fetch (owner feedback F5). Same scope rules, and the same optional {@code origin}
      * filter, as {@link #search}. */
     @GetMapping("/deal-quotations/counts")

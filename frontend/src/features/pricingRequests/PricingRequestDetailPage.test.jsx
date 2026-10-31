@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { formatThaiDate } from '../../utils/format.js';
 
 // This component (and PricingRequestCreateModal, which it opens in mode="revision"
 // for the customer-change-revision flow) is exercised here against a hand-rolled
@@ -1501,6 +1502,10 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
     expect(screen.getByText(byCombinedText(/ต้นทุนรวมนำเข้า.*฿60\.00/))).not.toBeNull();
     expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
+    // QA-29: the requested quantity reads "20 แผ่น", never the raw basis enum "20 (PER_PIECE)".
+    // The request-items list already renders one "20 แผ่น"; the decision line is the second.
+    expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
+    expect(screen.queryByText(/PER_PIECE/)).toBeNull();
     // The old per-item margin/minimum/ceiling grid is gone entirely.
     expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
     expect(screen.queryByPlaceholderText('ราคาขั้นต่ำ')).toBeNull();
@@ -1510,6 +1515,27 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     // "found 2" against getByRole's own strictness, not silently pass.
     expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
+  });
+
+  // QA-29 leftover: the decision's FX line printed the raw source enum and an ISO date
+  // ("อัตราแลกเปลี่ยน 1 (MANUAL, 2026-10-30)"); it reads a Thai source and a Thai date.
+  it.each(['MANUAL', 'BOT'])('the CEO decision FX line shows a Thai source label and a Thai date, never %s or the ISO date', async (fxSource) => {
+    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({
+      items: [buildDecision({ currency: 'USD', fxRateUsed: 35.5, fxSource, fxEffectiveDate: '2026-10-30' })],
+    });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+    await screen.findByText('PCD-2026-0001');
+
+    const fxLines = screen.getAllByText(/อัตราแลกเปลี่ยน 35\.5/);
+    expect(fxLines.length).toBeGreaterThan(0);
+    fxLines.forEach((line) => {
+      expect(line.textContent).not.toContain(fxSource);
+      expect(line.textContent).not.toContain('2026-10-30');
+      expect(line.textContent).toContain(formatThaiDate('2026-10-30'));
+      expect(line.textContent).toMatch(/\([^)]*[\u0E00-\u0E7F][^)]*\)/); // the source inside the brackets is Thai
+    });
   });
 
   // V141 ("CEO owns costing", PR #702, commit 1).
@@ -1910,6 +1936,20 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     // this page renders structurally has no cost/margin field at all (design correction 2).
     expect(screen.queryByText(/ต้นทุน/)).toBeNull();
     expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
+    // QA-29: "20 แผ่น", not the raw basis enum (the request-items list renders one already;
+    // the sales-view line is the second).
+    expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
+    expect(screen.queryByText(/PER_PIECE/)).toBeNull();
+  });
+
+  // W6-04: no approved decision to show yet (or any more), so no 404 on every load.
+  it.each(['READY_FOR_CEO_REVIEW', 'SUPERSEDED'])('does not fetch the sales-view projection on a %s request', async (status) => {
+    const request = buildRequest({ summary: { status } });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+
+    await waitFor(() => expect(api.dealQuotations.findForPricingRequest).toHaveBeenCalled());
+    expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
   });
 
   it('does not fetch the sales-view projection for a non-owning sales rep', async () => {
@@ -3041,12 +3081,15 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   it('shows the new-engine quotation (number, status, link) once one exists, and hides both create buttons', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
-      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'DRAFT' },
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'PENDING_APPROVAL' },
     });
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
 
     await screen.findByText('QT-2026-0099-1');
+    // The deal engine's own status words (PENDING_APPROVAL is not a customer-quotation status).
+    expect(screen.getByText('รออนุมัติ')).not.toBeNull();
+    expect(screen.queryByText(/PENDING_APPROVAL/)).toBeNull();
     const link = screen.getByRole('link', { name: 'เปิดใบเสนอราคา' });
     expect(link.getAttribute('href')).toBe('/quotations/9001');
     expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
@@ -3085,7 +3128,25 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     await waitForLoaded(request);
 
     expect(screen.queryByRole('button', { name: 'สร้างร่างใบเสนอราคาลูกค้า' })).toBeNull();
-    expect(screen.getByText(/ยังไม่มีใบเสนอราคาลูกค้า/)).not.toBeNull();
+    expect(screen.getByText('ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้')).not.toBeNull();
+    expect(screen.queryByText(/APPROVED_FOR_QUOTATION/)).toBeNull();
+  });
+
+  // QA-29b: a viewer who cannot create the quotation (the CEO) used to read
+  // "wait for APPROVED_FOR_QUOTATION" forever — stale after approval, and a raw enum.
+  it.each([
+    ['CEO_REVIEWING', 'ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้'],
+    ['APPROVED_FOR_QUOTATION', 'อนุมัติราคาขายแล้ว — รอฝ่ายขายสร้างใบเสนอราคาลูกค้า'],
+    // A request that will never get a quotation says why, instead of "wait for approval".
+    ['CANCELLED', 'ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้ยกเลิกแล้ว'],
+    ['SUPERSEDED', 'ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้ถูกแทนที่แล้ว'],
+  ])('tells the CEO the no-quotation state in words for %s, with no raw enum', async (status, text) => {
+    const request = buildRequest({ summary: { status } });
+    renderDetailPage({ user: ceoUser, request });
+    await waitForLoaded(request);
+
+    expect(await screen.findByText(text)).not.toBeNull();
+    expect(screen.queryByText(/APPROVED_FOR_QUOTATION/)).toBeNull();
   });
 
   it('lets the owning sales rep edit an item discount, warns below the CEO-approved minimum, and issues via the confirm dialog', async () => {
@@ -3095,6 +3156,11 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     renderDetailPage({ user: salesOwner, request });
     await waitForLoaded(request);
     await screen.findByText(quotation.number);
+
+    // QA-29: the quotation line reads "20 แผ่น", not the raw basis enum (the request-items list
+    // renders one already; the quotation line is the second).
+    expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
+    expect(screen.queryByText(/PER_PIECE/)).toBeNull();
 
     // Editable discount input is present for a DRAFT quotation owned by this sales rep.
     const discountInputs = screen.getAllByRole('spinbutton');
@@ -3262,10 +3328,10 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
   }
 
-  // Owner ruling 2026-10-27 (spec B2): a quotation sent to the BUYER is the last party's — accepting
-  // it is the order as before, one click, no question asked. Review V4: a revision draft cancelled
+  // QA-35 (supersedes the 2026-10-27 B2 "buyer = one click"): every recipient asks first. The buyer's is
+  // the last party, so the question never mentions skipping. Review V4: a revision draft cancelled
   // after แก้ใบเสนอราคา is the server's newest row; the page still records on the quotation it revised.
-  it('ISSUED, a buyer request: ลูกค้ายอมรับ records ACCEPTED at once via dealQuotations.recordOutcome (no confirmation step), even behind a cancelled revision draft', async () => {
+  it('ISSUED, a buyer request: ลูกค้ายอมรับ asks first (no "ข้ามผู้รับรายถัดไป"), then records ACCEPTED via dealQuotations.recordOutcome, even behind a cancelled revision draft', async () => {
     const issued = newEngineQuotation({ docStatus: 'ISSUED', origin: 'PRICING_REQUEST', pricingRequestId: 501 });
     const cancelledRevision = newEngineQuotation({
       id: 9102, number: 'QT-2026-0101-2', docStatus: 'CANCELLED', origin: 'PRICING_REQUEST', pricingRequestId: 501, parentQuotationId: 9101,
@@ -3282,11 +3348,16 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
     fireEvent.click(acceptButton);
 
+    const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+    expect(dialog.queryByText(/ข้ามผู้รับรายถัดไป/)).toBeNull();
+    expect(dialog.getByText(/ยืนยันคำสั่งซื้อ/)).not.toBeNull();
+    expect(api.dealQuotations.recordOutcome).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+
     await waitFor(() => expect(api.dealQuotations.recordOutcome).toHaveBeenCalledWith(
       issued.id,
       expect.objectContaining({ outcome: 'ACCEPTED', customerNote: 'ส่งของต้นเดือน', clientRequestId: expect.any(String) }),
     ));
-    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   // Spec B2: accepting a DESIGNER/OWNER quotation makes it the order and skips the later parties, so
@@ -3446,6 +3517,28 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       .toHaveBeenCalledWith(request.summary.id));
   });
 
+  // QA-13 + W6-02: a revision superseded this request. Its quotation may still read ISSUED (owner
+  // ruling 2026-08-13) or carry an earlier outcome, but nothing on it is actionable any more.
+  it('SUPERSEDED request: no outcome buttons on its ISSUED quotation, no recreate on a REJECTED one', async () => {
+    const request = buildRequest({ summary: { status: 'SUPERSEDED' } });
+    const issued = newEngineQuotation({ docStatus: 'ISSUED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
+    const { unmount } = renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+    expect(screen.queryByRole('button', { name: 'ลูกค้ายอมรับ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าปฏิเสธ' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ลูกค้าขอแก้ไข' })).toBeNull();
+    unmount();
+
+    const rejected = newEngineQuotation({ docStatus: 'REJECTED' });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: rejected });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(rejected.number);
+    expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).toBeNull();
+  });
+
   // S3 round-5 review fix (NEW-A, MAJOR, 2026-09-23): invalidate() (this file's source, around
   // line 815) invalidated seven query keys after recordDealQuotationOutcome's onSuccess but
   // OMITTED queryKeys.dealQuotationForPricingRequest — the key backing dealQuotationForPrQuery,
@@ -3563,6 +3656,29 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     // the always-present static customer-change section heading elsewhere on the page).
     fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' }));
     expect(await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' })).not.toBeNull();
+  });
+});
+
+// W6-02 sibling (old engine): a request that was cancelled or superseded takes no more revisions — the
+// server 409s them, so the legacy revision buttons are not offered (the new-engine recreate gate already agrees).
+describe('PricingRequestDetailPage legacy revision buttons on a dead request', () => {
+  it.each(['SUPERSEDED', 'CANCELLED'])('%s request: no สร้างรอบแก้ไข* button on an ISSUED or REVISION_REQUESTED quotation', async (status) => {
+    const request = buildRequest({ summary: { status } });
+    const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
+    const first = renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(issued.number);
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไขใหม่' })).toBeNull();
+    first.unmount();
+
+    const revisionRequested = buildCustomerQuotation({ docStatus: 'REVISION_REQUESTED' });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [revisionRequested] });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText(revisionRequested.number);
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไขราคา/เงื่อนไข' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' })).toBeNull();
   });
 });
 
@@ -3788,6 +3904,45 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
       request.summary.id,
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     );
+  });
+
+  // VW-04 (owner ruling 2026-10-30): the dialog used to name the PCR code ("ใบเสนอราคา PCR-…"),
+  // which is not a quotation number. It names the quotation the page shows.
+  it('VW-04: the confirm dialog names the new-engine quotation number, never the PCR code', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'ACCEPTED', depositPercent: 0 },
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText('QT-2026-0099-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+    expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0099-1');
+    expect(dialog.textContent).toContain('ไม่เก็บมัดจำ'); // W6-03: copy follows the quotation's 0%
+    expect(dialog.textContent).not.toContain(request.summary.requestCode);
+  });
+
+  // The server confirms the PR's ACCEPTED new-engine quotation if any, else the legacy one; the deal page
+  // shows a dead new-engine row's request through the live legacy quotation, and so must this dialog.
+  it('VW-04: a dead new-engine row beside a live old-engine quotation names the old-engine number, never the PCR code', async () => {
+    const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
+    api.dealQuotations.findForPricingRequest.mockResolvedValue({
+      quotation: { id: 9001, number: 'QT-2026-0099-1', docStatus: 'REJECTED' },
+    });
+    api.pricingRequests.listCustomerQuotations.mockResolvedValue({
+      items: [buildCustomerQuotation({ number: 'QT-2026-0042', docStatus: 'ACCEPTED' })],
+    });
+    renderDetailPage({ user: salesOwner, request });
+    await waitForLoaded(request);
+    await screen.findByText('QT-2026-0099-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
+    await waitFor(() => expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0042'));
+    expect(dialog.textContent).not.toContain('QT-2026-0099-1');
+    expect(dialog.textContent).not.toContain(request.summary.requestCode);
   });
 
   it('offers "สร้างใบแจ้งยอดเงินรับมัดจำ" (not the confirm button) once the bridge has already run', async () => {
@@ -4198,11 +4353,79 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByRole('button', { name: /ยกเลิกการติดต่อ|แก้ไขการติดต่อ/ })).toBeNull();
   });
 
+  // QA-40: the factory card's ยกเลิก only discards unsaved price edits — with none it did nothing.
+  it('QA-40: ยกเลิก appears only once a price has been edited', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '12.5' } });
+    expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();
+  });
+
+  // QA-40: FactoryQuoteService#receive only takes prices while the REQUEST is IMPORT_REVIEWING /
+  // AWAITING_FACTORY_RESPONSE / READY_FOR_CEO_REVIEW, so past that the grid is read-only.
+  // Review fix: read-only means the formatted price as text (like every other read-only cell),
+  // not a greyed input under an "(แก้ไข)" caption.
+  it.each(['QUOTATION_ISSUED', 'CANCELLED'])('QA-40: a %s request shows the factory prices as text, with no ยกเลิก or ยืนยันราคาเสนอ', async (status) => {
+    renderDetailPage({
+      user: importUser,
+      request: crRequest({ summary: { status } }),
+      factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING', items: [{ ...crQuote().items[0], rawUnitPrice: 12.5 }] })],
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
+    // once as the offered price (now text), once in ราคาที่ยืนยันแล้ว
+    expect(screen.getAllByText('12.5 EUR')).toHaveLength(2);
+    expect(screen.queryByText('ราคาที่เสนอ (แก้ไข)', { selector: 'span.md\\:hidden' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+  });
+
+  // QA-40 review: an unsaved price typed before the request left the window must not show in the
+  // read-only grid as if it were saved (nor linger with no ยกเลิก to discard it).
+  it('QA-40: once the request leaves the response window, the read-only grid shows the saved price, not an unsaved edit', async () => {
+    const quote = contactedQuote({ status: 'READY_FOR_COSTING', items: [{ ...crQuote().items[0], rawUnitPrice: 12.5 }] });
+    const { queryClient } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '99999' } });
+
+    api.pricingRequests.get.mockResolvedValue({ pricingRequest: crRequest({ summary: { status: 'QUOTATION_ISSUED' } }) });
+    await act(async () => { await queryClient.invalidateQueries(); });
+
+    await waitFor(() => expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull());
+    // once as the offered price (now text), once in ราคาที่ยืนยันแล้ว
+    expect(screen.getAllByText('12.5 EUR')).toHaveLength(2);
+    expect(screen.queryByText(/99,?999/)).toBeNull();
+  });
+
+  // QA-40: after the deal is lost the request is CANCELLED — no mail to build or re-read.
+  it('QA-40: a CANCELLED request offers no สร้างเมล', async () => {
+    renderDetailPage({
+      user: importUser,
+      request: crRequest({ summary: { status: 'CANCELLED' } }),
+      factoryQuotes: [contactedQuote()],
+    });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-open-email-draft-91')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'สร้างเมล' })).toBeNull();
+  });
+
   it('a READY_FOR_COSTING factory reads ยืนยันราคาแล้ว', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
     expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยืนยันราคาแล้ว');
+    // QA-29c: Import's confirmed price is not yet the CEO-approved one, so the column (desktop
+    // header + each mobile row label) says ราคาที่ยืนยันแล้ว, never ราคาที่อนุมัติ.
+    expect(screen.getAllByText('ราคาที่ยืนยันแล้ว').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryAllByText('ราคาที่อนุมัติ')).toHaveLength(0);
   });
 
   it('the price payload carries the sales terms (EUR / PER_SQM) — import cannot change them', async () => {
@@ -5055,6 +5278,33 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(panel.getByLabelText(/ราคาพิเศษ บาท\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
     expect(panel.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
     expect(panel.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
+    // QA-31: the hint is the แผ่น/ตร.ม. figure the net is divided by (round2(1 / 0.36) = 2.78),
+    // the same one the quotation editor shows — never the raw ตร.ม./แผ่น 0.36.
+    expect(panel.getByText('แผ่น/ตร.ม. 2.78')).not.toBeNull();
+    expect(panel.queryByText(/ตร\.ม\.\/แผ่น 0\.36/)).toBeNull();
+  });
+
+  // W5-03 (Ploy 2026-10-30): under ราคาพิเศษ/ตร.ม. and ราคาสุทธิ the quotation prints the net as
+  // its ราคา, so a stock line needs no ราคาตั้ง there — no field, and approve is not blocked on it.
+  it.each([
+    ['SPECIAL_SQM', { specialPriceSqm: 7000 }],
+    ['DIRECT_NET', { directNetPrice: 399.15 }],
+  ])('W5-03: %s — a priced STOCK line has no ราคาตั้ง field and does not block อนุมัติราคาขาย', async (priceMode, price) => {
+    await renderCeo({ priceMode, items: [newFormItem({
+      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: 399.15, ...price,
+    })] });
+    const panel = within(getPanel());
+    expect(panel.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
+    expect(screen.queryByText(/ต้องมีราคาตั้ง/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(false);
+  });
+
+  it('W5-03: NET — a STOCK line without ราคาตั้ง still blocks อนุมัติราคาขาย', async () => {
+    await renderCeo({ priceMode: 'NET', items: [newFormItem({
+      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null,
+    })] });
+    expect(within(getPanel()).getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
   });
 
   // Owner 2026-10-01: the CEO should not have to work these out. The formula price (CEO config:
@@ -5321,48 +5571,6 @@ describe('CEO pricing inside รายการสินค้าและรา
   });
 
   describe('fix round 2 (2026-10-01)', () => {
-    const stockDirectNet = () => newFormItem({
-      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null,
-      listUnitPrice: null, directNetPrice: 100, netUnitPrice: 100,
-    });
-
-    it('stock line under DIRECT_NET with no ราคาตั้ง: input present, approve blocked, message shown (Java 422 stockWithoutListPrice)', async () => {
-      await renderCeo({ priceMode: 'DIRECT_NET', items: [stockDirectNet()] });
-      const panel = within(getPanel());
-      expect(panel.getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
-      expect(panel.getByText('ต้องมีราคาตั้งสำหรับรายการสต็อก')).not.toBeNull();
-      expect(panel.getByTestId('pcr-ceo-approve').disabled).toBe(true);
-      expect(panel.getByText(/รายการจากสต็อกต้องมีราคาตั้ง \(มากกว่า 0\) ก่อนอนุมัติ/)).not.toBeNull();
-    });
-
-    it('stock line under DIRECT_NET: typing ราคาตั้ง 150 and saving sends listUnitPrice 150', async () => {
-      await renderCeo({ priceMode: 'DIRECT_NET', items: [stockDirectNet()] });
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '150' } });
-      fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
-      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
-      expect(lastSavedItem().listUnitPrice).toBe(150);
-      expect(lastSavedItem().sellingPriceOverride == null).toBe(true);
-    });
-
-    it('stock line under SPECIAL_SQM also shows the ราคาตั้ง input; an IMPORT line under DIRECT_NET does not', async () => {
-      await renderCeo({ priceMode: 'SPECIAL_SQM', items: [stockDirectNet()] });
-      expect(within(getPanel()).getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
-      cleanup();
-      vi.clearAllMocks();
-      setApiDefaults();
-      await renderCeo({ priceMode: 'DIRECT_NET', items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })] });
-      expect(within(getPanel()).queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
-    });
-
-    it('stock line with a positive ราคาตั้ง under DIRECT_NET is approvable', async () => {
-      await renderCeo({
-        priceMode: 'DIRECT_NET',
-        items: [{ ...stockDirectNet(), listUnitPrice: 150 }],
-      });
-      expect(within(getPanel()).getByTestId('pcr-ceo-approve').disabled).toBe(false);
-    });
-
     it('"ใช้ราคาตามสูตร" sends an EMPTY draft (no pending discount), clears the override, and spins on its own button', async () => {
       await renderCeo({
         items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
@@ -5443,34 +5651,6 @@ describe('CEO pricing inside รายการสินค้าและรา
       fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
       expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
       expect(screen.queryByText(/ประเภทสินค้า/)).toBeNull();
-    });
-
-    it('LOW-1: a stock line under DIRECT_NET with no ราคาสุทธิ cannot save ราคาตั้ง alone (Java 400s it) until the net is typed', async () => {
-      await renderCeo({
-        priceMode: 'DIRECT_NET',
-        items: [{ ...stockDirectNet(), directNetPrice: null, netUnitPrice: null }],
-      });
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '150' } });
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
-      expect(panel.getByText('กรอกราคาสุทธิต่อแผ่นด้วยก่อนบันทึก')).not.toBeNull();
-      fireEvent.change(panel.getByTestId('pcr-ceo-direct-net-8001'), { target: { value: '120' } });
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false);
-      fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
-      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
-      expect(lastSavedItem().listUnitPrice).toBe(150);
-      expect(lastSavedItem().directNetPrice).toBe(120);
-    });
-
-    it('LOW-1: same for SPECIAL_SQM with no ราคาพิเศษ', async () => {
-      await renderCeo({
-        priceMode: 'SPECIAL_SQM',
-        items: [{ ...stockDirectNet(), directNetPrice: null, specialPriceSqm: null, netUnitPrice: null }],
-      });
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '150' } });
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
-      expect(panel.getByText('กรอกราคาพิเศษ บาท/ตร.ม. ด้วยก่อนบันทึก')).not.toBeNull();
     });
 
     describe('อัตรากำไรเริ่มต้น default (owner 2026-10-01: read the formula config, fall back to 0.30)', () => {

@@ -16,7 +16,8 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 // duplicate of it.
 //
 // HOW A WARNING IS RAISED: PERSONAL (ลากิจ) requires 1 day of advance notice, VACATION (ลาพักร้อน)
-// requires 3 -- see V116__leave_type_rule_columns.sql. A same-day PERSONAL request therefore always
+// requires 3 -- see V116__leave_type_rule_columns.sql. A same-day PERSONAL request on a weekday
+// (or a next-working-day VACATION one on a weekend, see NOTICE_SHORT) therefore always
 // trips ADVANCE_NOTICE (WARN_UNPAID_ALL, LeaveRuleCode.java) for the seeded `employee` persona,
 // whose hire_date (V139) is three years back -- well past every other categorical gate (probation,
 // min-service, once-per-employment), so ADVANCE_NOTICE is the ONE gate this persona can trip via a
@@ -103,6 +104,25 @@ function firstWorkingDayOnOrAfterToday() {
   throw new Error('no Mon-Fri day found within 10 days of today');
 }
 
+/** Today in Asia/Bangkok is a Saturday or Sunday. */
+function weekendInBangkok() {
+  const dow = new Date(`${todayInBangkok()}T00:00:00Z`).getUTCDay();
+  return dow === 0 || dow === 6;
+}
+
+/**
+ * A one-working-day request that is short of its type's advance notice, so ADVANCE_NOTICE fires.
+ *
+ * Notice counts the employee's WORKING days after today up to the leave's first working day
+ * (LeaveService, owner ruling 2026-10-29). On a weekday a PERSONAL request starting today has 0
+ * days -- under PERSONAL's 1. On a Sat/Sun there is no such PERSONAL request: the earliest working
+ * day is Monday, and Monday itself already counts as 1 day of notice. So on a weekend this uses
+ * VACATION (3 days' notice) on that Monday instead: 1 < 3, the same warning and pay consequence.
+ */
+const NOTICE_SHORT = weekendInBangkok()
+  ? { typeCode: 'VACATION', typeNameTh: 'ลาพักร้อน', date: firstWorkingDayOnOrAfterToday() }
+  : { typeCode: 'PERSONAL', typeNameTh: 'ลากิจ', date: todayInBangkok() };
+
 // ── Composer navigation helpers ─────────────────────────────────────────────
 
 async function gotoComposer(page) {
@@ -163,15 +183,12 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
 
   test('case 1: a warning renders amber (not danger), submit stays enabled, and the button label states the pay consequence', async ({ page }) => {
     await gotoComposer(page);
-    await chooseTypeAndAdvance(page, 'ลากิจ'); // PERSONAL, advance_notice_days = 1
-    // The start date defaults to today (defaultForm) -- 0 days' notice, violating PERSONAL's
-    // 1-day requirement, so ADVANCE_NOTICE (WARN_UNPAID_ALL) fires. The END date is stretched to
-    // the first working day so the period is not all-weekend, which the service rejects outright;
-    // on a weekday that IS today, leaving this exactly as it was. See
-    // firstWorkingDayOnOrAfterToday.
+    // Short of its type's notice, so ADVANCE_NOTICE (WARN_UNPAID_ALL) fires -- see NOTICE_SHORT.
+    await chooseTypeAndAdvance(page, NOTICE_SHORT.typeNameTh);
     await fillStep2({
       page,
-      endDate: firstWorkingDayOnOrAfterToday(),
+      startDate: NOTICE_SHORT.date,
+      endDate: NOTICE_SHORT.date,
       reason: 'e2e-real: case1 amber warning, enabled submit',
     });
     await advanceToStep3(page);
@@ -206,6 +223,9 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
   });
 
   test('case 2: multiple simultaneous warnings all render, not just the first', async ({ page }) => {
+    // The wedding purpose exists only on PERSONAL, whose 1-day notice no request can be short of on
+    // a weekend (see NOTICE_SHORT).
+    test.skip(weekendInBangkok(), 'PERSONAL cannot be short of notice when today is a Sat/Sun');
     // PERSONAL + purposeCode=WEDDING, requested for MORE than the 3-day wedding cap (§5.2,
     // WEDDING_MAX_DAYS, hardcoded WEDDING_LEAVE_MAX_DAYS=3.00) AND submitted same-day (violates
     // the 1-day notice, ADVANCE_NOTICE) -- LeaveService#autoRejectNote evaluates the wedding cap
@@ -238,14 +258,15 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
   test('case 3: the quick-check "passed" line is suppressed when a warning fires, shown when clean', async ({ page }) => {
     const passedLine = page.getByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/);
 
-    // Half A: a warning fires (same-day PERSONAL) -> the green line must be ABSENT, not merely
+    // Half A: a warning fires (NOTICE_SHORT) -> the green line must be ABSENT, not merely
     // pushed below the amber panel -- LeaveRequestPage.jsx gates it on
     // `!step2Blocking && step2Warnings.length === 0`.
     await gotoComposer(page);
-    await chooseTypeAndAdvance(page, 'ลากิจ');
+    await chooseTypeAndAdvance(page, NOTICE_SHORT.typeNameTh);
     await fillStep2({
       page,
-      endDate: firstWorkingDayOnOrAfterToday(),
+      startDate: NOTICE_SHORT.date,
+      endDate: NOTICE_SHORT.date,
       reason: 'e2e-real: case3 warning suppresses passed line',
     });
     await expect(page.getByText('แจ้งล่วงหน้าไม่ครบกำหนด', { exact: true })).toBeVisible();
@@ -341,18 +362,18 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     const balancesBefore = await sessions[OWNER_ROLE].get(`/api/leave/balances?year=${year}`);
     expect(balancesBefore.status(), 'GET /api/leave/balances (baseline)').toBe(200);
     const { balances } = await balancesBefore.json();
-    const personalBefore = balances.find((b) => b.leaveTypeCode === 'PERSONAL');
-    expect(personalBefore, 'PERSONAL balance must be present in the baseline read').toBeTruthy();
-    quotaRemainingBeforeCreate = Number(personalBefore.remainingDays);
+    const quotaBefore = balances.find((b) => b.leaveTypeCode === NOTICE_SHORT.typeCode);
+    expect(quotaBefore, `${NOTICE_SHORT.typeCode} balance must be present in the baseline read`).toBeTruthy();
+    quotaRemainingBeforeCreate = Number(quotaBefore.remainingDays);
 
-    // PERSONAL starting today -> ADVANCE_NOTICE (WARN_UNPAID_ALL): the request becomes unpaid by
+    // NOTICE_SHORT -> ADVANCE_NOTICE (WARN_UNPAID_ALL): the request becomes unpaid by
     // rule if approved, which is what makes "quota has not moved" a meaningful assertion below --
     // LeaveRepository#sumUsedDays deliberately subtracts unpaid_by_rule_days from quota
     // consumption (see that method's own Javadoc).
     const created = await apiWrite(sessions[OWNER_ROLE], 'post', '/api/leave', {
-      leaveTypeCode: 'PERSONAL',
-      startDate: todayInBangkok(),
-      endDate: firstWorkingDayOnOrAfterToday(),
+      leaveTypeCode: NOTICE_SHORT.typeCode,
+      startDate: NOTICE_SHORT.date,
+      endDate: NOTICE_SHORT.date,
       reason,
     });
     const body = await created.text();
@@ -411,9 +432,9 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     const balancesAfter = await sessions[OWNER_ROLE].get(`/api/leave/balances?year=${year}`);
     expect(balancesAfter.status()).toBe(200);
     const { balances } = await balancesAfter.json();
-    const personalAfter = balances.find((b) => b.leaveTypeCode === 'PERSONAL');
+    const quotaAfter = balances.find((b) => b.leaveTypeCode === NOTICE_SHORT.typeCode);
     expect(
-      Number(personalAfter.remainingDays),
+      Number(quotaAfter.remainingDays),
       'a fully unpaid-by-rule day must not consume quota -- LeaveRepository#sumUsedDays subtracts it'
     ).toBe(quotaRemainingBeforeCreate);
   });

@@ -671,16 +671,15 @@ public class DealQuotationService {
      * {@link PricingRequestItemDto}. */
     private ItemInput buildItemInputFromDecisionItem(PricingRequestItemDto pri, PricingDecisionItemDto di,
                                                       String priceMode) {
-        // unitPrice ("ราคาตั้ง") is set for EVERY mode, not just NET: WastageCalculator's own
-        // #requirePriceValidForType requires a positive unitPrice on every non-perSqm TILE row
-        // regardless of priceMode (the direct-deal editor always shows it, even under
-        // SPECIAL_SQM/DIRECT_NET, as the reference figure the chosen mode's own price is compared
-        // against) — buildTileItem itself only ever READS it for NET's own math, so this is safe
-        // for the other two. list_unit_price (V187) is the right source here because it is
-        // ALWAYS auto-calculated regardless of price_mode (see that column's own migration
-        // comment), unlike manualSellingPricePerRequestedUnit, which is NET-only ("ruling B").
-        BigDecimal unitPrice = WastageCalculator.PRICE_MODE_NET.equals(priceMode)
-            && di.manualSellingPricePerRequestedUnit() != null
+        // unitPrice ("ราคา") is set for EVERY mode: WastageCalculator's own #requirePriceValidForType
+        // requires a positive unitPrice on every non-perSqm TILE row regardless of priceMode, and
+        // buildTileItem only READS it for NET's own math.
+        // W5-03/QA-31 (Ploy 2026-10-30): under SPECIAL_SQM / DIRECT_NET the printed ราคา is the net
+        // (the CEO's own figure), so the cost x margin formula list price never reaches the quotation.
+        // NET keeps list_unit_price (V187, always auto-calculated) unless the CEO overrode it
+        // (manualSellingPricePerRequestedUnit, NET-only, "ruling B").
+        BigDecimal unitPrice = !WastageCalculator.PRICE_MODE_NET.equals(priceMode) ? di.netUnitPrice()
+            : di.manualSellingPricePerRequestedUnit() != null
             ? di.manualSellingPricePerRequestedUnit() : di.listUnitPrice();
         BigDecimal discountPct = null;
         BigDecimal specialPriceSqm = null;
@@ -1993,6 +1992,13 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: " + fresh.docStatus() + ")");
         }
+        PricingRequestSummaryDto summary = pricingRequests.findSummary(fresh.pricingRequestId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
+        // A customer-change revision supersedes the parent PR but leaves its quotation ISSUED.
+        if (PricingRequestStatus.SUPERSEDED.equals(summary.status())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน");
+        }
         if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
@@ -2014,8 +2020,6 @@ public class DealQuotationService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาถูกเปลี่ยนแปลงโดยผู้ใช้อื่น");
         }
 
-        PricingRequestSummaryDto summary = pricingRequests.findSummary(fresh.pricingRequestId())
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         String eventKind = outcomeEventKind(request.outcome());
         pricingRequests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             eventKind, summary.status(), summary.status(),
@@ -2363,6 +2367,15 @@ public class DealQuotationService {
         // no longer the deal's live APPROVED document. Same message as the check above -- this is
         // the same rule, just re-asserted at the moment that actually matters.
         source = requireRevisableStatus(requireQuotation(id));
+        // QA-13 sibling: a SUPERSEDED (customer-change revision) or CANCELLED request is dead, so is revising its quotation.
+        if (isPricingRequestOrigin(source)) {
+            String requestStatus = pricingRequests.findSummary(source.pricingRequestId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้")).status();
+            if (PricingRequestStatus.SUPERSEDED.equals(requestStatus) || PricingRequestStatus.CANCELLED.equals(requestStatus)) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขหรือถูกยกเลิกแล้ว — สร้างฉบับแก้ไขของใบเสนอราคานี้ไม่ได้");
+            }
+        }
         long newId = insertRevisionCopyOf(source, actor);
         DealQuotationDto revision = requireQuotation(newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,

@@ -46,6 +46,13 @@ export function stepsAhead(code) {
   return i < 0 ? IMPORT_STEPS : IMPORT_STEPS.slice(i + 1);
 }
 
+// PARTIALLY_DELIVERED is deliberately not "arrived": stock lines went out while the imports are still in transit.
+const GOODS_ARRIVED = new Set(['GOODS_RECEIVED', 'FULLY_DELIVERED', 'FROM_STOCK']);
+export const goodsArrived = (fulfillmentStatus) => GOODS_ARRIVED.has(fulfillmentStatus);
+
+/** W3-09: the warning for moving on from ขั้น 12 by hand (`no` = the target stage's number). */
+export const goodsNotArrivedWarning = (no) => `สินค้าจากโรงงานยังมาไม่ครบ — เลื่อนไปขั้น ${no} ก่อนสินค้าถึงโกดังเฉพาะกรณีจำเป็น`;
+
 // Deal rollups at or past goods-received: the deal-level fulfilment label already says it.
 const PAST_IMPORT = new Set(['GOODS_RECEIVED', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'FROM_STOCK']);
 

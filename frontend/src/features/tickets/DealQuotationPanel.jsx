@@ -23,7 +23,7 @@ import {
   canManageCustomerQuotation, canRecordCustomerQuotationOutcome, canViewCustomerQuotation,
   isCustomerQuotationEditable, pricingRequestRecipientLabel,
 } from '../pricingRequests/pricingRequestMeta.js';
-import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, outcomeKeyFor, outcomeReasonConfirmCopy } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, outcomeKeyFor, outcomeReasonConfirmCopy, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
 // The customer-quotation tail only ever exists once a PricingRequest reaches
@@ -41,10 +41,6 @@ function pickRelevantPricingRequest(pricingRequests = []) {
   // that one, not a later party's newer request (review V2).
   return tail.find((pr) => pr.status === 'QUOTATION_ACCEPTED') ?? tail[0] ?? null;
 }
-
-// An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
-// non-live set): it does not hide the request's new-engine quotation (review V6).
-const DEAD_CUSTOMER_QUOTATION_STATUSES = new Set(['CANCELLED', 'SUPERSEDED', 'EXPIRED', 'REJECTED']);
 
 /**
  * "ราคาและใบเสนอราคา" (Phase 2 Slice S2 — see
@@ -94,7 +90,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
-  const [confirmingAccept, setConfirmingAccept] = useState(false);
+  // The quotation whose acceptance is being confirmed, captured at click so a refetch can't retarget it.
+  const [acceptTarget, setAcceptTarget] = useState(null);
   // W3-06/QA-35 (owner ruling 2026-10-29/30): ปฏิเสธ / ขอแก้ไข ask for the customer's reason first; each outcome
   // keeps its own idempotency key per quotation until it succeeds (see outcomeKeyFor). outcomeToConfirm is
   // { quotation, outcome }: the quotation is captured at click so a refetch can't retarget the confirm.
@@ -123,6 +120,9 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
     () => quotations.find((q) => isCustomerQuotationEditable(q)) ?? [...quotations].reverse()[0] ?? null,
     [quotations],
   );
+  // The quotation this panel shows: the new-engine one, unless a live old-engine one is open.
+  const shownQuotation = shownCustomerQuotation(prQuotation, current);
+  const showsPrQuotation = Boolean(prQuotation) && shownQuotation === prQuotation;
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.customerQuotations(pr?.id) });
@@ -200,7 +200,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
 
         {quotationsQuery.isLoading ? (
           <p className="text-sm text-text-muted">กำลังโหลดใบเสนอราคาลูกค้า…</p>
-        ) : prQuotation && !(current && !DEAD_CUSTOMER_QUOTATION_STATUSES.has(current.docStatus)) ? (
+        ) : showsPrQuotation ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface p-3">
             <span className="font-mono text-sm font-bold">{prQuotation.number}</span>
             <StatusBadge tone={prQuotationStatus.tone}>
@@ -261,7 +261,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordOutcome.isPending}
-                    onClick={() => (acceptConfirm ? setConfirmingAccept(true) : recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }))}
+                    onClick={() => setAcceptTarget(current)}
                     data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </Button>
@@ -314,18 +314,19 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
 
       <ConfirmOrderDialog
         open={confirmingOrder}
-        number={current?.number}
+        number={shownQuotation?.number}
+        depositPercent={shownQuotation?.depositPercent}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
       />
       <ConfirmDialog
-        open={confirmingAccept && Boolean(acceptConfirm)}
-        title={acceptConfirm?.title}
-        message={acceptConfirm?.message}
+        open={Boolean(acceptTarget)}
+        title={acceptConfirm.title}
+        message={acceptConfirm.message}
         busy={recordOutcome.isPending}
-        onCancel={() => setConfirmingAccept(false)}
-        onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }); }}
+        onCancel={() => setAcceptTarget(null)}
+        onConfirm={() => { const quotation = acceptTarget; setAcceptTarget(null); recordOutcome.mutate({ quotation, outcome: 'ACCEPTED' }); }}
       />
       <ConfirmDialog
         open={Boolean(outcomeToConfirm)}

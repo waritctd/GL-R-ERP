@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { api } from '../../api/index.js';
@@ -356,8 +356,193 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     await screen.findByTestId('remaining-invoice-draft-editor');
     fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).getByRole('button', { name: 'ออกใบแจ้งหนี้' }));
 
     await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900));
+  });
+
+  // W4-07 (owner ruling 2026-10-30): issuing mints a legal document number and cannot be undone,
+  // so the click only opens a confirmation; update+issue run on confirm, exactly once.
+  describe('W4-07 confirm before issuing', () => {
+    function confirmDialog() {
+      return screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' });
+    }
+
+    // The server re-snapshots money from live data on update + issue, so the confirm shows a FRESH
+    // preview (api.tickets.remainingInvoiceOptions), never the draft's last saved snapshot.
+    it('first issue: refetches the preview, shows ITS amounts (not the draft snapshot) once loaded, calls no issue api until confirmed', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow() });
+      api.storedRemainingInvoices.issue.mockResolvedValue({ remainingInvoice: docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1' }) });
+      let resolveFresh;
+      api.tickets.remainingInvoiceOptions
+        .mockResolvedValueOnce({ options: baseOptions() })
+        .mockReturnValueOnce(new Promise((resolve) => { resolveFresh = resolve; }));
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      await waitFor(() => expect(api.tickets.remainingInvoiceOptions).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(api.tickets.remainingInvoiceOptions).toHaveBeenCalledTimes(2);
+      expect(dialog.textContent).toContain('กำลังคำนวณยอด');
+      expect(dialog.textContent).not.toContain('฿19,856.09');
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' });
+      expect(confirm.disabled).toBe(true);
+
+      await act(async () => {
+        resolveFresh({
+          options: baseOptions({ itemsTotal: 40000, depositAmount: 20000, netAmount: 20000, vatAmount: 1400, totalPayable: 21400 }),
+        });
+      });
+      await waitFor(() => expect(dialog.textContent).toContain('฿21,400.00'));
+      const text = dialog.textContent;
+      expect(text).toContain('QT-2026-0099');
+      expect(text).toContain('ยอดสินค้า');
+      expect(text).toContain('฿40,000.00');
+      expect(text).toContain('หักมัดจำ');
+      expect(text).toContain('฿20,000.00');
+      expect(text).toContain('ภาษีมูลค่าเพิ่ม');
+      expect(text).toContain('฿1,400.00');
+      expect(text).toContain('ยอดชำระ');
+      // The draft's stale saved snapshot is not what the server will issue.
+      expect(text).not.toContain('฿19,856.09');
+      expect(text).not.toContain('฿37,114.18');
+      expect(text).toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
+      expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+
+      expect(confirm.disabled).toBe(false);
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+
+      await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledTimes(1));
+      expect(api.storedRemainingInvoices.update).toHaveBeenCalledTimes(1);
+      expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900);
+    });
+
+    // The server's issue would 409 on a blocking reason, so the confirm names it and cannot proceed.
+    it('a blockingReason on the fresh preview is shown and keeps confirm disabled', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      api.tickets.remainingInvoiceOptions.mockResolvedValue({
+        options: baseOptions({ blockingReason: 'ยังไม่มีใบแจ้งยอดเงินรับมัดจำ' }),
+      });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      await waitFor(() => expect(dialog.textContent).toContain('ยังไม่มีใบแจ้งยอดเงินรับมัดจำ'));
+      expect(dialog.textContent).not.toContain('฿19,856.09');
+      expect(within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' }).disabled).toBe(true);
+    });
+
+    // The server recomputes anyway, so a failed preview does not trap the user — but it must not show stale amounts.
+    it('a failed preview refetch shows an error line instead of amounts and leaves confirm enabled', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      api.tickets.remainingInvoiceOptions
+        .mockResolvedValueOnce({ options: baseOptions() })
+        .mockRejectedValueOnce(new Error('boom'));
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      await waitFor(() => expect(api.tickets.remainingInvoiceOptions).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      await waitFor(() => expect(dialog.textContent).toContain('คำนวณยอดไม่สำเร็จ'));
+      expect(dialog.textContent).not.toContain('฿19,856.09');
+      expect(within(dialog).getByRole('button', { name: 'ออกใบแจ้งหนี้' }).disabled).toBe(false);
+    });
+
+    it('revision: shows the predicted next number from the ISSUED row of the same quotation', async () => {
+      const issuedRow = docRow({
+        id: 880, status: 'ISSUED', docNumber: 'GLR6900004-1', baseNumber: 'GLR6900004', version: 1, customerQuotationId: 55,
+      });
+      const revisionDraft = docRow({ id: 881, status: 'DRAFT', docNumber: null, baseNumber: null, customerQuotationId: 55 });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow, revisionDraft] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(dialog.textContent).toContain('GLR6900004-2');
+      expect(dialog.textContent).not.toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+    });
+
+    it('legacy data with several ISSUED rows: the prediction uses the one of the draft\'s own quotation, not the first ISSUED', async () => {
+      const otherChain = docRow({
+        id: 870, status: 'ISSUED', docNumber: 'GLR6900002-3', baseNumber: 'GLR6900002', version: 3, customerQuotationId: 11,
+      });
+      const ownChain = docRow({
+        id: 880, status: 'ISSUED', docNumber: 'GLR6900004-1', baseNumber: 'GLR6900004', version: 1, customerQuotationId: 55,
+      });
+      const revisionDraft = docRow({ id: 881, status: 'DRAFT', docNumber: null, baseNumber: null, customerQuotationId: 55 });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [otherChain, ownChain, revisionDraft] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(dialog.textContent).toContain('GLR6900004-2');
+      expect(dialog.textContent).not.toContain('GLR6900002-4');
+    });
+
+    it('an ISSUED row of a DIFFERENT quotation does not predict a number (first issue for this quotation)', async () => {
+      const issuedRow = docRow({
+        id: 880, status: 'ISSUED', docNumber: 'GLR6900004-1', baseNumber: 'GLR6900004', version: 1, customerQuotationId: 55,
+      });
+      const draftOther = docRow({ id: 881, status: 'DRAFT', docNumber: null, baseNumber: null, customerQuotationId: 77 });
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [issuedRow, draftOther] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+
+      const dialog = await confirmDialog();
+      expect(dialog.textContent).toContain('ระบบจะออกเลขที่เอกสารใหม่เมื่อยืนยัน');
+      expect(dialog.textContent).not.toContain('GLR6900004-2');
+    });
+
+    it('cancel closes the confirm and calls neither update nor issue', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      renderDialog();
+
+      await screen.findByTestId('remaining-invoice-draft-editor');
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+      fireEvent.click(within(await confirmDialog()).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).toBeNull());
+      expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+    });
+
+    // Both dialogs listen on `document`; one Escape must only dismiss the topmost (the confirm),
+    // never also close the dialog under it and drop the unsaved อ้างอิง/วันที่/หมายเหตุ.
+    it('Escape on the confirm closes only the confirm: the outer dialog stays open with the unsaved edit', async () => {
+      api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+      const { onClose } = renderDialog();
+
+      fireEvent.change(await screen.findByDisplayValue('QT-2026-0099'), { target: { value: 'PO-UNSAVED' } });
+      fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+      await confirmDialog();
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).toBeNull());
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByDisplayValue('PO-UNSAVED')).toBeTruthy();
+      expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+
+      // With the confirm gone the outer dialog is topmost again, so Escape closes it.
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('ลบร่าง calls deleteDraft', async () => {
@@ -387,6 +572,7 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     fireEvent.change(input, { target: { value: 'PO-NEVER-SAVED' } });
     // "บันทึก" is deliberately NEVER clicked here — going straight to issue.
     fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).getByRole('button', { name: 'ออกใบแจ้งหนี้' }));
 
     await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledWith(900));
     expect(api.storedRemainingInvoices.update).toHaveBeenCalledWith(900,

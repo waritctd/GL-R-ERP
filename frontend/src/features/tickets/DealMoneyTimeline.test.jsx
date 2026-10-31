@@ -53,6 +53,9 @@ describe('DealMoneyTimeline', () => {
     // Exactly the two payment-track rows: the receipt (newer) before the event (older).
     expect(items).toHaveLength(2);
     expect(items[0]).toContain('คุณบัญชี');
+    // F11: the receipt's kind prints Thai, never the raw enum.
+    expect(items[0]).toContain('มัดจำ');
+    expect(items[0]).not.toContain('DEPOSIT');
     expect(items[1]).toContain('รับมัดจำแล้ว');
   });
 
@@ -79,9 +82,9 @@ describe('DealMoneyTimeline', () => {
     expect(items).toHaveLength(3);
     // Fixed rule: events sort before receipts at a shared instant.
     expect(items[0]).toContain('ลูกค้ายืนยันคำสั่งซื้อ');
-    expect(items[1]).toContain('DEPOSIT');
+    expect(items[1]).toContain('มัดจำ');
     // The unparseable-timestamp receipt (BALANCE) sorts last, not first.
-    expect(items[2]).toContain('BALANCE');
+    expect(items[2]).toContain('ส่วนที่เหลือ');
   });
 
   it('still shows the balance figures — de-emphasised, not removed', () => {

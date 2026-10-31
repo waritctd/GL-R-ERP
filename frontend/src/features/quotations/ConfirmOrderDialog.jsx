@@ -6,7 +6,7 @@ import { CONFIRM_ORDER_FROM_QUOTATION_COPY } from './quotationMeta.js';
  * page, direct-quotation sticky CTA): same title, copy and button label everywhere. The caller owns the open state and
  * what confirming does; `number` is the quotation / request code the copy names.
  */
-export function ConfirmOrderDialog({ open, number, busy, onCancel, onConfirm, cancelLabel }) {
+export function ConfirmOrderDialog({ open, number, depositPercent, busy, onCancel, onConfirm, cancelLabel }) {
   return (
     <ConfirmDialog
       open={open}
@@ -14,7 +14,7 @@ export function ConfirmOrderDialog({ open, number, busy, onCancel, onConfirm, ca
       message={(
         <p className="confirm-dialog-message m-0 leading-normal text-text-secondary">
           {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-          {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+          {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail(depositPercent)}
         </p>
       )}
       confirmLabel="ยืนยันคำสั่งซื้อ"

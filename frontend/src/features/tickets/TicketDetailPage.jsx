@@ -57,12 +57,13 @@ import { DealRemainingInvoiceCard, pickRemainingInvoice } from './DealRemainingI
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
   canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
+  DEAD_PRICING_REQUEST_STATUSES, stageForQuotationRecipient,
 } from '../quotations/quotationMeta.js';
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
 import { visibleSections } from './salesViewScope.js';
-import { nextOnRoute, offRoutePartiesFor, useStageCatalog } from './stageCatalog.js';
+import { nextOnRoute, offRoutePartiesFor, stageIndexIn, useStageCatalog } from './stageCatalog.js';
 import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
@@ -993,6 +994,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   }
 
   const { summary, items, events, quotations } = ticket;
+  // QA-33: the billing form is the only writer of lastFollowUpAt, so ติดตามล่าสุด is the later of it and the newest activity.
+  const latestFollowUp = [summary.lastFollowUpAt, ...activities.map((a) => a.activityDate)].filter(Boolean).sort().pop() ?? null;
   // B5 fix: when sales.ticket_item is still empty (pre-order-confirmation), the items grid
   // below falls back to the deal's live pricing-request/quotation line items instead of
   // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
@@ -1221,7 +1224,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     </Button>
   ) : can.verifyClose ? (
     <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-verify-close"
-      onClick={() => doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว')}>
+      onClick={() => setConfirm({ kind: 'verifyClose' })}>
       <Icon name="check" size={14} />
       ตรวจสอบและปิดงาน
     </Button>
@@ -1250,8 +1253,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // quotationMeta.canReviseDealQuotation (the single rule; owner + status live there), plus any
   // open revision draft already hanging off it. Same query key as DealDocumentRegister, so one fetch.
   const dealQuotationRows = dealQuotationsQuery.data ?? [];
+  const confirmedRow = dealQuotationRows.find((q) => q.id === confirm?.quotationId);
   const reviseCandidate = dealQuotationRows
     .filter((q) => canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
+    // The server refuses a revise on a SUPERSEDED/CANCELLED request's quotation (409).
+    .filter((q) => !DEAD_PRICING_REQUEST_STATUSES.has(pricingRequests.find((pr) => pr.id === q.pricingRequestId)?.status))
     .reduce((best, q) => (best == null || q.id > best.id ? q : best), null);
   const openRevisionDraft = reviseCandidate
     ? dealQuotationRows.find((q) => q.docStatus === 'DRAFT' && q.parentQuotationId === reviseCandidate.id)
@@ -1281,6 +1287,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     || (workState.action?.key === 'create_pcr' && requestListUnread) ? null : workState.action;
   const lost = summary.lifecycle === 'CLOSED_LOST';
   const isActiveLifecycle = (summary.lifecycle ?? 'ACTIVE') === 'ACTIVE';
+  // ถัดไป names where the main button leads: ขั้น 10 for confirm-order, else the stage of the newest live
+  // request's recipient when that is ahead of the deal (e.g. a buyer request opened by the skip).
+  const newestLiveRequest = pricingRequests.filter((pr) => !DEAD_PRICING_REQUEST_STATUSES.has(pr.status))
+    .reduce((newest, pr) => (newest == null || pr.id > newest.id ? pr : newest), null);
+  const requestStage = stageForQuotationRecipient(newestLiveRequest?.recipientType);
+  // The request's stage must also be on THIS deal's route (the server's verdict), else it is not where the deal goes.
+  const requestStageOnRoute = stageDecisions.find((decision) => decision.stage === requestStage)?.onRoute !== false;
+  const requestStageAhead = requestStage != null && requestStageOnRoute
+    && stageIndexIn(stageCatalog, requestStage) > stageIndexIn(stageCatalog, summary.salesStage);
+  const confirmOrderCta = ['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key);
+  const ctaStage = confirmOrderCta ? 'ORDER_RECEIVED'
+    : requestStageAhead ? requestStage : null;
   // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
   // explicit `isActiveLifecycle` guard DealStagePanel got "for free" from
   // which JSX branch rendered its old inline "เลื่อนไป" button (only the
@@ -1643,7 +1661,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // each opener (DealStagePanel's openAdvance/openEditStage/openHold/
     // openDormant) is the actual guard; this is the visible half of the
     // same fix, so the item doesn't invite a click it's about to reject.
-    canAdvance && {
+    // While ยืนยันคำสั่งซื้อ is the primary, a second เลื่อนไป would compete with it (SK-08).
+    canAdvance && !confirmOrderCta && {
       key: 'advanceStage',
       label: summary.salesStage === 'PROCUREMENT' && next
         ? manualMoveLabel(summary.salesStage, next, '')
@@ -1881,6 +1900,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         catalog={stageCatalog}
         events={ticket.events}
         quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
+        ctaStage={ctaStage}
         // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
         // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
         // rendering the exact same button twice on one page.
@@ -1951,7 +1971,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               <ContextSection title="วันสำคัญ" helper="Key dates" icon="calendar">
                 <dl className="m-0">
                   <FieldRow label="ติดตามครั้งถัดไป" value={formatThaiDate(summary.nextFollowUpAt)} />
-                  <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(summary.lastFollowUpAt)} />
+                  <FieldRow label="ติดตามล่าสุด" value={formatThaiDate(latestFollowUp)} />
                   <FieldRow label="วันวางบิล" value={formatThaiDate(summary.billingDate)} />
                   <FieldRow label="ครบกำหนดชำระ" value={formatThaiDate(summary.dueDate)} danger={summary.overdue} />
                   <FieldRow label="ใบเสนอราคาหมดอายุ" value={formatThaiDate(latestQuotation?.validityDate)} />
@@ -2500,6 +2520,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               can never drift. See DealDocumentRegister.jsx's own header
               comment for the exact three gates and their backend citations. */}
           <DealDocumentRegister
+            depositCtaShown={workStateAction?.key === 'create_deposit_notice'}
             ticketId={ticketId}
             user={user}
             summary={summary}
@@ -3044,14 +3065,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onCancel={() => setConfirm(null)}
       />
 
+      {/* W4-10 (owner ruling 2026-10-30): the CEO's close cannot be undone, so it asks first. */}
+      <ConfirmDialog
+        open={confirm?.kind === 'verifyClose'}
+        title="ยืนยันตรวจสอบและปิดงาน"
+        message="เมื่อตรวจสอบและปิดงานแล้ว ดีลนี้จะปิดและย้อนกลับไม่ได้"
+        confirmLabel="ตรวจสอบและปิดงาน"
+        busy={actionLoading}
+        // Close first: a second click on the open dialog would send twice.
+        onConfirm={() => { setConfirm(null); doAction(() => api.tickets.verifyClose(ticketId), 'ตรวจสอบและปิดงานแล้ว'); }}
+        onCancel={() => setConfirm(null)}
+      />
+
       {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
           quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
           doors to the same irreversible act say the same thing. */}
       <ConfirmOrderDialog
         open={confirm?.kind === 'confirmOrderDirect'}
         number={confirm?.number}
+        depositPercent={confirmedRow?.depositPercent}
         cancelLabel="ปิด"
-        busy={confirmOrderDirectMutation.isPending}
+        // Until the row is read the deposit wording (it may be 0%) is unknown: no confirm yet.
+        busy={confirmOrderDirectMutation.isPending || (confirm?.kind === 'confirmOrderDirect' && !confirmedRow)}
         // Close first (as the pricing-request door does): a second click on the open dialog would send twice.
         onConfirm={() => { const { quotationId } = confirm; setConfirm(null); confirmOrderDirectMutation.mutate(quotationId); }}
         onCancel={() => setConfirm(null)}

@@ -40,7 +40,7 @@ function phaseName(phaseId) {
  *
  * Pip numbers are the stages' own business numbers (S8 is "8"), the same number the panel badge and
  * the update-stage dialog print, so a buyer-direct route visibly jumps 3 → 8. Progress in words
- * ("ขั้นที่ 4 จาก 11") is PhaseSummary's job. State is carried by shape AND a Thai word (screen-
+ * ("ผ่านมาแล้ว 4 จาก 11 ขั้น") is PhaseSummary's job. State is carried by shape AND a Thai word (screen-
  * reader text), never by colour alone: done = tick, current = filled, upcoming = hollow.
  */
 function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
@@ -94,7 +94,7 @@ function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
  * The first change's fromStatus and everything before it are pre-history and count as done; no
  * STAGE_CHANGED at all, or a first fromStatus outside the catalog, means nothing is skipped.
  */
-function skippedStageCodes(catalog, currentIdx, events) {
+export function skippedStageCodes(catalog, currentIdx, events) {
   const changes = (events ?? []).filter((event) => event.kind === 'STAGE_CHANGED');
   if (changes.length === 0) return new Set();
   const visited = new Set(changes.map((event) => event.toStatus));
@@ -377,7 +377,7 @@ export function PhaseSummary({
       <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
         <span className="block h-full rounded-full bg-info" style={{ width: `${(position / total) * 100}%` }} />
       </div>
-      <span className="sr-only">ขั้นที่ {position} จาก {total}</span>
+      <span className="sr-only">ผ่านมาแล้ว {position} จาก {total} ขั้น</span>
     </div>
   );
 }

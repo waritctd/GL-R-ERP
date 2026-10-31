@@ -75,7 +75,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, piecesPerSqmFromSqmPerPiece, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, PRICE_MODE_OPTIONS, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
@@ -452,7 +452,7 @@ function cleanResponsePayload(draft) {
 
 // One CSS-grid template shared by the column-header row and every item row beneath it (DESIGN.md
 // §13: "CSS-grid columns per table type keep alignment"), so ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน ·
-// ราคาที่เสนอ · ราคาที่อนุมัติ line up down the whole grouped list regardless of which factory a row
+// ราคาที่เสนอ · ราคาที่ยืนยันแล้ว line up down the whole grouped list regardless of which factory a row
 // belongs to. Mobile-first, matching this file's own existing per-item response grid below
 // (`md:grid-cols-[1fr_auto_auto_auto]`): no columns at all below `md` (768px, this file's
 // established switch point), full 5-track grid from `md` up. `min-w-[720px]` gives the grid a
@@ -870,6 +870,9 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newFor
     </Modal>
   );
 }
+
+const FX_SOURCE_LABEL = { THB: 'บาท', MANUAL: 'กรอกเอง', BOT: 'ธปท.' };
+const fxNote = (decision) => `${FX_SOURCE_LABEL[decision.fxSource] ?? decision.fxSource}, ${formatThaiDate(decision.fxEffectiveDate)}`;
 
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
@@ -1718,14 +1721,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const request = detailQuery.data;
   const summary = request?.summary;
   const status = pricingRequestStatusLabel(summary?.status);
-  // B2 (owner ruling 2026-10-27): ลูกค้ายอมรับ on a DESIGNER/OWNER request asks first, both engines.
+  // ลูกค้ายอมรับ always asks first, both engines (B2 2026-10-27, QA-35).
   const acceptConfirm = acceptOutcomeConfirmCopy(summary?.recipientType);
   function recordAccepted(engine, quotation) {
     (engine === 'deal' ? recordDealQuotationOutcome : recordQuotationOutcome).mutate({ quotation, outcome: 'ACCEPTED' });
-  }
-  function acceptOutcome(engine, quotation) {
-    if (acceptConfirm) setAcceptToConfirm({ engine, quotation });
-    else recordAccepted(engine, quotation);
   }
   // Step 6: one deposit notice per deal (owner ruling 2026-10-23). Read only when the owner could
   // otherwise be offered "สร้างใบแจ้งยอดเงินรับมัดจำ", so the block can point at an ISSUED one instead.
@@ -1768,6 +1767,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // because FactoryEmailDraftModal needs it too — its send/save gating is a per-QUOTE status read
   // that has the identical gap the price grid had before the #1062 review fix.
   const inSendWindow = FACTORY_ROUTING_STATUSES.includes(summary?.status);
+  // QA-40: mirrors FactoryQuoteService.RESPONSE_STATUSES -- the only request statuses in which
+  // receive / startNegotiation take prices, so the factory grid is read-only outside them.
+  const inResponseWindow = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW'].includes(summary?.status);
   const factoryQuotes = useMemo(() => factoryQuery.data ?? [], [factoryQuery.data]);
   const ceoGateNotice = useMemo(
     () => (ceoGateCheckedForId === pricingRequestId && confirmingFactoryQuoteIds.size === 0 && !detailQuery.isFetching && !factoryQuery.isFetching
@@ -1905,6 +1907,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // display when it is absent, is what keeps the panel showing "the one that matters" rather than
   // a stale cancelled row.
   const dealQuotationForPr = dealQuotationForPrQuery.data ?? null;
+  const shownQuotation = shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation);
   // CEO discount-approval workflow, Phase 2 (V155): per-line status for the CURRENT quotation
   // only — placed here (not grouped with the other useQuery calls above) because its key/enabled
   // genuinely depend on currentCustomerQuotation's id, and re-deriving that id independently here
@@ -2080,11 +2083,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
       item.stockSource == null
       && item.frozenLandedCostPerRequestedUnitThb == null
       && !(overrideClearsCostGate && item.manualSellingPricePerRequestedUnit != null));
-    // Java (approve, stockWithoutListPrice): EVERY stock line needs a ราคาตั้ง > 0 whatever the price
-    // mode — under DIRECT_NET/SPECIAL_SQM it is a required reference, the net still comes from the
-    // mode's own input.
-    const missingStockListPrice = decision.items.filter((item) =>
-      item.stockSource != null && !(Number(item.listUnitPrice) > 0));
+    // W5-03 (Ploy 2026-10-30), Java approve stockWithoutListPrice: a stock line needs a ราคาตั้ง > 0
+    // in NET mode only. Under DIRECT_NET/SPECIAL_SQM the quotation prints the net as its ราคา, so
+    // the ราคาตั้ง is neither asked for nor required.
+    const missingStockListPrice = decision.priceMode === 'NET' ? decision.items.filter((item) =>
+      item.stockSource != null && !(Number(item.listUnitPrice) > 0)) : [];
     return { decision, decisionStatus, editable, missingBeforeApprove, staleOverrideItems, newForm, missingCeoPrice, missingCost, missingStockListPrice };
   }
 
@@ -2095,7 +2098,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <StatusBadge tone="neutral">เวอร์ชัน {decision.decisionVersionNo}</StatusBadge>
         <StatusBadge tone={decisionStatus.tone}>{decisionStatus.label}</StatusBadge>
         <span className="text-xs text-text-muted">
-          {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+          {decision.currency} · อัตราแลกเปลี่ยน {decision.fxRateUsed} ({fxNote(decision)})
         </span>
       </div>
     );
@@ -2275,13 +2278,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         ? (!isStockLine && hasPriceOverride)
         : currentList == null || listDraftNumber !== Number(currentList));
       const otherDraftDirty = Object.keys(draft).some((k) => k !== 'listUnitPrice');
-      // A stock line's ราคาตั้ง saved under DIRECT_NET/SPECIAL_SQM makes applyItemUpdates re-derive
-      // the net, which 400s while that mode's own input is still empty — so ask for it first.
-      const modeInputBlank = (value) => value === '' || value == null;
-      const missingModeInputForList = listChanged && isStockLine && (
-        (decision.priceMode === 'DIRECT_NET' && modeInputBlank(draft.directNetPrice ?? item.directNetPrice))
-        || (decision.priceMode === 'SPECIAL_SQM' && modeInputBlank(draft.specialPriceSqm ?? item.specialPriceSqm)));
-      const saveDisabled = listInvalid || marginInvalid || missingModeInputForList || !(otherDraftDirty || listChanged);
+      const saveDisabled = listInvalid || marginInvalid || !(otherDraftDirty || listChanged);
       const costForcedOpen = showCost && Boolean(costingItem?.uncostableReason || costingItem?.overrideStale);
       const listPriceField = (
         <div className="flex flex-col gap-1">
@@ -2301,13 +2298,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </FormField>
           {listInvalid ? (
             <span role="alert" className="text-2xs text-danger">ราคาตั้งต้องมากกว่า 0</span>
-          ) : null}
-          {missingModeInputForList ? (
-            <span role="alert" className="text-2xs text-danger">
-              {decision.priceMode === 'DIRECT_NET'
-                ? 'กรอกราคาสุทธิต่อแผ่นด้วยก่อนบันทึก'
-                : 'กรอกราคาพิเศษ บาท/ตร.ม. ด้วยก่อนบันทึก'}
-            </span>
           ) : null}
           {formulaPerPiece != null ? (
             <span className="text-2xs text-text-muted">
@@ -2332,9 +2322,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 </Button>
               ) : null}
             </span>
-          ) : null}
-          {decision.priceMode !== 'NET' ? (
-            <span className="text-2xs text-text-muted">ต้องมีราคาตั้งสำหรับรายการสต็อก</span>
           ) : null}
         </div>
       );
@@ -2455,7 +2442,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
               ) : null}
               {decision.priceMode === 'SPECIAL_SQM' ? (
                 <>
-                  {isStockLine ? listPriceField : null}
                   {!isStockLine && formulaPerPiece != null ? (
                     <span className="text-xs text-text-muted" data-testid={`pcr-ceo-formula-list-${item.id}`}>
                       ราคาตั้ง/แผ่น (สูตร): <code className="font-bold text-text">{formatCurrency(formulaPerPiece, decision.currency)}</code>
@@ -2465,7 +2451,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   <FormField
                     label="ราคาพิเศษ บาท/ตร.ม. (รวม VAT)"
                     htmlFor={`pcr-ceo-special-sqm-${item.id}`}
-                    hint={item.sqmPerPiece != null ? `ตร.ม./แผ่น ${item.sqmPerPiece}` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
+                    hint={item.sqmPerPiece != null ? `แผ่น/ตร.ม. ${piecesPerSqmFromSqmPerPiece(item.sqmPerPiece)}` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
                   >
                     <input
                       id={`pcr-ceo-special-sqm-${item.id}`}
@@ -2484,7 +2470,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
               ) : null}
               {decision.priceMode === 'DIRECT_NET' ? (
                 <>
-                  {isStockLine ? listPriceField : null}
                   <FormField label="ราคาสุทธิต่อแผ่น" htmlFor={`pcr-ceo-direct-net-${item.id}`}>
                     <input
                       id={`pcr-ceo-direct-net-${item.id}`}
@@ -2595,7 +2580,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
           <strong className="text-text">{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
           <span>{item.factoryName ?? '-'}</span>
-          <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+          <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
           {hasPriceOverride ? <span className="font-bold text-override">ราคาปรับเอง</span> : null}
           {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
           {/* V156: the freight table could not be looked up for this line (the
@@ -2721,7 +2706,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               </p>
               {decision.currency !== 'THB' ? (
                 <p className="m-0 mt-1 text-2xs text-text-muted">
-                  อัตราแลกเปลี่ยน {decision.fxRateUsed} ({decision.fxSource}, {decision.fxEffectiveDate})
+                  อัตราแลกเปลี่ยน {decision.fxRateUsed} ({fxNote(decision)})
                 </p>
               ) : null}
             </div>
@@ -3385,7 +3370,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 <span>จำนวน</span>
                 <span>ราคาที่เสนอ (แก้ไข)</span>
                 <span>ระยะเวลานำเข้า</span>
-                <span>ราคาที่อนุมัติ</span>
+                <span>ราคาที่ยืนยันแล้ว</span>
               </div>
               {factoryGroups.map((group) => {
                 const current = group.current;
@@ -3393,7 +3378,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // The email-draft fields live in FactoryEmailDraftModal now (its own lookup against
                 // `emailModalQuote`/`emailDrafts`, opened via setEmailModalQuoteId below) — no
                 // per-group emailDraft needed in this closure any more.
-                const draft = responseDrafts[current.id] ?? {
+                // QA-40: outside the response window an unsaved draft is ignored, so the read-only grid
+                // shows what was saved rather than an edit nobody can submit or discard any more.
+                const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
+                const draft = unsavedDraft ?? {
                   supplierQuoteRef: current.supplierQuoteRef ?? '',
                   // R1: when every line is locked to ONE currency, that is the draft's currency too.
                   defaultCurrency: (() => {
@@ -3409,8 +3397,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // See confirmFactoryQuote's own doc comment: `responseDrafts[id]` exists in state
                 // only once a change handler has written to it, so its presence already means
                 // "Import touched this draft since it was last loaded from the server."
-                const dirty = Boolean(responseDrafts[current.id]);
-                const editable = isImport(user) && current.current
+                const dirty = Boolean(unsavedDraft);
+                // QA-40: past the response window the prices read as plain text, like any read-only grid.
+                const editable = isImport(user) && current.current && inResponseWindow
                   && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
                 // CR-1 (GLA-167) R3 / B-R2: the price grid is locked until the factory has been marked
                 // ติดต่อโรงงานแล้ว — a DRAFT quote means "not contacted yet", and FactoryQuoteService#receive
@@ -3422,14 +3411,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 // confirmFactoryQuote's doc comment for why an undirtied re-click must not be
                 // offered at all (it would either no-op-fail against markReady's own guard, or,
                 // if this branch called receive() unconditionally, spuriously bump the revision).
-                const canConfirm = isImport(user) && current.current && contacted
+                const canConfirm = isImport(user) && current.current && contacted && inResponseWindow
                   && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
                     || (current.status === 'READY_FOR_COSTING' && dirty));
-                const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current;
+                const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current && inResponseWindow;
                 // สร้างเมล is offered to import AND the CEO at every status (R5): to build + copy the
                 // mail while DRAFT, or just to re-read what was drafted afterwards. The modal is
                 // read-only once the quote leaves DRAFT or the request leaves the contact window.
-                const canOpenEmailDraft = canContactFactory;
+                // QA-40: except on a dead request (CANCELLED / SUPERSEDED), where there is no mail to build or re-read.
+                const canOpenEmailDraft = canContactFactory && !['CANCELLED', 'SUPERSEDED'].includes(summary?.status);
                 // ติดต่อโรงงานแล้ว: only for a current DRAFT quote inside the window markContacted
                 // accepts (FactoryQuoteService.DRAFT_STATUSES) — and never again after (R7, no undo).
                 const canMarkContacted = canContactFactory && current.current && current.status === 'DRAFT' && inSendWindow;
@@ -3610,7 +3600,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       </div>
                     )) : null}
 
-                    {/* Item rows: ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน · ราคาที่เสนอ (แก้ไข) · ราคาที่อนุมัติ. */}
+                    {/* Item rows: ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน · ราคาที่เสนอ (แก้ไข) · ราคาที่ยืนยันแล้ว. */}
                     {draft.items.map((line, index) => {
                       const itemRef = `รายการ #${line.pricingRequestItemId}`;
                       const requested = requestItemById.get(line.pricingRequestItemId);
@@ -3655,7 +3645,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             {qty} {unitLabel}
                           </div>
                           <div className="min-w-0">
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่เสนอ (แก้ไข)</span>
+                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">{editable ? 'ราคาที่เสนอ (แก้ไข)' : 'ราคาที่เสนอ'}</span>
                             {editable && contacted ? (
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {/* Factories sell on different terms: a line Sales asked per ตร.ม. or per แผ่น can be
@@ -3737,7 +3727,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             )}
                           </div>
                           <div>
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่อนุมัติ</span>
+                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่ยืนยันแล้ว</span>
                             <span className="text-sm font-bold text-text">
                               {approvedPrice != null ? formatCurrency(approvedPrice, serverItem?.currency ?? line.currency) : '–'}
                             </span>
@@ -3874,7 +3864,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             เจรจา
                           </Button>
                         ) : null}
-                        {editable ? (
+                        {editable && dirty ? (
                           <Button type="button" variant="secondary" onClick={discardEdits}>
                             ยกเลิก
                           </Button>
@@ -3914,7 +3904,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
               <div key={item.pricingRequestItemId} className="rounded-md border border-border bg-surface p-3 text-sm">
                 <strong>{[item.brand, item.model].filter(Boolean).join(' ') || item.productDescription || '-'}</strong>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                  <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                  <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
                   <span>ราคาขาย (ก่อน VAT): {formatCurrency(item.approvedSellingPricePerRequestedUnit, decisionSalesView.currency)}</span>
                 </div>
               </div>
@@ -3932,7 +3922,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           title="ใบเสนอราคาลูกค้า"
           actions={dealQuotationForPr ? (
             (() => {
-              const status = quotationStatusLabel(dealQuotationForPr.docStatus);
+              const status = dealQuotationStatusLabel(dealQuotationForPr.docStatus);
               return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
             })()
           ) : currentCustomerQuotation ? (
@@ -3981,7 +3971,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordDealQuotationOutcome.isPending}
-                    onClick={() => acceptOutcome('deal', dealQuotationForPr)}>
+                    onClick={() => setAcceptToConfirm({ engine: 'deal', quotation: dealQuotationForPr })}>
                     ลูกค้ายอมรับ
                   </Button>
                   <Button type="button" variant="danger" disabled={recordDealQuotationOutcome.isPending}
@@ -4002,7 +3992,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             {dealQuotationForPr
               && ['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED'].includes(dealQuotationForPr.docStatus) ? (
               <p className="text-sm text-text-muted">
-                ผลใบเสนอราคา: <strong>{quotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
+                ผลใบเสนอราคา: <strong>{dealQuotationStatusLabel(dealQuotationForPr.docStatus).label}</strong>
               </p>
             ) : null}
             {/* MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"),
@@ -4017,7 +4007,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 which left REVISION_REQUESTED and REJECTED — both reachable via this same PR's
                 own outcome-recording buttons just above — as UI dead ends: the backend accepted
                 a recreate, but nothing on screen offered it. Gated on canManageCustomerQuotation
-                (sales + ticket owner, no PR-status check) rather than canCreateCustomerQuotation,
+                (sales + ticket owner, minus a CANCELLED/SUPERSEDED request, checked just below) rather than canCreateCustomerQuotation,
                 which requires pr.status === 'APPROVED_FOR_QUOTATION' — a PR in any of these three
                 states sits at QUOTATION_ISSUED instead (the backend deliberately does not roll PR
                 status back), so that stricter gate would incorrectly hide this button in exactly
@@ -4026,6 +4016,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 navigate-on-success behaviour), since the server-side call is identical in every
                 case — only the PR's current state differs. */}
             {['EXPIRED', 'REVISION_REQUESTED', 'REJECTED'].includes(dealQuotationForPr?.docStatus)
+              && !['CANCELLED', 'SUPERSEDED'].includes(summary?.status)
               && canManageCustomerQuotation(user, summary) ? (
               <div className="flex flex-col items-start gap-2">
                 <p className="m-0 text-sm text-warning">
@@ -4084,7 +4075,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ) : null}
             {!dealQuotationForPr && !currentCustomerQuotation && !canCreateCustomerQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
-                ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขาย (APPROVED_FOR_QUOTATION) ก่อนจึงจะสร้างได้
+                {summary.status === 'APPROVED_FOR_QUOTATION'
+                  ? 'อนุมัติราคาขายแล้ว — รอฝ่ายขายสร้างใบเสนอราคาลูกค้า'
+                  : ['CANCELLED', 'SUPERSEDED'].includes(summary.status)
+                    ? `ยังไม่มีใบเสนอราคาลูกค้า — คำขอราคานี้${pricingRequestStatusLabel(summary.status).label}`
+                    : 'ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้'}
               </p>
             ) : null}
 
@@ -4135,7 +4130,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                             <strong>{item.description || '-'}</strong>
                           )}
                           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                            <span>{item.requestedQuantity} ({item.requestedUnitBasis})</span>
+                            <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
                             <span>ราคาที่อนุมัติ: {formatCurrency(item.approvedUnitPrice, quotation.currency)}</span>
                             {discountEditable ? (
                               <label className="flex items-center gap-1">
@@ -4263,7 +4258,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                         {quotation.docStatus === 'REVISION_REQUESTED' ? 'สร้างรอบแก้ไขราคา/เงื่อนไข' : 'สร้างรอบแก้ไขใหม่'}
                       </Button>
                     ) : null}
-                    {quotation.docStatus === 'REVISION_REQUESTED' && canManageCustomerQuotation(user, summary) ? (
+                    {quotation.docStatus === 'REVISION_REQUESTED' && canCreateCommercialOnlyRevision(user, summary, quotation) ? (
                       <Button type="button" variant="secondary" onClick={() => setRevisionModalOpen(true)}>
                         สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน
                       </Button>
@@ -4282,7 +4277,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       />
                       <div className="flex flex-wrap gap-2">
                         <Button type="button" variant="primary" disabled={recordQuotationOutcome.isPending}
-                          onClick={() => acceptOutcome('customer', quotation)}>
+                          onClick={() => setAcceptToConfirm({ engine: 'customer', quotation })}>
                           ลูกค้ายอมรับ
                         </Button>
                         <Button type="button" variant="danger" disabled={recordQuotationOutcome.isPending}
@@ -4384,7 +4379,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
       <ConfirmOrderDialog
         open={confirmingOrder}
-        number={summary?.requestCode}
+        number={shownQuotation?.number}
+        depositPercent={shownQuotation?.depositPercent}
         busy={confirmOrder.isPending}
         onCancel={() => setConfirmingOrder(false)}
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
@@ -4434,9 +4430,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       />
 
       <ConfirmDialog
-        open={Boolean(acceptToConfirm) && Boolean(acceptConfirm)}
-        title={acceptConfirm?.title}
-        message={acceptConfirm?.message}
+        open={Boolean(acceptToConfirm)}
+        title={acceptConfirm.title}
+        message={acceptConfirm.message}
         busy={recordQuotationOutcome.isPending || recordDealQuotationOutcome.isPending}
         onCancel={() => setAcceptToConfirm(null)}
         onConfirm={() => {

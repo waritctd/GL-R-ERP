@@ -338,7 +338,7 @@ export function ImportDealPage({ user, showToast }) {
                     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
                       <strong className="min-w-0 text-sm">{itemTitle(item)}</strong>
                       <span className="text-xs font-bold tabular-nums text-text-secondary">
-                        ส่งแล้ว {formatQty(item.qtyDelivered ?? 0)} / {formatQty(item.qty)} {item.unit ?? ''}
+                        ส่งแล้ว {formatQty(item.qtyDelivered ?? 0)} / {formatQty(item.qty)} แผ่น
                       </span>
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
@@ -369,7 +369,7 @@ export function ImportDealPage({ user, showToast }) {
                     </span>
                   </span>
                   <span className="text-sm font-bold tabular-nums">
-                    {formatQty(item.qty)} {item.unit ?? ''}
+                    {formatQty(item.qty)} แผ่น
                     {item.qtySqm != null ? (
                       <span className="ml-1 text-xs font-normal text-text-muted">({formatQty(item.qtySqm)} ตร.ม.)</span>
                     ) : null}

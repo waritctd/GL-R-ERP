@@ -269,6 +269,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(quotation.priceMode()).isEqualTo("SPECIAL_SQM");
         for (DealQuotationItemDto item : quotation.items()) {
             assertThat(item.netUnitPrice()).isEqualByComparingTo(item.ceoNetUnitPrice());
+            // W5-03/QA-31 (Ploy 2026-10-30): the ราคา column is the net, never the cost x margin
+            // formula price — that is a CEO-side reference, not a list price the customer was given.
+            assertThat(item.unitPrice()).isEqualByComparingTo(item.netUnitPrice());
             assertThat(item.specialPriceSqm()).isNotNull();
             assertThat(item.priceChangedFromCeo()).isFalse();
         }
@@ -283,6 +286,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(quotation.priceMode()).isEqualTo("DIRECT_NET");
         for (DealQuotationItemDto item : quotation.items()) {
             assertThat(item.netUnitPrice()).isEqualByComparingTo(item.ceoNetUnitPrice());
+            assertThat(item.unitPrice()).as("W5-03: ราคา = net").isEqualByComparingTo(item.netUnitPrice());
             assertThat(item.priceChangedFromCeo()).isFalse();
         }
     }

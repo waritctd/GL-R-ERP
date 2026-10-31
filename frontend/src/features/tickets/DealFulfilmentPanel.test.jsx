@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { api } from '../../api/index.js';
@@ -83,6 +83,7 @@ const summary = { createdById: 42, status: 'quotation_issued', fulfillmentStatus
 function renderPanel(user, rows = [draftRow()], {
   summary: dealSummary = summary, availableActions = [], showToast = vi.fn(), items = [], ref = undefined,
   hasUncoveredFactories = undefined, // undefined = an older backend that does not send the flag
+  uncoveredFactoryNames = undefined, // undefined = an older backend that sends no names
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else {
@@ -90,7 +91,11 @@ function renderPanel(user, rows = [draftRow()], {
   }
   // The flag has its own endpoint; undefined = an older backend (no such route -> the call fails).
   if (hasUncoveredFactories === undefined) api.storedImportRequests.coverage.mockRejectedValue(new Error('404'));
-  else api.storedImportRequests.coverage.mockResolvedValue({ hasUncoveredFactories });
+  else {
+    api.storedImportRequests.coverage.mockResolvedValue({
+      hasUncoveredFactories, ...(uncoveredFactoryNames === undefined ? {} : { uncoveredFactoryNames }),
+    });
+  }
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
@@ -105,8 +110,222 @@ const CEO = { id: 1, name: 'ราม', role: 'ceo' };
 const IMPORT = { id: 2, name: 'ฝ่ายนำเข้า', role: 'import' };
 const SALES_MANAGER = { id: 3, name: 'ผจก.ขาย', role: 'sales_manager' };
 
+// W3-11 (owner ruling 2026-10-30): ออกใบขอซื้อ (IR) mints one numbered IR per factory and cannot be
+// undone, so the click only opens this confirm; createDrafts runs when it is confirmed.
+const IR_CONFIRM_TITLE = 'ยืนยันการออกใบขอซื้อ (IR)';
+// Opening the confirm re-checks which factories are uncovered; the dialog is ready once that settles.
+const IR_COVERAGE_LOADING = 'กำลังตรวจสอบโรงงาน';
+async function openIrConfirm(button) {
+  fireEvent.click(button ?? await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+  return settledIrConfirm();
+}
+async function settledIrConfirm() {
+  const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+  await waitFor(() => expect(dialog.textContent).not.toContain(IR_COVERAGE_LOADING));
+  return dialog;
+}
+async function createIrAndConfirm(button) {
+  const dialog = await openIrConfirm(button);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
+}
+
+// W3-11 (owner ruling 2026-10-30): ออกเลข on a draft IR mints its document number, so it asks first.
+const IR_ISSUE_CONFIRM_TITLE = 'ยืนยันการออกเลขใบขอซื้อ';
+async function issueIrAndConfirm(issueButton) {
+  fireEvent.click(issueButton);
+  const dialog = await screen.findByRole('dialog', { name: IR_ISSUE_CONFIRM_TITLE });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'ออกเลข' }));
+}
+
 describe('DealFulfilmentPanel — ใบขอซื้อรายโรงงาน (V184 stored aggregate)', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  describe('W3-11 confirm before issuing the ใบขอซื้อ (IR)', () => {
+    beforeEach(() => api.storedImportRequests.createDrafts.mockReset());
+
+    it('clicking opens a dialog (one IR per factory, cannot be undone) and calls no api; confirming calls createDrafts exactly once', async () => {
+      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [issuedRow()] });
+      renderPanel(OWNER, []);
+      const dialog = await openIrConfirm();
+      expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
+      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: IR_CONFIRM_TITLE })).toBeNull());
+    });
+
+    // Ploy 2026-10-30: the confirm names what will be issued — the server's uncovered factories.
+    it('names the count and the factories the server says are uncovered', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] });
+      await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalled());
+      const dialog = await openIrConfirm();
+      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto Industry, Rex Ceramics');
+      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+    });
+
+    it('adds the factory the rep picked for a factory-less line (not in the server list), once', async () => {
+      const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+      const lines = [
+        { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+        { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+      ];
+      renderPanel(OWNER, [], {
+        summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto'],
+      });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '7' } });
+      await waitFor(() => expect(button.disabled).toBe(false));
+
+      const dialog = await openIrConfirm(button);
+      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto, Rex Ceramics');
+    });
+
+    // The picked factory may already be one the server named (same factory on a catalogued line): once.
+    it('a pick that equals a server-named factory is not counted twice', async () => {
+      const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+      const lines = [
+        { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Rex Ceramics', catalogPriceId: 90, qty: 10 },
+        { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+      ];
+      renderPanel(OWNER, [], {
+        summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Rex Ceramics'],
+      });
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '7' } });
+      await waitFor(() => expect(button.disabled).toBe(false));
+
+      const dialog = await openIrConfirm(button);
+      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 1 ใบ: Rex Ceramics');
+    });
+
+    // The picked factory already has a live IR (the server only lists UNcovered ones): nothing new for it.
+    it('a pick whose factory already has a live IR is not counted', async () => {
+      const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+      const lines = [
+        { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+        { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+      ];
+      renderPanel(OWNER, [draftRow({ id: 10, factoryId: 7, factoryName: 'Rex Ceramics' })], {
+        summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto'],
+      });
+      await screen.findByTestId('ir-factory-card-10');
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '7' } });
+      await waitFor(() => expect(button.disabled).toBe(false));
+
+      const dialog = await openIrConfirm(button);
+      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 1 ใบ: Cotto');
+      expect(dialog.textContent).not.toContain('Rex Ceramics');
+    });
+
+    // 4: a second ask while a create is in flight opens nothing and sends nothing.
+    it('the ขั้น 11 handle while a create is pending opens no dialog and sends no second create', async () => {
+      let finish;
+      api.storedImportRequests.createDrafts.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+      const ref = React.createRef();
+      renderPanel(OWNER, [], { ref });
+      await createIrAndConfirm();
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+
+      let started;
+      act(() => { started = ref.current.createIrDrafts(); });
+      expect(started).toBe(false);
+      expect(screen.queryByRole('dialog', { name: IR_CONFIRM_TITLE })).toBeNull();
+      expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1);
+      await act(async () => { finish({ importRequests: [issuedRow()] }); });
+    });
+
+    // Names unavailable (older backend: the coverage route fails or omits the field): the generic copy,
+    // but a factory the rep picked is still named.
+    it('an older backend (no names) still shows the generic copy, plus the factory the rep picked', async () => {
+      const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+      const lines = [
+        { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+        { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+      ];
+      renderPanel(OWNER, [], { summary: directSummary, items: lines, hasUncoveredFactories: true });
+      await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalled());
+      const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+      const select = await screen.findByTestId('ir-line-factory-3');
+      await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+      fireEvent.change(select, { target: { value: '7' } });
+      await waitFor(() => expect(button.disabled).toBe(false));
+
+      const dialog = await openIrConfirm(button);
+      expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
+      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      expect(dialog.textContent).toContain('Rex Ceramics');
+      expect(dialog.textContent).not.toContain('จะออกใบขอซื้อ (IR)');
+    });
+
+    // The names come from a re-check done when the confirm opens: until it answers, no guess and no confirm.
+    it('while the coverage is re-checked the dialog says so with confirm disabled, then names the factories', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'] });
+      await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledTimes(1));
+      let resolveFresh;
+      api.storedImportRequests.coverage.mockReturnValueOnce(new Promise((resolve) => { resolveFresh = resolve; }));
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+
+      const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      expect(dialog.textContent).toContain(IR_COVERAGE_LOADING);
+      expect(dialog.textContent).not.toContain('จะออกใบขอซื้อ (IR)');
+      expect(confirm.disabled).toBe(true);
+
+      await act(async () => { resolveFresh({ hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] }); });
+      await waitFor(() => expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto Industry, Rex Ceramics'));
+      expect(confirm.disabled).toBe(false);
+    });
+
+    // Another session may issue the last IR between page load and click: the fresh read then says nothing is left.
+    it('the re-check says every factory is covered now: the dialog says nothing is left to issue and confirm stays disabled', async () => {
+      renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'] });
+      await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalledTimes(1));
+      api.storedImportRequests.coverage.mockResolvedValueOnce({ hasUncoveredFactories: false, uncoveredFactoryNames: [] });
+      const dialog = await openIrConfirm();
+
+      expect(dialog.textContent).toContain('ไม่มีใบขอซื้อที่ต้องออก');
+      expect(dialog.textContent).not.toContain('หนึ่งใบต่อโรงงาน');
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      expect(confirm.disabled).toBe(true);
+      fireEvent.click(confirm);
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+    });
+
+    it('cancel closes the dialog and creates nothing', async () => {
+      renderPanel(OWNER, []);
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      fireEvent.click(within(await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE })).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: IR_CONFIRM_TITLE })).toBeNull());
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+    });
+
+    it('the deal page\'s ขั้น 11 handle (createIrDrafts) asks first too: dialog, no api until confirmed', async () => {
+      api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [issuedRow()] });
+      const ref = React.createRef();
+      renderPanel(OWNER, [], { ref });
+      await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+
+      act(() => { ref.current.createIrDrafts(); });
+      const dialog = await settledIrConfirm();
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
+      await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+    });
+  });
 
   describe('role visibility', () => {
     it('the owning sales rep sees the create-draft button', async () => {
@@ -188,13 +407,43 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.getByTestId('advance-11')).not.toBeNull();
     });
 
+    it('W3-11: ออกเลข opens a dialog naming the factory (cannot be undone) and calls no api; confirming issues exactly once', async () => {
+      api.storedImportRequests.issue.mockReset();
+      api.storedImportRequests.issue.mockResolvedValue({});
+      renderPanel(OWNER, [draftRow()]);
+      fireEvent.click(await screen.findByTestId('ir-issue-10'));
+
+      const dialog = await screen.findByRole('dialog', { name: IR_ISSUE_CONFIRM_TITLE });
+      expect(dialog.textContent).toContain('Cotto Industry');
+      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      expect(api.storedImportRequests.issue).not.toHaveBeenCalled();
+
+      const confirm = within(dialog).getByRole('button', { name: 'ออกเลข' });
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+
+      await waitFor(() => expect(api.storedImportRequests.issue).toHaveBeenCalledTimes(1));
+      expect(api.storedImportRequests.issue).toHaveBeenCalledWith(10, {});
+    });
+
+    it('W3-11: cancelling the ออกเลข dialog issues nothing and leaves the draft', async () => {
+      api.storedImportRequests.issue.mockReset();
+      renderPanel(OWNER, [draftRow()]);
+      fireEvent.click(await screen.findByTestId('ir-issue-10'));
+      fireEvent.click(within(await screen.findByRole('dialog', { name: IR_ISSUE_CONFIRM_TITLE })).getByRole('button', { name: 'ยกเลิก' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: IR_ISSUE_CONFIRM_TITLE })).toBeNull());
+      expect(api.storedImportRequests.issue).not.toHaveBeenCalled();
+      expect(screen.getByTestId('ir-issue-10')).not.toBeNull();
+    });
+
     it('a refused ออกเลข refetches, so a draft someone else already issued stops offering it', async () => {
       const showToast = vi.fn();
       api.storedImportRequests.issue.mockRejectedValue(new Error('ใบขอซื้อฉบับนี้ออกเลขไปแล้ว'));
       renderPanel(OWNER, [draftRow()], { showToast });
       const issue = await screen.findByTestId('ir-issue-10');
       api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [issuedRow({ id: 10 })] });
-      fireEvent.click(issue);
+      await issueIrAndConfirm(issue);
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ใบขอซื้อฉบับนี้ออกเลขไปแล้ว'));
       await waitFor(() => expect(screen.queryByTestId('ir-issue-10')).toBeNull());
       expect(screen.queryByTestId('ir-draft-hint-10')).toBeNull();
@@ -321,7 +570,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
       fireEvent.change(select, { target: { value: '7' } });
       await waitFor(() => expect(button.disabled).toBe(false));
-      fireEvent.click(button);
+      await createIrAndConfirm(button);
 
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(1, {
         itemFactories: [{ ticketItemId: 3, factoryId: 7 }],
@@ -341,7 +590,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('sends no payload at all when every line already has a factory (shape unchanged)', async () => {
       api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [draftRow()] });
       renderPanel(OWNER, [], { summary: directSummary, items: lines.slice(0, 2) });
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(1, undefined));
     });
 
@@ -353,7 +602,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       const select = await screen.findByTestId('ir-line-factory-3');
       await waitFor(() => expect(within(select).getByRole('option', { name: 'Cotto' })).not.toBeNull());
       fireEvent.change(select, { target: { value: '8' } });
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
       fireEvent.change(await screen.findByLabelText(/^ประเทศ/), { target: { value: 'CN' } });
       fireEvent.click(await screen.findByTestId('new-factory-country-submit'));
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenLastCalledWith(1, {
@@ -379,7 +628,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .mockRejectedValueOnce(LT('Rex Ceramics, Cotto'))
         .mockResolvedValueOnce({ importRequests: [issuedRow({ factoryName: 'Rex Ceramics' })] });
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
 
       const submit = await screen.findByTestId('factory-lead-time-submit');
       expect(submit.disabled).toBe(true);
@@ -395,12 +644,14 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
           { factoryName: 'Cotto', minDays: 5, maxDays: 9 },
         ],
       }));
+      // The popup's own retry is a continuation of the confirmed create — it must not ask again.
+      expect(screen.queryByRole('dialog', { name: IR_CONFIRM_TITLE })).toBeNull();
     });
 
     it('does not enable submit while min is greater than max', async () => {
       api.storedImportRequests.createDrafts.mockRejectedValueOnce(LT('Rex Ceramics'));
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
       const submit = await screen.findByTestId('factory-lead-time-submit');
       fill('Rex Ceramics', 40, 30);
       expect(submit.disabled).toBe(true);
@@ -409,7 +660,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     it('cancel creates nothing: no retry, popup gone', async () => {
       api.storedImportRequests.createDrafts.mockRejectedValueOnce(LT('Rex Ceramics'));
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
       fireEvent.click(await screen.findByTestId('factory-lead-time-cancel'));
 
       await waitFor(() => expect(screen.queryByTestId('factory-lead-time-submit')).toBeNull());
@@ -422,7 +673,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .mockRejectedValueOnce(LT('Rex Ceramics'))
         .mockResolvedValueOnce({ importRequests: [issuedRow({ factoryName: 'Rex Ceramics' })] });
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
 
       fireEvent.change(await screen.findByLabelText(/^ประเทศ/), { target: { value: 'CN' } });
       fireEvent.click(await screen.findByTestId('new-factory-country-submit'));
@@ -443,7 +694,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .mockRejectedValueOnce(LT('Rex Ceramics'))
         .mockRejectedValueOnce(LT('Rex Ceramics'));
       renderPanel(OWNER, [], { showToast: onToast });
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
       await screen.findByTestId('factory-lead-time-submit');
       fill('Rex Ceramics', 20, 30);
       fireEvent.click(screen.getByTestId('factory-lead-time-submit'));
@@ -494,6 +745,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(started).toBe(false);
       expect(showToast).toHaveBeenCalledWith('error', HINT);
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog', { name: IR_CONFIRM_TITLE })).toBeNull();
     });
   });
 
@@ -503,7 +755,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }))
         .mockResolvedValueOnce({ importRequests: [draftRow({ factoryName: 'Rex Ceramics' })] });
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
 
       const submit = await screen.findByTestId('new-factory-country-submit');
       expect(submit.disabled).toBe(true);
@@ -522,7 +774,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       api.storedImportRequests.createDrafts
         .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: New Factory'), { status: 409 }));
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
 
       const select = await screen.findByLabelText(/^ประเทศ/);
       fireEvent.change(select, { target: { value: 'ZZ' } });
@@ -539,7 +791,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       api.storedImportRequests.createDrafts
         .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }));
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
 
       const errorMsg = await screen.findByTestId('new-factory-country-error');
       expect(errorMsg.textContent).toContain('โหลดรายชื่อประเทศไม่สำเร็จ');
@@ -558,7 +810,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }))
         .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics, New Factory'), { status: 409 }));
       renderPanel(OWNER, []);
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
 
       const select = await screen.findByLabelText(/^ประเทศ/);
       fireEvent.change(select, { target: { value: 'CN' } });
@@ -695,7 +947,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
           <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={showToast} />
         </QueryClientProvider>,
       );
-      fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+      await createIrAndConfirm();
       const select = await screen.findByLabelText(/^ประเทศ/);
       fireEvent.change(select, { target: { value: 'CN' } });
       const submit = await screen.findByTestId('new-factory-country-submit');
@@ -733,7 +985,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       renderPanel(CEO, [draftRow()]);
       const issue = await screen.findByTestId('ir-issue-10');
       api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [issuedRow({ id: 10, vesselEtaNote: note })] });
-      fireEvent.click(issue);
+      await issueIrAndConfirm(issue);
       await screen.findByTestId('factory-progress-10');
       fireEvent.click(screen.getByTestId('ir-footer-open-10'));
       expect(screen.getByLabelText('กำหนดเรือเข้าโดยประมาณ').value).toBe(note);
@@ -908,7 +1160,7 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
     const created = [issuedRow({ id: 21, factoryName: 'Cotto Industry' }), issuedRow({ id: 22, factoryId: 2, factoryName: 'Panaria' })];
     api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: created });
     renderPanel(OWNER, []);
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await createIrAndConfirm();
 
     await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledTimes(2));
     expect(api.storedImportRequests.download.mock.calls.map((c) => c[0]).sort()).toEqual([21, 22]);
@@ -921,7 +1173,7 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
     renderPanel(OWNER, [], { showToast });
     // after the create the refetch returns the server's rows, which are already ISSUED
     api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: issued });
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await createIrAndConfirm();
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ออกใบขอซื้อ (IR) แล้ว'));
     await screen.findByText('Panaria');
@@ -936,7 +1188,7 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
     api.storedImportRequests.createDrafts.mockResolvedValueOnce({ importRequests: [existing, fresh] });
     renderPanel(OWNER, [existing]);
     await screen.findByText('Cotto Industry');
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await createIrAndConfirm();
 
     await waitFor(() => expect(api.storedImportRequests.download).toHaveBeenCalledTimes(1));
     expect(api.storedImportRequests.download).toHaveBeenCalledWith(23, undefined);
@@ -953,7 +1205,7 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
         <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={showToast} />
       </QueryClientProvider>,
     );
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await createIrAndConfirm();
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('ออกใบขอซื้อ (IR)')));
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ออกใบขอซื้อ (IR) แล้ว แต่ดาวน์โหลด')));
   });
@@ -968,7 +1220,7 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
         <DealFulfilmentPanel user={OWNER} ticketId={1} summary={summary} items={[]} availableActions={[]} showToast={vi.fn()} />
       </QueryClientProvider>,
     );
-    fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
+    await createIrAndConfirm();
     await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalled());
     await waitFor(() => {
       const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
@@ -976,5 +1228,57 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
       // the cross-deal /fulfilment page reads the ticket list for its candidates
       expect(keys.some((k) => k.includes('"tickets","list"'))).toBe(true);
     });
+  });
+});
+
+// QA-29e / W4-08: the ส่งมอบสินค้า step used to print the raw codes — "WAREHOUSE" and "6: 250" in the
+// history, WAREHOUSE/STOCK in the บันทึกการส่งสินค้า select. The wire value (what recordDelivery
+// sends) stays the code; only what the person reads changes.
+describe('DealFulfilmentPanel — ส่งมอบสินค้า shows words, not codes', () => {
+  const deliveryItems = [
+    { id: 6, brand: 'Brand X', model: 'Model Y', size: '60x60', qty: 500, qtyDelivered: 0 },
+    // Same brand + model, other size: the history must tell the two apart.
+    { id: 7, brand: 'Brand X', model: 'Model Y', size: '30x60', qty: 100, qtyDelivered: 0 },
+  ];
+
+  afterEach(() => {
+    api.tickets.listDeliveries.mockResolvedValue({ items: [] });
+    api.tickets.recordDelivery.mockReset();
+  });
+
+  it('the history names the source in Thai and each line by brand + model + size (fallback รายการ id), never "6: 250"', async () => {
+    api.tickets.listDeliveries.mockResolvedValue({
+      items: [
+        { deliveryId: 1, deliveredAt: '2026-10-01T03:00:00Z', source: 'WAREHOUSE', items: [{ itemId: 6, qty: 250 }, { itemId: 99, qty: 3 }], deliveredByName: 'สมหญิง', note: null },
+        { deliveryId: 2, deliveredAt: '2026-10-02T03:00:00Z', source: 'STOCK', items: [{ itemId: 7, qty: 10 }], deliveredByName: null, note: null },
+      ],
+    });
+    renderPanel(OWNER, [], { items: deliveryItems });
+
+    expect(await screen.findByText(/Brand X Model Y 60x60: 250/)).not.toBeNull();
+    expect(screen.getByText(/รายการ 99: 3/)).not.toBeNull();
+    expect(screen.getByText(/Brand X Model Y 30x60: 10/)).not.toBeNull();
+    expect(screen.queryByText(/รายการ #/)).toBeNull();
+    expect(screen.queryByText(/(^|[\s,])6: 250/)).toBeNull();
+    expect(screen.getByText('คลังสินค้า', { selector: 'strong' })).not.toBeNull();
+    expect(screen.getByText('สต็อก', { selector: 'strong' })).not.toBeNull();
+    expect(screen.queryByText('WAREHOUSE')).toBeNull();
+    expect(screen.queryByText('STOCK')).toBeNull();
+  });
+
+  it('the บันทึกการส่งสินค้า select reads คลังสินค้า / สต็อก but still sends the WAREHOUSE / STOCK code', async () => {
+    api.tickets.recordDelivery.mockResolvedValue({});
+    renderPanel(OWNER, [], { items: deliveryItems, availableActions: [{ action: 'RECORD_PARTIAL_DELIVERY' }] });
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-record-delivery'));
+
+    const select = await screen.findByLabelText('แหล่งสินค้า');
+    expect([...select.options].map((o) => [o.value, o.textContent]))
+      .toEqual([['WAREHOUSE', 'คลังสินค้า'], ['STOCK', 'สต็อก']]);
+
+    fireEvent.change(select, { target: { value: 'STOCK' } });
+    fireEvent.click(screen.getByTestId('deal-fulfilment-record-delivery-submit'));
+    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(
+      1, { source: 'STOCK', note: null, lines: [{ itemId: 6, qty: 500 }, { itemId: 7, qty: 100 }] },
+    ));
   });
 });

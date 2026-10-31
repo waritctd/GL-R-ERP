@@ -23,7 +23,7 @@ import {
   canChangeDealCustomer, canCreateDealQuotationStandalone, canDecideDealQuotation, canEditDealQuotation,
   canPromoteDealQuotationToDeal, canReviseDealQuotation, orderConfirmationOf, canSubmitDealQuotation, DEPOSIT_PERCENT_PRESETS,
   CONFIRM_ORDER_FROM_QUOTATION_COPY, REVISION_RECIPIENT_LOCKED_MESSAGE, quotationRecipientOption, recipientForDealStage, recipientForEntryChannel,
-  availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, DOCUMENT_LANGUAGE_OPTIONS,
+  availablePriceModes, PRICE_MODE_OPTIONS, adjustmentDescriptionPreview, buildQuotationChecklist, currencyForLanguage, missingLeadTimeMessage, splitQuotationChecklist, DOCUMENT_LANGUAGE_OPTIONS,
   isEffectiveZeroDeposit,
   estimateAdjustmentAmount, formatQuotationMoney, hasSpecialPricing, isEnglishPerSqm, LINE_TYPE_ADJUSTMENT, LINE_TYPE_PLAIN, LINE_TYPE_TILE,
   lineTypeOf, priceModeForLanguage, rowHasPriceForPreview, rowsWithPricesCleared, validateAdjustment, vatRateForLanguage,
@@ -1182,7 +1182,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // The EXACT wording DealQuotationService#requireEveryTileItemHasALeadTime's 400 uses, so a rep
   // sees the same sentence whether the client or the server catches it.
   const leadTimeBlockMessage = hasMissingLeadTimes
-    ? `กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ ${missingLeadTimeSeqs.join(', ')}` : null;
+    ? missingLeadTimeMessage(missingLeadTimeSeqs) : null;
 
   // Item 4 ("ไม่รับมัดจำ", V181) + Opus review fix (2026-09-16, F2): mirrors
   // DealQuotationService#submit's own gate (isZeroDeposit(depositPercent) &&
@@ -1274,12 +1274,13 @@ export function QuotationEditorPage({ user, showToast }) {
     livePricingRequest: !quotation && !isInlineCreate && dealHasLivePricingRequest,
     // V192.3 — a typed-but-malformed address is what DealQuotationService refuses on every save.
     orderedByEmail: terms.orderedByEmail,
+    missingLeadTimeSeqs,
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, ticket, dealHasLivePricingRequest, terms.orderedByEmail]);
+    needsDeal, quotation, recipientType, ticket, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
-  const checklistWarnings = useMemo(() => checklist.filter((e) => !e.blocking), [checklist]);
+  const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
   // D4 fix (Opus review 2026-09-16): same "latest value" mirror as `dirtyRef` above, and for the
   // same reason -- handleDownload reads this across several `await`s and must never act on a
@@ -3545,7 +3546,7 @@ export function QuotationEditorPage({ user, showToast }) {
               exactly the same thing (TicketDetailPage renders the same three parts). */}
           <p className="m-0">
             {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(quotation?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail(quotation?.depositPercent)}
           </p>
         </Modal>
       ) : null}

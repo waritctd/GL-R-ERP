@@ -108,7 +108,7 @@ public class ImportRequestController {
     @GetMapping("/tickets/{ticketId}/import-requests/coverage")
     ImportRequestCoverageResponse coverage(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new ImportRequestCoverageResponse(service.hasUncoveredFactories(ticketId, user));
+        return service.coverage(ticketId, user);
     }
 
     @GetMapping("/import-requests/{id}")

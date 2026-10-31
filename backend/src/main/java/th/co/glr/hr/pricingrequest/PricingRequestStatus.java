@@ -104,6 +104,7 @@ public final class PricingRequestStatus {
      * #supersedeOpenPricingDecisionAndQuotation} were widened in the same change to reach all
      * four. If a later change admits another status here, check what it can own first.
      */
+    // SUPERSEDED stays terminal here; the one exit is PricingRequestRepository#reviveParentOfCancelledRevision (direct SQL).
     private static final Map<String, Set<String>> ALLOWED = Map.ofEntries(
         Map.entry(DRAFT,               Set.of(SUBMITTED, CANCELLED)),
         // SUPERSEDED (reissue-through-CEO-chain, owner ruling 2026-08-13): a customer-change

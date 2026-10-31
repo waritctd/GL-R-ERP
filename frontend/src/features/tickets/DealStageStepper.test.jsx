@@ -29,7 +29,7 @@ const decisionsFor = (off) => catalog.stages.map((stage) => ({
 const pipCodes = () => screen.getAllByTestId('route-pip').map((pip) => pip.getAttribute('data-stage'));
 
 // Owner ruling 2026-09-30: pips carry the ROUTE'S OWN ordinal (1..N), not the business stage number,
-// so the ribbon and the `ขั้นที่ p จาก t` line can never disagree. On a buyer-direct deal the current
+// so the ribbon and the `ผ่านมาแล้ว p จาก t ขั้น` line can never disagree. On a buyer-direct deal the current
 // stage is S8 but the 4th step of an 11-step route — the rep must read "4" in both places.
 // Reads the VISIBLE glyph only (the aria-hidden span) — a done pip shows a tick and contributes
 // nothing, and the sr-only sentence is excluded so it cannot smear into the digits.
@@ -48,7 +48,7 @@ describe('RouteRibbon — ordinal numbering', () => {
     expect(pipNumbers()).toEqual(['4', '5', '6', '7', '8', '9', '10', '11']);
   });
 
-  it('marks the 4th pip current, agreeing with ขั้นที่ 4 จาก 11', () => {
+  it('marks the 4th pip current, agreeing with ผ่านมาแล้ว 4 จาก 11 ขั้น', () => {
     render(<DealStageStepper salesStage="QUOTE_BUYER" catalog={catalog}
       stageDecisions={decisionsFor(BUYER_OFF)} entryChannel="BUYER_DIRECT" />);
     const pips = screen.getAllByTestId('route-pip');
@@ -92,26 +92,26 @@ describe('PhaseTracker', () => {
 describe('PhaseSummary — the denominator is THIS deal\'s route, not the catalog', () => {
   const barWidth = (container) => container.querySelector('[style*="width"]').getAttribute('style');
 
-  it('buyer-direct at QUOTE_BUYER (S8) reads ขั้นที่ 4 จาก 11 and fills ~36%, not 8/15 = 53%', () => {
+  it('buyer-direct at QUOTE_BUYER (S8) reads ผ่านมาแล้ว 4 จาก 11 ขั้น and fills ~36%, not 8/15 = 53%', () => {
     const { container } = render(
       <PhaseSummary catalog={catalog} salesStage="QUOTE_BUYER" stageDecisions={decisionsFor(BUYER_OFF)} />,
     );
-    expect(screen.getByText('ขั้นที่ 4 จาก 11')).not.toBeNull();
-    expect(screen.queryByText('ขั้นที่ 8 จาก 15')).toBeNull();
+    expect(screen.getByText('ผ่านมาแล้ว 4 จาก 11 ขั้น')).not.toBeNull();
+    expect(screen.queryByText('ผ่านมาแล้ว 8 จาก 15 ขั้น')).toBeNull();
     expect(barWidth(container)).toContain('36.36');
   });
 
-  it('designer-led (nothing off-route) at QUOTE_BUYER still reads ขั้นที่ 8 จาก 15 and ~53%', () => {
+  it('designer-led (nothing off-route) at QUOTE_BUYER still reads ผ่านมาแล้ว 8 จาก 15 ขั้น and ~53%', () => {
     const { container } = render(
       <PhaseSummary catalog={catalog} salesStage="QUOTE_BUYER" stageDecisions={decisionsFor([])} />,
     );
-    expect(screen.getByText('ขั้นที่ 8 จาก 15')).not.toBeNull();
+    expect(screen.getByText('ผ่านมาแล้ว 8 จาก 15 ขั้น')).not.toBeNull();
     expect(barWidth(container)).toContain('53.33');
   });
 
   it('with no stageDecisions prop at all it degrades to today\'s 8 จาก 15', () => {
     render(<PhaseSummary catalog={catalog} salesStage="QUOTE_BUYER" />);
-    expect(screen.getByText('ขั้นที่ 8 จาก 15')).not.toBeNull();
+    expect(screen.getByText('ผ่านมาแล้ว 8 จาก 15 ขั้น')).not.toBeNull();
   });
 });
 
@@ -162,7 +162,7 @@ describe('DealStageStepper route ribbon', () => {
     // S1 S2 S3 done · S8 current · S9..S15 upcoming
     expect(within(pips[0]).getByText('ขั้นที่ 1 เสร็จแล้ว')).not.toBeNull();
     // Buyer-direct: S8 is the route's 4th step, so the pip announces "ขั้นที่ 4", not "ขั้นที่ 8"
-    // (owner ruling 2026-09-30 — the ribbon and the ขั้นที่ p จาก t line must never disagree).
+    // (owner ruling 2026-09-30 — the ribbon and the ผ่านมาแล้ว p จาก t ขั้น line must never disagree).
     expect(within(pips[3]).getByText('ขั้นที่ 4 ขั้นปัจจุบัน')).not.toBeNull();
     expect(within(pips[4]).getByText('ขั้นที่ 5 ยังไม่ถึง')).not.toBeNull();
     expect(pips.filter((pip) => pip.getAttribute('aria-current') === 'step')).toHaveLength(1);

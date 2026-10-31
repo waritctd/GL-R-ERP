@@ -912,6 +912,19 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.signatories().printedBy()).isEqualTo("แอดมิน");
     }
 
+    /** QA-31 (Ploy 2026-10-30): a rep with no phone on file printed "Sales/{name} T." with nothing
+     * after the T. — the " T." goes when there is no number to follow it. */
+    @Test
+    void toRenderModel_salesLine_dropsTheDanglingT_whenTheRepHasNoPhone() {
+        for (String phone : new String[] {null, "", "  "}) {
+            DealQuotationDto q = quotationWithDisplayNames(
+                "แอดมิน", "Admin", "เซลล์จริง", "RealRep", phone,
+                null, null, null, null, null, null, null);
+            assertThat(DealQuotationRenderAdapter.toRenderModel(q, null, null).salesLine())
+                .as("phone=%s", phone).isEqualTo("Sales/เซลล์จริง");
+        }
+    }
+
     private DealQuotationDto quotationWithDisplayNames(
             String createdByName, String createdByNameEn,
             String salesRepName, String salesRepNameEn, String salesRepPhone,

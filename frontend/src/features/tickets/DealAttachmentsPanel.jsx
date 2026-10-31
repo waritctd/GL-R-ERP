@@ -14,6 +14,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
+import { attachTypeLabel } from './dealTrackingMeta.js';
 
 export function DealAttachmentsPanel({
   attachments,
@@ -114,7 +115,7 @@ export function DealAttachmentsPanel({
               <Icon name="paperclip" size={13} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
               <span style={{ flex: 1, fontSize: 13, color: 'var(--color-text)', wordBreak: 'break-all' }}>{att.fileName}</span>
               <span style={{ fontSize: 11, color: 'var(--color-text-muted)', whiteSpace: 'nowrap', background: 'var(--color-surface-subtle)', padding: '1px 6px', borderRadius: 99 }}>
-                {att.attachType}
+                {attachTypeLabel(att.attachType)}
               </span>
               <a href={api.attachments.fileUrl(att.id)} target="_blank" rel="noreferrer"
                 style={{ fontSize: 12, color: 'var(--color-link)', textDecoration: 'none', whiteSpace: 'nowrap' }}>

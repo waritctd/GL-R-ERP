@@ -114,7 +114,7 @@ public final class ImportRequestDtos {
     ) {}
 
     /** GET /tickets/{id}/import-requests/coverage. */
-    public record ImportRequestCoverageResponse(boolean hasUncoveredFactories) {}
+    public record ImportRequestCoverageResponse(boolean hasUncoveredFactories, List<String> uncoveredFactoryNames) {}
 
     public record ImportRequestItemDto(
         long id,

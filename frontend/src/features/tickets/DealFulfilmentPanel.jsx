@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -151,6 +152,9 @@ function FactoryLeadTimeModal({ factoryNames, onClose, onSubmit, submitting }) {
     </Modal>
   );
 }
+
+// ที่มาของสินค้าที่ส่งมอบ — the select and the history read the same words; the wire value stays the code.
+const DELIVERY_SOURCE_LABELS = { WAREHOUSE: 'คลังสินค้า', STOCK: 'สต็อก' };
 
 // One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy
 // preview, ②): 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds
@@ -306,13 +310,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   });
   // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
   // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
-  // backend that omits it (undefined) keeps them.
+  // backend that omits it (undefined) keeps them. `uncoveredFactoryNames` feeds the create confirm; an older backend omits it.
   const coverageQuery = useQuery({
     queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage'],
-    queryFn: () => api.storedImportRequests.coverage(ticketId).then((r) => r.hasUncoveredFactories),
+    queryFn: () => api.storedImportRequests.coverage(ticketId),
     enabled: !!ticketId && canReadStoredIr,
   });
-  const allFactoriesCovered = coverageQuery.data === false;
+  const allFactoriesCovered = coverageQuery.data?.hasUncoveredFactories === false;
   const storedIrRows = storedIrQuery.data ?? [];
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
@@ -404,6 +408,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // never be bypassed.
   const depositReady = depositReadyForIr(summary);
   const DEPOSIT_HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
+  // ออกใบขอซื้อ (IR) numbers and issues one IR per factory and cannot be undone, so it asks first
+  // (W3-11, owner ruling 2026-10-30). The country / lead-time popup retries are a continuation of this
+  // confirmed create and call the mutation directly.
+  const [confirmingCreate, setConfirmingCreate] = useState(false);
   function requestCreateIrDrafts() {
     if (!depositReady) {
       showToast?.('error', DEPOSIT_HINT);
@@ -414,7 +422,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       document.querySelector('[data-testid="deal-fulfilment-stored-ir"]')?.scrollIntoView?.({ block: 'start' });
       return false;
     }
-    createDraftsMutation.mutate(buildCreatePayload());
+    if (createDraftsMutation.isPending) return false;
+    coverageQuery.refetch(); // the confirm names the factories from a fresh read
+    setConfirmingCreate(true);
     return true;
   }
   const createDraftsMutation = useMutation({
@@ -690,6 +700,27 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     createIrDrafts: () => { showIrSection(); return requestCreateIrDrafts(); },
     showIrSection,
   }));
+
+  // The create confirm: the factories the server says are uncovered, plus the ones the rep picked for
+  // factory-less lines (a pick that already has a live IR, or that the server named, adds nothing).
+  // Names unavailable (older backend, or the re-check failed): the generic line, still naming the picks.
+  const pickedNames = factorylessLines
+    .map((l) => (factoryNamesQuery.data ?? []).find((f) => String(f.id) === String(lineFactories[l.id])))
+    .filter((f) => f && !liveStoredIrRows.some((r) => String(r.factoryId) === String(f.id)))
+    .map((f) => f.factoryName);
+  const serverNames = coverageQuery.isError ? undefined : coverageQuery.data?.uncoveredFactoryNames;
+  const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
+  const coverageLoading = coverageQuery.isFetching;
+  let createConfirmMessage = 'กำลังตรวจสอบโรงงาน…';
+  if (!coverageLoading && allFactoriesCovered) {
+    // Another session issued the last one since this page loaded: a create now would only 409.
+    createConfirmMessage = 'ทุกโรงงานมีใบขอซื้อแล้ว — ไม่มีใบขอซื้อที่ต้องออก';
+  } else if (!coverageLoading) {
+    const what = confirmNames.length > 0
+      ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
+      : `ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`;
+    createConfirmMessage = `${what} — การดำเนินการนี้ย้อนกลับไม่ได้`;
+  }
 
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
@@ -1026,9 +1057,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               deliveryRecords.map((record) => (
                 <div key={record.deliveryId} className="flex flex-wrap items-baseline gap-2 text-xs">
                   <span className="text-text-muted">{formatThaiDate(record.deliveredAt)}</span>
-                  <strong>{record.source}</strong>
+                  <strong>{DELIVERY_SOURCE_LABELS[record.source] ?? record.source}</strong>
                   <span className="text-text-muted">
-                    {(record.items ?? []).map((line) => `${line.itemId}: ${Number(line.qty).toLocaleString('en-US')}`).join(', ')}
+                    {(record.items ?? []).map((line) => {
+                      const item = items.find((i) => String(i.id) === String(line.itemId));
+                      const name = [item?.brand, item?.model, item?.size].filter(Boolean).join(' ') || `รายการ ${line.itemId}`;
+                      return `${name}: ${Number(line.qty).toLocaleString('en-US')}`;
+                    }).join(', ')}
                     {record.deliveredByName ? ` · ${record.deliveredByName}` : ''}
                     {record.note ? ` · ${record.note}` : ''}
                   </span>
@@ -1058,8 +1093,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               แหล่งสินค้า
               <select value={deliveryDraft.source}
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
-                <option value="WAREHOUSE">WAREHOUSE</option>
-                <option value="STOCK">STOCK</option>
+                {Object.entries(DELIVERY_SOURCE_LABELS).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
               </select>
             </label>
             <div className="flex flex-col gap-2">
@@ -1136,6 +1172,18 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           </div>
         </Modal>
       ) : null}
+
+      <ConfirmDialog
+        open={confirmingCreate}
+        title="ยืนยันการออกใบขอซื้อ (IR)"
+        message={createConfirmMessage}
+        confirmLabel="ออกใบขอซื้อ (IR)"
+        busy={createDraftsMutation.isPending}
+        confirmDisabled={coverageLoading || allFactoriesCovered}
+        // Close first: a second click on the open dialog would send twice.
+        onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
+        onCancel={() => setConfirmingCreate(false)}
+      />
 
       {leadTimeNames ? (
         <FactoryLeadTimeModal

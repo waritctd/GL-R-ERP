@@ -84,13 +84,13 @@ function dealFixture(over = {}) {
     items: [
       {
         id: 201, brand: 'Cotto', model: 'Ivory Lappato', color: 'ขาว', texture: null, size: '60x60',
-        code: 'CT-60x60', qty: 120, qtySqm: 43.2, unit: 'ตร.ม.', qtyDelivered: 40,
+        code: 'CT-60x60', qty: 120, qtySqm: 43.2, unit: 'SQM', qtyDelivered: 40, // QA-29f: the bare basis code ImportDealService sends as unit
         // A stray price field the DTO must never carry — the page must not render it regardless.
         rawPrice: 777,
       },
       {
         id: 202, brand: 'Duragres', model: 'Slate Grey', color: 'เทา', texture: null, size: '30x60',
-        code: 'DG-30x60', qty: 50, qtySqm: null, unit: 'กล่อง', qtyDelivered: 0,
+        code: 'DG-30x60', qty: 50, qtySqm: null, unit: 'PIECE', qtyDelivered: 0,
       },
     ],
     importRequests: [
@@ -182,6 +182,14 @@ describe('ImportDealPage', () => {
     expect(items.textContent).toContain('60x60');
     expect(items.textContent).toContain('120');
     expect(items.textContent).toContain('ตร.ม.');
+    // QA-29f: qty is always pieces (unit is only the line's basis), so it reads แผ่น, never the raw code;
+    // an SQM line keeps its area in brackets.
+    expect(items.textContent).toContain('120 แผ่น(43.2 ตร.ม.)');
+    expect(items.textContent).toContain('50 แผ่น');
+    expect(items.textContent).not.toMatch(/PIECE|SQM/);
+    const delivery = screen.getByTestId('import-deal-delivery');
+    expect(within(delivery).getByTestId('import-deal-delivery-item-202').textContent).toMatch(/0\s*\/\s*50 แผ่น/);
+    expect(delivery.textContent).not.toMatch(/PIECE|SQM/);
     const page = document.body.textContent;
     expect(page).not.toMatch(/777/);
     expect(page).not.toMatch(/ราคา|ต้นทุน|฿|THB|มูลค่า|ยอดรวม/);

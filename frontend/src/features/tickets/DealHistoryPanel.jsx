@@ -6,7 +6,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatThaiDate } from '../../utils/format.js';
+import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
 
 // Moved verbatim from TicketDetailPage.jsx (IA rebuild — see
@@ -72,7 +72,25 @@ export const EVENT_KIND_LABEL = {
   DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
   AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
   FULLY_PAID:             'ชำระครบแล้ว',
+  CLOSE_CONFIRMED:        'ยืนยันการปิดดีล',
+  CLOSE_CONFIRM_REVOKED:  'ถอนการยืนยันปิดดีล',
+  ORDER_CONFIRMED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
+  DEAL_QUOTATION_SUBMITTED: 'ส่งใบเสนอราคาขออนุมัติ',
+  DEAL_QUOTATION_APPROVED: 'อนุมัติใบเสนอราคา',
+  DEAL_QUOTATION_REJECTED: 'ไม่อนุมัติใบเสนอราคา',
+  DEAL_QUOTATION_REVISION_SUBMITTED: 'ส่งใบเสนอราคาฉบับแก้ไขขออนุมัติ',
+  IMPORT_STEP_ADVANCED:   'ฝ่ายนำเข้าเลื่อนขั้นตอน',
+  IMPORT_REQUEST_EMAIL_SENT: 'ส่งอีเมลใบขอซื้อแล้ว',
 };
+
+// The backend writes "kind=…, amount=…, paid=…, payable=… — note" (TicketService#recordPayment); old rows
+// keep it, so it is formatted here. Anything not in that shape is shown as written.
+function eventMessage(event) {
+  if (event.kind !== 'PAYMENT_RECORDED') return event.message;
+  const m = /^kind=(\w+), amount=(-?[\d.]+), paid=([-\d.]+), payable=([-\d.]+)(?: — (.*))?$/s.exec(event.message ?? '');
+  if (!m || !PAYMENT_KIND_LABEL[m[1]]) return event.message;
+  return `${PAYMENT_KIND_LABEL[m[1]]} ${formatMoney(m[2])} · รับแล้วรวม ${formatMoney(m[3])} จากยอด ${formatMoney(m[4])}${m[5] ? ` — ${m[5]}` : ''}`;
+}
 
 // Payment-track events get a success-toned dot, fulfillment-track events get
 // an info-toned dot — mirrors the two colour groups used by the sub-status
@@ -99,11 +117,8 @@ export function eventDotClass(kind) {
   return `${EVENT_DOT_BASE} bg-info-dot`;
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-const EMPTY_ACTIVITY_DRAFT = { activityDate: today(), kind: 'CALL', note: '' };
+// Read on every render/reset, not once at module load: today's date in Bangkok, never the UTC date.
+const emptyActivityDraft = () => ({ activityDate: bangkokTodayIso(), kind: 'CALL', note: '' });
 
 /** `Date.parse`-safe timestamp, or `null` for a missing/unparseable value —
  * rows with a `null` timestamp sort last rather than crashing `Array#sort` or
@@ -126,7 +141,7 @@ function EventRow({ event }) {
         <strong className="block text-sm text-text">{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
         <span className="text-xs text-icon-muted">{event.actorName}</span>
         {event.message ? (
-          <p className="mt-1 rounded bg-surface-muted px-2 py-1 text-xs text-text-muted">{event.message}</p>
+          <p className="mt-1 rounded bg-surface-muted px-2 py-1 text-xs text-text-muted">{eventMessage(event)}</p>
         ) : null}
         {snapItems && snapItems.length > 0 ? (
           <div className="mt-1.5 rounded bg-surface-muted px-2.5 py-1.5 text-2xs text-icon-muted">
@@ -212,7 +227,7 @@ export function DealHistoryPanel({
   onAddActivity,
   addingActivity = false,
 }) {
-  const [activityDraft, setActivityDraft] = useState(EMPTY_ACTIVITY_DRAFT);
+  const [activityDraft, setActivityDraft] = useState(emptyActivityDraft);
 
   const rows = useMemo(() => {
     const eventRows = events.map((event) => ({ key: `event-${event.id}`, type: 'event', ts: toTimestamp(event.createdAt), event }));
@@ -263,7 +278,7 @@ export function DealHistoryPanel({
       kind: activityDraft.kind,
       note: activityDraft.note.trim() || null,
     });
-    setActivityDraft(EMPTY_ACTIVITY_DRAFT);
+    setActivityDraft(emptyActivityDraft());
   }
 
   return (

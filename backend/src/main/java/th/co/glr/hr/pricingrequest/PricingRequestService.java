@@ -617,6 +617,11 @@ public class PricingRequestService {
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
             request.reason(), metadataJson);
+        // QA-13 fallback: a dead revision hands the parent's still-ISSUED offer back.
+        requests.reviveParentOfCancelledRevision(id).ifPresent(parentId -> requests.addEvent(
+            parentId, summary.ticketId(), actor.id(), actor.name(), PricingRequestEventKind.PRICING_REQUEST_REVISED,
+            PricingRequestStatus.SUPERSEDED, PricingRequestStatus.QUOTATION_ISSUED,
+            "ยกเลิกรอบแก้ไขแล้ว — กลับมาใช้ใบเสนอราคาเดิม", "{}"));
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
             "คำขอราคา " + summary.requestCode() + " ถูกยกเลิก");
         return detail(id);

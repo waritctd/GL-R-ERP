@@ -118,6 +118,8 @@ describe('pricing workflow status labels', () => {
     expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'รอ CEO อนุมัติราคา', tone: 'success' });
     expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
     expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
+    // VW-07: a direct-deal quotation reaches the finance accepted-quotation badge as APPROVED.
+    expect(quotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
     // Absorbed from a deleted 'keeps stale costing visible' case: that test only ever exercised
     // the ` · ต้องคำนวณใหม่` suffix, which V141 removed along with pricing_costing.stale — but it
     // was also the file's ONLY call of pricingCostingStatusLabel, so the still-true base mapping
