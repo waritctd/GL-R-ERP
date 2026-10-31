@@ -468,9 +468,10 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
      * Owner decision 3: a deal already {@code PARTIALLY_DELIVERED} (some lines delivered from stock
      * while the imported remainder was still in transit — Case 8) must NOT have its delivery status
      * clobbered back onto the import axis when the last factory's IR reaches RECEIVED. Only the
-     * {@code GOODS_RECEIVED} event is written, so {@code TicketRepository#hasReceivedGoods} flips
-     * true without disturbing the delivery already under way. W6-01: the stage still rolls forward
-     * to ขั้น 13 — staying at 12 left the deal jumping 12 → 14 on the last delivery.
+     * {@code GOODS_RECEIVED} event is written and the stage rolls forward to ขั้น 13 (no
+     * status or payment write), so {@code TicketRepository#hasReceivedGoods} flips true without
+     * disturbing the delivery already under way. W6-01: staying at 12 left the deal jumping
+     * 12 → 14 on the last delivery.
      */
     @Test
     void rollup_onAMixedPartiallyDeliveredDeal_keepsTheStatus_writesTheEvent_andMovesToStage13() {

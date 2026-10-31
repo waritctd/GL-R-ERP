@@ -1253,8 +1253,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // quotationMeta.canReviseDealQuotation (the single rule; owner + status live there), plus any
   // open revision draft already hanging off it. Same query key as DealDocumentRegister, so one fetch.
   const dealQuotationRows = dealQuotationsQuery.data ?? [];
+  const confirmedRow = dealQuotationRows.find((q) => q.id === confirm?.quotationId);
   const reviseCandidate = dealQuotationRows
     .filter((q) => canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
+    // The server refuses a revise on a SUPERSEDED/CANCELLED request's quotation (409).
+    .filter((q) => !DEAD_PRICING_REQUEST_STATUSES.has(pricingRequests.find((pr) => pr.id === q.pricingRequestId)?.status))
     .reduce((best, q) => (best == null || q.id > best.id ? q : best), null);
   const openRevisionDraft = reviseCandidate
     ? dealQuotationRows.find((q) => q.docStatus === 'DRAFT' && q.parentQuotationId === reviseCandidate.id)
@@ -1289,7 +1292,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const newestLiveRequest = pricingRequests.filter((pr) => !DEAD_PRICING_REQUEST_STATUSES.has(pr.status))
     .reduce((newest, pr) => (newest == null || pr.id > newest.id ? pr : newest), null);
   const requestStage = stageForQuotationRecipient(newestLiveRequest?.recipientType);
-  const requestStageAhead = requestStage != null && stageIndexIn(stageCatalog, requestStage) > stageIndexIn(stageCatalog, summary.salesStage);
+  // The request's stage must also be on THIS deal's route (the server's verdict), else it is not where the deal goes.
+  const requestStageOnRoute = stageDecisions.find((decision) => decision.stage === requestStage)?.onRoute !== false;
+  const requestStageAhead = requestStage != null && requestStageOnRoute
+    && stageIndexIn(stageCatalog, requestStage) > stageIndexIn(stageCatalog, summary.salesStage);
   const confirmOrderCta = ['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key);
   const ctaStage = confirmOrderCta ? 'ORDER_RECEIVED'
     : requestStageAhead ? requestStage : null;
@@ -2514,6 +2520,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               can never drift. See DealDocumentRegister.jsx's own header
               comment for the exact three gates and their backend citations. */}
           <DealDocumentRegister
+            depositCtaShown={workStateAction?.key === 'create_deposit_notice'}
             ticketId={ticketId}
             user={user}
             summary={summary}
@@ -3076,9 +3083,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <ConfirmOrderDialog
         open={confirm?.kind === 'confirmOrderDirect'}
         number={confirm?.number}
-        depositPercent={dealQuotationRows.find((q) => q.id === confirm?.quotationId)?.depositPercent}
+        depositPercent={confirmedRow?.depositPercent}
         cancelLabel="ปิด"
-        busy={confirmOrderDirectMutation.isPending}
+        // Until the row is read the deposit wording (it may be 0%) is unknown: no confirm yet.
+        busy={confirmOrderDirectMutation.isPending || (confirm?.kind === 'confirmOrderDirect' && !confirmedRow)}
         // Close first (as the pricing-request door does): a second click on the open dialog would send twice.
         onConfirm={() => { const { quotationId } = confirm; setConfirm(null); confirmOrderDirectMutation.mutate(quotationId); }}
         onCancel={() => setConfirm(null)}

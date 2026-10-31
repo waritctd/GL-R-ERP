@@ -984,7 +984,7 @@ describe('TicketDetailPage', () => {
     expect(within(paidTile).getByText('฿400.00')).not.toBeNull();
     const outstandingTile = screen.getByText('คงเหลือ').parentElement;
     expect(within(outstandingTile).getByText('฿600.00')).not.toBeNull();
-    expect(await screen.findByText('DEPOSIT')).not.toBeNull();
+    expect((await screen.findByText(/คุณบัญชี/)).closest('li').textContent).toContain('มัดจำ');
     // The receipt row itself really did render (not just the tile) — proves
     // the scoped assertion above didn't accidentally start passing vacuously.
     expect(screen.getByText(/คุณบัญชี/)).not.toBeNull();
@@ -1083,7 +1083,7 @@ describe('TicketDetailPage', () => {
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
 
     await openTab(/การเงิน/);
-    expect(await screen.findByText('DEPOSIT')).not.toBeNull();
+    expect((await screen.findByText(/คุณบัญชี/)).closest('li').textContent).toContain('มัดจำ');
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
   });
 
@@ -2712,6 +2712,28 @@ describe('TicketDetailPage', () => {
       expect(screen.getByTestId('deal-stage-next').textContent).not.toContain('8.');
     });
 
+    // F3: the request's stage must be on THIS deal's route (server stageDecisions), else the plain next stage.
+    it('ถัดไป ignores a live DESIGNER request whose stage is off the route (OWNER_DIRECT deal at ขั้น 3)', async () => {
+      deal({
+        stage: 'SPEC_APPROVED',
+        entryChannel: 'OWNER_DIRECT',
+        requests: [sentRequest({ status: 'IMPORT_REVIEWING', recipientType: 'DESIGNER' })],
+        quotations: [],
+      });
+      api.tickets.actions.mockResolvedValue({
+        currentState: { lifecycle: 'ACTIVE', salesStage: 'SPEC_APPROVED', paymentStatus: null, fulfillmentStatus: null, status: 'draft' },
+        availableActions: [],
+        stageDecisions: DEAL_STAGE_CATALOG.stages.map((s) => ({
+          stage: s.code, no: s.no, allowed: true, requiresReason: false, blockedReason: null,
+          onRoute: s.code !== 'QUOTE_DESIGN_SIDE',
+        })),
+      });
+      renderTicketDetailPage(salesOwnerUser);
+
+      await waitFor(() => expect(screen.getByTestId('deal-stage-next').textContent).toContain('5.'));
+      expect(screen.getByTestId('deal-stage-next').textContent).not.toContain('4.');
+    });
+
     it('ถัดไป stays on the route when the live buyer request is not AHEAD of the deal (deal already at ขั้น 8)', async () => {
       deal({
         stage: 'QUOTE_BUYER',
@@ -3293,6 +3315,30 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(
         9301, expect.objectContaining({ outcome: 'ACCEPTED' }),
       ));
+    });
+
+    // F10: the accept confirm records the quotation that was clicked, even if a refetch swaps the shown one.
+    it('a refetch while the ลูกค้ายอมรับ dialog is open still records ACCEPTED on the clicked quotation', async () => {
+      api.pricingRequests.listForTicket.mockResolvedValue({
+        items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'BUYER' }],
+      });
+      const row = (id, number) => ({ id, number, docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 });
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [row(9301, 'QT-2026-0301-1')] });
+      api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { id: 9301, docStatus: 'ACCEPTED' } });
+
+      const { queryClient } = renderTicketDetailPage(salesOwnerUser);
+      await openTab(/เอกสาร/);
+      fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
+      const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
+
+      api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [row(9302, 'QT-2026-0302-1')] });
+      await act(async () => { await queryClient.invalidateQueries(); });
+      await screen.findAllByText('QT-2026-0302-1');
+
+      fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
+      await waitFor(() => expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalled());
+      expect(api.pricingRequests.recordCustomerQuotationOutcome).toHaveBeenCalledWith(9301, expect.objectContaining({ outcome: 'ACCEPTED' }));
+      api.pricingRequests.recordCustomerQuotationOutcome.mockReset();
     });
 
     // W3-06/QA-35 (owner rulings 2026-10-29/30): the panel's ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข ask first with a
@@ -4966,8 +5012,34 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว'));
     });
 
+    // F9: until the deal's quotation row is read, the deposit wording is unknown (it may be 0%): no confirm yet.
+    it('while the deal\'s quotation list is unread, the confirm dialog cannot be confirmed', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.listForTicket.mockReturnValue(new Promise(() => {}));
+      renderTicketDetailPage(salesOwnerUser);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      // busy swaps the label to กำลังดำเนินการ
+      const confirmBtn = within(screen.getByRole('dialog')).getByRole('button', { name: /ยืนยันคำสั่งซื้อ|กำลังดำเนินการ/ });
+      expect(confirmBtn.disabled).toBe(true);
+      fireEvent.click(confirmBtn);
+      expect(api.dealQuotations.promoteToDeal).not.toHaveBeenCalled();
+    });
+
+    it('the list loading WITHOUT the quotation\'s row keeps the confirm disabled', async () => {
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      renderTicketDetailPage(salesOwnerUser);
+      await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
+      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
+      fireEvent.click(screen.getByTestId('ticket-primary-action'));
+      const confirmBtn = within(screen.getByRole('dialog')).getByRole('button', { name: /ยืนยันคำสั่งซื้อ|กำลังดำเนินการ/ });
+      expect(confirmBtn.disabled).toBe(true);
+    });
+
     it('a double-click on the dialog\'s confirm sends ONE confirm request (VW-05), same as the pricing-request door', async () => {
       activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED' }] }); // the confirm waits for the row
       api.dealQuotations.promoteToDeal.mockReturnValue(new Promise(() => {})); // in flight: never settles
       renderTicketDetailPage(salesOwnerUser);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
@@ -4982,6 +5054,7 @@ describe('TicketDetailPage', () => {
 
     it('a refused confirm surfaces the server\'s own Thai message', async () => {
       activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED' }] }); // the confirm waits for the row
       api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error('ดีลไม่ได้อยู่ในสถานะ ACTIVE'), { status: 409 }));
       const showToast = vi.fn();
       renderTicketDetailPage(salesOwnerUser, showToast);
@@ -5083,6 +5156,16 @@ describe('TicketDetailPage', () => {
       fireEvent.click(trigger);
       return screen.queryByTestId('deal-quotation-revise');
     }
+
+    // F4 (QA-13 sibling): the server refuses a revise on a dead request's quotation (409), so the page hides it.
+    it.each(['SUPERSEDED', 'CANCELLED'])('PR-origin: an ISSUED quotation whose request is %s offers no แก้ใบเสนอราคา', async (deadStatus) => {
+      prOriginDeal({ salesStage: 'QUOTE_BUYER' });
+      api.pricingRequests.listForTicket.mockResolvedValue({ items: [{ ...issuedPr, status: deadStatus }] });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await settle();
+      expect(await reviseMenuItem()).toBeNull();
+      expect(primaryAction()).not.toBe('revise_quotation');
+    });
 
     it.each(['QUOTE_OWNER', 'QUOTE_BUYER'])(
       'PR-origin: an ISSUED quotation at %s keeps บันทึกผลใบเสนอราคา as primary AND offers แก้ใบเสนอราคา in the overflow menu; click revises it',

@@ -20,7 +20,6 @@ import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { attachTypeLabel } from './dealTrackingMeta.js';
-import { depositBypassed } from './dealMoneyStatus.js';
 import {
   dropLegacyDuplicatedByChain, groupChainQuotations, groupDepositNotices,
   groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
@@ -101,6 +100,8 @@ export function canReadStoredImportRequests(user, summary) {
  * which is worse than an honest "not available in this view".
  */
 export function DealDocumentRegister({
+  // W3-10: the page header's สร้างใบแจ้งยอดเงินรับมัดจำ button is up (the page's own signal).
+  depositCtaShown = false,
   ticketId,
   user,
   summary,
@@ -129,9 +130,6 @@ export function DealDocumentRegister({
   // carve-out). UI-only convenience for RemainingInvoiceDialog's own button visibility — the
   // backend gate above is what actually enforces this.
   const canWriteRemainingInvoice = user?.role === 'sales' && user?.id === summary?.createdById;
-  // W3-10: the button lives on the page header, for the owning rep only, at ขั้น 10 with a deposit due.
-  const pointsToDepositButton = canWriteRemainingInvoice && summary?.salesStage === 'ORDER_RECEIVED'
-    && !depositBypassed(summary?.depositPolicy);
 
   const eligiblePricingRequests = useMemo(
     () => (canViewQuotations ? pricingRequests.filter((pr) => canViewCustomerQuotation(user, pr)) : []),
@@ -411,7 +409,7 @@ export function DealDocumentRegister({
           ) : (
             <p className="text-xs text-text-muted">
               ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้
-              {pointsToDepositButton ? ' — กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า' : ''}
+              {depositCtaShown ? ' — กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า' : ''}
             </p>
           )}
         </RegisterSection>

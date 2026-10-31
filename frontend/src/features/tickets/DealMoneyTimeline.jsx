@@ -6,7 +6,7 @@ import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import {
-  formatMoney, formatThaiDate, overdueBadgeLabel, paymentStageLabel,
+  formatMoney, formatThaiDate, overdueBadgeLabel, paymentStageLabel, PAYMENT_KIND_LABEL,
 } from '../../utils/format.js';
 import { EVENT_KIND_LABEL, PAYMENT_TRACK_KINDS } from './DealHistoryPanel.jsx';
 import { PAYMENT_SUBSTEPS } from './stageMeta.js';
@@ -92,7 +92,7 @@ function MoneyReceiptRow({ receipt }) {
       <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-info" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-2">
-          <strong className="text-sm text-text">{receipt.kind}</strong>
+          <strong className="text-sm text-text">{PAYMENT_KIND_LABEL[receipt.kind] ?? receipt.kind}</strong>
           <span className="font-mono text-sm text-text">{formatMoney(receipt.amount)}</span>
         </div>
         <small className="block text-2xs text-text-muted">

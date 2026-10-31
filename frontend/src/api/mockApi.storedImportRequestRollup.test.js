@@ -285,14 +285,14 @@ describe('applyImportRequestRollupMock — X5: firewall guards mirror TicketServ
     expect(ticket.events.length).toBe(eventsBefore);
   });
 
-  it('writes ONLY the GOODS_RECEIVED event for a PARTIALLY_DELIVERED deal — no status/stage/payment write (Owner decision 3)', () => {
+  // F8: Java also moves the stage on the PARTIALLY_DELIVERED path; the status/payment stay untouched.
+  it('writes the GOODS_RECEIVED event for a PARTIALLY_DELIVERED deal and advances the stage — no status/payment write (Owner decision 3)', () => {
     const ticket = fakeRollupTicket({ fulfillmentStatus: 'PARTIALLY_DELIVERED', paymentStatus: 'DEPOSIT_PAID' });
     applyImportRequestRollupMock(ticket, rollupActor);
     expect(ticket.fulfillmentStatus).toBe('PARTIALLY_DELIVERED');
     expect(ticket.paymentStatus).toBe('DEPOSIT_PAID');
-    expect(ticket.salesStage).toBe('PROCUREMENT');
-    expect(ticket.events).toHaveLength(1);
-    expect(ticket.events[0].kind).toBe('GOODS_RECEIVED');
+    expect(ticket.salesStage).toBe('DELIVERY_SCHEDULING');
+    expect(ticket.events.map((e) => e.kind)).toContain('GOODS_RECEIVED');
   });
 
   it('writes nothing when the deal is not on the import axis at all (e.g. FROM_STOCK)', () => {

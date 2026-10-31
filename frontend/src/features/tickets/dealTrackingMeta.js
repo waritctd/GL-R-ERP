@@ -82,7 +82,7 @@ export const ACTIVITY_KINDS = [
 ];
 
 // Ticket-attachment types (INVOICE is written by commission creation, PO/OTHER by uploads).
-const ATTACH_TYPE_LABEL = { PO: 'ใบสั่งซื้อ (PO)', INVOICE: 'ใบกำกับภาษี', OTHER: 'อื่น ๆ' };
+const ATTACH_TYPE_LABEL = { PO: 'ใบสั่งซื้อ (PO)', INVOICE: 'ใบกำกับภาษี', SIGNED_QUOTATION: 'ใบเสนอราคาที่ลูกค้าเซ็น', OTHER: 'อื่น ๆ' };
 
 export function attachTypeLabel(code) {
   return ATTACH_TYPE_LABEL[code] ?? code ?? '-';

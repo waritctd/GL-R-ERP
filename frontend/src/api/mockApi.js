@@ -3645,6 +3645,8 @@ function projectTicketDetailForRole(detail, role) {
 // the deal, OR the deal has reached PROCUREMENT or later. A closed/lost/cancelled
 // deal is never in scope, even at a late stage.
 const IMPORT_STAGE_SCOPE_START = dealStageIndex('PROCUREMENT');
+// Mirrors DealQuotationService#recordOutcome's refusal on a SUPERSEDED request's ISSUED quotation (QA-13).
+const SUPERSEDED_PR_OUTCOME_MESSAGE = 'คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน';
 const PRICING_REQUEST_TERMINAL_STATUSES = ['CANCELLED', 'SUPERSEDED', 'QUOTATION_ACCEPTED'];
 const ACCOUNT_PENDING_PAYMENT_STATUSES = ['DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT'];
 
@@ -4725,6 +4727,7 @@ export function applyImportRequestRollupMock(ticket, actor) {
   const cur = ticket.fulfillmentStatus;
   if (cur === 'PARTIALLY_DELIVERED') {
     pushEvent(ticket, actor, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
+    autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', actor); // TicketService#applyImportRequestRollup does too
     return;
   }
   if (cur === 'FULLY_DELIVERED') return;
@@ -17613,6 +17616,9 @@ export const api = {
       if (row.docStatus !== 'ISSUED') {
         fail(`บันทึกผลได้เฉพาะใบเสนอราคาที่ออกแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
       }
+      if (mockPricingRequests.find((p) => p.id === row.pricingRequestId)?.status === 'SUPERSEDED') {
+        fail(SUPERSEDED_PR_OUTCOME_MESSAGE, 409);
+      }
       if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(row.ticketId)) {
         fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
       }
@@ -17657,6 +17663,9 @@ export const api = {
         if (user.role !== 'sales' || ticket?.createdById !== user.id) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
         if (parent.docStatus !== 'ISSUED' && parent.docStatus !== 'REVISION_REQUESTED') {
           fail('สร้างฉบับแก้ไขได้จากใบเสนอราคาที่ออกแล้วหรือลูกค้าขอแก้ไขเท่านั้น', 409);
+        }
+        if (['SUPERSEDED', 'CANCELLED'].includes(mockPricingRequests.find((p) => p.id === parent.pricingRequestId)?.status)) {
+          fail('คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขหรือถูกยกเลิกแล้ว — สร้างฉบับแก้ไขของใบเสนอราคานี้ไม่ได้', 409);
         }
       } else {
         requireDealQuotationWriteAccess(ticket, user, parent.origin);

@@ -841,12 +841,17 @@ describe('DealDocumentRegister', () => {
     ['ORDER_RECEIVED, CREDIT_CUSTOMER', 'ORDER_RECEIVED', 'CREDIT_CUSTOMER', 6, false],
     ['another stage (QUOTE_BUYER)', 'QUOTE_BUYER', 'REQUIRED', 6, false],
     ['a sales rep who does not own the deal', 'ORDER_RECEIVED', 'REQUIRED', 99, false],
-  ])('empty deposit section pointer: %s', async (_label, salesStage, depositPolicy, createdById, pointed) => {
+    // F7: the page's real signal (the button is up) decides, not a re-derivation from the summary.
+    ['ON_HOLD: stage and policy say yes but the page shows no deposit button', 'ORDER_RECEIVED', 'REQUIRED', 6, false, { depositCtaShown: false }],
+    ['the page shows the deposit button, whatever the summary says', 'QUOTE_BUYER', 'REQUIRED', 6, true, { depositCtaShown: true }],
+  ])('empty deposit section pointer: %s', async (_label, salesStage, depositPolicy, createdById, pointed, override) => {
     renderRegister({
       user: { id: 6, role: 'sales' },
       sections: SALES_SECTIONS,
       canViewPricingRequests: true,
       canViewDocumentsTab: true,
+      depositCtaShown: pointed,
+      ...override,
       summary: { status: 'price_proposed', fulfillmentStatus: null, salesStage, depositPolicy, createdById },
     });
 
@@ -871,10 +876,11 @@ describe('DealDocumentRegister', () => {
   it('the ไฟล์แนบ rows show a Thai attachment type, not the raw enum', async () => {
     renderRegister({
       ...ACCOUNT,
-      attachments: [{ id: 2, fileName: 'invoice.pdf', attachType: 'INVOICE' }, { id: 3, fileName: 'x.pdf', attachType: 'OTHER' }],
+      attachments: [{ id: 2, fileName: 'invoice.pdf', attachType: 'INVOICE' }, { id: 3, fileName: 'x.pdf', attachType: 'OTHER' }, { id: 4, fileName: 'qt.pdf', attachType: 'SIGNED_QUOTATION' }],
     });
     const section = await screen.findByTestId('register-attachments');
-    expect(section.textContent).not.toMatch(/INVOICE|OTHER/);
+    expect(section.textContent).not.toMatch(/INVOICE|OTHER|SIGNED_QUOTATION/);
+    expect(section.textContent).toContain('ใบเสนอราคาที่ลูกค้าเซ็น');
   });
 
   it('deposit groups live only in register-deposit; remaining groups and readiness only in register-remaining-invoice', async () => {

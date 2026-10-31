@@ -699,6 +699,25 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             """, Map.of("id", issued.pricingRequestId()), Long.class)).isZero();
     }
 
+    /** F4 (QA-13 sibling): revising the ISSUED quotation of a SUPERSEDED or CANCELLED request is refused too. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"SUPERSEDED", "CANCELLED"})
+    void createRevision_onIssuedQuotationOfADeadPricingRequest_refused_writesNothing(String deadStatus) {
+        DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
+        jdbc.update("UPDATE sales.pricing_request SET status = :s, cancelled_at = CASE WHEN :s = 'CANCELLED' THEN now() END"
+                + " WHERE pricing_request_id = :id",
+            Map.of("s", deadStatus, "id", issued.pricingRequestId()));
+
+        assertThatThrownBy(() -> quotationService.createRevision(issued.id(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("รอบแก้ไข");
+            });
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM sales.quotation WHERE parent_quotation_id = :id",
+            Map.of("id", issued.id()), Long.class)).isZero();
+    }
+
     /** GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
      * REVISION_REQUESTED was missing from {@code hasLivePricingRequestQuotation}'s non-live set,
      * even though S3 (this slice's own recordOutcome) is what makes that outcome reachable —

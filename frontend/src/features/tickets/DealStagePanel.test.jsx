@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  act, fireEvent, render, screen, waitFor, within,
+  act, cleanup, fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
@@ -141,6 +141,35 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     expect(offered).not.toContain('AWAITING_BUYER');
     expect(offered).toContain('QUOTE_DESIGN_SIDE');
     expect(offered).toContain('NEGOTIATION');
+  });
+
+  // F1: only a skipped OWNER stage is final. Never-visited stages elsewhere stay offered.
+  it('openEditStage() still offers SPEC_APPROVED on a 1 -> 2 -> 4 deal (the routine 4 -> 3 move)', () => {
+    const { ref } = renderPanelWithRef({
+      summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }),
+      availableActions: [{ action: 'UPDATE_STAGE' }],
+      events: [
+        { kind: 'STAGE_CHANGED', fromStatus: 'LEAD_APPROACH', toStatus: 'PRESENTATION' },
+        { kind: 'STAGE_CHANGED', fromStatus: 'PRESENTATION', toStatus: 'QUOTE_DESIGN_SIDE' },
+      ],
+    });
+    act(() => ref.current.openEditStage());
+    const offered = within(screen.getByRole('dialog')).getAllByRole('option').map((o) => o.value);
+    expect(offered).toContain('SPEC_APPROVED');
+  });
+
+  it('openEditStage() still offers OWNER_SIGNOFF after an auto 5 -> 8 (the owner stage was quoted)', () => {
+    const { ref } = renderPanelWithRef({
+      summary: baseSummary({ salesStage: 'QUOTE_BUYER' }),
+      availableActions: [{ action: 'UPDATE_STAGE' }],
+      events: [
+        { kind: 'STAGE_CHANGED', fromStatus: 'QUOTE_DESIGN_SIDE', toStatus: 'QUOTE_OWNER' },
+        { kind: 'STAGE_CHANGED', fromStatus: 'QUOTE_OWNER', toStatus: 'QUOTE_BUYER' },
+      ],
+    });
+    act(() => ref.current.openEditStage());
+    const offered = within(screen.getByRole('dialog')).getAllByRole('option').map((o) => o.value);
+    expect(offered).toContain('OWNER_SIGNOFF');
   });
 
   it('openEditStage() keeps an off-route stage in the blocked list with its reason, even though the deal never sat on it', () => {
@@ -569,6 +598,128 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
 
       expect(onUpdateStage).not.toHaveBeenCalled();
       expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  // F2: only the confirm-order CTA replaces เลื่อนไป; a later party's live request (SK-04) does not.
+  it('ขั้น 5 with a live BUYER request and readiness unmet still shows guided-advance-open', () => {
+    const blocked = allAllowed.map((d) => (
+      d.stage === 'OWNER_SIGNOFF' ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
+    ));
+    renderPanel({
+      summary: baseSummary({ id: 508, salesStage: 'QUOTE_OWNER' }),
+      availableActions: [],
+      stageDecisions: blocked,
+      ctaStage: 'QUOTE_BUYER',
+    });
+    expect(screen.getByTestId('guided-advance-open')).not.toBeNull();
+  });
+
+  // F5a: the warning is for goods that have NOT all arrived (fulfillmentStatus past the import axis).
+  it('F5a: no goods-not-arrived warning once fulfillmentStatus says the goods arrived', () => {
+    const WARNING = /สินค้าจากโรงงานยังมาไม่ครบ/;
+    const blocked = allAllowed.map((d) => (
+      d.stage === 'DELIVERY_SCHEDULING' ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
+    ));
+    const { unmount } = renderPanel({
+      summary: baseSummary({ id: 509, salesStage: 'PROCUREMENT', fulfillmentStatus: 'GOODS_RECEIVED' }),
+      availableActions: [],
+      stageDecisions: blocked,
+    });
+    fireEvent.click(screen.getByTestId('guided-advance-open'));
+    expect(within(screen.getByTestId('guided-advance-modal')).queryByText(WARNING)).toBeNull();
+    unmount();
+
+    // Case 8: stock lines delivered while the imports are still in transit is NOT "goods arrived".
+    renderPanel({
+      summary: baseSummary({ id: 512, salesStage: 'PROCUREMENT', fulfillmentStatus: 'PARTIALLY_DELIVERED' }),
+      availableActions: [],
+      stageDecisions: blocked,
+    });
+    fireEvent.click(screen.getByTestId('guided-advance-open'));
+    expect(within(screen.getByTestId('guided-advance-modal')).getByText(WARNING)).not.toBeNull();
+    cleanup();
+
+    const onUpdateStage = vi.fn();
+    const { ref } = renderPanelWithRef({
+      summary: baseSummary({ id: 510, salesStage: 'PROCUREMENT', fulfillmentStatus: 'GOODS_RECEIVED' }),
+      availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'DELIVERY_SCHEDULING' }],
+      advanceReady: true,
+      onUpdateStage,
+    });
+    act(() => ref.current.openAdvance());
+    expect(screen.queryByText(WARNING)).toBeNull();
+  });
+
+  // F6: the ขั้น 12 confirm posts the stage captured when it opened; a deal that moved on posts nothing.
+  describe('F6 the ขั้น 12 skip confirm is pinned', () => {
+    const props = (overrides = {}) => ({
+      summary: baseSummary({ id: 511, salesStage: 'PROCUREMENT' }),
+      availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'DELIVERY_SCHEDULING' }, { action: 'ADVANCE_STAGE', targetStage: 'DELIVERED' }],
+      advanceReady: true,
+      ...overrides,
+    });
+    const rerenderWith = (rerender, ref, overrides) => rerender(
+      <DealStagePanel
+        ref={ref}
+        summary={baseSummary({ id: 511, salesStage: 'DELIVERY_SCHEDULING' })}
+        availableActions={[{ action: 'ADVANCE_STAGE', targetStage: 'DELIVERED' }]}
+        stageDecisions={allAllowed}
+        catalog={catalog}
+        advanceReady
+        {...noopHandlers}
+        {...overrides}
+      />,
+    );
+
+    it('the deal leaving PROCUREMENT while the dialog is open never posts DELIVERED', () => {
+      const onUpdateStage = vi.fn();
+      const { ref, rerender } = renderPanelWithRef(props({ onUpdateStage }));
+      act(() => ref.current.openAdvance());
+      rerenderWith(rerender, ref, { onUpdateStage });
+      const confirm = screen.queryByRole('button', { name: /^ข้ามไปขั้น/ });
+      if (confirm) fireEvent.click(confirm);
+      expect(onUpdateStage).not.toHaveBeenCalledWith({ stage: 'DELIVERED' });
+    });
+
+    it('the deal leaving PROCUREMENT and coming back does not reopen the dialog', () => {
+      const { ref, rerender } = renderPanelWithRef(props());
+      act(() => ref.current.openAdvance());
+      rerenderWith(rerender, ref, {});
+      rerender(
+        <DealStagePanel
+          ref={ref}
+          summary={baseSummary({ id: 511, salesStage: 'PROCUREMENT' })}
+          availableActions={props().availableActions}
+          stageDecisions={allAllowed}
+          catalog={catalog}
+          advanceReady
+          {...noopHandlers}
+        />,
+      );
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('a confirm while an action is loading posts nothing', () => {
+      const onUpdateStage = vi.fn();
+      const { ref, rerender } = renderPanelWithRef(props({ onUpdateStage }));
+      act(() => ref.current.openAdvance());
+      rerender(
+        <DealStagePanel
+          ref={ref}
+          summary={baseSummary({ id: 511, salesStage: 'PROCUREMENT' })}
+          availableActions={props().availableActions}
+          stageDecisions={allAllowed}
+          catalog={catalog}
+          advanceReady
+          actionLoading
+          {...noopHandlers}
+          onUpdateStage={onUpdateStage}
+        />,
+      );
+      const confirm = screen.queryByRole('button', { name: /^ข้ามไปขั้น/ });
+      if (confirm) fireEvent.click(confirm);
+      expect(onUpdateStage).not.toHaveBeenCalled();
     });
   });
 

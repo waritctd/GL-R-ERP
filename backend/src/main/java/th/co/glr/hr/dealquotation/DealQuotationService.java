@@ -2367,6 +2367,15 @@ public class DealQuotationService {
         // no longer the deal's live APPROVED document. Same message as the check above -- this is
         // the same rule, just re-asserted at the moment that actually matters.
         source = requireRevisableStatus(requireQuotation(id));
+        // QA-13 sibling: a SUPERSEDED (customer-change revision) or CANCELLED request is dead, so is revising its quotation.
+        if (isPricingRequestOrigin(source)) {
+            String requestStatus = pricingRequests.findSummary(source.pricingRequestId())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้")).status();
+            if (PricingRequestStatus.SUPERSEDED.equals(requestStatus) || PricingRequestStatus.CANCELLED.equals(requestStatus)) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขหรือถูกยกเลิกแล้ว — สร้างฉบับแก้ไขของใบเสนอราคานี้ไม่ได้");
+            }
+        }
         long newId = insertRevisionCopyOf(source, actor);
         DealQuotationDto revision = requireQuotation(newId);
         tickets.addEvent(source.ticketId(), actor.id(), actor.name(), TicketEventKind.REVISION_REQUESTED, null, null,

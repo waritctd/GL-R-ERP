@@ -232,3 +232,40 @@ describe('UpdateStageModal blocked rows — แก้ช่องทางดี
     expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
   });
 });
+
+// F5b: leaving PROCUREMENT for a later stage by hand warns that the goods are not all in.
+describe('UpdateStageModal goods-not-arrived warning', () => {
+  const WARNING = /สินค้าจากโรงงานยังมาไม่ครบ/;
+  const procurementDecisions = [
+    decision('SPEC_APPROVED', 3),
+    decision('PROCUREMENT', 12, { allowed: false, blockedReason: 'อยู่ในขั้นตอนนี้อยู่แล้ว' }),
+    decision('DELIVERY_SCHEDULING', 13),
+  ];
+
+  it('shows the warning when the target is later than PROCUREMENT and the goods have not arrived', () => {
+    renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'SHIPPING' }, stageDecisions: procurementDecisions });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
+    expect(screen.getByText(WARNING)).not.toBeNull();
+  });
+
+  it('shows no warning for a backward target, once the goods arrived, or from another stage', () => {
+    const { unmount } = renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'SHIPPING' }, stageDecisions: procurementDecisions });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'SPEC_APPROVED' } });
+    expect(screen.queryByText(WARNING)).toBeNull();
+    unmount();
+
+    const partial = renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'PARTIALLY_DELIVERED' }, stageDecisions: procurementDecisions });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
+    expect(screen.getByText(WARNING)).not.toBeNull(); // Case 8: imports still in transit
+    partial.unmount();
+
+    const arrived = renderModal({ deal: { salesStage: 'PROCUREMENT', fulfillmentStatus: 'GOODS_RECEIVED' }, stageDecisions: procurementDecisions });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
+    expect(screen.queryByText(WARNING)).toBeNull();
+    arrived.unmount();
+
+    renderModal({ deal: { salesStage: 'NEGOTIATION' }, stageDecisions: procurementDecisions });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'DELIVERY_SCHEDULING' } });
+    expect(screen.queryByText(WARNING)).toBeNull();
+  });
+});

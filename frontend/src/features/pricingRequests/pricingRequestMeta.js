@@ -279,7 +279,8 @@ export function canRecordCustomerQuotationOutcome(user, pr, quotation) {
  * (createRevision, reachable from ISSUED or REVISION_REQUESTED) vs cost-affecting
  * (createCustomerChangeRevision, reachable from most non-terminal pricing-request statuses —
  * see canCreateCustomerRevision's own inline gate in PricingRequestDetailPage). This predicate
- * only covers the commercial-only button's own visibility. */
+ * only covers the commercial-only button's own visibility, and hides it for a SUPERSEDED or
+ * CANCELLED request (the server answers 409 for those, as it does for recordOutcome). */
 export function canCreateCommercialOnlyRevision(user, pr, quotation) {
   return canManageCustomerQuotation(user, pr) && ['ISSUED', 'REVISION_REQUESTED'].includes(quotation?.docStatus)
     && !['SUPERSEDED', 'CANCELLED'].includes(pr?.status);

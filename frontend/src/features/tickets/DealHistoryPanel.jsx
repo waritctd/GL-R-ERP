@@ -6,7 +6,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
+import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
 
 // Moved verbatim from TicketDetailPage.jsx (IA rebuild — see
@@ -83,15 +83,13 @@ export const EVENT_KIND_LABEL = {
   IMPORT_REQUEST_EMAIL_SENT: 'ส่งอีเมลใบขอซื้อแล้ว',
 };
 
-const PAYMENT_KIND_LABEL = { DEPOSIT: 'มัดจำ', BALANCE: 'ส่วนที่เหลือ', ADJUSTMENT: 'ปรับปรุงยอด/คืนเงิน' };
-
 // The backend writes "kind=…, amount=…, paid=…, payable=… — note" (TicketService#recordPayment); old rows
 // keep it, so it is formatted here. Anything not in that shape is shown as written.
 function eventMessage(event) {
   if (event.kind !== 'PAYMENT_RECORDED') return event.message;
-  const m = /^kind=(\w+), amount=(-?[\d.]+), paid=[-\d.]+, payable=[-\d.]+(?: — (.*))?$/s.exec(event.message ?? '');
+  const m = /^kind=(\w+), amount=(-?[\d.]+), paid=([-\d.]+), payable=([-\d.]+)(?: — (.*))?$/s.exec(event.message ?? '');
   if (!m || !PAYMENT_KIND_LABEL[m[1]]) return event.message;
-  return `${PAYMENT_KIND_LABEL[m[1]]} ${formatMoney(m[2])}${m[3] ? ` — ${m[3]}` : ''}`;
+  return `${PAYMENT_KIND_LABEL[m[1]]} ${formatMoney(m[2])} · รับแล้วรวม ${formatMoney(m[3])} จากยอด ${formatMoney(m[4])}${m[5] ? ` — ${m[5]}` : ''}`;
 }
 
 // Payment-track events get a success-toned dot, fulfillment-track events get

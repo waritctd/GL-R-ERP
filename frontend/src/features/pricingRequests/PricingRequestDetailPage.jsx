@@ -4007,7 +4007,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                 which left REVISION_REQUESTED and REJECTED — both reachable via this same PR's
                 own outcome-recording buttons just above — as UI dead ends: the backend accepted
                 a recreate, but nothing on screen offered it. Gated on canManageCustomerQuotation
-                (sales + ticket owner, no PR-status check) rather than canCreateCustomerQuotation,
+                (sales + ticket owner, minus a CANCELLED/SUPERSEDED request, checked just below) rather than canCreateCustomerQuotation,
                 which requires pr.status === 'APPROVED_FOR_QUOTATION' — a PR in any of these three
                 states sits at QUOTATION_ISSUED instead (the backend deliberately does not roll PR
                 status back), so that stricter gate would incorrectly hide this button in exactly

@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -11,6 +11,7 @@ import {
 } from '../../utils/format.js';
 import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
+import { goodsArrived, goodsNotArrivedWarning } from '../importProgress/importSteps.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker, skippedStageCodes } from './DealStageStepper.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import {
@@ -102,7 +103,10 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // Guided advance (owner ask 2026-09-28): the readiness gate stays, but instead of a dead hint the
   // rep gets one flow that collects the two things it needs, then advances.
   const [guidedOpen, setGuidedOpen] = useState(false);
-  const [procurementSkipOpen, setProcurementSkipOpen] = useState(false);
+  // The stage the ขั้น 12 skip confirm was opened for; confirm posts this, never a re-derived `next`.
+  const [procurementSkipTarget, setProcurementSkipTarget] = useState(null);
+  // A deal that left ขั้น 12 drops the captured target, so coming back never reopens the dialog.
+  useEffect(() => { if (summary.salesStage !== 'PROCUREMENT') setProcurementSkipTarget(null); }, [summary.salesStage]);
   const [guidedDraft, setGuidedDraft] = useState({ nextFollowUpAt: '', kind: 'CALL', activityNote: '', winProbability: '' });
   const queryClient = useQueryClient();
 
@@ -146,7 +150,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
   // The page's main button carries เลื่อนไป on ขั้น 1–2; one copy on the page.
   // SK-08: no เลื่อนไป beside a main button that leads elsewhere (ยืนยันคำสั่งซื้อ → 10).
-  const showGuidedOpener = readinessBlocked && !advanceInHeader && !(ctaStage && ctaStage !== next?.code);
+  const showGuidedOpener = readinessBlocked && !advanceInHeader && !(ctaStage === 'ORDER_RECEIVED' && ctaStage !== next?.code);
   // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity,
   // then advance through the PARENT's own onUpdateStage so its invalidation + toast still run. The
   // gate itself is unchanged — this just satisfies it in one place instead of two scattered panels.
@@ -208,7 +212,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     // the FIX 3 note above).
     openAdvance: () => {
       if (!(canAdvance && advanceReady && !actionLoading && next)) return;
-      if (summary.salesStage === 'PROCUREMENT') setProcurementSkipOpen(true); // W3-09: warn before skipping ahead
+      if (summary.salesStage === 'PROCUREMENT' && !goodsArrived(summary.fulfillmentStatus)) setProcurementSkipTarget(next); // W3-09: warn before skipping ahead
       else onUpdateStage({ stage: next.code });
     },
     // The page's ขั้น 1–2 main button: move now when ready, else collect the follow-up + activity first.
@@ -231,9 +235,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // The first party's stage missing from the catalog: the plain next-stage line.
   const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
   // A skipped stage is final (ruling 2026-10-29): แก้ไขสถานะ never offers what the track marks ข้าม.
-  const skipped = skippedStageCodes(catalog, stageIndexIn(catalog, summary.salesStage), events);
-  const goodsNotArrivedWarning = next
-    ? `สินค้าจากโรงงานยังมาไม่ครบ — เลื่อนไปขั้น ${next.no} ก่อนสินค้าถึงโกดังเฉพาะกรณีจำเป็น` : '';
+  // Only a skipped OWNER stage is final; any other never-visited stage (e.g. the routine 4 -> 3) stays offered.
+  const skippedAll = skippedStageCodes(catalog, stageIndexIn(catalog, summary.salesStage), events);
+  const skipped = skippedAll.has('QUOTE_OWNER')
+    ? new Set(['QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'].filter((code) => skippedAll.has(code)))
+    : new Set();
+  const showGoodsWarning = summary.salesStage === 'PROCUREMENT' && !goodsArrived(summary.fulfillmentStatus);
   const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
   const lineStage = choiceStage ?? ctaRow ?? next;
   const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint;
@@ -501,12 +508,16 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         </Modal>
       ) : null}
       <ConfirmDialog
-        open={procurementSkipOpen && Boolean(next)}
-        title={`ข้ามไปขั้น ${next?.no}`}
-        message={goodsNotArrivedWarning}
-        confirmLabel={`ข้ามไปขั้น ${next?.no}`}
-        onCancel={() => setProcurementSkipOpen(false)}
-        onConfirm={() => { setProcurementSkipOpen(false); onUpdateStage({ stage: next.code }); }}
+        open={Boolean(procurementSkipTarget) && summary.salesStage === 'PROCUREMENT'}
+        title={`ข้ามไปขั้น ${procurementSkipTarget?.no}`}
+        message={goodsNotArrivedWarning(procurementSkipTarget?.no)}
+        confirmLabel={`ข้ามไปขั้น ${procurementSkipTarget?.no}`}
+        onCancel={() => setProcurementSkipTarget(null)}
+        onConfirm={() => {
+          const target = procurementSkipTarget;
+          setProcurementSkipTarget(null);
+          if (!actionLoading && summary.salesStage === 'PROCUREMENT') onUpdateStage({ stage: target.code });
+        }}
       />
       {guidedOpen && next ? (
         <Modal
@@ -532,7 +543,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           )}
         >
           <div className="grid gap-3">
-            {summary.salesStage === 'PROCUREMENT' ? <p className="m-0 text-xs font-bold text-warning-dark">{goodsNotArrivedWarning}</p> : null}
+            {showGoodsWarning ? <p className="m-0 text-xs font-bold text-warning-dark">{goodsNotArrivedWarning(next.no)}</p> : null}
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               วันติดตามครั้งถัดไป *
               <input

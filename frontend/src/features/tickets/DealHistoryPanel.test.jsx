@@ -149,6 +149,9 @@ describe('DealHistoryPanel', () => {
       expect(text).toContain('ส่วนที่เหลือ');
       expect(text).toContain(formatMoney(440647.94));
       expect(text).toContain('ยืนยันชำระส่วนที่เหลือ');
+      // F12: the running totals stay on the row (paid so far out of the payable).
+      expect(text).toContain(`รับแล้วรวม ${formatMoney(440647.94)}`);
+      expect(text).toContain(`จากยอด ${formatMoney(881295.88)}`);
       expect(text).not.toMatch(/kind=|amount=|paid=|payable=|BALANCE/);
     });
 
@@ -161,6 +164,8 @@ describe('DealHistoryPanel', () => {
       expect(text).toContain(label);
       expect(text).toContain(formatMoney(1500.5));
       expect(text).not.toMatch(new RegExp(`kind=|amount=|${kind}`));
+      expect(text).toContain(`รับแล้วรวม ${formatMoney(1500.5)}`);
+      expect(text).toContain(`จากยอด ${formatMoney(5000)}`);
     });
 
     it('a message that is not in that format is shown as written', () => {

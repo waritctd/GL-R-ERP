@@ -90,7 +90,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
   const [downloadingFormat, setDownloadingFormat] = useState(null);
-  const [confirmingAccept, setConfirmingAccept] = useState(false);
+  // The quotation whose acceptance is being confirmed, captured at click so a refetch can't retarget it.
+  const [acceptTarget, setAcceptTarget] = useState(null);
   // W3-06/QA-35 (owner ruling 2026-10-29/30): ปฏิเสธ / ขอแก้ไข ask for the customer's reason first; each outcome
   // keeps its own idempotency key per quotation until it succeeds (see outcomeKeyFor). outcomeToConfirm is
   // { quotation, outcome }: the quotation is captured at click so a refetch can't retarget the confirm.
@@ -260,7 +261,7 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="primary" disabled={recordOutcome.isPending}
-                    onClick={() => setConfirmingAccept(true)}
+                    onClick={() => setAcceptTarget(current)}
                     data-testid="deal-quotation-accept">
                     ลูกค้ายอมรับ
                   </Button>
@@ -320,12 +321,12 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
         onConfirm={() => { setConfirmingOrder(false); confirmOrder.mutate(); }}
       />
       <ConfirmDialog
-        open={confirmingAccept}
+        open={Boolean(acceptTarget)}
         title={acceptConfirm.title}
         message={acceptConfirm.message}
         busy={recordOutcome.isPending}
-        onCancel={() => setConfirmingAccept(false)}
-        onConfirm={() => { setConfirmingAccept(false); recordOutcome.mutate({ quotation: current, outcome: 'ACCEPTED' }); }}
+        onCancel={() => setAcceptTarget(null)}
+        onConfirm={() => { const quotation = acceptTarget; setAcceptTarget(null); recordOutcome.mutate({ quotation, outcome: 'ACCEPTED' }); }}
       />
       <ConfirmDialog
         open={Boolean(outcomeToConfirm)}
