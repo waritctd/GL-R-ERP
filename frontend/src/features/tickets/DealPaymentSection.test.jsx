@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealPaymentSection } from './DealPaymentSection.jsx';
 import { api } from '../../api/index.js';
 import { downloadBlob } from '../../utils/download.js';
+import { formatThaiDate } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -359,11 +360,41 @@ describe('DealPaymentSection — step 2 ใบแจ้งหนี้ส่ว�
     expect(remaining().getByText('ชำระแล้ว')).toBeTruthy();
   });
 
+  it('paid in full by the deposit (no remaining invoice): a done, neutral "not needed" state with no create button and no chip', async () => {
+    renderSection({
+      summary: summaryOf({
+        paymentStatus: 'FULLY_PAID', paymentStage: 'FULLY_PAID', amountPaid: 1000, amountOutstanding: 0, fulfillmentStatus: 'GOODS_RECEIVED',
+      }),
+      depositNotices: [issuedNotice], canManageRemainingInvoice: true,
+    });
+    await settled();
+    expect(remaining().getByText('ไม่ต้องออก — ชำระครบจากมัดจำ')).toBeTruthy();
+    expect(remaining().queryByText('ยังไม่ออก')).toBeNull();
+    expect(remaining().queryByRole('button')).toBeNull();
+    expect(screen.queryByText('ขั้นตอนถัดไป')).toBeNull();
+  });
+
   it('a deal that skips the deposit is ready for its invoice straight away', async () => {
     renderSection({ summary: summaryOf({ depositPolicy: 'NOT_REQUIRED', paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: 'GOODS_RECEIVED' }), canManageRemainingInvoice: true });
     await settled();
     expect(remaining().queryByText('รอรับมัดจำก่อน')).toBeNull();
     expect(remaining().getByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).toBeTruthy();
+  });
+});
+
+describe('DealPaymentSection — deposit receipt date', () => {
+  it('shows the LATEST deposit receipt date, whatever order the receipts arrive in', async () => {
+    renderSection({
+      summary: summaryOf({ paymentStatus: 'DEPOSIT_PAID' }), depositNotices: [issuedNotice],
+      paymentReceipts: [
+        { receiptId: 1, kind: 'DEPOSIT', amount: 100, receivedAt: '2026-08-01T09:00:00.000Z' },
+        { receiptId: 2, kind: 'DEPOSIT', amount: 200, receivedAt: '2026-09-15T09:00:00.000Z' },
+        { receiptId: 3, kind: 'DEPOSIT', amount: 50, receivedAt: '2026-08-20T09:00:00.000Z' },
+      ],
+    });
+    await settled();
+    expect(deposit().getByText(`รับเงิน ${formatThaiDate('2026-09-15T09:00:00.000Z')}`)).toBeTruthy();
+    expect(deposit().queryByText(`รับเงิน ${formatThaiDate('2026-08-01T09:00:00.000Z')}`)).toBeNull();
   });
 });
 
@@ -391,7 +422,7 @@ describe('DealPaymentSection — step 3 รับชำระครบ, and the 
     ['deposit notice out, unpaid', { summary: summaryOf({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }), depositNotices: [issuedNotice] }, 'deposit'],
     ['deposit skipped, no invoice yet', { summary: summaryOf({ depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' }) }, 'remaining'],
     ['deposit paid, no invoice yet', { summary: summaryOf({ paymentStatus: 'DEPOSIT_PAID', ...AFTER }), depositNotices: [issuedNotice] }, 'remaining'],
-    ['invoice issued, awaiting payment (steps 2 and 3 finish together, as in the prototype)', { summary: summaryOf({ paymentStatus: 'AWAITING_FINAL_PAYMENT', ...AFTER }), depositNotices: [issuedNotice], remainingInvoices: [issuedInvoice] }, 'remaining'],
+    ['invoice issued, awaiting payment (the chip moves to รับชำระครบ)', { summary: summaryOf({ paymentStatus: 'AWAITING_FINAL_PAYMENT', ...AFTER }), depositNotices: [issuedNotice], remainingInvoices: [issuedInvoice] }, 'final'],
   ])('the ขั้นตอนถัดไป chip lands on the first unfinished step: %s', async (_label, props, step) => {
     renderSection(props);
     await settled();

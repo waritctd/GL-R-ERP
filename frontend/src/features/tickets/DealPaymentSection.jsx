@@ -97,6 +97,30 @@ function Step({
   );
 }
 
+const DEP_BADGE = {
+  skipped: { label: 'ไม่เก็บมัดจำ', tone: 'neutral' },
+  notyet: { label: 'ยังไม่ถึงขั้นตอน', tone: 'neutral' },
+  create: { label: 'ยังไม่สร้าง', tone: 'warning' },
+  draft: { label: 'ร่าง', tone: 'warning' },
+  issued: { label: 'รอชำระ', tone: 'warning' },
+  paid: { label: 'ชำระแล้ว', tone: 'success' },
+};
+
+const DEP_HINT = {
+  skipped: 'ข้ามขั้นตอนนี้ — ไม่ต้องเก็บมัดจำสำหรับดีลนี้',
+  notyet: 'สร้างได้เมื่อลูกค้ายืนยันคำสั่งซื้อ',
+  issued: 'รอลูกค้าชำระ — ฝ่ายบัญชียืนยันรับเงินที่หน้าการเงินของฝ่ายบัญชี',
+};
+
+const REM_BADGE = {
+  wait: { label: 'รอรับมัดจำก่อน', tone: 'neutral' },
+  create: { label: 'ยังไม่ออก', tone: 'warning' },
+  draft: { label: 'ร่าง', tone: 'warning' },
+  issued: { label: 'รอชำระ', tone: 'warning' },
+  paid: { label: 'ชำระแล้ว', tone: 'success' },
+  notneeded: { label: 'ไม่ต้องออก — ชำระครบจากมัดจำ', tone: 'neutral' },
+};
+
 const ERROR_BADGE = { label: 'โหลดไม่สำเร็จ', tone: 'danger' };
 
 // A failed list read must never fall through to "none yet" (that would offer สร้าง over an existing document).
@@ -220,17 +244,11 @@ export function DealPaymentSection({
   else dep = 'notyet';
   const depositDone = dep === 'skipped' || dep === 'paid';
 
-  const DEP_BADGE = {
-    skipped: { label: 'ไม่เก็บมัดจำ', tone: 'neutral' },
-    notyet: { label: 'ยังไม่ถึงขั้นตอน', tone: 'neutral' },
-    create: { label: 'ยังไม่สร้าง', tone: 'warning' },
-    draft: { label: 'ร่าง', tone: 'warning' },
-    issued: { label: 'รอชำระ', tone: 'warning' },
-    paid: { label: 'ชำระแล้ว', tone: 'success' },
-  };
   const depositLoading = depositQuery.isLoading;
   const depositError = depositQuery.isError;
-  const depositReceipt = paymentReceipts.find((r) => r.kind === 'DEPOSIT');
+  const depositReceipt = paymentReceipts
+    .filter((r) => r.kind === 'DEPOSIT')
+    .sort((a, b) => (toTimestamp(b.receivedAt) ?? -Infinity) - (toTimestamp(a.receivedAt) ?? -Infinity))[0];
   const docMeta = doc ? (
     <>
       {doc.docNumber ? mono(doc.docNumber) : <span>ฉบับร่าง — ยังไม่ออกเลขที่เอกสาร</span>}
@@ -240,11 +258,6 @@ export function DealPaymentSection({
         : doc.docDate ? <span>ออกเมื่อ {formatThaiDate(doc.docDate)}</span> : null}
     </>
   ) : null;
-  const DEP_HINT = {
-    skipped: 'ข้ามขั้นตอนนี้ — ไม่ต้องเก็บมัดจำสำหรับดีลนี้',
-    notyet: 'สร้างได้เมื่อลูกค้ายืนยันคำสั่งซื้อ',
-    issued: 'รอลูกค้าชำระ — ฝ่ายบัญชียืนยันรับเงินที่หน้าการเงินของฝ่ายบัญชี',
-  };
   let depositHint = DEP_HINT[dep];
   if (dep === 'create') {
     if (mainButtonCreatesNotice) depositHint = 'ลูกค้ายืนยันคำสั่งซื้อแล้ว — กดปุ่ม "สร้างใบแจ้งยอดเงินรับมัดจำ" ด้านบน';
@@ -257,14 +270,9 @@ export function DealPaymentSection({
   let rem;
   if (invoice?.status === 'ISSUED') rem = fullyPaid ? 'paid' : 'issued';
   else if (invoice?.status === 'DRAFT') rem = 'draft';
+  else if (fullyPaid) rem = 'notneeded'; // paid in full by the deposit (custom 100%): no remaining invoice to issue
   else rem = depositDone ? 'create' : 'wait';
-  const REM_BADGE = {
-    wait: { label: 'รอรับมัดจำก่อน', tone: 'neutral' },
-    create: { label: 'ยังไม่ออก', tone: 'warning' },
-    draft: { label: 'ร่าง', tone: 'warning' },
-    issued: { label: 'รอชำระ', tone: 'warning' },
-    paid: { label: 'ชำระแล้ว', tone: 'success' },
-  };
+  const remDone = invoice?.status === 'ISSUED' || rem === 'notneeded';
   const remainingLoading = remainingQuery.isLoading;
   const remainingError = remainingQuery.isError;
   let remainingHint = null;
@@ -280,7 +288,7 @@ export function DealPaymentSection({
     : rem === 'issued' ? 'รอลูกค้าชำระ — ฝ่ายบัญชีบันทึกรับชำระที่หน้าการเงินของฝ่ายบัญชี'
       : 'รอใบแจ้งหนี้ส่วนที่เหลือ';
 
-  const doneFlags = [depositDone, rem === 'paid' || fullyPaid, fullyPaid];
+  const doneFlags = [depositDone, remDone, fullyPaid];
   // Nothing is "next" before the order is confirmed (even if step 1 is skipped), nor while a list is
   // loading or failed (the marker would jump the moment data settles).
   const currentIndex = (!orderConfirmed || depositLoading || remainingLoading || depositError || remainingError) ? -1 : doneFlags.indexOf(false);
@@ -410,7 +418,7 @@ export function DealPaymentSection({
               )}
             </Step>
             <Step
-              no={2} id="remaining" title="ใบแจ้งหนี้ส่วนที่เหลือ" done={rem === 'paid'} current={currentIndex === 1}
+              no={2} id="remaining" title="ใบแจ้งหนี้ส่วนที่เหลือ" done={remDone} current={currentIndex === 1}
               badge={remainingLoading ? { label: 'กำลังโหลด…', tone: 'neutral' } : remainingError ? ERROR_BADGE : REM_BADGE[rem]}
               meta={invoice && !remainingLoading && !remainingError ? (
                 <>
@@ -426,7 +434,7 @@ export function DealPaymentSection({
                     <Button type="button" variant="primary" onClick={() => onManageRemainingInvoice?.()}>สร้างใบแจ้งหนี้ส่วนที่เหลือ</Button>
                   ) : null}
                   {invoice?.status === 'ISSUED' ? downloadButton(
-                    'rem-pdf', 'PDF', () => api.storedRemainingInvoices.download(invoice.id), invoice.docNumber || `draft-${invoice.id}`, 'pdf',
+                    'rem-pdf', 'PDF', () => api.storedRemainingInvoices.download(invoice.id), invoice.docNumber, 'pdf',
                   ) : null}
                   {invoice && canManageRemainingInvoice ? (
                     <Button type="button" variant="secondary" onClick={() => onManageRemainingInvoice?.()}>จัดการเอกสาร</Button>
