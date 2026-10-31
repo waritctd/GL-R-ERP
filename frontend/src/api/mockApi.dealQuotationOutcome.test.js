@@ -395,3 +395,35 @@ describe('mockApi dealQuotations.createFromPricingRequest after an outcome — t
     });
   }, 20000);
 });
+
+// F8 (QA-13 parity): a customer-change revision supersedes the request but leaves its quotation ISSUED
+// (DealQuotationService). Neither an outcome nor another revise may run on it.
+describe('mockApi dealQuotations on the ISSUED quotation of a SUPERSEDED pricing request (mock parity)', () => {
+  it('recordOutcome and createRevision answer 409 "รอบแก้ไข", and the quotation stays ISSUED with no child', async () => {
+    const { ticketId, sourceItemId } = await freshTicket();
+    const { prId, quotationId } = await issuedNewOriginQuotation(ticketId, sourceItemId, 'DESIGNER');
+    await api.auth.login({ role: 'sales' });
+    await api.pricingRequests.createCustomerChangeRevision(prId, {
+      recipientType: 'DESIGNER',
+      revisionReason: 'ลูกค้าเปลี่ยนจำนวน',
+      clientRequestId: nextClientRequestId(),
+      items: [{
+        sourceTicketItemId: sourceItemId, productId: 1, brand: 'SCG', model: 'Tile S3 Outcome Mock', factory: 'Panaria SpA',
+        color: 'ขาว', texture: 'ด้าน', size: '60x60', thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES',
+        piecesInput: 12, wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: false, originCountry: 'ไทย-สต็อก',
+        leadTimeMinDays: 3, leadTimeMaxDays: 7, quantityType: 'ESTIMATE',
+      }],
+    });
+    expect((await api.pricingRequests.get(prId)).pricingRequest.summary.status).toBe('SUPERSEDED');
+
+    await expect(api.dealQuotations.recordOutcome(quotationId, { outcome: 'ACCEPTED', clientRequestId: nextClientRequestId() }))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('รอบแก้ไข') });
+    await expect(api.dealQuotations.createRevision(quotationId))
+      .rejects.toMatchObject({
+        status: 409,
+        message: 'คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขหรือถูกยกเลิกแล้ว — สร้างฉบับแก้ไขของใบเสนอราคานี้ไม่ได้',
+      });
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('ISSUED');
+  }, 20000);
+});

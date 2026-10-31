@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { dealStageLabel } from '../../utils/format.js';
+import { goodsArrived, goodsNotArrivedWarning } from '../importProgress/importSteps.js';
 import { EntryChannelFix } from './EntryChannelFix.jsx';
 
 /**
@@ -46,6 +47,9 @@ export function UpdateStageModal({
   // the same two messages the same way.)
   const current = stageDecisions.find((decision) => decision.stage === deal?.salesStage) ?? null;
   const backward = Boolean(selected && current && selected.no < current.no);
+  // W3-09: leaving ขั้น 12 forward by hand while the goods have not all arrived.
+  const goodsWarning = deal?.salesStage === 'PROCUREMENT' && selected && current && selected.no > current.no
+    && !goodsArrived(deal.fulfillmentStatus);
 
   return (
     <Modal
@@ -87,6 +91,8 @@ export function UpdateStageModal({
             </select>
           </label>
         )}
+
+        {goodsWarning ? <p className="m-0 text-xs font-bold text-warning-dark">{goodsNotArrivedWarning(selected.no)}</p> : null}
 
         {noteRequired ? (
           <div className="rounded-lg border border-warning-border bg-warning-bg-soft px-3 py-2 text-xs text-warning-dark">

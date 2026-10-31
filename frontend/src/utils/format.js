@@ -67,6 +67,9 @@ export function formatAddress(address) {
   return parts.length > 0 ? parts.join(' ') : '-';
 }
 
+/** Thai names of a payment receipt's kind; the one copy every payment surface reads. */
+export const PAYMENT_KIND_LABEL = { DEPOSIT: 'มัดจำ', BALANCE: 'ส่วนที่เหลือ', ADJUSTMENT: 'ปรับปรุงยอด/คืนเงิน' };
+
 export function formatMoney(value) {
   if (value === null || value === undefined || value === '') return '-';
   const amount = Number(value);

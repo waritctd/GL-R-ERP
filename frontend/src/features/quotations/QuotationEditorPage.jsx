@@ -3546,7 +3546,7 @@ export function QuotationEditorPage({ user, showToast }) {
               exactly the same thing (TicketDetailPage renders the same three parts). */}
           <p className="m-0">
             {CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(quotation?.number)} <strong>{CONFIRM_ORDER_FROM_QUOTATION_COPY.stage}</strong>
-            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail}
+            {' '}{CONFIRM_ORDER_FROM_QUOTATION_COPY.tail(quotation?.depositPercent)}
           </p>
         </Modal>
       ) : null}

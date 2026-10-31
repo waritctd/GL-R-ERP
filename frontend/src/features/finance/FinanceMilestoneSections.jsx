@@ -8,14 +8,12 @@ import { cn } from '../../utils/cn.js';
 import { downloadBlob, fetchDocumentBlob } from '../../utils/download.js';
 import {
   depositNoticeStatusLabel, formatMoney, formatThaiDate, fulfilmentStatusLabel,
-  depositPolicyLabel, quotationStatusLabel,
+  depositPolicyLabel, quotationStatusLabel, PAYMENT_KIND_LABEL,
 } from '../../utils/format.js';
 
 // The five milestone sections of a finance deal, in order. Every figure, label and document comes
 // from the server's FinanceDealDto (its `milestoneTrack` decides which section is current/skipped);
 // nothing here derives a milestone from a stage.
-
-const PAYMENT_KIND_LABEL = { DEPOSIT: 'มัดจำ', BALANCE: 'ส่วนที่เหลือ', ADJUSTMENT: 'ปรับปรุงยอด/คืนเงิน' };
 
 export function vatCaption(basis) {
   if (basis === 'EXCLUDING_VAT') return 'ไม่รวม VAT';

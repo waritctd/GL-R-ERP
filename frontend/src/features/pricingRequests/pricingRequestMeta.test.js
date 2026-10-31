@@ -289,19 +289,29 @@ describe('canSeeRawPricingDecision', () => {
 });
 
 describe('canSeePricingDecisionSalesView', () => {
+  const approved = (overrides = {}) => pr({ status: 'APPROVED_FOR_QUOTATION', ...overrides });
   it('allows the owning sales rep', () => {
-    expect(canSeePricingDecisionSalesView(salesOwner, pr())).toBe(true);
+    expect(canSeePricingDecisionSalesView(salesOwner, approved())).toBe(true);
   });
   it('rejects a non-owning sales rep — wrong-way-round', () => {
-    expect(canSeePricingDecisionSalesView(otherSales, pr())).toBe(false);
+    expect(canSeePricingDecisionSalesView(otherSales, approved())).toBe(false);
   });
   it('allows sales_manager/ceo/import regardless of ownership', () => {
-    expect(canSeePricingDecisionSalesView({ id: 9, role: 'sales_manager' }, pr())).toBe(true);
-    expect(canSeePricingDecisionSalesView(ceo, pr())).toBe(true);
-    expect(canSeePricingDecisionSalesView(importUser, pr())).toBe(true);
+    expect(canSeePricingDecisionSalesView({ id: 9, role: 'sales_manager' }, approved())).toBe(true);
+    expect(canSeePricingDecisionSalesView(ceo, approved())).toBe(true);
+    expect(canSeePricingDecisionSalesView(importUser, approved())).toBe(true);
   });
   it('rejects account — no access to pricing decisions at all', () => {
-    expect(canSeePricingDecisionSalesView({ id: 9, role: 'account' }, pr())).toBe(false);
+    expect(canSeePricingDecisionSalesView({ id: 9, role: 'account' }, approved())).toBe(false);
+  });
+  // W6-04: the server answers 404 until the CEO approves, and again once the request is dead.
+  it('only while an APPROVED decision exists: approved → quoted → accepted', () => {
+    for (const status of ['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']) {
+      expect(canSeePricingDecisionSalesView(salesOwner, pr({ status }))).toBe(true);
+    }
+    for (const status of ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING', 'CANCELLED', 'SUPERSEDED']) {
+      expect(canSeePricingDecisionSalesView(salesOwner, pr({ status }))).toBe(false);
+    }
   });
 });
 
@@ -366,6 +376,12 @@ describe('canRecordCustomerQuotationOutcome', () => {
   it('rejects every other docStatus, even for the owner', () => {
     for (const docStatus of ['DRAFT', 'READY_TO_ISSUE', 'ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'CANCELLED', 'SUPERSEDED']) {
       expect(canRecordCustomerQuotationOutcome(salesOwner, pr(), { docStatus })).toBe(false);
+    }
+  });
+  // QA-13: a revision supersedes the request but its quotation stays ISSUED (owner ruling 2026-08-13).
+  it('rejects an ISSUED quotation on a dead (SUPERSEDED / CANCELLED) request', () => {
+    for (const status of ['SUPERSEDED', 'CANCELLED']) {
+      expect(canRecordCustomerQuotationOutcome(salesOwner, pr({ status }), { docStatus: 'ISSUED' })).toBe(false);
     }
   });
   it('rejects a non-owning sales rep, ceo, and import', () => {

@@ -19,6 +19,7 @@ import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
+import { attachTypeLabel } from './dealTrackingMeta.js';
 import {
   dropLegacyDuplicatedByChain, groupChainQuotations, groupDepositNotices,
   groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
@@ -99,6 +100,8 @@ export function canReadStoredImportRequests(user, summary) {
  * which is worse than an honest "not available in this view".
  */
 export function DealDocumentRegister({
+  // W3-10: the page header's สร้างใบแจ้งยอดเงินรับมัดจำ button is up (the page's own signal).
+  depositCtaShown = false,
   ticketId,
   user,
   summary,
@@ -404,7 +407,10 @@ export function DealDocumentRegister({
           ) : depositGroups[0]?.versions.length ? (
             renderGroups(depositGroups, depositItem)
           ) : (
-            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้</p>
+            <p className="text-xs text-text-muted">
+              ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้
+              {depositCtaShown ? ' — กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า' : ''}
+            </p>
           )}
         </RegisterSection>
       ) : null}
@@ -462,7 +468,7 @@ export function DealDocumentRegister({
                   key={`attachment-${att.id}`}
                   icon="paperclip"
                   title={att.fileName}
-                  meta={att.attachType}
+                  meta={attachTypeLabel(att.attachType)}
                   status={null}
                   actions={[{
                     label: 'ดูไฟล์',
