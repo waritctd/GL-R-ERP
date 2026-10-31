@@ -474,15 +474,26 @@ describe('TicketDetailPage', () => {
     expect(stickyChrome.className).toContain('sticky');
     expect(stickyChrome.className).toContain('top-[calc(var(--deal-scroll-pad-y)*-1)]');
     expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดดีล' })).not.toBeNull();
+    // Desktop header clearance for focus/jumps sits on the content wrapper (the chrome's next
+    // sibling) so the header's own controls never get it.
+    expect(stickyChrome.nextElementSibling.className).toContain(
+      'min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]',
+    );
 
     // Ticket-workspace IA rebuild Slice B: the sticky context rail (and its own
     // measured `--deal-header-h` sticky-offset classes) is retired — there is
     // no second column any more, so no `data-testid="ticket-context-rail"`
     // element exists at all. `--deal-header-h` itself stays defined (index.css)
-    // and consumed by AppShell.jsx's `scroll-pt-[...]` (Tailwind port of the
-    // old `.content-scroll` rule) for mobile focus scrolling — see
-    // ticketWorkspaceLayout.test.js, unaffected by this.
+    // and consumed by the content wrapper's descendant `scroll-mt-[...]` (see
+    // ticketWorkspaceLayout.test.js), unaffected by this.
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
+  });
+
+  it('marks the sticky chrome with data-sticky-chrome so the shell scroller opts out of scroll anchoring (condensing would otherwise pull scrollTop back up by the shrink)', async () => {
+    renderTicketDetailPage();
+
+    const chrome = await screen.findByTestId('ticket-detail-sticky-chrome');
+    expect(chrome.hasAttribute('data-sticky-chrome')).toBe(true);
   });
 
   // Regression guard for the sticky-chrome jitter bug: the header must condense off the
