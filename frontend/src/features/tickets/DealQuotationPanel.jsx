@@ -63,7 +63,7 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): the
  * create-deposit-notice-from-quotation control that used to live here too
  * (a real, documented overlap flagged in Slice S3's handoff) now lives
- * solely in DealDepositPanel's own "ใบแจ้งยอดมัดจำ" step — see this
+ * solely in the การเงิน tab's ใบแจ้งยอดเงินรับมัดจำ step (DealPaymentSection) — see this
  * component's git history for the removed `createDepositNotice`
  * mutation/`depositPercentInput` state if that overlap ever needs undoing.
  *
@@ -85,7 +85,7 @@ function pickRelevantPricingRequest(pricingRequests = []) {
  * label were visible on screen simultaneously.
  */
 export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
-  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast, depositMainButtonLabel = null,
+  ticketId, pricingRequests = [], quotationByRequest = null, user, showToast, depositMainButtonLabel = null, depositNoticeExists = false,
 }, ref) {
   const queryClient = useQueryClient();
   const [outcomeNote, setOutcomeNote] = useState('');
@@ -301,10 +301,13 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
               <p className="text-sm text-text-muted">
                 {confirmOrderBlockedReason(pr) ?? (pr.orderConfirmedAt
                   // Owner rulings 2026-10-28: the main button creates the deposit notice (only while it offers
-                  // it); otherwise the notice lives on the การเงิน tab.
+                  // it); otherwise, once a notice exists, it is in this tab's document register, and before that
+                  // it is created in the การเงิน tab's ใบแจ้งยอดเงินรับมัดจำ step (the register is empty then).
                   ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(pr.orderConfirmedAt)} — ${depositMainButtonLabel
                     ? `ขั้นต่อไป: กดปุ่ม "${depositMainButtonLabel}" ด้านบน`
-                    : 'ใบแจ้งยอดเงินรับมัดจำอยู่ที่แท็บ "การเงิน"'}`
+                    : depositNoticeExists
+                      ? 'ใบแจ้งยอดเงินรับมัดจำดูได้ในทะเบียนเอกสารของแท็บนี้'
+                      : 'สร้างใบแจ้งยอดเงินรับมัดจำได้ที่แท็บ "การเงิน" (ขั้นตอน ใบแจ้งยอดเงินรับมัดจำ)'}`
                   : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)')}
               </p>
             )}
