@@ -584,6 +584,12 @@ async function waitForLoaded(request = buildRequest()) {
 // or within a card (ceoCard). An unscoped getByTestId('pcr-ceo-margin-input-8001') is ambiguous by
 // design. The unique, unscoped ids are the summary bar's (pcr-ceo-save-all / -approve / -return)
 // and the mobile bar's (pcr-ceo-mobile-*).
+// Import PCR redesign: the 3-step indicator of a factory card (ติดต่อโรงงาน -> กรอกราคา -> ยืนยันราคาเสนอ)
+// -> ['done' | 'now' | 'todo', ...] read off each step's data-state.
+const stepStates = (quoteId) => within(screen.getByTestId(`pcr-factory-steps-${quoteId}`))
+  .getAllByTestId('pcr-factory-step').map((el) => el.getAttribute('data-state'));
+// Import PCR redesign: a spec row is a <dl> of dt/dd pairs; read a value by its label.
+const specValue = (spec, label) => spec.getByText(label).nextElementSibling?.textContent.trim();
 const ceoTable = () => within(screen.getByTestId('pcr-ceo-table'));
 const ceoRow = (id) => within(screen.getByTestId(`pcr-ceo-row-${id}`));
 const ceoCard = (id) => within(screen.getByTestId(`pcr-ceo-card-${id}`));
@@ -803,7 +809,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.getByTestId('pcr-await-contact-91').textContent).toContain('กด ติดต่อโรงงานแล้ว ก่อนกรอกราคา');
+    // Import PCR redesign: the lock reason lives ONCE in the terms row, not under each input.
+    expect(screen.getByTestId('pcr-await-contact-91').textContent).toContain('ช่องราคาจะเปิดหลังกด "ติดต่อโรงงานแล้ว"');
     expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
   });
@@ -879,17 +886,16 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     const preview = await screen.findByTestId('pcr-price-preview');
     expect(within(preview).getByText('Cotto')).not.toBeNull();          // C's factory shows
     expect(within(preview).queryByText('SCG Ceramics')).toBeNull();     // A/B's factory does not
-    // Mixed case (A/B already quoted, C only just previewed): the banner must not claim no draft
-    // was ever generated — that would be false for A/B's already-drafted factory.
-    expect(within(preview).getByText(/รายการที่ยังไม่ได้ขอราคาจากโรงงาน/)).not.toBeNull();
-    expect(within(preview).queryByText(/ยังไม่ได้สร้างเมลขอราคา/)).toBeNull();
+    // (Import PCR redesign: the amber pre-draft banner and its two copies are retired — the lock reason
+    // now sits in each factory card's terms row — so the banner-copy assertions were deleted.)
 
     // A and B still render as their own quote-grid rows (locked, since request stays
     // IMPORT_REVIEWING and the quote stays DRAFT) rather than being hidden by C's preview.
     expect(screen.getAllByLabelText(/^ราคาที่เสนอ/).length).toBe(2);
 
-    // Panel title counts all three items (2 quoted + 1 previewed), not just the quoted ones.
-    expect(screen.getByText('รายการสินค้า (3 รายการ)')).not.toBeNull();
+    // The progress strip's สินค้า figure counts all three items (2 quoted + 1 previewed), not just the
+    // quoted ones (it replaces the old "รายการสินค้า (3 รายการ)" panel title).
+    expect(within(screen.getByRole('region', { name: 'ความคืบหน้าการขอราคา' })).getByTestId('pcr-import-fig-items').textContent.trim()).toBe('3');
   });
 
   // #1 (owner ask 2026-09-24): a SUBMITTED request opened here (e.g. from a link) had no รับเรื่อง
@@ -910,14 +916,15 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
   });
 
   // owner ask 2026-09-24 (kept): once contacted, Import can still reopen the mail — read-only
-  // (view + copy). CR-1 naming: the button stays สร้างเมล, there is no separate ดูอีเมล label.
+  // (view + copy). Import PCR redesign: once contacted the button reads ดูเมลที่ส่ง (same testid, same modal).
   it('reopens the mail of a CONTACTED factory read-only (copy kept, no บันทึกร่าง)', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
     const openBtn = screen.getByTestId('pcr-open-email-draft-91');
-    expect(openBtn.textContent).toContain('สร้างเมล');
+    expect(openBtn.textContent).toContain('ดูเมลที่ส่ง');
+    expect(screen.queryByRole('button', { name: 'สร้างเมล' })).toBeNull();
     fireEvent.click(openBtn);
 
     const dialog = await screen.findByTestId('factory-email-draft-modal');
@@ -1029,30 +1036,24 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     ));
   });
 
-  // Item 3 of this task's brief: the unit select is built from GET /api/meta/unit-bases at
-  // runtime, not a hardcoded list, and changing it writes both unitBasis and quotedUnit together
-  // (the same "one select, two fields" pattern PricingRequestCreateModal's updateUnitBasis uses).
-  it('offers the unit select built from the backend catalog, and changing it updates both unitBasis and quotedUnit on save', async () => {
+  // Price-terms change: the group-level หน่วยราคา select is gone. Every line has its own แผ่น / ตร.ม.
+  // switch (a button group), and changing it still writes unitBasis AND quotedUnit together.
+  it('switching a line\'s unit (/ แผ่น → / กล่อง needs a PER_BOX request, so here / ตร.ม.) updates both unitBasis and quotedUnit on save', async () => {
     const quote = buildFactoryQuote({ status: 'REQUESTED' }); // default item: unitBasis PER_PIECE
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    // หน่วยราคา (factory-price-import-ui redesign): one select per FACTORY GROUP now, not per line
-    // — every line in the group shares it — but still built from the same backend catalog.
-    const unitSelect = await screen.findByLabelText(/^หน่วย/);
-    expect(within(unitSelect).getAllByRole('option').map((option) => option.value)).toEqual([
-      'PER_PIECE', 'PER_SQM', 'PER_BOX', 'PER_LINEAR_M',
-    ]);
-
-    fireEvent.change(unitSelect, { target: { value: 'PER_BOX' } });
+    const group = await screen.findByRole('group', { name: /^หน่วยราคา รายการ #1/ });
+    expect(screen.queryByRole('combobox', { name: /^หน่วย/ })).toBeNull();
+    fireEvent.click(within(group).getByRole('button', { name: '/ ตร.ม.' }));
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
       quote.id,
       expect.objectContaining({
-        items: [expect.objectContaining({ unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' })],
+        items: [expect.objectContaining({ unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.' })],
       }),
     ));
   });
@@ -2730,18 +2731,15 @@ describe('PricingRequestDetailPage mobile layout', () => {
     });
 
     await waitForLoaded();
-    expect(screen.getByText('ภาพรวม')).not.toBeNull();
-    expect(screen.getByText('รายการสินค้าและราคาตั้งต้น')).not.toBeNull();
-    // Item identity renders brand+model ("SCG A1") ahead of productDescription per the
-    // component's own fallback chain (catalogBrand/brand + catalogModel/model first).
-    // getAllByText, not getByText: the grouped-by-factory item row (ยี่ห้อ/รุ่น column) now echoes
-    // the same product name back, alongside "รายการสินค้าและราคาตั้งต้น" above it, so this string
-    // legitimately appears twice.
+    // Import PCR redesign: the header (with the meta line) replaces ภาพรวม, the progress strip leads,
+    // and the read-only item-card panel is not rendered for import at all.
+    expect(screen.getByTestId('pcr-import-header')).not.toBeNull();
+    expect(screen.queryByText('ภาพรวม')).toBeNull();
+    expect(screen.queryByText('รายการสินค้าและราคาตั้งต้น')).toBeNull();
+    expect(screen.getByRole('region', { name: 'ความคืบหน้าการขอราคา' })).not.toBeNull();
     expect(screen.getAllByText('SCG A1').length).toBeGreaterThan(0);
-    // By role and a prefix regex, not exact text: the section header is "รายการสินค้า (N รายการ)"
-    // with a dynamic count (factory-price-import-ui redesign). The assertion here is that the
-    // SECTION is present.
-    expect(await screen.findByRole('heading', { name: /^รายการสินค้า \(/ })).not.toBeNull();
+    // The factory SECTION is present (by role: the heading is "ขอราคาจากโรงงาน").
+    expect(await screen.findByRole('heading', { name: 'ขอราคาจากโรงงาน' })).not.toBeNull();
     // ต้นทุนนำเข้า is deliberately absent for Import — see the hiding test above.
   });
 });
@@ -2783,7 +2781,7 @@ describe('PricingRequestDetailPage header terms — ฝ่าย is not shown (o
 // sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
 // already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
 // fixture's own V185 comment).
-describe('PricingRequestDetailPage item card — import price in baht', () => {
+describe('PricingRequestDetailPage import price in baht', () => {
   const fxRates = [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }];
   // 5 แผ่น of a 1.44 ตร.ม. slab = 7.2 ตร.ม.
   const request = () => {
@@ -2808,36 +2806,51 @@ describe('PricingRequestDetailPage item card — import price in baht', () => {
   };
   afterEach(() => { delete api.fxRates; });
 
-  it('shows ราคาจากฝ่ายนำเข้า with its unit — Import\'s quote, never the catalogue price or "preliminary"', async () => {
+  // Import PCR redesign: the read-only item card (and its "ราคาจากฝ่ายนำเข้า" line) is gone for import;
+  // the baht conversion now sits under the price input in the factory table. The CEO still reads it on
+  // the item card (second test), unchanged.
+  it('import: the price cell shows ≈ baht per ตร.ม. and the line total under the input, reusing quotedPriceInThb — no item card', async () => {
     await renderWithFx(importUser, [quoteWith()]);
-    const label = (await screen.findByTestId('pcr-import-price-1')).textContent;
-    expect(label).toContain('ราคาจากฝ่ายนำเข้า: 115 EUR/ตร.ม.');
+    const thb = await screen.findByTestId('pcr-quote-thb-91-1');
+    expect(thb.textContent).toContain('4,600');
+    expect(thb.textContent).toContain('33,120');
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).value).toBe('115');
+    expect(screen.queryByTestId('pcr-import-price-1')).toBeNull();
+    expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
     expect(document.body.textContent).not.toContain('999');
     expect(document.body.textContent).not.toContain('preliminary');
   });
 
-  it.each([['import', importUser], ['ceo', ceoUser]])('shows %s the baht per ตร.ม., per แผ่น and in total for the requested quantity', async (_name, user) => {
-    await renderWithFx(user, [quoteWith()]);
+  it('ceo: the item card still shows the baht per ตร.ม., per แผ่น and in total for the requested quantity (unchanged)', async () => {
+    await renderWithFx(ceoUser, [quoteWith()]);
     const thb = await screen.findByTestId('pcr-import-thb-1');
     expect(thb.textContent).toContain('4,600');
     expect(thb.textContent).toContain('6,624');
     expect(thb.textContent).toContain('33,120');
     expect(thb.textContent).toContain('5 แผ่น = 7.2 ตร.ม.');
+    expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('ราคาจากฝ่ายนำเข้า: 115 EUR/ตร.ม.');
   });
 
-  it('says ยังไม่มี and shows no baht until Import has typed a price', async () => {
+  it('import: no baht until a price is typed — the cell says ยังไม่กรอก and has no baht figure', async () => {
     await renderWithFx(importUser, [quoteWith({ rawUnitPrice: null })]);
-    expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('ยังไม่มี');
-    expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
+    const cell = await screen.findByTestId('pcr-quote-price-cell-91-1');
+    expect(cell.textContent).toContain('ยังไม่กรอก');
+    expect(screen.queryByTestId('pcr-quote-thb-91-1')).toBeNull();
   });
 
-  it('shows no baht for a per-box price, and none to Sales (no FX access)', async () => {
+  it('import: no baht for a per-box price; ceo item card keeps its per-box text; Sales has no FX access', async () => {
     await renderWithFx(importUser, [quoteWith({ unitBasis: 'PER_BOX' })]);
+    expect(await screen.findByTestId('pcr-quote-price-cell-91-1')).not.toBeNull(); // positive control: the redesigned price cell
+    expect((await screen.findByLabelText(/^ราคาที่เสนอ/)).value).toBe('115');
+    expect(screen.queryByTestId('pcr-quote-thb-91-1')).toBeNull();
+    cleanup();
+    await renderWithFx(ceoUser, [quoteWith({ unitBasis: 'PER_BOX' })]);
     expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('115 EUR/กล่อง');
     expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
     cleanup();
     await renderWithFx(salesOwner, [quoteWith()]);
     expect(screen.queryByTestId('pcr-import-thb-1')).toBeNull();
+    expect(screen.queryByTestId('pcr-quote-thb-91-1')).toBeNull();
   });
 });
 
@@ -2871,18 +2884,24 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(screen.getByText(/^จำนวนที่กรอก:/)).not.toBeNull();
   });
 
-  it('hides เผื่อ (wastage) and the pre-wastage quantity from Import — final order quantity only', async () => {
+  // Import PCR redesign: the item card is not rendered for import; its fields live in the factory
+  // table's spec row (opened by the "สเปกจากฝ่ายขาย" toggle) and the จำนวน cell. The wastage ruling
+  // (2026-09-18) is unchanged: neither appears there. The positive control (the spec row opened and
+  // holding a sales-entered field) keeps the absence assertions from passing on an empty page.
+  it('hides เผื่อ (wastage) and the pre-wastage quantity from Import — in the opened spec row too; final order quantity stays in the จำนวน cell', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();
 
-    expect(screen.queryByText(/^เผื่อ \(wastage\):/)).toBeNull();
-    expect(screen.queryByText(/^จำนวนที่กรอก:/)).toBeNull();
-    // The final order quantity (what must actually be ordered) stays visible to Import.
-    expect(screen.getByText(/^จำนวนสั่งซื้อ:/)).not.toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /สเปกจากฝ่ายขาย/ }));
+    const spec = within(screen.getByTestId('pcr-spec-1'));
+    expect(specValue(spec, 'สี')).toBe('ขาว');
+    expect(screen.queryByText(/เผื่อ \(wastage\)/)).toBeNull();
+    expect(screen.queryByText(/จำนวนที่กรอก/)).toBeNull();
+    expect(screen.getByTestId('pcr-factory-row-1').querySelector('[data-label="จำนวน"]').textContent).toContain('20 แผ่น');
   });
 
-  it('shows the final order quantity (จำนวนสั่งซื้อ) to every viewer, including Import', async () => {
-    for (const user of [salesOwner, importUser, ceoUser]) {
+  it('shows the final order quantity (จำนวนสั่งซื้อ) on the item card to Sales and the CEO; Import reads it in the table (above)', async () => {
+    for (const user of [salesOwner, ceoUser]) {
       const { unmount } = renderDetailPage({ user });
       await waitForLoaded();
       expect(screen.getByText(/^จำนวนสั่งซื้อ:/)).not.toBeNull();
@@ -2918,34 +2937,61 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
   // Owner ruling 2026-09-18: the label is โรงงาน, not ยี่ห้อ — but the VALUE shown is still the
   // sales-entered brand, captioned to distinguish it from Import's own factory-assignment control
   // just below (which also says โรงงาน — see PricingRequestDetailPage.jsx's own comment).
-  it('shows the sales-entered value captioned "โรงงาน (ที่ฝ่ายขายกรอก)", never the old bare "Factory:" label', async () => {
+  it('import: the spec row captions the sales-entered value "โรงงาน (ที่ฝ่ายขายกรอก)", never the old bare "Factory:" label', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();
 
-    expect(screen.getByText(/^โรงงาน \(ที่ฝ่ายขายกรอก\):/)).not.toBeNull();
-    expect(screen.queryByText(/^Factory:/)).toBeNull();
-    expect(screen.queryByText(/^ยี่ห้อ:/)).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /สเปกจากฝ่ายขาย/ }));
+    const spec = within(screen.getByTestId('pcr-spec-1'));
+    expect(spec.getByText('โรงงาน (ที่ฝ่ายขายกรอก)')).not.toBeNull();
+    expect(spec.queryByText(/^Factory/)).toBeNull();
+    expect(spec.queryByText(/^ยี่ห้อ/)).toBeNull();
   });
 
   // Opus review finding #6 (2026-09-18): before this fix, a card whose sales rep left the
   // โรงงาน-labelled brand field blank fell back to showing Import's ROUTING resolution
   // (resolvedFactoryName/factory) under the "(ที่ฝ่ายขายกรอก)" caption — misattributing an
   // Import/catalog value to Sales. The two must render as separate lines instead.
-  it('shows the sales value and Import\'s resolved factory as two SEPARATE lines, never one falling back to the other', async () => {
+  it('import: the spec row shows the sales value; Import\'s resolved factory is the CARD heading — two separate places, never one falling back to the other', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();
 
     // The default fixture's item has a real `brand` ("SCG") AND a real `resolvedFactoryName`
-    // ("SCG Ceramics") that DIFFER — proving neither line is standing in for the other.
-    expect(screen.getByText('โรงงาน (ที่ฝ่ายขายกรอก): SCG')).not.toBeNull();
-    expect(screen.getByText('โรงงานที่กำหนด (Import): SCG Ceramics')).not.toBeNull();
+    // ("SCG Ceramics") that DIFFER — proving neither is standing in for the other.
+    fireEvent.click(await screen.findByRole('button', { name: /สเปกจากฝ่ายขาย/ }));
+    expect(specValue(within(screen.getByTestId('pcr-spec-1')), 'โรงงาน (ที่ฝ่ายขายกรอก)')).toBe('SCG');
+    expect(screen.getByText('SCG Ceramics')).not.toBeNull();
+    expect(screen.queryByText(/^โรงงานที่กำหนด \(Import\)/)).toBeNull();
   });
 
-  it('shows the sales value as em-dash (never Import\'s routing resolution) when Sales left the brand blank, plus an amber "ยังไม่ได้ระบุ" on the routing line when nothing has resolved one either', async () => {
+  // Sales / CEO keep the item card's two separate lines exactly as before.
+  it('sales and CEO still see the sales value and Import\'s resolved factory as two separate item-card lines', async () => {
+    for (const user of [salesOwner, ceoUser]) {
+      const { unmount } = renderDetailPage({ user });
+      await waitForLoaded();
+      expect(screen.getByText('โรงงาน (ที่ฝ่ายขายกรอก): SCG')).not.toBeNull();
+      expect(screen.getByText('โรงงานที่กำหนด (Import): SCG Ceramics')).not.toBeNull();
+      unmount();
+    }
+  });
+
+  it('import: the spec row shows an em-dash (never Import\'s routing resolution) when Sales left the brand blank', async () => {
+    const request = buildRequest({
+      items: [{ ...buildRequest().items[0], brand: null }],
+    });
+    renderDetailPage({ user: importUser, request });
+    await waitForLoaded();
+
+    fireEvent.click(await screen.findByRole('button', { name: /สเปกจากฝ่ายขาย/ }));
+    expect(specValue(within(screen.getByTestId('pcr-spec-1')), 'โรงงาน (ที่ฝ่ายขายกรอก)')).toBe('—');
+  });
+
+  // The old amber "ยังไม่ได้ระบุ" routing line (Sales/CEO item card) is unchanged.
+  it('sales: the item card still shows the sales value as em-dash and an amber "ยังไม่ได้ระบุ" routing line when nothing resolved a factory', async () => {
     const request = buildRequest({
       items: [{ ...buildRequest().items[0], brand: null, resolvedFactoryName: null, factory: null }],
     });
-    renderDetailPage({ user: importUser, request });
+    renderDetailPage({ user: salesOwner, request });
     await waitForLoaded();
 
     expect(screen.getByText('โรงงาน (ที่ฝ่ายขายกรอก): —')).not.toBeNull();
@@ -4020,10 +4066,13 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    const warning = screen.getByText(/ยังไม่ได้ระบุโรงงาน 1 รายการ/);
+    // Import PCR redesign: the warning is the callout at the TOP of the page (it used to sit in the
+    // item-card panel, which import no longer gets).
+    const warning = screen.getByTestId('pcr-import-unassigned');
+    expect(warning.textContent).toContain('ยังไม่ได้ระบุโรงงาน 1 รายการ');
     // Position 2, not the row id — the number the reader can count on screen.
     expect(warning.textContent).toContain('รายการที่ 2 (กระเบื้องนำเข้าพิเศษ)');
-    expect(screen.getByText('รายการที่ 2')).toBeTruthy();
+    expect(warning.textContent).not.toContain('รายการที่ 1');
   });
 
   // B6 (GLA-135): the field is now a picker over the real factory master list (SearchableCombobox),
@@ -4083,12 +4132,20 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
   // QA BUG-20: a line that already has a factory is a silent dead-end no more — it explains that
   // changing means a new revision (the backend refuses an in-place re-route), instead of leaving
   // Import to guess why the picker vanished.
-  it('tells Import how to change a factory once one is set, without offering a re-route', async () => {
-    const request = buildRequestWithBlankFactoryLine();
+  it('tells Import ONCE (a section subtitle, not on every card) how to change a factory once one is set, without offering a re-route', async () => {
+    const base = buildRequest();
+    // two lines that already name a factory + one blank: the old per-card note would have printed twice
+    const request = buildRequest({ items: [
+      base.items[0],
+      { ...base.items[0], id: 3, model: 'A3', resolvedFactoryName: 'Cotto Industry' },
+      { ...base.items[0], id: 2, brand: null, model: null, productDescription: 'กระเบื้องนำเข้าพิเศษ', resolvedFactoryName: null, factory: null },
+    ] });
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    expect(screen.getByText(/ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน/)).toBeTruthy();
+    expect(screen.getAllByText('เปลี่ยนโรงงานของรายการที่ระบุแล้วต้องสร้างคำขอราคารอบใหม่')).toHaveLength(1);
+    expect(screen.queryByText(/ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน/)).toBeNull();
+    expect(screen.queryByText(/^ต้องการเปลี่ยนโรงงาน\?/)).toBeNull();
   });
 
   it('offers no input on a line that already names a factory — the backend refuses a re-route', async () => {
@@ -4265,12 +4322,14 @@ function ltChange(over = {}) {
 }
 
 describe('CR-1 factory card — status, terms, and the locked price grid (F1)', () => {
-  it('a not-yet-contacted factory shows the chip ยังไม่ติดต่อ with สร้างเมล + a primary ติดต่อโรงงานแล้ว, and none of the retired labels', async () => {
+  it('a not-yet-contacted factory shows step 1 as current with สร้างเมล + a primary ติดต่อโรงงานแล้ว, and none of the retired labels', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยังไม่ติดต่อ');
+    // Import PCR redesign: the chip is replaced by the 3-step indicator (ติดต่อโรงงาน is the current step).
+    expect(stepStates(91)).toEqual(['now', 'todo', 'todo']);
+    expect(screen.queryByTestId('pcr-factory-status-91')).toBeNull();
     expect(screen.getByRole('button', { name: 'สร้างเมล' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'ร่างอีเมล' })).toBeNull();
@@ -4278,29 +4337,28 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
   });
 
-  it('shows the locked terms strip "EUR · ต่อ ตร.ม. · ตามคำขอของฝ่ายขาย" and REMOVES the currency select (the unit may now switch ตร.ม./แผ่น per line) for lines that carry terms (R1)', async () => {
+  it('shows the read-only currency line "สกุลเงิน 🔒 EUR € · ตามคำขอราคา" and no currency / unit select for lines that carry terms (R1)', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    const strip = screen.getByTestId('pcr-factory-terms-91');
-    expect(strip.textContent).toContain('EUR');
-    expect(strip.textContent).toContain('ต่อ ตร.ม.');
-    expect(strip.textContent).toContain('ตามคำขอของฝ่ายขาย');
-    // regex, not the bare string: the label carries an InfoTip, so an exact-string query can never match
+    const line = screen.getByTestId('pcr-factory-currency-91').textContent;
+    expect(line).toContain('สกุลเงิน');
+    expect(line).toContain('EUR €');
+    expect(line).toContain('ตามคำขอราคา');
+    expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull(); // the old "ต่อ ตร.ม." strip is retired: the unit is per line now
     expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
-    // the group-level unit select stays gone; the per-line ตร.ม./แผ่น switch is its own control
-    expect(screen.queryByRole('combobox', { name: /^หน่วยราคา$/ })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
   });
 
-  it('a legacy line with no requested terms keeps today\'s currency/unit selects and shows no lock strip', async () => {
+  it('a legacy line with no requested terms ALSO gets the read-only currency line — no currency or unit select', async () => {
     renderDetailPage({ user: importUser, request: buildRequest(), factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ })).not.toBeNull();
-    expect(screen.getByRole('combobox', { name: /^หน่วยราคา/ })).not.toBeNull();
-    expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
+    expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('THB ฿');
   });
 
   it('a not-yet-contacted factory disables every price input and says why', async () => {
@@ -4309,7 +4367,8 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     await screen.findByText('SCG Ceramics');
 
     expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
-    expect(screen.getByTestId('pcr-await-contact-91').textContent).toContain('กด ติดต่อโรงงานแล้ว ก่อนกรอกราคา');
+    // Import PCR redesign: the lock reason lives ONCE in the terms row, not under each input.
+    expect(screen.getByTestId('pcr-await-contact-91').textContent).toContain('ช่องราคาจะเปิดหลังกด "ติดต่อโรงงานแล้ว"');
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
   });
 
@@ -4390,16 +4449,21 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
 
     expect(screen.queryByTestId('pcr-open-email-draft-91')).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างเมล' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ดูเมลที่ส่ง' })).toBeNull();
   });
 
-  it('a READY_FOR_COSTING factory reads ยืนยันราคาแล้ว', async () => {
+  it('a READY_FOR_COSTING factory reads as confirmed: steps done + the success line', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
-    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยืนยันราคาแล้ว');
-    // QA-29c: Import's confirmed price is not yet the CEO-approved one, so the column (desktop
-    // header + each mobile row label) says ราคาที่ยืนยันแล้ว, never ราคาที่อนุมัติ.
-    expect(screen.getAllByText('ราคาที่ยืนยันแล้ว').length).toBeGreaterThanOrEqual(2);
+    expect(stepStates(91)).toEqual(['done', 'done', 'done']);
+    expect(screen.getByTestId('pcr-factory-confirmed-91').textContent).toContain('ยืนยันราคาเสนอแล้ว · 1 รายการ');
+    // QA-29c: Import's confirmed price is not yet the CEO-approved one, so the column says
+    // ราคาที่ยืนยันแล้ว, never ราคาที่อนุมัติ. (Redesign: one table header; the mobile row label is a
+    // data-label attribute, not a second text node.)
+    const table = within(screen.getByTestId('pcr-factory-card-91')).getByRole('table');
+    expect(within(table).getByRole('columnheader', { name: 'ราคาที่ยืนยันแล้ว' })).not.toBeNull();
+    expect(screen.getByTestId('pcr-factory-row-1').querySelector('[data-label="ราคาที่ยืนยันแล้ว"]')).not.toBeNull();
     expect(screen.queryAllByText('ราคาที่อนุมัติ')).toHaveLength(0);
   });
 
@@ -4432,7 +4496,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
 
     const price = screen.getByLabelText(/^ราคาที่เสนอ/);
     expect(price.getAttribute('placeholder')).toBe('ราคา/ตร.ม.');
-    fireEvent.change(screen.getByLabelText(/^หน่วยราคา รายการ/), { target: { value: 'PER_PIECE' } });
+    fireEvent.click(within(screen.getByRole('group', { name: /^หน่วยราคา รายการ/ })).getByRole('button', { name: '/ แผ่น' }));
     expect(screen.getByLabelText(/^ราคาที่เสนอ/).getAttribute('placeholder')).toBe('ราคา/แผ่น');
     expect(screen.queryByLabelText(/^ตร.ม.\/หน่วย/)).toBeNull();
 
@@ -4447,14 +4511,38 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     ));
   });
 
-  it('offers no unit switch when Sales asked for per-box (or per-metre) — only the ตร.ม./แผ่น pair switches', async () => {
-    const base = crQuote();
-    const quote = contactedQuote({ items: [{ ...base.items[0], unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' }] });
-    renderDetailPage({ user: importUser, request: buildRequest({ items: [crItem({ requestedPriceUnitBasis: 'PER_BOX' })] }), factoryQuotes: [quote] });
+  it('a LEGACY per-box / per-metre line adds that unit as a THIRD option; a per-ตร.ม. line offers exactly แผ่น / ตร.ม.', async () => {
+    const buttons = () => within(screen.getByRole('group', { name: /^หน่วยราคา รายการ/ })).getAllByRole('button').map((b) => b.textContent.trim());
+    for (const [basis, label] of [['PER_BOX', 'กล่อง'], ['PER_LINEAR_M', 'เมตร']]) {
+      // legacy = no requestedPriceUnitBasis (the backend only locks the unit when Sales set one)
+      const quote = buildFactoryQuote({ status: 'REQUESTED', items: [{ ...buildFactoryQuote().items[0], unitBasis: basis, quotedUnit: label }] });
+      const request = buildRequest({ items: [{ ...buildRequest().items[0], requestedUnitBasis: basis }] });
+      const { unmount } = renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+      await waitForLoaded();
+      await screen.findByText('SCG Ceramics');
+      expect(buttons()).toEqual(['/ แผ่น', '/ ตร.ม.', `/ ${label}`]);
+      unmount();
+    }
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] }); // per-ตร.ม. request
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    expect(buttons()).toEqual(['/ แผ่น', '/ ตร.ม.']);
+  });
+
+  // FactoryQuoteService only lets a Sales-LOCKED line switch ตร.ม.<->แผ่น; any other locked unit 409s.
+  it.each([['PER_BOX', 'กล่อง'], ['PER_LINEAR_M', 'เมตร']])('a Sales-LOCKED %s line has NO unit switch: the unit is shown read-only and confirm keeps it', async (basis, label) => {
+    const quote = contactedQuote({ items: [{ ...crQuote().items[0], unitBasis: basis, quotedUnit: label }] });
+    renderDetailPage({ user: importUser, request: buildRequest({ items: [crItem({ requestedPriceUnitBasis: basis })] }), factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByLabelText(/^หน่วยราคา รายการ/)).toBeNull();
+    expect(screen.queryByRole('group', { name: /^หน่วยราคา รายการ/ })).toBeNull();
+    expect(screen.getByTestId('pcr-quote-unit-91-1').textContent).toBe(`/ ${label}`);
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id, expect.objectContaining({ items: [expect.objectContaining({ unitBasis: basis })] }),
+    ));
   });
 
   it('auto-calculates the price in the other unit as import types: 100 EUR/ตร.ม. x 0.36 = 36 EUR/แผ่น, and back', async () => {
@@ -4466,7 +4554,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '100' } });
     expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('36 EUR/แผ่น');
 
-    fireEvent.change(screen.getByLabelText(/^หน่วยราคา รายการ/), { target: { value: 'PER_PIECE' } });
+    fireEvent.click(within(screen.getByRole('group', { name: /^หน่วยราคา รายการ/ })).getByRole('button', { name: '/ แผ่น' }));
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '36' } });
     expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('100 EUR/ตร.ม.');
   });
@@ -4627,7 +4715,7 @@ describe('CR-1 สร้างเมล modal (R3, R8)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'สร้างเมล' })).toBeNull());
     expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
     expect(api.pricingRequests.updateFactoryQuote).not.toHaveBeenCalled();
-    expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ยังไม่ติดต่อ');
+    expect(stepStates(91)).toEqual(['now', 'todo', 'todo']);
   });
 
   it('lists the request attachments that are ticked to go with the mail', async () => {
@@ -5042,7 +5130,8 @@ describe('CR-1 unknown lead time reads ยังไม่ระบุ, never "-"
     unmount();
     renderDetailPage({ user: importUser, request: noLeadRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
-    expect((await screen.findByTestId('pcr-lt-value-91-1')).textContent).toBe('ระยะเวลานำเข้ายังไม่ระบุ');
+    // Import PCR redesign: the column caption is a data-label attribute, no longer a text node inside the value.
+    expect((await screen.findByTestId('pcr-lt-value-91-1')).textContent).toBe('ยังไม่ระบุ');
     fireEvent.click(screen.getByTestId('pcr-lt-open-91'));
     const dialog = await screen.findByRole('dialog', { name: 'ขอเปลี่ยนระยะเวลานำเข้า' });
     expect(dialog.textContent).toContain('ปัจจุบัน ยังไม่ระบุ');
@@ -5084,13 +5173,6 @@ describe('CR-1 R1 payload precedence — the line\'s requested terms win over wh
 });
 
 describe('CR-1 review copy / gating / a11y / provenance', () => {
-  it('pre-draft banner points at each factory\'s ติดต่อโรงงานแล้ว and says the mail is optional', async () => {
-    renderDetailPage({ user: importUser, request: crRequest() });
-    await waitForLoaded();
-    const preview = await screen.findByTestId('pcr-price-preview');
-    expect(preview.textContent).toContain('กด “ติดต่อโรงงานแล้ว” ของแต่ละโรงงานเมื่อติดต่อแล้ว จึงกรอกราคาได้ (สร้างเมลหรือไม่ก็ได้)');
-  });
-
   it('สร้างเมลให้ทุกโรงงาน is offered only inside the contact window', async () => {
     renderDetailPage({ user: importUser, request: crRequest() });
     await waitForLoaded();
@@ -5174,11 +5256,13 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(screen.queryByRole('heading', { level: 2, name: PANEL_TITLE })).toBeNull();
   });
 
-  it('regression guard: Import still gets the factory รายการสินค้า (N รายการ) panel', async () => {
+  it('regression guard: Import still gets the factory section (ขอราคาจากโรงงาน)', async () => {
     const request = buildRequest({ summary: { status: 'IMPORT_REVIEWING' } });
     renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote()] });
     await waitForLoaded(request);
-    expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า \(\d+ รายการ\)$/ })).not.toBeNull();
+    // Import PCR redesign: the section is headed "ขอราคาจากโรงงาน" (was "รายการสินค้า (N รายการ)").
+    expect(await screen.findByRole('heading', { level: 2, name: 'ขอราคาจากโรงงาน' })).not.toBeNull();
+    expect(screen.queryByRole('heading', { level: 2, name: /^รายการสินค้า \(\d+ รายการ\)$/ })).toBeNull();
   });
 
   it('NET mode, STOCK line: ราคาตั้ง/แผ่น is a typed input prefilled with the saved list price, beside ส่วนลด %', async () => {
@@ -6165,7 +6249,7 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
 
     // Positive control first (the CEO DOES get the workspace), then the "cannot reach" cases.
     it.each([['import', importUser], ['sales', salesOwner], ['sales_manager', salesManager]])(
-      '%s never sees the summary bar, the pricing table, the cards or the mobile bar (and keeps the ภาพรวม panel)',
+      '%s never sees the summary bar, the pricing table, the cards or the mobile bar (sales/manager keep the ภาพรวม panel; import has its own header instead)',
       async (_name, user) => {
         const { request } = await renderCeoNewForm();
         expect(screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' })).not.toBeNull();
@@ -6183,7 +6267,14 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
           expect(screen.queryByTestId(id)).toBeNull();
         }
         expect(screen.queryByRole('group', { name: 'วิธีกรอกราคา' })).toBeNull();
-        expect(screen.getByText('ภาพรวม')).not.toBeNull();
+        if (user === importUser) {
+          // Import PCR redesign: import's header replaces the ภาพรวม panel.
+          expect(screen.getByTestId('pcr-import-header')).not.toBeNull();
+          expect(screen.queryByText('ภาพรวม')).toBeNull();
+        } else {
+          expect(screen.getByText('ภาพรวม')).not.toBeNull();
+          expect(screen.queryByTestId('pcr-import-header')).toBeNull();
+        }
       },
     );
 
@@ -7070,5 +7161,807 @@ describe('CEO pricing workspace redesign — review round 2', () => {
       await screen.findByText('PCD-2026-0001');
       expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
     });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Import PCR redesign (import role, /pricing-requests/:id) — Phase A tests. UI-LEVEL ONLY.
+// Target: header + progress strip + unassigned-factory callout + ONE factory section whose cards are
+// header / terms row / table (spec toggle) / footer. The read-only item-card panel and the ภาพรวม
+// panel are not rendered for import. EVERY backend call, payload and gate is unchanged (canConfirm,
+// editable, contacted, canMarkContacted, windows, the dirty/receive-skip rule, locked terms): the
+// payload/gate tests above stay as they were, and the cases here pin only the new surface plus the
+// "cannot reach" cases (CEO/Sales unchanged; locked before contact; confirm absent where
+// canConfirm is false; เจรจา → the same endpoint).
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+describe('Import PCR redesign — factory-first page (import role)', () => {
+  const SCG = 'SCG Ceramics';
+  const COTTO = 'Cotto Industry';
+  const stripOf = () => within(screen.getByRole('region', { name: 'ความคืบหน้าการขอราคา' }));
+  const fig = (key) => stripOf().getByTestId(`pcr-import-fig-${key}`).textContent.trim();
+  const nextStep = () => stripOf().getByTestId('pcr-import-next-step').textContent.trim();
+  const nextSub = () => stripOf().getByTestId('pcr-import-next-sub').textContent.trim();
+  const segs = () => stripOf().getAllByTestId('pcr-import-progress-seg').map((el) => el.getAttribute('data-state'));
+  const card = (id) => within(screen.getByTestId(`pcr-factory-card-${id}`));
+
+  const item = (over = {}) => crItem({ boxes: 5, requestedQtySqm: 7.2, ...over });
+  const twoFactoryRequest = (summary = {}) => ({
+    ...buildRequest({
+      summary: { requestedByName: 'คุณขาย ตัวอย่าง', assignedImportName: 'คุณนำเข้า ตัวอย่าง', ...summary },
+      items: [
+        item({ id: 1, resolvedFactoryName: SCG }),
+        item({ id: 2, brand: 'COTTO', model: 'B2', productDescription: 'กระเบื้องผนัง COTTO B2', resolvedFactoryName: COTTO }),
+      ],
+    }),
+    events: crRequest().events,
+  });
+  const line = (id, itemId, over = {}) => ({ ...crQuote().items[0], id: id * 10 + itemId, pricingRequestItemId: itemId, ...over });
+  const fq = (id, name, itemId, over = {}) => crQuote({ id, factoryName: name, factoryId: 500 + id, items: [line(id, itemId)], ...over });
+  const contacted = (id, name, itemId, over = {}) => fq(id, name, itemId, { status: 'REQUESTED', contactedOn: '2026-10-01', contactedBy: 3, ...over });
+  const confirmed = (id, name, itemId, over = {}) => contacted(id, name, itemId, {
+    status: 'READY_FOR_COSTING', items: [line(id, itemId, { rawUnitPrice: 12.5 })], ...over,
+  });
+
+  async function renderTwo({ q1 = fq(91, SCG, 1), q2 = fq(92, COTTO, 2), request = twoFactoryRequest(), user = importUser } = {}) {
+    renderDetailPage({ user, request, factoryQuotes: [q1, q2] });
+    await waitForLoaded(request);
+    await screen.findByTestId('pcr-factory-card-92');
+    return request;
+  }
+
+  afterEach(() => { delete api.fxRates; });
+
+  describe('header (replaces ภาพรวม)', () => {
+    it('shows the PCR code, status badge, customer and ONE meta line: ดีล · ผู้รับ · ต้องการภายใน · ฝ่ายขาย · ผู้รับเรื่อง', async () => {
+      const request = await renderTwo();
+      const header = within(screen.getByTestId('pcr-import-header'));
+      // the h1's accessible name stays EXACTLY the code (waitForLoaded depends on it): the badge is a sibling
+      expect(header.getByRole('heading', { level: 1, name: request.summary.requestCode })).not.toBeNull();
+      expect(header.getByText(pricingRequestStatusLabel('IMPORT_REVIEWING').label)).not.toBeNull();
+      expect(header.getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      expect(header.getByRole('link', { name: 'PR-2026-0701' }).getAttribute('href')).toBe('/import/deals/701');
+      expect(header.getByText(/^ผู้รับ:/).textContent).toContain('ผู้ออกแบบ ก.');
+      expect(header.getByText(/ต้องการภายใน/).textContent).toContain(formatThaiDate('2026-08-01'));
+      expect(header.getByText(/^ฝ่ายขาย:/).textContent).toContain('คุณขาย ตัวอย่าง');
+      expect(header.getByText(/^ผู้รับเรื่อง:/).textContent).toContain('คุณนำเข้า ตัวอย่าง');
+      // the role description is NOT a person, and the ภาพรวม panel is gone
+      expect(screen.queryByText(/ผู้รับเรื่องและประสานราคาโรงงาน/)).toBeNull();
+      expect(screen.queryByText('ภาพรวม')).toBeNull();
+    });
+
+    it('omits ฝ่ายขาย / ผู้รับเรื่อง when the data does not carry them (never the role description in their place)', async () => {
+      await renderTwo({ request: twoFactoryRequest({ requestedByName: null, assignedImportName: null }) });
+      const header = within(screen.getByTestId('pcr-import-header'));
+      expect(header.getByRole('link', { name: 'PR-2026-0701' })).not.toBeNull(); // positive control
+      expect(header.queryByText(/^ฝ่ายขาย:/)).toBeNull();
+      expect(header.queryByText(/^ผู้รับเรื่อง:/)).toBeNull();
+      expect(screen.queryByText(/ผู้รับเรื่องและประสานราคาโรงงาน/)).toBeNull();
+    });
+  });
+
+  describe('progress strip (section "ความคืบหน้าการขอราคา")', () => {
+    it('figures: โรงงาน N · ติดต่อแล้ว n/N · ยืนยันราคาแล้ว n/N · สินค้า count', async () => {
+      await renderTwo({ q1: contacted(91, SCG, 1), q2: fq(92, COTTO, 2) }); // SCG contacted, Cotto still DRAFT
+      for (const label of ['โรงงาน', 'ติดต่อแล้ว', 'ยืนยันราคาแล้ว', 'สินค้า']) {
+        expect(stripOf().getByText(label)).not.toBeNull();
+      }
+      expect(fig('factories')).toBe('2');
+      expect(fig('contacted')).toBe('1/2');
+      expect(fig('confirmed')).toBe('0/2');
+      expect(fig('items')).toBe('2');
+    });
+
+    it('confirmed = READY_FOR_COSTING and NOT dirty: editing a confirmed factory\'s price takes it out of the count', async () => {
+      await renderTwo({ q1: confirmed(91, SCG, 1), q2: contacted(92, COTTO, 2) });
+      expect(fig('contacted')).toBe('2/2');
+      expect(fig('confirmed')).toBe('1/2');
+      expect(segs()).toEqual(['confirmed', 'contacted']);
+
+      fireEvent.change(card(91).getByLabelText(/^ราคาที่เสนอ/), { target: { value: '99' } });
+      expect(fig('confirmed')).toBe('0/2');
+      expect(segs()).toEqual(['contacted', 'contacted']);
+    });
+
+    it('the segmented bar has one segment per factory: none / contacted / confirmed', async () => {
+      await renderTwo({ q1: fq(91, SCG, 1), q2: confirmed(92, COTTO, 2) });
+      expect(segs()).toEqual(['none', 'confirmed']);
+    });
+
+    it('the สินค้า figure counts unassigned lines but the โรงงาน figure counts only named factories', async () => {
+      const request = buildRequestWithBlankFactoryLine();
+      renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      expect(fig('factories')).toBe('1');
+      expect(fig('items')).toBe('2');
+    });
+
+    // "ขั้นต่อไป" — ONE plain sentence, in this precedence.
+    it('ขั้นต่อไป 1/4: an unassigned item comes first, even before a factory that is not contacted', async () => {
+      const request = buildRequestWithBlankFactoryLine();
+      renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote()] }); // DRAFT = not contacted
+      await waitForLoaded(request);
+      expect(nextStep()).toBe('ระบุโรงงานให้ "กระเบื้องนำเข้าพิเศษ" ก่อน');
+    });
+
+    it('ขั้นต่อไป 2/4: the first factory not contacted — and the sub-line says the request goes to the CEO automatically once every factory is confirmed', async () => {
+      await renderTwo({ q1: contacted(91, SCG, 1), q2: fq(92, COTTO, 2) });
+      expect(nextStep()).toBe(`ติดต่อ ${COTTO}`);
+      expect(nextSub()).toContain('ส่งถึง CEO อัตโนมัติ');
+      expect(nextSub()).not.toBe('ยืนยันโรงงานนี้แล้วคำขอนี้จะส่งถึง CEO อัตโนมัติ'); // two are left
+    });
+
+    it('ขั้นต่อไป 3/4: all contacted → the first not confirmed; with exactly ONE left the sub-line is the single-factory sentence', async () => {
+      await renderTwo({ q1: contacted(91, SCG, 1), q2: contacted(92, COTTO, 2) });
+      expect(nextStep()).toBe(`กรอกราคาและยืนยัน ${SCG}`);
+      expect(nextSub()).not.toBe('ยืนยันโรงงานนี้แล้วคำขอนี้จะส่งถึง CEO อัตโนมัติ');
+      cleanup();
+
+      await renderTwo({ q1: confirmed(91, SCG, 1), q2: contacted(92, COTTO, 2) });
+      expect(nextStep()).toBe(`กรอกราคาและยืนยัน ${COTTO}`);
+      expect(nextSub()).toBe('ยืนยันโรงงานนี้แล้วคำขอนี้จะส่งถึง CEO อัตโนมัติ');
+    });
+
+    // "ส่งถึง CEO แล้ว" describes the REQUEST (the server decides, on more than the factories), so it
+    // follows the request's own status, not "all factories confirmed".
+    it('ขั้นต่อไป 4/4 (a): every factory confirmed but the request still AWAITING_FACTORY_RESPONSE → NOT ส่งถึง CEO แล้ว', async () => {
+      await renderTwo({
+        q1: confirmed(91, SCG, 1), q2: confirmed(92, COTTO, 2),
+        request: twoFactoryRequest({ status: 'AWAITING_FACTORY_RESPONSE' }),
+      });
+      expect(nextStep()).toBe('ยืนยันราคาครบแล้ว แต่ยังไม่ส่งถึง CEO');
+      expect(nextSub()).toBe('ระบบจะส่งถึง CEO เมื่อครบเงื่อนไข');
+    });
+
+    it('ขั้นต่อไป 4/4 (b): the request itself is past import (READY_FOR_CEO_REVIEW) → ส่งถึง CEO แล้ว', async () => {
+      await renderTwo({
+        q1: confirmed(91, SCG, 1), q2: confirmed(92, COTTO, 2),
+        request: twoFactoryRequest({ status: 'READY_FOR_CEO_REVIEW' }),
+      });
+      expect(nextStep()).toBe('ส่งถึง CEO แล้ว');
+    });
+  });
+
+  describe('unassigned-factory callout, section order, item cards gone', () => {
+    const blankRequest = () => buildRequestWithBlankFactoryLine();
+
+    it('a warning callout at the TOP holds the existing ImportFactoryPicker for the unassigned item', async () => {
+      const request = blankRequest();
+      renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+
+      const callout = screen.getByTestId('pcr-import-unassigned');
+      expect(callout.getAttribute('role')).toBe('status'); // persistent, not an alert
+      expect(within(callout).getByLabelText('ระบุโรงงาน').id).toBe('pcr-item-factory-2');
+      expect(within(callout).getByRole('button', { name: 'บันทึกโรงงาน' })).not.toBeNull();
+      // the picker is not duplicated anywhere else on the page
+      expect(screen.getAllByLabelText('ระบุโรงงาน')).toHaveLength(1);
+    });
+
+    it('shows no callout when every line names a factory, and none once the request has left Import\'s hands (canSetItemFactory)', async () => {
+      await renderTwo();
+      expect(screen.getByTestId('pcr-import-header')).not.toBeNull(); // positive control: the redesigned page is up
+      expect(screen.queryByTestId('pcr-import-unassigned')).toBeNull();
+      cleanup();
+
+      const late = buildRequestWithBlankFactoryLine({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+      renderDetailPage({ user: importUser, request: late });
+      await waitForLoaded(late);
+      expect(screen.getByTestId('pcr-import-header')).not.toBeNull();
+      expect(screen.queryByTestId('pcr-import-unassigned')).toBeNull();
+    });
+
+    it('page order: header → progress strip → callout → "ขอราคาจากโรงงาน" section → attachments; สร้างเมลให้ทุกโรงงาน sits in the section', async () => {
+      const request = blankRequest();
+      renderDetailPage({ user: importUser, request }); // no quotes: preview cards + the bulk button
+      await waitForLoaded(request);
+
+      const section = await screen.findByRole('region', { name: 'ขอราคาจากโรงงาน' });
+      expect(within(section).getByRole('heading', { level: 2, name: 'ขอราคาจากโรงงาน' })).not.toBeNull();
+      expect(within(section).getByRole('button', { name: 'สร้างเมลให้ทุกโรงงาน' })).not.toBeNull();
+      const order = [
+        screen.getByTestId('pcr-import-header'),
+        screen.getByRole('region', { name: 'ความคืบหน้าการขอราคา' }),
+        screen.getByTestId('pcr-import-unassigned'),
+        section,
+        screen.getByRole('heading', { name: 'ไฟล์แนบประกอบคำขอราคา' }),
+      ];
+      for (let i = 0; i < order.length - 1; i += 1) {
+        expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+    });
+
+    it('the read-only item-card panel is NOT rendered for import (none of its headings or lines), and the old "รายการสินค้า (N รายการ)" panel title is gone', async () => {
+      await renderTwo();
+      expect(screen.getByRole('region', { name: 'ขอราคาจากโรงงาน' })).not.toBeNull(); // positive control
+      expect(screen.queryByRole('heading', { name: 'รายการสินค้าและราคาตั้งต้น' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: /^รายการสินค้า \(/ })).toBeNull();
+      expect(screen.queryByText(/^จำนวนสั่งซื้อ:/)).toBeNull();
+      expect(screen.queryByText(/^โรงงาน \(ที่ฝ่ายขายกรอก\):/)).toBeNull();
+      expect(screen.queryByTestId('pcr-import-price-1')).toBeNull();
+    });
+  });
+
+  describe('factory card — header, steps, terms row', () => {
+    it('header: factory name, origin · n รายการ, and the 3-step indicator (ติดต่อโรงงาน → กรอกราคา → ยืนยันราคาเสนอ) with an aria-label', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+
+      const head = within(screen.getByTestId('pcr-factory-head-91'));
+      expect(head.getByText(SCG)).not.toBeNull();
+      expect(screen.getByTestId('pcr-factory-head-91').textContent).toContain('ไทย-สต็อก');
+      expect(screen.getByTestId('pcr-factory-head-91').textContent).toContain('1 รายการ');
+      const steps = screen.getByTestId('pcr-factory-steps-91');
+      expect(steps.getAttribute('aria-label')).toMatch(/^ขั้นตอนโรงงานนี้/);
+      expect(steps.textContent).toMatch(/ติดต่อโรงงาน.*กรอกราคา.*ยืนยันราคาเสนอ/);
+    });
+
+    it('steps follow the gate state: not contacted [now,todo,todo] → contacted [done,now,todo] → confirmed [done,done,done]', async () => {
+      const { unmount } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(stepStates(91)).toEqual(['now', 'todo', 'todo']);
+      unmount();
+
+      const second = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(stepStates(91)).toEqual(['done', 'now', 'todo']);
+      second.unmount();
+
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(stepStates(91)).toEqual(['done', 'done', 'done']);
+    });
+
+    it('a contacted factory\'s header reads ติดต่อแล้ว <date> and keeps the contact note visible; the mail button reads ดูเมลที่ส่ง and ติดต่อโรงงานแล้ว is gone', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+
+      const head = within(screen.getByTestId('pcr-factory-head-91'));
+      expect(screen.getByTestId('pcr-factory-status-91').textContent).toContain('ติดต่อแล้ว 1 ต.ค.');
+      expect(head.getByRole('button', { name: 'ดูเมลที่ส่ง' })).not.toBeNull();
+      expect(head.queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
+      expect(screen.getByText(/โทรคุณ Marco/)).not.toBeNull();
+    });
+
+    it('a factory not yet contacted has สร้างเมล + ติดต่อโรงงานแล้ว IN its header and no contacted line', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      const head = within(screen.getByTestId('pcr-factory-head-91'));
+      expect(head.getByRole('button', { name: 'สร้างเมล' })).not.toBeNull();
+      expect(head.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
+      expect(screen.queryByTestId('pcr-factory-status-91')).toBeNull();
+    });
+
+    it('terms row: the lock reason appears ONCE per card (not under each of the two inputs), and every price input is still disabled', async () => {
+      const request = crRequest({ items: [crItem({ id: 1 }), crItem({ id: 2, model: 'A2' })] });
+      const quote = crQuote({ items: [line(91, 1), line(91, 2)] }); // DRAFT = not contacted
+      renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-factory-card-91');
+
+      const reason = 'ช่องราคาจะเปิดหลังกด "ติดต่อโรงงานแล้ว"';
+      expect(within(screen.getByTestId('pcr-factory-terms-row-91')).getByTestId('pcr-await-contact-91').textContent).toContain(reason);
+      expect(card(91).getAllByText(/ช่องราคาจะเปิดหลังกด/)).toHaveLength(1);
+      expect(card(91).queryAllByText(/กรอกได้หลังติดต่อโรงงาน/)).toHaveLength(0);
+      const inputs = card(91).getAllByLabelText(/^ราคาที่เสนอ/);
+      expect(inputs).toHaveLength(2);
+      inputs.forEach((input) => expect(input.disabled).toBe(true));
+    });
+
+    it('terms row: once contacted there is no lock reason, and the prices unlock', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(screen.getByTestId('pcr-factory-terms-row-91')).not.toBeNull();
+      expect(screen.queryByText(/ช่องราคาจะเปิดหลังกด/)).toBeNull();
+      expect(card(91).getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);
+    });
+
+    it('terms row holds the read-only currency line and, for EUR, the FX note "อัตรา 40.00 บาท (ธปท.)" when a rate exists', async () => {
+      api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }] }) };
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      const row = within(await screen.findByTestId('pcr-factory-terms-row-91'));
+      expect(row.getByTestId('pcr-factory-currency-91').textContent).toContain('ตามคำขอราคา');
+      expect((await row.findByTestId('pcr-factory-fx-91')).textContent).toMatch(/อัตรา 40\.00 บาท \(ธปท\.\)/);
+    });
+
+    it('terms row: a THB / legacy factory has no FX note and no currency / unit select', async () => {
+      api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }] }) };
+      renderDetailPage({ user: importUser, request: buildRequest(), factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+      await waitForLoaded();
+      const row = within(await screen.findByTestId('pcr-factory-terms-row-91'));
+      expect(row.queryByRole('combobox')).toBeNull();
+      expect(row.getByTestId('pcr-factory-currency-91')).not.toBeNull();
+      expect(row.queryByTestId('pcr-factory-fx-91')).toBeNull();
+    });
+  });
+
+  describe('factory card — table, spec row, price cell', () => {
+    const richRequest = () => crRequest({ items: [crItem({ boxes: 5, requestedQtySqm: 7.2 })] });
+
+    it('table columns: สินค้า · จำนวน · ราคาที่โรงงานเสนอ · ระยะเวลานำเข้า · ราคาที่ยืนยันแล้ว', async () => {
+      renderDetailPage({ user: importUser, request: richRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      const table = within(await screen.findByTestId('pcr-factory-card-91')).getByRole('table');
+      expect(within(table).getAllByRole('columnheader').map((th) => th.textContent.trim())).toEqual(
+        ['สินค้า', 'จำนวน', 'ราคาที่โรงงานเสนอ', 'ระยะเวลานำเข้า', 'ราคาที่ยืนยันแล้ว'],
+      );
+    });
+
+    it('a row shows name · variant · รหัส, the quantity as แผ่น + ตร.ม. + กล่อง, the lead time, and labelled cells (mobile stacked block)', async () => {
+      renderDetailPage({ user: importUser, request: richRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+
+      const row = screen.getByTestId('pcr-factory-row-1');
+      expect(row.textContent).toContain('SCG A1');
+      expect(row.textContent).toContain('60x60 · ขาว · ด้าน');
+      expect(row.textContent).toContain('รหัส SCG-A1');
+      const cell = (label) => row.querySelector(`[data-label="${label}"]`);
+      expect(cell('จำนวน').textContent).toContain('20 แผ่น');
+      expect(cell('จำนวน').textContent).toContain('7.2 ตร.ม.');
+      expect(cell('จำนวน').textContent).toContain('5 กล่อง');
+      expect(cell('ราคาที่โรงงานเสนอ').querySelector('input')).not.toBeNull();
+      expect(cell('ระยะเวลานำเข้า').textContent).toContain('75–90 วัน');
+      expect(cell('ราคาที่ยืนยันแล้ว')).not.toBeNull();
+      // the lead-time change action is still ONE per card, inside the card
+      expect(card(91).getByTestId('pcr-lt-open-91').textContent).toContain('ขอเปลี่ยน');
+    });
+
+    it('"สเปกจากฝ่ายขาย" toggles an inline spec row with the old item card\'s fields (closed by default, aria-expanded)', async () => {
+      renderDetailPage({ user: importUser, request: richRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+
+      const toggle = screen.getByRole('button', { name: /สเปกจากฝ่ายขาย/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByTestId('pcr-spec-1')).toBeNull();
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const spec = within(screen.getByTestId('pcr-spec-1'));
+      expect(specValue(spec, 'สี')).toBe('ขาว');
+      expect(specValue(spec, 'ผิว')).toBe('ด้าน');
+      expect(specValue(spec, 'ขนาด')).toBe('60x60');
+      expect(specValue(spec, 'ความหนา')).toBe('10 มม.');
+      expect(specValue(spec, 'โรงงาน (ที่ฝ่ายขายกรอก)')).toBe('SCG');
+      expect(specValue(spec, 'ประเทศต้นทาง')).toBe('ไทย-สต็อก');
+
+      fireEvent.click(toggle);
+      expect(screen.queryByTestId('pcr-spec-1')).toBeNull();
+    });
+
+    it('the price input is still the existing one (aria-label ราคาที่เสนอ …, typing sanitised) and on mobile is full width and 44px', async () => {
+      renderDetailPage({ user: importUser, request: richRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      const price = card(91).getByLabelText(/^ราคาที่เสนอ/);
+      expect(price.getAttribute('type')).toBe('text');
+      expect(price.className).toMatch(/44px|h-11/);
+      expect(price.className).toMatch(/w-full/);
+    });
+
+    it('a locked (not yet contacted) price input stays disabled and a click on the table cannot unlock it', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(within(card(91).getByRole('table')).getByRole('columnheader', { name: 'ราคาที่โรงงานเสนอ' })).not.toBeNull(); // positive control: the new table
+      const price = card(91).getByLabelText(/^ราคาที่เสนอ/);
+      expect(price.disabled).toBe(true);
+      fireEvent.change(price, { target: { value: '55' } });
+      expect(price.value).toBe('');
+      expect(card(91).queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    });
+  });
+
+  describe('factory card — footer', () => {
+    it('helper under the buttons, not contacted: "ติดต่อโรงงานก่อน จึงกรอกราคาและยืนยันได้" — and no confirm / เจรจา button (nothing disabled-in-place either)', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(screen.getByTestId('pcr-factory-helper-91').textContent).toContain('ติดต่อโรงงานก่อน จึงกรอกราคาและยืนยันได้');
+      expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'บันทึกว่ากำลังเจรจา' })).toBeNull();
+    });
+
+    it('helper when confirm is offered: "ยืนยันแล้วราคานี้ใช้คำนวณต้นทุน · …กำลังเจรจา… ใช้เมื่อยังต่อรองอยู่"; the buttons are 44px', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'RESPONSE_RECEIVED' })] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      const helper = screen.getByTestId('pcr-factory-helper-91').textContent;
+      expect(helper).toContain('ยืนยันแล้วราคานี้ใช้คำนวณต้นทุน');
+      expect(helper).toContain('"กำลังเจรจา" ใช้เมื่อยังต่อรองอยู่');
+      expect(card(91).getByRole('button', { name: 'ยืนยันราคาเสนอ' }).className).toMatch(/44px|h-11/);
+      expect(card(91).getByRole('button', { name: 'บันทึกว่ากำลังเจรจา' }).className).toMatch(/44px|h-11/);
+    });
+
+    // NO NEW GATE: canConfirm never required every price. The prototype's disabled-until-all-priced
+    // button and "กรอกราคาให้ครบอีก n รายการจึงยืนยันได้" helper are therefore NOT built.
+    it('no new gate: with an empty price a contacted factory still offers ยืนยันราคาเสนอ, shows no "กรอกราคาให้ครบ" helper, and confirming still sends the (null) price', async () => {
+      const quote = contactedQuote({ items: [line(91, 1, { rawUnitPrice: null })] });
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      const confirm = card(91).getByRole('button', { name: 'ยืนยันราคาเสนอ' });
+      expect(confirm.disabled).toBe(false);
+      expect(screen.getByTestId('pcr-factory-helper-91').textContent).toContain('ยืนยันแล้วราคานี้ใช้คำนวณต้นทุน');
+      // a NON-blocking count of what is still empty (owner ruling): it disables nothing
+      expect(screen.getByTestId('pcr-factory-helper-91').textContent).toContain('ยังไม่กรอกราคา 1 รายการ');
+      expect(screen.queryByText(/กรอกราคาให้ครบ/)).toBeNull();
+
+      fireEvent.click(confirm);
+      await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+        quote.id, expect.objectContaining({ items: [expect.objectContaining({ pricingRequestItemId: 1, rawUnitPrice: null })] }),
+      ));
+      await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
+    });
+
+    it('the ยังไม่กรอกราคา n รายการ helper counts the EMPTY drafts and goes away once every price is typed (never disables anything)', async () => {
+      const request = crRequest({ items: [crItem({ id: 1 }), crItem({ id: 2, model: 'A2' })] });
+      const quote = contactedQuote({ items: [line(91, 1, { rawUnitPrice: 12 }), line(91, 2, { rawUnitPrice: null })] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(screen.getByTestId('pcr-factory-helper-91').textContent).toContain('ยังไม่กรอกราคา 1 รายการ');
+      fireEvent.change(card(91).getAllByLabelText(/^ราคาที่เสนอ/)[1], { target: { value: '13' } });
+      expect(screen.getByTestId('pcr-factory-helper-91').textContent).not.toContain('ยังไม่กรอกราคา');
+      expect(card(91).getByRole('button', { name: 'ยืนยันราคาเสนอ' }).disabled).toBe(false);
+    });
+
+    it('บันทึกว่ากำลังเจรจา (renamed เจรจา) calls the SAME endpoint as before — startFactoryNegotiation(quote.id, {note}) — and the old name is gone', async () => {
+      const quote = contactedQuote({ status: 'RESPONSE_RECEIVED' });
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(screen.queryByRole('button', { name: 'เจรจา' })).toBeNull();
+
+      fireEvent.click(card(91).getByRole('button', { name: 'บันทึกว่ากำลังเจรจา' }));
+      await waitFor(() => expect(api.pricingRequests.startFactoryNegotiation).toHaveBeenCalledWith(
+        quote.id, { note: 'Negotiation in progress' },
+      ));
+      expect(api.pricingRequests.receiveFactoryQuote).not.toHaveBeenCalled();
+      expect(api.pricingRequests.markFactoryQuoteReady).not.toHaveBeenCalled();
+    });
+
+    it('บันทึกว่ากำลังเจรจา is offered only where canNegotiate is (RESPONSE_RECEIVED): not on REQUESTED, NEGOTIATING or READY_FOR_COSTING', async () => {
+      // positive control first, so the absences below cannot pass on a page that never had the button
+      const first = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'RESPONSE_RECEIVED' })] });
+      await waitForLoaded();
+      expect(await screen.findByRole('button', { name: 'บันทึกว่ากำลังเจรจา' })).not.toBeNull();
+      first.unmount();
+      for (const status of ['REQUESTED', 'NEGOTIATING', 'READY_FOR_COSTING']) {
+        const { unmount } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status })] });
+        await waitForLoaded();
+        await screen.findByTestId('pcr-factory-card-91');
+        expect(screen.queryByRole('button', { name: 'บันทึกว่ากำลังเจรจา' }), status).toBeNull();
+        unmount();
+      }
+    });
+
+    it('after confirm the footer shows the success line "ยืนยันราคาเสนอแล้ว · n รายการ" and no confirm button; editing a price brings the button back and drops the line', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      expect(screen.getByTestId('pcr-factory-confirmed-91').textContent).toContain('ยืนยันราคาเสนอแล้ว · 1 รายการ');
+      expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+
+      fireEvent.change(card(91).getByLabelText(/^ราคาที่เสนอ/), { target: { value: '48' } });
+      expect(await screen.findByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
+      expect(screen.queryByTestId('pcr-factory-confirmed-91')).toBeNull();
+    });
+
+    it('the footer keeps หมายเหตุราคา and the factory file attachment (existing controls)', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      await screen.findByTestId('pcr-factory-card-91');
+      const footer = within(screen.getByTestId('pcr-factory-footer-91'));
+      expect(footer.getByLabelText('หมายเหตุราคา')).not.toBeNull();
+      expect(footer.getByText('แนบไฟล์')).not.toBeNull();
+    });
+  });
+
+  describe('preview cards (factory with no quote yet) are the same card', () => {
+    it('a preview group renders as a card with the steps (contact = now), the table, its spec toggle and สร้างเมล / ติดต่อโรงงานแล้ว in the header', async () => {
+      renderDetailPage({ user: importUser, request: crRequest() });
+      await waitForLoaded();
+      const group = within(await screen.findByTestId('pcr-price-preview-group'));
+      expect(group.getByRole('table')).not.toBeNull();
+      expect(group.getByRole('button', { name: /สเปกจากฝ่ายขาย/ })).not.toBeNull();
+      expect(group.getByRole('button', { name: 'สร้างเมล' })).not.toBeNull();
+      expect(group.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).not.toBeNull();
+      expect(within(screen.getByTestId('pcr-price-preview-group')).getAllByTestId('pcr-factory-step').map((el) => el.getAttribute('data-state')))
+        .toEqual(['now', 'todo', 'todo']);
+      expect(group.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+    });
+  });
+
+  describe('stock lines stay visible to import', () => {
+    it('a small "จากสต็อก · ไม่ต้องขอราคา (n รายการ)" card after the factory cards lists each stock line with the badge, and is not counted as a โรงงาน', async () => {
+      const base = item({ id: 1, resolvedFactoryName: SCG });
+      const request = buildRequest({ items: [base, { ...base, id: 2, model: 'S1', productDescription: 'กระเบื้อง S1 จากสต็อก', stockSource: 'IN_THAILAND', resolvedFactoryName: null }] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      const stock = within(await screen.findByTestId('pcr-stock-card'));
+      expect(stock.getByText(/จากสต็อก · ไม่ต้องขอราคา \(1 รายการ\)/)).not.toBeNull();
+      expect(stock.getByText('SCG S1')).not.toBeNull();
+      expect(stock.getByText('จากสต็อก')).not.toBeNull();
+      expect(fig('factories')).toBe('1');
+      const section = screen.getByRole('region', { name: 'ขอราคาจากโรงงาน' });
+      expect(section.contains(screen.getByTestId('pcr-stock-card'))).toBe(true);
+    });
+
+    it('no stock card when there are no stock lines', async () => {
+      await renderTwo();
+      expect(screen.getByTestId('pcr-import-header')).not.toBeNull();
+      expect(screen.queryByTestId('pcr-stock-card')).toBeNull();
+    });
+  });
+
+  describe('price terms: locked currency, per-line unit switch, symbol prefix', () => {
+    const legacyEur = (status = 'REQUESTED') => {
+      const base = buildFactoryQuote();
+      return buildFactoryQuote({ status, defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: 'EUR' }] });
+    };
+    const render = async (quote, request = buildRequest()) => {
+      renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-factory-card-91');
+    };
+
+    it('a legacy line has no currency select and shows the read-only code', async () => {
+      await render(legacyEur());
+      expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
+      expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('EUR €');
+    });
+
+    it('a legacy line\'s unit switch offers exactly / แผ่น and / ตร.ม., with the current one pressed', async () => {
+      await render(legacyEur());
+      const group = screen.getByRole('group', { name: /^หน่วยราคา รายการ #1/ });
+      const buttons = within(group).getAllByRole('button');
+      expect(buttons.map((b) => b.textContent.trim())).toEqual(['/ แผ่น', '/ ตร.ม.']);
+      expect(buttons[0].getAttribute('aria-pressed')).toBe('true'); // default item: PER_PIECE
+      expect(buttons[1].getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('confirm sends the SAME currency as before for an untouched legacy draft (defaultCurrency + the line currency)', async () => {
+      const quote = legacyEur();
+      await render(quote);
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+      await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+        quote.id,
+        expect.objectContaining({ defaultCurrency: 'EUR', items: [expect.objectContaining({ currency: 'EUR', unitBasis: 'PER_PIECE' })] }),
+      ));
+    });
+
+    it('currency parity: when defaultCurrency differs from a line\'s currency, confirm sends exactly the seeded values', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'USD', items: [{ ...base.items[0], currency: 'EUR' }] });
+      await render(quote);
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+      fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+      await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalled());
+      const payload = api.pricingRequests.receiveFactoryQuote.mock.calls[0][1];
+      expect(payload.defaultCurrency).toBe('USD');
+      expect(payload.items[0].currency).toBe('EUR');
+    });
+
+    it('the price input carries a currency symbol prefix (€ for EUR, ฿ for THB, the code for an unknown one) and an aria-label with currency and unit', async () => {
+      await render(legacyEur());
+      expect(screen.getByTestId('pcr-quote-symbol-91-1').textContent).toBe('€');
+      const price = screen.getByLabelText(/^ราคาที่เสนอ รายการ #1/);
+      expect(price.getAttribute('aria-label')).toContain('EUR');
+      expect(price.getAttribute('aria-label')).toContain('แผ่น');
+      expect(price.className).toMatch(/text-right/);
+      expect(price.className).toMatch(/44px|h-11/);
+      expect(price.className).toMatch(/text-base/);
+      cleanup();
+
+      await render(buildFactoryQuote({ status: 'REQUESTED' })); // THB
+      expect(screen.getByTestId('pcr-quote-symbol-91-1').textContent).toBe('฿');
+      cleanup();
+
+      const base = buildFactoryQuote();
+      await render(buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'XYZ', items: [{ ...base.items[0], currency: 'XYZ' }] }));
+      expect(screen.getByTestId('pcr-quote-symbol-91-1').textContent).toBe('XYZ');
+    });
+
+    it('a line with no currency of its own shows the fallback code in the equivalent line (not a blank)', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: '', unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.' }] });
+      await render(quote);
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '100' } });
+      expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toBe('= 36 EUR/แผ่น');
+    });
+
+    it('mixed currencies: the locked pill says so instead of showing only a lock icon', async () => {
+      const request = crRequest({ items: [crItem({ id: 1 }), crItem({ id: 2, model: 'A2', requestedCurrency: 'USD' })] });
+      await render(contactedQuote({ items: [line(91, 1), line(91, 2, { currency: 'USD' })] }), request);
+      expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('หลายสกุลเงิน — ดูในแต่ละรายการ');
+    });
+
+    it('header terms: only printedByDisplayId / salesRepDisplayId set → no terms row (it never shows them)', async () => {
+      const request = buildRequest({ summary: { printedByDisplayId: 5, salesRepDisplayId: 6 } });
+      await render(buildFactoryQuote({ status: 'REQUESTED' }), request);
+      expect(screen.getByTestId('pcr-import-header')).not.toBeNull();
+      expect(screen.queryByText(/เงื่อนไขการชำระเงิน/)).toBeNull();
+    });
+
+    it('inputs stay locked before contact: disabled, no unit switch, no symbol prefix to type into', async () => {
+      await render(legacyEur('DRAFT'));
+      expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
+      expect(screen.queryByRole('group', { name: /^หน่วยราคา รายการ/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: '/ ตร.ม.' })).toBeNull();
+    });
+
+    it('lines of one factory with DIFFERENT locked currencies: the header line stays generic and each row shows its own code', async () => {
+      const request = crRequest({ items: [crItem({ id: 1 }), crItem({ id: 2, model: 'A2', requestedCurrency: 'USD' })] });
+      const quote = contactedQuote({ items: [line(91, 1), line(91, 2, { currency: 'USD' })] });
+      await render(quote, request);
+      const header = screen.getByTestId('pcr-factory-currency-91').textContent;
+      expect(header).toContain('ตามคำขอราคา');
+      expect(header).not.toMatch(/EUR|USD/);
+      expect(screen.getByTestId('pcr-quote-symbol-91-1').textContent).toBe('€');
+      expect(screen.getByTestId('pcr-quote-symbol-91-2').textContent).toBe('$');
+      expect(screen.getByTestId('pcr-quote-currency-91-2').textContent).toContain('USD');
+    });
+  });
+
+  describe('review fixes: strip states, a11y, stock detail', () => {
+    it('a CANCELLED / SUPERSEDED request never says ส่งถึง CEO แล้ว — it says the request is dead, with no action sub-line', async () => {
+      await renderTwo({ q1: confirmed(91, SCG, 1), q2: confirmed(92, COTTO, 2), request: twoFactoryRequest({ status: 'CANCELLED' }) });
+      expect(nextStep()).toBe('คำขอนี้ถูกยกเลิกแล้ว');
+      expect(nextSub()).toBe('');
+      cleanup();
+      await renderTwo({ q1: confirmed(91, SCG, 1), q2: confirmed(92, COTTO, 2), request: twoFactoryRequest({ status: 'SUPERSEDED' }) });
+      expect(nextStep()).toBe('คำขอนี้ถูกแทนด้วยรอบใหม่');
+      expect(nextSub()).toBe('');
+    });
+
+    it('a factory that declined (NOT_AVAILABLE) is not an actionable step: ขั้นต่อไป names it, and its steps show a distinct declined state with text', async () => {
+      await renderTwo({ q1: contacted(91, SCG, 1), q2: contacted(92, COTTO, 2, { status: 'NOT_AVAILABLE' }) });
+      expect(nextStep()).toBe(`${COTTO} แจ้งไม่พร้อมเสนอราคา`);
+      expect(nextStep()).not.toMatch(/กรอกราคาและยืนยัน/);
+      expect(nextSub()).not.toBe('');
+      expect(stepStates(92)).toEqual(['done', 'declined', 'todo']);
+      expect(screen.getByTestId('pcr-factory-steps-92').textContent).toContain('แจ้งไม่พร้อมเสนอราคา');
+    });
+
+    it('missing factory but canSetItemFactory is false (no picker rendered): ขั้นต่อไป states the read-only fact, never "ระบุโรงงานให้ … ก่อน"', async () => {
+      const request = buildRequestWithBlankFactoryLine({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
+      expect(nextStep()).toBe('ยังไม่ได้ระบุโรงงาน 1 รายการ — ฝ่ายนำเข้าระบุไม่ได้ในขั้นนี้');
+    });
+
+    it('a11y: the steps are a labelled group, and the table keeps explicit table semantics', async () => {
+      renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+      await waitForLoaded();
+      const c = await screen.findByTestId('pcr-factory-card-91');
+      expect(within(c).getByRole('group', { name: /^ขั้นตอนโรงงานนี้/ })).not.toBeNull();
+      const table = c.querySelector('table');
+      expect(table.getAttribute('role')).toBe('table');
+      expect(table.querySelector('thead').getAttribute('role')).toBe('rowgroup');
+      expect(table.querySelector('tbody').getAttribute('role')).toBe('rowgroup');
+      table.querySelectorAll('tr').forEach((tr) => expect(tr.getAttribute('role')).toBe('row'));
+      table.querySelectorAll('th').forEach((th) => expect(th.getAttribute('role')).toBe('columnheader'));
+      table.querySelectorAll('td').forEach((td) => expect(td.getAttribute('role')).toBe('cell'));
+    });
+
+    it('stock card rows show boxes and ตร.ม. when available', async () => {
+      const base = item({ id: 1, resolvedFactoryName: SCG });
+      const request = buildRequest({ items: [base, { ...base, id: 2, model: 'S1', stockSource: 'IN_THAILAND', resolvedFactoryName: null, boxes: 3, requestedQtySqm: 4.32 }] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      const stock = (await screen.findByTestId('pcr-stock-card')).textContent;
+      expect(stock).toContain('3 กล่อง');
+      expect(stock).toContain('4.32 ตร.ม.');
+    });
+  });
+
+  describe('review round 3', () => {
+    const unitGroup = (n) => within(screen.getByRole('group', { name: new RegExp(`^หน่วยราคา รายการ #${n}`) }));
+    const renderOne = async (quote, request = buildRequest()) => {
+      renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-factory-card-91');
+    };
+
+    it('1. a legacy line saved per กล่อง (request per แผ่น) keeps / กล่อง as a pressed option of the unit switch', async () => {
+      const base = buildFactoryQuote();
+      await renderOne(buildFactoryQuote({ status: 'REQUESTED', items: [{ ...base.items[0], unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' }] }));
+      const buttons = unitGroup(1).getAllByRole('button');
+      expect(buttons.map((b) => b.textContent.trim())).toEqual(['/ แผ่น', '/ ตร.ม.', '/ กล่อง']);
+      expect(buttons[2].getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('2. read-only price text of a line with an empty currency shows the fallback code, not a blank', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: '', rawUnitPrice: 12.5 }] });
+      await renderOne(quote, buildRequest({ summary: { status: 'CANCELLED' } }));
+      const cell = screen.getByTestId('pcr-quote-price-cell-91-1').textContent;
+      expect(cell).toContain('12.5 EUR');
+    });
+
+    it('2b. the approved price of a confirmed line with an empty currency shows the fallback code', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'READY_FOR_COSTING', defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: '', rawUnitPrice: 12.5 }] });
+      await renderOne(quote);
+      expect(screen.getByTestId('pcr-factory-row-1').textContent).toContain('12.5 EUR');
+    });
+
+    it('3. two unit switches fired in one batch both persist (no stale-closure overwrite)', async () => {
+      const request = crRequest({ items: [crItem({ id: 1, requestedPriceUnitBasis: undefined }), crItem({ id: 2, model: 'A2', requestedPriceUnitBasis: undefined })] });
+      await renderOne(contactedQuote({ items: [line(91, 1, { unitBasis: 'PER_PIECE', quotedUnit: 'แผ่น' }), line(91, 2, { unitBasis: 'PER_PIECE', quotedUnit: 'แผ่น' })] }), request);
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ รายการ #1/), { target: { value: '10' } });
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ รายการ #2/), { target: { value: '11' } });
+      const sqm1 = unitGroup(1).getByRole('button', { name: '/ ตร.ม.' });
+      const sqm2 = unitGroup(2).getByRole('button', { name: '/ ตร.ม.' });
+      act(() => { fireEvent.click(sqm1); fireEvent.click(sqm2); });
+      fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+      await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalled());
+      const { items } = api.pricingRequests.receiveFactoryQuote.mock.calls[0][1];
+      expect(items.map((i) => i.unitBasis)).toEqual(['PER_SQM', 'PER_SQM']);
+    });
+
+    it('4. สินค้า counts the stock lines too (1 factory line + 1 stock line = 2)', async () => {
+      const base = item({ id: 1, resolvedFactoryName: SCG });
+      const request = buildRequest({ items: [base, { ...base, id: 2, model: 'S1', stockSource: 'IN_THAILAND', resolvedFactoryName: null }] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-stock-card');
+      expect(fig('items')).toBe('2');
+    });
+
+    it('5. the ตร.ม. under a factory row is formatted (4.319999999999999 -> 4.32)', async () => {
+      const request = buildRequest({ items: [item({ id: 1, resolvedFactoryName: SCG, requestedQtySqm: 4.319999999999999 })] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      const row = (await screen.findByTestId('pcr-factory-row-1')).textContent;
+      expect(row).toContain('4.32 ตร.ม.');
+      expect(row).not.toContain('4.319999');
+    });
+
+    it('6. the card meta names the typed country for "อื่นๆ"', async () => {
+      const request = buildRequest({ items: [item({ id: 1, resolvedFactoryName: SCG, originCountry: 'อื่นๆ', originCountryOther: 'เวียดนาม' })] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      const head = (await screen.findByTestId('pcr-factory-head-91')).textContent;
+      expect(head).toContain('อื่นๆ (เวียดนาม)');
+    });
+  });
+
+  describe('the CEO and Sales see the page as before (cannot reach)', () => {
+    it.each([['ceo', ceoUser], ['sales', salesOwner], ['sales_manager', salesManager]])(
+      '%s: no progress strip, no factory section, no import header — item cards and ภาพรวม are still there (positive control: import gets the new page)',
+      async (_name, user) => {
+        await renderTwo(); // import: the new surface exists
+        expect(screen.getByRole('region', { name: 'ความคืบหน้าการขอราคา' })).not.toBeNull();
+        cleanup();
+
+        const request = twoFactoryRequest();
+        renderDetailPage({ user, request, factoryQuotes: [fq(91, SCG, 1), fq(92, COTTO, 2)] });
+        await waitForLoaded(request);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+
+        expect(screen.queryByRole('region', { name: 'ความคืบหน้าการขอราคา' })).toBeNull();
+        expect(screen.queryByRole('region', { name: 'ขอราคาจากโรงงาน' })).toBeNull();
+        expect(screen.queryByTestId('pcr-import-header')).toBeNull();
+        expect(screen.queryByTestId('pcr-import-unassigned')).toBeNull();
+        expect(screen.queryByRole('button', { name: /สเปกจากฝ่ายขาย/ })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'บันทึกว่ากำลังเจรจา' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
+        expect(screen.getByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' })).not.toBeNull();
+        expect(screen.getAllByText(/^จำนวนสั่งซื้อ:/).length).toBe(2);
+        expect(screen.getByText('ภาพรวม')).not.toBeNull();
+      },
+    );
   });
 });
