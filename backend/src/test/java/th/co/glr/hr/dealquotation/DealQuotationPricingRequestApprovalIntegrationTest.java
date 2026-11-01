@@ -954,6 +954,23 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(supersededEventCount(ticketId, live.number(), pending.number())).isZero();
     }
 
+    /** #1216's revive hands the parent back only when it still owns an ISSUED quotation. The
+     * revision retired the parent's PENDING_APPROVAL quotation, so cancelling the revision must NOT
+     * revive the parent into QUOTATION_ISSUED with no live quote. */
+    @Test
+    void cancellingTheRevision_doesNotReviveAParentWhoseOnlyQuotationWasRetiredFromPendingApproval() {
+        DealQuotationDto pending = submittedQuotation();
+        long parentId = pending.pricingRequestId();
+        long childId = pricingRequestService.createCustomerChangeRevision(parentId, customerChangeRevision(), salesActor)
+            .summary().id();
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+
+        pricingRequestService.cancel(childId, cancelRequest(), salesActor);
+
+        assertThat(pricingRequestStatusOf(parentId)).isEqualTo(PricingRequestStatus.SUPERSEDED);
+        assertThat(statusOf(pending.id())).isEqualTo("SUPERSEDED");
+    }
+
     private PricingRequestRequests.CancelPricingRequestRequest cancelRequest() {
         return new PricingRequestRequests.CancelPricingRequestRequest("ลูกค้ายกเลิกโครงการ");
     }
