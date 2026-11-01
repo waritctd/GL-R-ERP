@@ -130,7 +130,7 @@ synced: develop@fe5138dd
 - `frontend/src/features/commissions/ReceiptChain.jsx`
 - `frontend/src/features/commissions/ReceiptLedger.jsx`
 - `frontend/src/features/commissions/WeightSegmented.jsx`
-- `frontend/src/features/commissions/WeightingDesk.jsx`
+- `frontend/src/features/commissions/ApprovalBoard.jsx`, `InvoiceDetailPanel.jsx`, `WeightLines.jsx`
 - `frontend/src/features/commissions/commissionRecord.js`
 - `frontend/src/features/commissions/invoiceFromDeal.js`
 ### `features/specialmoney` — [specialmoney/](https://github.com/waritctd/GL-R-ERP/blob/develop/frontend/src/features/specialmoney)

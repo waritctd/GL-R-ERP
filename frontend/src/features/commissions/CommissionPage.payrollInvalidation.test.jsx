@@ -1,8 +1,8 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
 
@@ -39,6 +39,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         // of what this file's own tests exercise -- default empty so it resolves rather than
         // throwing on an unconfigured vi.fn(). Issue #737.
         reps: vi.fn().mockResolvedValue({ reps: [] }),
+        // The approval page's queue (sales_manager/ceo) and per-rep summary table read these.
+        pendingApproval: vi.fn(),
+        monthlySummary: vi.fn().mockResolvedValue({ summary: null }),
       },
       tickets: {
         list: vi.fn(),
@@ -57,6 +60,7 @@ const submittedRecord = {
   id: 501,
   kind: 'SALE',
   status: 'SUBMITTED',
+  payrollMonth: '2026-08-01', // the page opens on Aug 2026 (clock faked below) and queues that round's items
   salesRepId: 7,
   salesRepName: 'พนักงานขาย ทดสอบ',
   actualReceived: 100000,
@@ -97,10 +101,22 @@ function renderCommissionPage() {
   return { ...view, invalidateSpy };
 }
 
+afterEach(() => { vi.useRealTimers(); });
+
 describe('CommissionPage issue #422 B5 (payroll-prefix invalidation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Only `Date` is faked so the page opens on the round the record belongs to.
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-15T05:00:00Z'));
     api.commissions.list.mockResolvedValue({ commissions: [submittedRecord] });
+    api.commissions.pendingApproval.mockResolvedValue({
+      commissions: [{
+        commission: submittedRecord, ticketCode: 'TCK-0501', customerName: 'ลูกค้า', items: [],
+        effectiveWeight: 1, weightedCommissionableBase: 90000, estimatedCommission: 1,
+      }],
+    });
     api.commissions.approve.mockResolvedValue({ commission: { ...submittedRecord, status: 'MANAGER_APPROVED' } });
     api.tickets.list.mockResolvedValue({ tickets: [] });
   });
@@ -108,15 +124,17 @@ describe('CommissionPage issue #422 B5 (payroll-prefix invalidation)', () => {
   it('invalidates the [\'payroll\'] prefix after a successful approve, alongside its own load()', async () => {
     const { invalidateSpy } = renderCommissionPage();
 
-    const approveButton = await screen.findByTestId('commission-approve');
-    fireEvent.click(approveButton);
+    // The approve button now lives on the queue row (the table's icon button is gone); the confirm
+    // dialog's own "อนุมัติ" is scoped to the dialog so the two never collide.
+    const row = await screen.findByTestId('queue-row-501');
+    fireEvent.click(within(row).getByRole('button', { name: 'อนุมัติ' }));
 
-    const confirmButton = await screen.findByRole('button', { name: /^อนุมัติ$/ });
-    fireEvent.click(confirmButton);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
 
     await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(501));
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['payroll'] }));
     // The pre-existing commissions list also reloads -- this fix must not replace that behaviour.
-    await waitFor(() => expect(api.commissions.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.commissions.list.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 });

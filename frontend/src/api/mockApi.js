@@ -10726,7 +10726,7 @@ export const api = {
     },
 
     // Mirrors CommissionController#pendingApproval / CommissionService#listPendingApproval: every SALE record
-    // with status SUBMITTED, ANY payroll month, ORDER BY commission_id ASC. sales_manager + ceo only (403 else).
+    // at the caller's stage (sales_manager -> SUBMITTED, ceo -> MANAGER_APPROVED), ANY payroll month, ORDER BY commission_id ASC. sales_manager + ceo only (403 else).
     // effectiveWeight / weightedCommissionableBase / estimatedCommission are SERVER computations (calculator +
     // the rep's month totals) and the mock deliberately does not reimplement them (CLAUDE.md: a mock that
     // mirrors a computation is no evidence). It echoes what the record already carries and null where absent.
@@ -10734,7 +10734,7 @@ export const api = {
       const user = requireSession();
       if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const pending = db.commissions
-        .filter((item) => item.kind === 'SALE' && item.status === 'SUBMITTED')
+        .filter((item) => item.kind === 'SALE' && item.status === (user.role === 'ceo' ? 'MANAGER_APPROVED' : 'SUBMITTED'))
         .sort((a, b) => a.id - b.id)
         .map(buildMockPendingCommission);
       return delay({ commissions: pending });

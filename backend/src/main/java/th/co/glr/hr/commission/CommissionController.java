@@ -156,7 +156,7 @@ public class CommissionController {
         return new CommissionDetailResponse(commissionService.updateDeductions(id, request, user));
     }
 
-    /** The sales manager's "รออนุมัติ" list: every SUBMITTED SALE commission, any payroll month. */
+    /** The caller's approval queue: sales_manager -> SUBMITTED, ceo -> MANAGER_APPROVED SALE commissions, any payroll month. */
     @GetMapping("/pending-approval")
     @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
     public PendingCommissionsResponse pendingApproval(HttpSession session) {
