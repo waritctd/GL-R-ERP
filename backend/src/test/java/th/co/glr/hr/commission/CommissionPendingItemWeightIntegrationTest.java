@@ -126,9 +126,17 @@ class CommissionPendingItemWeightIntegrationTest extends AbstractPostgresIntegra
         assertThat(pending).allSatisfy(p -> assertThat(p.commission().status()).isEqualTo(CommissionStatus.SUBMITTED));
         assertThat(pending).extracting(p -> p.commission().payrollMonth())
             .containsExactly(LocalDate.of(2026, 7, 1), LocalDate.of(2026, 8, 1), LocalDate.of(2026, 7, 1));
-        // CEO may read the same list.
-        assertThat(commissionService.listPendingApproval(ceoActor)).extracting(p -> p.commission().id())
-            .containsExactly(r1, r3, r6);
+        // Commission approval redesign: the CEO's queue is the MANAGER_APPROVED records (r2 only),
+        // NOT the manager's SUBMITTED list -- same DTO shape (items, effective weight, estimate).
+        List<PendingCommissionDto> ceoQueue = commissionService.listPendingApproval(ceoActor);
+        assertThat(ceoQueue).extracting(p -> p.commission().id()).containsExactly(r2);
+        assertThat(ceoQueue).allSatisfy(p -> {
+            assertThat(p.commission().status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
+            assertThat(p.items()).isNotEmpty();
+            assertThat(p.effectiveWeight()).isNotNull();
+            assertThat(p.weightedCommissionableBase()).isNotNull();
+            assertThat(p.estimatedCommission()).isNotNull();
+        });
 
         boolean sawNonZeroEstimate = false;
         for (PendingCommissionDto dto : pending) {

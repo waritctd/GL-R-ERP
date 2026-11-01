@@ -871,14 +871,14 @@ public class CommissionRepository {
             """, new MapSqlParameterSource().addValue("id", commissionId).addValue("weight", weight));
     }
 
-    /** Every SALE record awaiting the sales manager, any payroll month, oldest first. */
-    public List<CommissionRecord> findSubmittedSaleRecords() {
+    /** Every SALE record at the given approval stage, any payroll month, oldest first. */
+    public List<CommissionRecord> findPendingSaleRecords(String status) {
         return jdbc.query(
             RECORD_SELECT + """
-             WHERE cr.kind = 'SALE' AND cr.status = 'SUBMITTED'
+             WHERE cr.kind = 'SALE' AND cr.status = :status
              ORDER BY cr.commission_id ASC
             """,
-            Map.of(),
+            Map.of("status", status),
             (rs, rowNum) -> mapRecord(rs));
     }
 
