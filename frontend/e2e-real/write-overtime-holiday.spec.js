@@ -214,8 +214,17 @@ test.describe('overtime day type: system suggestion, employee request, approver 
 
   // ── overtime helpers, same shapes as write-overtime.spec.js ────────────────────────────────
 
+  // GET /api/overtime with no dates lists only the 1st of THIS month (Bangkok) to today
+  // (OvertimeService#list). A work date stepped back across a month boundary -- e.g. Sunday the 1st
+  // -> Saturday the 31st via nearestScheduledWorkdayOnOrBefore -- or the January sentinel is then
+  // invisible, so every read here asks for a window wide enough to hold any date this file uses.
+  const overtimeListUrl = () => {
+    const today = todayInBangkok();
+    return `/api/overtime?from=${Number(today.slice(0, 4)) - 1}-01-01&to=${shiftDateIso(today, 31)}`;
+  };
+
   async function readOvertime(id) {
-    const response = await sessions[OWNER].get('/api/overtime');
+    const response = await sessions[OWNER].get(overtimeListUrl());
     expect(response.status()).toBe(200);
     const { requests } = await response.json();
     return requests.find((row) => row.id === id) ?? null;
@@ -223,7 +232,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
 
   /** Own-requests count, for the wrong-way-round "no row was created" assertion where still relevant. */
   async function countOwnOvertime() {
-    const response = await sessions[OWNER].get('/api/overtime');
+    const response = await sessions[OWNER].get(overtimeListUrl());
     expect(response.status()).toBe(200);
     const { requests } = await response.json();
     return requests.length;
