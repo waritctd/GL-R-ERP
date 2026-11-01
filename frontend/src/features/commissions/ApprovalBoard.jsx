@@ -13,7 +13,7 @@ import {
 } from '../../utils/format.js';
 import { CommissionStatement } from './CommissionStatement.jsx';
 import { InvoiceDetailPanel } from './InvoiceDetailPanel.jsx';
-import { MANUAL_KIND_LABELS, baseContribution, countsTowardBase, describeCommissionWeight, isManualKind, kindLabel } from './commissionRecord.js';
+import { MANUAL_KIND_LABELS, baseContribution, countsTowardBase, describeCommissionWeight, isManualKind, kindLabel, monthOf } from './commissionRecord.js';
 
 const STAGES = [
   { status: 'SUBMITTED', label: 'รอผู้จัดการ', dot: 'bg-warning-border' },
@@ -29,12 +29,12 @@ const CHIPS = [
 ];
 const COUNTED = STAGES.map((stage) => stage.status);
 
-export function shiftMonth(yearMonth, delta) {
+function shiftMonth(yearMonth, delta) {
   const [year, month] = yearMonth.split('-').map(Number);
   const index = year * 12 + (month - 1) + delta;
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
 }
-const monthOf = (record) => (record.payrollMonth || '').slice(0, 7);
+const byMonth = (a, b) => monthOf(a.commission).localeCompare(monthOf(b.commission));
 const baseOf = (record) => (countsTowardBase(record) ? baseContribution(record) : 0);
 
 function CycleHeader({ month, currentMonth, onMonth, records, stage, canCreateManual, onManual }) {
@@ -293,8 +293,8 @@ export function ApprovalBoard({
     ? records.filter((r) => isManualKind(r.kind) && r.status === 'MANAGER_APPROVED' && monthOf(r) === month).map((commission) => ({ commission }))
     : [];
   const queue = [...entries.filter((e) => monthOf(e.commission) === month), ...manualWaiting];
-  const upcoming = entries.filter((e) => monthOf(e.commission) > month).sort((a, b) => monthOf(a.commission).localeCompare(monthOf(b.commission)));
-  const carry = entries.filter((e) => monthOf(e.commission) < month).sort((a, b) => monthOf(a.commission).localeCompare(monthOf(b.commission)));
+  const upcoming = entries.filter((e) => monthOf(e.commission) > month).sort(byMonth);
+  const carry = entries.filter((e) => monthOf(e.commission) < month).sort(byMonth);
   const pendingById = useMemo(() => new Map(entries.map((e) => [e.commission.id, e])), [entries]);
 
   const reps = useMemo(() => {

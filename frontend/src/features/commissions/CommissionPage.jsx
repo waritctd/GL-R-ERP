@@ -17,7 +17,7 @@ import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } f
 import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
 import { ApprovalBoard } from './ApprovalBoard.jsx';
 import { CommissionStatement } from './CommissionStatement.jsx';
-import { MANUAL_KIND_LABELS, MANUAL_KINDS, isManualKind } from './commissionRecord.js';
+import { MANUAL_KIND_LABELS, MANUAL_KINDS, isManualKind, monthOf } from './commissionRecord.js';
 import { ReceiptLedger } from './ReceiptLedger.jsx';
 import { WeightSegmented } from './WeightSegmented.jsx';
 
@@ -165,7 +165,7 @@ export function CommissionPage({ user, showToast }) {
       // pending items (carry-over first, else current, else upcoming); none -> the current round.
       if (!pendingViewApplied.current && searchParams.get('view') === 'pending') {
         pendingViewApplied.current = true;
-        const months = entries.map((entry) => (entry.commission.payrollMonth || '').slice(0, 7)).filter(Boolean).sort();
+        const months = entries.map((entry) => monthOf(entry.commission)).filter(Boolean).sort();
         if (months.length) setMonth(months[0]);
       }
     } catch (error) {

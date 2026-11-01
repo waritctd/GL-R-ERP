@@ -3,7 +3,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
-import { isManualKind } from './commissionRecord.js';
+import { isManualKind, monthOf } from './commissionRecord.js';
 import { ReceiptChain } from './ReceiptChain.jsx';
 import { WeightLines } from './WeightLines.jsx';
 
@@ -89,7 +89,7 @@ export function InvoiceDetailPanel({
               title="CEO"
               sub={ceoDone ? who(record.ceoApprovedByName, record.ceoApprovedAt) : mgrDone ? 'รออนุมัติ' : 'ยังไม่ถึงขั้นนี้'}
             />
-            <Step title="จ่ายกับเงินเดือน" sub={formatThaiMonthYearFromMonthInputValue((record.payrollMonth || '').slice(0, 7))} />
+            <Step title="จ่ายกับเงินเดือน" sub={formatThaiMonthYearFromMonthInputValue(monthOf(record))} />
           </ol>
           <div className="grid gap-1 text-sm text-text-muted">
             {entry?.ticketCode ? (

@@ -19,6 +19,9 @@ export function isManualKind(kind) {
   return Object.prototype.hasOwnProperty.call(MANUAL_KIND_LABELS, kind);
 }
 
+// A record's payroll round as "YYYY-MM" (payrollMonth arrives as "YYYY-MM-DD"); '' when absent.
+export const monthOf = (record) => (record.payrollMonth || '').slice(0, 7);
+
 export function kindLabel(kind) {
   if (kind === 'CLAWBACK') return 'คืน/ยกเลิก';
   if (isManualKind(kind)) return MANUAL_KIND_LABELS[kind];
