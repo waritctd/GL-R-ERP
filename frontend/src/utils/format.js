@@ -21,22 +21,22 @@ export function formatThaiDate(value) {
 // back to `formatThaiMonthYear` without also resolving that collision (ideally consolidating both
 // into one thaiMonths table — this file, `specialMoneyRules.js`, and `formatThaiDate` above all keep
 // their own copy today).
-export function formatThaiMonthYearFromMonthInputValue(value) {
-  if (!value) return '-';
-  const match = /^(\d{4})-(\d{2})$/.exec(value);
-  if (!match) return '-';
-  const monthIndex = Number(match[2]) - 1;
+function monthYearFrom(value, monthNames) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value || '');
+  const monthIndex = match ? Number(match[2]) - 1 : -1;
   if (monthIndex < 0 || monthIndex > 11) return '-';
-  return `${thaiMonths[monthIndex]} ${Number(match[1]) + 543}`;
+  return `${monthNames[monthIndex]} ${Number(match[1]) + 543}`;
+}
+
+export function formatThaiMonthYearFromMonthInputValue(value) {
+  return monthYearFrom(value, thaiMonths);
 }
 
 const thaiMonthsLong = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
 // Full month name + BE year for a "YYYY-MM" value ("พฤศจิกายน 2569"); '-' when it is not one.
 export function formatThaiMonthYearLongFromMonthInputValue(value) {
-  const match = /^(\d{4})-(\d{2})$/.exec(value || '');
-  if (!match || Number(match[2]) < 1 || Number(match[2]) > 12) return '-';
-  return `${thaiMonthsLong[Number(match[2]) - 1]} ${Number(match[1]) + 543}`;
+  return monthYearFrom(value, thaiMonthsLong);
 }
 
 export function formatShortDate(value) {
