@@ -1,12 +1,9 @@
-/* eslint-disable jsx-a11y/no-interactive-element-to-noninteractive-role, jsx-a11y/no-redundant-roles --
-   the table roles are explicit on purpose: `display:block` on mobile strips the native table semantics. */
 import { Fragment, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { pricingRequestRecipientLabel } from './pricingRequestMeta.js';
@@ -100,6 +97,8 @@ function ProgressStrip({ progress }) {
   );
 }
 
+// `display:block` on mobile strips native table semantics, so the cell roles are explicit.
+/* eslint-disable jsx-a11y/no-interactive-element-to-noninteractive-role */
 function SpecRow({ id, spec }) {
   return (
     <tr role="row" data-testid={`pcr-spec-${id}`} className="bg-surface-muted">
@@ -229,6 +228,8 @@ function FactoryRow({ row, quoteId }) {
   );
 }
 
+/* eslint-enable jsx-a11y/no-interactive-element-to-noninteractive-role */
+
 function CardTerms({ card }) {
   const t = card.terms;
   return (
@@ -348,6 +349,7 @@ function FactoryCard({ card }) {
       ) : null}
       {card.terms ? <CardTerms card={card} /> : null}
       <table role="table" className="w-full border-collapse text-left mobile:block">
+        {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- kept for mobile display:block */}
         <thead role="rowgroup" className="mobile:hidden">
           <tr role="row" className="bg-surface-subtle text-xs font-bold text-text-muted">
             <th role="columnheader" className="px-3 py-2">สินค้า</th>
@@ -357,6 +359,7 @@ function FactoryCard({ card }) {
             <th role="columnheader" className="px-3 py-2 text-right">ราคาที่ยืนยันแล้ว</th>
           </tr>
         </thead>
+        {/* eslint-disable-next-line jsx-a11y/no-redundant-roles -- kept for mobile display:block */}
         <tbody role="rowgroup" className="mobile:block">
           {card.rows.map((row) => <FactoryRow key={row.itemId} row={row} quoteId={id} />)}
         </tbody>
@@ -397,7 +400,7 @@ export function ImportPricingWorkspace({ model }) {
       <section aria-label="ขอราคาจากโรงงาน" className="grid">
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="m-0 text-lg font-extrabold">ขอราคาจากโรงงาน</h2>
-          {model.subtitle ? <span className="text-xs text-text-muted">เปลี่ยนโรงงานของรายการที่ระบุแล้วต้องสร้างคำขอราคารอบใหม่</span> : null}
+          {model.showFactoryChangeHint ? <span className="text-xs text-text-muted">เปลี่ยนโรงงานของรายการที่ระบุแล้วต้องสร้างคำขอราคารอบใหม่</span> : null}
           {model.generate ? (
             <Button type="button" variant="secondary" disabled={model.generate.pending} onClick={model.generate.onClick} data-testid="pcr-generate-drafts">
               สร้างเมลให้ทุกโรงงาน

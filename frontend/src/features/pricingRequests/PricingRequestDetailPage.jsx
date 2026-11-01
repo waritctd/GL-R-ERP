@@ -113,6 +113,10 @@ function formatOrDash(value, suffix = '') {
   return value == null || value === '' ? '—' : `${value}${suffix}`;
 }
 
+function qtyOf(item) {
+  return `${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim();
+}
+
 function formatLeadTime(item) {
   if (item?.leadTimeMinDays == null && item?.leadTimeMaxDays == null) return '—';
   const min = item.leadTimeMinDays ?? '?';
@@ -392,10 +396,9 @@ function cleanResponsePayload(draft) {
   };
 }
 
-
 /**
  * Import's factory-routing control for ONE blank line (rendered only when `canSetItemFactory &&
- * !factoryName` — see the item-card call site). B6 (GLA-135, owner ruling): a typed factory name
+ * !factoryName` — see the unassigned-factory callout, renderFactoryPicker). B6 (GLA-135, owner ruling): a typed factory name
  * that did not exactly match a `price_catalog.factories` master row used to save with
  * `resolved_factory_id` NULL, dead-ending the downstream factory-email + CEO landed-cost lookups
  * that key on it — the reported "brand-new factory → factory config error". Sales/import now pick
@@ -408,7 +411,7 @@ function cleanResponsePayload(draft) {
  * {@link FactoryFormModal} (the catalog PriceImportPage's own add/edit form: name, country,
  * countryOther, currency, unit, email) rather than a second, drifting copy of the same fields and
  * validation. `Modal` is `position: fixed` + focus-trapped (see Modal.jsx), so this dialog is
- * fully reachable regardless of the item card's own layout — never a clipped absolute dropdown.
+ * fully reachable regardless of the callout's own layout — never a clipped absolute dropdown.
  */
 function ImportFactoryPicker({
   itemId, factories, countries, loading, loadFailed, value, onChangeValue, onSave, saving, onFactoryAdded,
@@ -874,11 +877,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     staleTime: 5 * 60 * 1000,
   });
 
-  // The สกุลเงิน select on the ราคาโรงงาน per-factory control row (owner-supplied mockup,
-  // 2026-08-16): options come from the real FX rate table (CeoSettingsPage's own fxRates query,
-  // same queryKeys.fxRates()/api.fxRates.list()), not a hand-typed list here that could drift from
-  // it. Only that Import-only factory-quote panel renders the select, so only Import fetches it
-  // (2026-10-01; it used to also load for the CEO, who no longer gets that panel).
+  // The real FX rate table (CeoSettingsPage's own fxRates query, same queryKeys.fxRates()/
+  // api.fxRates.list()) feeds the read-only currency/FX note and the baht conversion on the factory
+  // cards, not a hand-typed list that could drift from it.
   const fxRatesQuery = useQuery({
     queryKey: queryKeys.fxRates(),
     queryFn: () => api.fxRates.list().then((r) => r.fxRates ?? []),
@@ -2605,7 +2606,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       factoryWarning: renderMissingFactoryBanner(),
       startReview: needsFreshReview && canStartCeoReview(user, summary) ? renderCeoStartReview() : null,
       missingRows: requestItems.flatMap((requestItem, index) => (ceoPricingByRequestItem.has(requestItem.id) ? [] : [{
-        requestItem, position: index + 1, name: itemDisplayName(requestItem), qtyText: `${requestItem.requestedQty ?? '—'} ${requestItem.requestedUnit ?? ''}`.trim(),
+        requestItem, position: index + 1, name: itemDisplayName(requestItem), qtyText: qtyOf(requestItem),
       }])),
       versionNo: decision.decisionVersionNo,
       priceMode: decision.priceMode,
@@ -2662,35 +2663,33 @@ export function PricingRequestDetailPage({ user, showToast }) {
   }
   function renderFactoryPicker(item) {
     return (
-                  <ImportFactoryPicker
-                    itemId={item.id}
-                    factories={factoriesQuery.data ?? []}
-                    countries={countriesQuery.data ?? []}
-                    loading={factoriesQuery.isLoading}
-                    loadFailed={factoriesQuery.isError}
-                    value={factoryDrafts[item.id] ?? ''}
-                    onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
-                    saving={setItemFactory.isPending}
-                    onSave={() => setItemFactory.mutate(
-                      { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
-                      { onSuccess: () => setFactoryDrafts((current) => {
-                        const next = { ...current };
-                        delete next[item.id];
-                        return next;
-                      }) },
-                    )}
-                    onFactoryAdded={(saved) => {
-                      queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
-                      setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
-                      showToast?.('success', `เพิ่มโรงงาน "${saved.name}" แล้ว`);
-                    }}
-                  />
-
+    <ImportFactoryPicker
+      itemId={item.id}
+      factories={factoriesQuery.data ?? []}
+      countries={countriesQuery.data ?? []}
+      loading={factoriesQuery.isLoading}
+      loadFailed={factoriesQuery.isError}
+      value={factoryDrafts[item.id] ?? ''}
+      onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
+      saving={setItemFactory.isPending}
+      onSave={() => setItemFactory.mutate(
+        { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
+        { onSuccess: () => setFactoryDrafts((current) => {
+          const next = { ...current };
+          delete next[item.id];
+          return next;
+        }) },
+      )}
+      onFactoryAdded={(saved) => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
+        setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
+        showToast?.('success', `เพิ่มโรงงาน "${saved.name}" แล้ว`);
+      }}
+    />
     );
   }
 
-  // Import view-model for ImportPricingWorkspace: every derivation, gate and handler below is the one
-  // the old inline factory panel used, unchanged; the component only draws it.
+  // Import view-model for ImportPricingWorkspace (gates and handlers live here; the component only draws).
   function buildImportModel() {
     const specFor = (item) => [
       ['สี', formatOrDash(item?.color)],
@@ -2702,6 +2701,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       ['ประเทศต้นทาง', `${formatOrDash(item?.originCountry)}${item?.originCountry === 'อื่นๆ' ? ` (${formatOrDash(item.originCountryOther)})` : ''}`],
     ];
     const productCodeOf = (item) => item?.productCode?.trim() || item?.catalogProductCode || '—';
+    const variantOf = (item) => [item?.size, item?.color, item?.texture].filter(Boolean).join(' · ');
     const qtyDetailOf = (item) => [
       item?.requestedQtySqm != null ? `${item.requestedQtySqm} ตร.ม.` : null,
       item?.boxes != null ? `${item.boxes} กล่อง` : null,
@@ -2836,7 +2836,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         return {
           itemId: line.pricingRequestItemId,
           name: productName,
-          variant: [requested?.size, requested?.color, requested?.texture].filter(Boolean).join(' · '),
+          variant: variantOf(requested),
           code: `รหัส ${productCodeOf(requested)}`,
           qty: `${qty} ${unitLabel}`,
           qtyDetail: qtyDetailOf(requested),
@@ -3001,9 +3001,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           rows: group.items.map((item) => ({
             itemId: item.id,
             name: itemDisplayName(item),
-            variant: [item.size, item.color, item.texture].filter(Boolean).join(' · '),
+            variant: variantOf(item),
             code: `รหัส ${productCodeOf(item)}`,
-            qty: `${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim(),
+            qty: qtyOf(item),
             qtyDetail: qtyDetailOf(item),
             spec: specFor(item),
             price: { mode: 'none' },
@@ -3082,12 +3082,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
           itemId: item.id,
           position,
           name: itemDisplayName(item),
-          detail: `${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim(),
+          detail: qtyOf(item),
           picker: renderFactoryPicker(item),
         })),
       } : null,
       gateNotice: ceoGateNotice,
-      subtitle: canSetItemFactory,
+      showFactoryChangeHint: canSetItemFactory,
       generate: canContactFactory && inSendWindow && pricePreviewGroups.length > 0
         ? { pending: generateDrafts.isPending, onClick: () => generateDrafts.mutate() } : null,
       previewCards,
@@ -3095,8 +3095,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
       stock: (request?.items ?? []).filter((item) => item.stockSource != null).map((item) => ({
         id: item.id,
         name: itemDisplayName(item),
-        variant: [item.size, item.color, item.texture].filter(Boolean).join(' · '),
-        qty: [`${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim(), qtyDetailOf(item)].filter(Boolean).join(' · '),
+        variant: variantOf(item),
+        qty: [qtyOf(item), qtyDetailOf(item)].filter(Boolean).join(' · '),
       })),
     };
   }
@@ -3143,7 +3143,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {!ceoNewForm && !importModel ? (
       <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
-          <div className="text-sm"><strong>ดีล</strong> <Link to={user?.role === 'import' ? `/import/deals/${summary.ticketId}` : `/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
+          <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
