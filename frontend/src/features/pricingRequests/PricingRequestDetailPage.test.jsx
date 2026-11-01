@@ -7162,6 +7162,8 @@ describe('CEO pricing workspace redesign — review round 2', () => {
       expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
     });
   });
+});
+
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 // Import PCR redesign (import role, /pricing-requests/:id) — Phase A tests. UI-LEVEL ONLY.
 // Target: header + progress strip + unassigned-factory callout + ONE factory section whose cards are
