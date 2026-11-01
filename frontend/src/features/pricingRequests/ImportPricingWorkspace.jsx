@@ -36,8 +36,7 @@ export function ImportPricingHeader({ summary, status, actions }) {
           {summary.projectName ? <span>โครงการ {summary.projectName}</span> : null}
         </div>
         {/* GLA-125 header terms, read-only (what the old ภาพรวม panel showed) */}
-        {(summary.paymentTermMode || summary.validityDays != null || summary.unitCode
-          || summary.printedByDisplayId != null || summary.salesRepDisplayId != null || summary.omitContactHonorific) ? (
+        {(summary.paymentTermMode || summary.validityDays != null || summary.unitCode || summary.omitContactHonorific) ? (
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
             <span>เงื่อนไขการชำระเงิน: {summary.paymentTermMode === 'CREDIT'
               ? `เครดิต ${summary.creditDays ?? '—'} วัน`
@@ -238,7 +237,7 @@ function CardTerms({ card }) {
         <b className="text-text">สกุลเงิน</b>
         <span className="inline-flex items-center gap-1 rounded-pill bg-surface-subtle px-2 py-0.5 font-bold text-text" title="ใช้สกุลเงินตามคำขอราคา เปลี่ยนไม่ได้">
           <Icon name="lock" size={12} className="shrink-0 text-text-muted" />
-          {t.currency ? `${t.currency} ${t.symbol}` : null}
+          {t.currency ? `${t.currency} ${t.symbol}` : 'หลายสกุลเงิน — ดูในแต่ละรายการ'}
         </span>
         <span className="text-text-muted">ตามคำขอราคา</span>
         {t.fxNote ? <span className="text-text-muted" data-testid={`pcr-factory-fx-${card.quoteId}`}>{`· ${t.fxNote}`}</span> : null}

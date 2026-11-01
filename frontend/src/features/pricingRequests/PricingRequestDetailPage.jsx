@@ -2815,7 +2815,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             },
             equivalent: equivalentPrice ? {
               testId: `pcr-quote-equiv-${current.id}-${line.pricingRequestItemId}`,
-              text: `= ${equivalentPrice.value} ${line.currency}/${equivalentPrice.unitLabel}`,
+              text: `= ${equivalentPrice.value} ${lineCurrency}/${equivalentPrice.unitLabel}`,
             } : null,
             sqm: line.unitBasis === 'PER_SQM' && !(Number(requested?.sqmPerPiece) > 0) ? {
               id: `pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`,

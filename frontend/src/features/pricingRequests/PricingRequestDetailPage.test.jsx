@@ -7770,6 +7770,27 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       expect(screen.getByTestId('pcr-quote-symbol-91-1').textContent).toBe('XYZ');
     });
 
+    it('a line with no currency of its own shows the fallback code in the equivalent line (not a blank)', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: '', unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.' }] });
+      await render(quote);
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '100' } });
+      expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toBe('= 36 EUR/แผ่น');
+    });
+
+    it('mixed currencies: the locked pill says so instead of showing only a lock icon', async () => {
+      const request = crRequest({ items: [crItem({ id: 1 }), crItem({ id: 2, model: 'A2', requestedCurrency: 'USD' })] });
+      await render(contactedQuote({ items: [line(91, 1), line(91, 2, { currency: 'USD' })] }), request);
+      expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('หลายสกุลเงิน — ดูในแต่ละรายการ');
+    });
+
+    it('header terms: only printedByDisplayId / salesRepDisplayId set → no terms row (it never shows them)', async () => {
+      const request = buildRequest({ summary: { printedByDisplayId: 5, salesRepDisplayId: 6 } });
+      await render(buildFactoryQuote({ status: 'REQUESTED' }), request);
+      expect(screen.getByTestId('pcr-import-header')).not.toBeNull();
+      expect(screen.queryByText(/เงื่อนไขการชำระเงิน/)).toBeNull();
+    });
+
     it('inputs stay locked before contact: disabled, no unit switch, no symbol prefix to type into', async () => {
       await render(legacyEur('DRAFT'));
       expect(screen.getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(true);
