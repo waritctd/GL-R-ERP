@@ -11,7 +11,6 @@ import { CollapsibleSection } from '../../components/common/CollapsibleSection.j
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { ConfirmOrderDialog } from '../quotations/ConfirmOrderDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
-import { InfoTip } from '../../components/common/InfoTip.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -53,6 +52,7 @@ import {
   itemDisplayName,
   itemFactoryName,
   ceoGateBlockerMessage,
+  PRE_CEO_GATE_STATUSES,
   groupFactoryQuotesByFactory,
   pricingRequestRecipientLabel,
   unitBasisLabel,
@@ -62,18 +62,17 @@ import { CeoPricingHeader, CeoPricingWorkspace } from './CeoPricingWorkspace.jsx
 import {
   ceoRowFigures, cleanNumber, fractionToPct, lineProfitThb, marginOutOfRange, pctToFraction, round2,
 } from './ceoPricingRow.js';
+import { ImportPricingHeader, ImportPricingWorkspace } from './ImportPricingWorkspace.jsx';
 import { FactoryContactDialog } from './FactoryContactDialog.jsx';
 import { LeadTimeChangeBanner } from './LeadTimeChangeBanner.jsx';
 import { LeadTimeChangeDialog } from './LeadTimeChangeDialog.jsx';
 import {
   contactedByName,
   formatShortThaiDay,
-  hasLockedTerms,
   isFactoryContacted,
   isImportLine,
   leadTimeRangeText,
   leadTimeWithUnit,
-  lockedTermsList,
   splitLeadTimeChanges,
 } from './factoryContactMeta.js';
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
@@ -319,6 +318,7 @@ function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
   );
 }
 
+const CURRENCY_SYMBOLS = { EUR: '€', THB: '฿', USD: '$', CNY: '¥', JPY: '¥', GBP: '£' };
 const QUOTE_UNIT_SUFFIX = { PER_SQM: '/ตร.ม.', PER_PIECE: '/แผ่น', PER_BOX: '/กล่อง', PER_LINEAR_M: '/เมตร' };
 
 /** Quantities shown with up to 2 decimals, no trailing zeros (7.2, 5, 7.25). */
@@ -392,20 +392,6 @@ function cleanResponsePayload(draft) {
   };
 }
 
-// One CSS-grid template shared by the column-header row and every item row beneath it (DESIGN.md
-// §13: "CSS-grid columns per table type keep alignment"), so ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน ·
-// ราคาที่เสนอ · ราคาที่ยืนยันแล้ว line up down the whole grouped list regardless of which factory a row
-// belongs to. Mobile-first, matching this file's own existing per-item response grid below
-// (`md:grid-cols-[1fr_auto_auto_auto]`): no columns at all below `md` (768px, this file's
-// established switch point), full 5-track grid from `md` up. `min-w-[720px]` gives the grid a
-// floor at tablet width — Panel's `flush` variant is `overflow-x-auto`, so a tight tablet card
-// scrolls this table horizontally inside itself rather than crushing the columns unreadable or
-// silently losing data off the edge (see Layout.jsx's own Panel comment on why that clip is
-// scroll, not hidden).
-// No fixed min-width: the section is a flush Panel (overflow-x-auto), so any min-w here scrolled the WHOLE
-// card — header and chip included — at ~1100px. Five flexible tracks (variant sits under the product
-// name) always fit; below md each line stacks as label/value instead.
-const FACTORY_ITEM_GRID = 'md:grid-cols-[minmax(0,1.6fr)_5.5rem_minmax(0,11rem)_minmax(0,1fr)_5.5rem]';
 
 /**
  * Import's factory-routing control for ONE blank line (rendered only when `canSetItemFactory &&
@@ -1779,15 +1765,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
       + pricePreviewGroups.reduce((sum, group) => sum + group.items.length, 0),
     [factoryGroups, pricePreviewGroups],
   );
-  // Currency codes Import may pick from the per-factory สกุลเงิน select — real trade currencies
-  // this business already reads elsewhere (fxRatesQuery above), not an invented list. THB always
-  // leads (the default for most factories) when present, then the rest in whatever order the FX
-  // table returns.
-  const currencyOptions = useMemo(() => {
-    const codes = (fxRatesQuery.data ?? []).map((fx) => fx.currency);
-    const unique = [...new Set(codes)];
-    return unique.includes('THB') ? ['THB', ...unique.filter((c) => c !== 'THB')] : unique;
-  }, [fxRatesQuery.data]);
   const emailModalQuote = emailModalQuoteId != null
     ? factoryQuotes.find((q) => q.id === emailModalQuoteId) ?? null
     : null;
@@ -2494,9 +2471,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
         {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
         {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
-        {canSetItemFactory
-          ? ' — เลือกโรงงานในรายการด้านล่างแล้วกดบันทึก'
-          : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
+        {' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
       </p>
     );
   }
@@ -2685,9 +2660,453 @@ export function PricingRequestDetailPage({ user, showToast }) {
       history: pricingDecisions.map((d) => `เวอร์ชัน ${d.decisionVersionNo} (${pricingDecisionStatusLabel(d.status).label})`),
     };
   }
+  function renderFactoryPicker(item) {
+    return (
+                  <ImportFactoryPicker
+                    itemId={item.id}
+                    factories={factoriesQuery.data ?? []}
+                    countries={countriesQuery.data ?? []}
+                    loading={factoriesQuery.isLoading}
+                    loadFailed={factoriesQuery.isError}
+                    value={factoryDrafts[item.id] ?? ''}
+                    onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
+                    saving={setItemFactory.isPending}
+                    onSave={() => setItemFactory.mutate(
+                      { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
+                      { onSuccess: () => setFactoryDrafts((current) => {
+                        const next = { ...current };
+                        delete next[item.id];
+                        return next;
+                      }) },
+                    )}
+                    onFactoryAdded={(saved) => {
+                      queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
+                      setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
+                      showToast?.('success', `เพิ่มโรงงาน "${saved.name}" แล้ว`);
+                    }}
+                  />
+
+    );
+  }
+
+  // Import view-model for ImportPricingWorkspace: every derivation, gate and handler below is the one
+  // the old inline factory panel used, unchanged; the component only draws it.
+  function buildImportModel() {
+    const specFor = (item) => [
+      ['สี', formatOrDash(item?.color)],
+      ['ผิว', formatOrDash(item?.texture)],
+      ['ขนาด', formatOrDash(item?.size)],
+      ['ความหนา', formatOrDash(item?.thicknessMm, ' มม.')],
+      ['ขายแผ่นไม่เต็มกล่อง', item?.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'],
+      ['โรงงาน (ที่ฝ่ายขายกรอก)', item?.brand?.trim() || '—'],
+      ['ประเทศต้นทาง', `${formatOrDash(item?.originCountry)}${item?.originCountry === 'อื่นๆ' ? ` (${formatOrDash(item.originCountryOther)})` : ''}`],
+    ];
+    const productCodeOf = (item) => item?.productCode?.trim() || item?.catalogProductCode || '—';
+    const qtyDetailOf = (item) => [
+      item?.requestedQtySqm != null ? `${item.requestedQtySqm} ตร.ม.` : null,
+      item?.boxes != null ? `${item.boxes} กล่อง` : null,
+    ].filter(Boolean).join(' · ');
+    const originOf = (items) => items.map((i) => i?.originCountry).find(Boolean) ?? null;
+    const metaOf = (items, count) => [originOf(items), `${count} รายการ`].filter(Boolean).join(' · ');
+    const NOT_CONTACTED_HELPER = 'ติดต่อโรงงานก่อน จึงกรอกราคาและยืนยันได้';
+
+    const quoteCards = factoryGroups.map((group) => {
+      const current = group.current;
+      const quoteStatus = factoryQuoteStatusLabel(current.status);
+      const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
+      const draft = unsavedDraft ?? {
+        supplierQuoteRef: current.supplierQuoteRef ?? '',
+        defaultCurrency: (() => {
+          const locked = [...new Set((current.items ?? []).map((i) => requestItemById.get(i.pricingRequestItemId)?.requestedCurrency).filter(Boolean))];
+          return locked.length === 1 ? locked[0] : (current.defaultCurrency ?? 'THB');
+        })(),
+        paymentTerms: current.paymentTerms ?? '',
+        leadTimeText: current.leadTimeText ?? '',
+        revisionReason: '',
+        negotiationNote: current.negotiationNote ?? '',
+        items: defaultResponseItems(current, requestItemById),
+      };
+      const dirty = Boolean(unsavedDraft);
+      const editable = isImport(user) && current.current && inResponseWindow
+        && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
+      const contacted = isFactoryContacted(current);
+      const canConfirm = isImport(user) && current.current && contacted && inResponseWindow
+        && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
+          || (current.status === 'READY_FOR_COSTING' && dirty));
+      const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current && inResponseWindow;
+      const canOpenEmailDraft = canContactFactory && !['CANCELLED', 'SUPERSEDED'].includes(summary?.status);
+      const canMarkContacted = canContactFactory && current.current && current.status === 'DRAFT' && inSendWindow;
+      const groupRequestItems = draft.items.map((line) => requestItemById.get(line.pricingRequestItemId));
+      const quoteIds = group.quotes.map((q) => q.id);
+      const pendingChange = leadTimeSplit.pending.find((change) => quoteIds.includes(change.factoryQuoteId)) ?? null;
+      const decidedChanges = leadTimeSplit.decided.filter((change) => quoteIds.includes(change.factoryQuoteId));
+      const pendingLineById = new Map((pendingChange?.lines ?? []).map((line) => [line.pricingRequestItemId, line]));
+      const irRow = (storedIrQuery.data ?? [])
+        .filter((row) => row.status !== 'SUPERSEDED')
+        .find((row) => (current.factoryId != null && row.factoryId != null
+          ? row.factoryId === current.factoryId
+          : row.factoryName === current.factoryName)) ?? null;
+      const leadTimeLines = draft.items
+        .map((line) => requestItemById.get(line.pricingRequestItemId))
+        .filter((item) => item && isImportLine(item));
+      const canRequestLeadTime = isImport(user) && current.current && !pendingChange && leadTimeLines.length > 0
+        && !['CANCELLED', 'SUPERSEDED', 'NOT_AVAILABLE'].includes(current.status);
+      const contactedName = contactedByName(current, request?.events);
+      const confirmedState = current.status === 'READY_FOR_COSTING' && !dirty;
+
+      function updateDraft(patch) {
+        setResponseDrafts({ ...responseDrafts, [current.id]: { ...draft, ...patch } });
+      }
+      function updateLine(index, patch) {
+        const items = [...draft.items];
+        items[index] = { ...items[index], ...patch };
+        updateDraft({ items });
+      }
+      function discardEdits() {
+        setResponseDrafts((cur) => {
+          const next = { ...cur };
+          delete next[current.id];
+          return next;
+        });
+      }
+
+      const lineCurrencies = [...new Set(draft.items.map((line) => line.currency || draft.defaultCurrency || 'THB'))];
+      const sharedCurrency = lineCurrencies.length === 1 ? lineCurrencies[0] : null;
+      const rows = draft.items.map((line, index) => {
+        const itemRef = `รายการ #${line.pricingRequestItemId}`;
+        const requested = requestItemById.get(line.pricingRequestItemId);
+        const productName = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
+          .filter(Boolean).join(' ') || requested?.productDescription || itemRef;
+        const qty = requested?.requestedQty ?? line.quotedQuantity;
+        const unitLabel = requested?.requestedUnit
+          ?? unitBasisCatalog.find((option) => option.code === line.unitBasis)?.label
+          ?? unitBasisLabel(line.unitBasis);
+        // Every line switches แผ่น / ตร.ม.; a line Sales asked per กล่อง or per เมตร also keeps that unit.
+        const requestedBasis = requested?.requestedPriceUnitBasis ?? requested?.requestedUnitBasis ?? line.unitBasis;
+        const unitCodes = ['PER_PIECE', 'PER_SQM', ...(['PER_BOX', 'PER_LINEAR_M'].includes(requestedBasis) ? [requestedBasis] : [])];
+        const unitName = (code) => unitBasisCatalog.find((option) => option.code === code)?.label ?? unitBasisLabel(code);
+        const lineCurrency = line.currency || draft.defaultCurrency || 'THB';
+        const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
+        const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
+        const equivalentPrice = equivalentUnitPrice(line, requested);
+        const thb = requested ? quotedPriceInThb(importQuoteItemByRequestItem.get(requested.id), requested, fxRatesQuery.data) : null;
+        const pendingLine = pendingLineById.get(line.pricingRequestItemId);
+        let price;
+        if (editable && contacted) {
+          price = {
+            mode: 'input',
+            id: `pcr-quote-price-${current.id}-${line.pricingRequestItemId}`,
+            value: line.rawUnitPrice ?? '',
+            placeholder: `ราคา/${unitBasisCatalog.find((option) => option.code === line.unitBasis)?.label ?? line.quotedUnit ?? ''}`,
+            ariaLabel: `ราคาที่เสนอ ${itemRef} (${lineCurrency} ต่อ${unitName(line.unitBasis)})`,
+            onChange: (value) => updateLine(index, { rawUnitPrice: sanitizeDecimal(value) }),
+            symbol: CURRENCY_SYMBOLS[lineCurrency] ?? lineCurrency,
+            // A Sales-LOCKED per-กล่อง / per-เมตร line cannot switch at all (FactoryQuoteService 409s anything
+            // but the ตร.ม.<->แผ่น pair on a locked line): show the unit read-only. Legacy lines are unconstrained.
+            fixedUnit: ['PER_BOX', 'PER_LINEAR_M'].includes(requested?.requestedPriceUnitBasis) ? `/ ${unitName(line.unitBasis)}` : null,
+            unitSwitch: {
+              value: line.unitBasis,
+              ariaLabel: `หน่วยราคา ${itemRef}`,
+              options: unitCodes.map((code) => ({ code, label: `/ ${unitName(code)}` })),
+              onChange: (value) => updateLine(index, {
+                unitBasis: value,
+                quotedUnit: unitBasisCatalog.find((option) => option.code === value)?.label ?? line.quotedUnit,
+              }),
+            },
+            equivalent: equivalentPrice ? {
+              testId: `pcr-quote-equiv-${current.id}-${line.pricingRequestItemId}`,
+              text: `= ${equivalentPrice.value} ${line.currency}/${equivalentPrice.unitLabel}`,
+            } : null,
+            sqm: line.unitBasis === 'PER_SQM' && !(Number(requested?.sqmPerPiece) > 0) ? {
+              id: `pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`,
+              ariaLabel: `ตร.ม./หน่วย ${itemRef}`,
+              value: line.sqmPerUnit ?? '',
+              onChange: (value) => updateLine(index, { sqmPerUnit: sanitizeDecimal(value) }),
+            } : null,
+          };
+        } else if (editable) {
+          price = {
+            mode: 'locked',
+            ariaLabel: `ราคาที่เสนอ ${itemRef} — ต้องติดต่อโรงงานก่อน`,
+            testId: `pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`,
+          };
+        } else {
+          price = { mode: 'text', text: formatCurrency(line.rawUnitPrice, line.currency) };
+        }
+        return {
+          itemId: line.pricingRequestItemId,
+          name: productName,
+          variant: [requested?.size, requested?.color, requested?.texture].filter(Boolean).join(' · '),
+          code: `รหัส ${productCodeOf(requested)}`,
+          qty: `${qty} ${unitLabel}`,
+          qtyDetail: qtyDetailOf(requested),
+          spec: specFor(requested),
+          price,
+          thb: thb ? `≈ ${formatMoney(thb.perSqm)}/ตร.ม. · รวม ${formatMoney(thb.total)}` : null,
+          currency: lineCurrency,
+          currencyNote: sharedCurrency ? null : lineCurrency,
+          priceEmpty: price.mode === 'input' && !thb && cleanNumber(line.rawUnitPrice) == null,
+          leadPending: pendingLine
+            ? `${leadTimeRangeText(pendingLine.oldMinDays, pendingLine.oldMaxDays)} → ${leadTimeRangeText(pendingLine.newMinDays, pendingLine.newMaxDays)} วัน`
+            : null,
+          lead: leadTimeWithUnit(requested?.leadTimeMinDays, requested?.leadTimeMaxDays),
+          approved: approvedPrice != null ? formatCurrency(approvedPrice, serverItem?.currency ?? line.currency) : null,
+        };
+      });
+
+      const fxRate = sharedCurrency && sharedCurrency !== 'THB' ? (fxRatesQuery.data ?? []).find((fx) => fx.currency === sharedCurrency)?.rateToThb : null;
+      const emptyPrices = draft.items.filter((line) => cleanNumber(line.rawUnitPrice) == null).length;
+      let helper = null;
+      if (!contacted) helper = NOT_CONTACTED_HELPER;
+      else if (canConfirm) {
+        helper = `ยืนยันแล้วราคานี้ใช้คำนวณต้นทุน · "กำลังเจรจา" ใช้เมื่อยังต่อรองอยู่${emptyPrices > 0 ? ` · ยังไม่กรอกราคา ${emptyPrices} รายการ` : ''}`;
+      }
+
+      return {
+        key: group.key,
+        quoteId: current.id,
+        name: group.factoryName,
+        meta: metaOf(groupRequestItems, current.items?.length ?? 0),
+        contactedLine: contacted
+          ? ['ติดต่อแล้ว', formatShortThaiDay(current.contactedOn)].filter(Boolean).join(' ') + (contactedName ? ` · โดย ${contactedName}` : '')
+          : null,
+        badges: [
+          ...(contacted && (['NOT_AVAILABLE', 'CANCELLED', 'SUPERSEDED'].includes(current.status)
+            || !['READY_FOR_COSTING', 'REQUESTED'].includes(current.status)) ? [{ tone: quoteStatus.tone, label: quoteStatus.label }] : []),
+          ...(current.revisionNo > 1 ? [{ tone: 'neutral', label: `ครั้งที่ ${current.revisionNo}` }] : []),
+        ],
+        steps: contacted && current.status === 'NOT_AVAILABLE' ? ['done', 'declined', 'todo']
+          : confirmedState ? ['done', 'done', 'done'] : contacted ? ['done', 'now', 'todo'] : ['now', 'todo', 'todo'],
+        mail: canOpenEmailDraft ? {
+          label: contacted ? 'ดูเมลที่ส่ง' : 'สร้างเมล',
+          testId: `pcr-open-email-draft-${current.id}`,
+          onClick: () => setEmailModalQuoteId(current.id),
+        } : null,
+        contact: canMarkContacted ? { testId: `pcr-open-contact-${current.id}`, onClick: () => setContactQuoteId(current.id) } : null,
+        contactNote: contacted && current.contactedNote ? current.contactedNote : null,
+        terms: {
+          // Currency is Sales's and read-only. One shared code is named in the header; mixed codes stay
+          // generic here and each row shows its own.
+          currency: sharedCurrency,
+          symbol: sharedCurrency ? (CURRENCY_SYMBOLS[sharedCurrency] ?? sharedCurrency) : null,
+          fxNote: fxRate != null ? `อัตรา ${Number(fxRate).toFixed(2)} บาท (ธปท.)` : null,
+          lockReason: editable && !contacted,
+        },
+        rows,
+        leadBlock: pendingChange || canRequestLeadTime || decidedChanges.length > 0 || irRow ? (
+          <div className="grid gap-2.5 border-b border-border-subtle px-5 py-3 text-xs mobile:px-4">
+            {pendingChange ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-warning-border bg-warning-bg-soft px-3 py-2" data-testid={`pcr-lt-pending-${current.id}`}>
+                <StatusBadge tone="warning">รอฝ่ายขายอนุมัติ</StatusBadge>
+                <span className="min-w-0 text-text-secondary">ขอเปลี่ยนระยะเวลานำเข้า — {pendingChange.reason}</span>
+                {isImport(user) ? (
+                  <span className="ml-auto flex flex-wrap items-center gap-2">
+                    <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
+                      onClick={() => setLeadTimeDialog({ quoteId: current.id, change: pendingChange })}>
+                      แก้ไข
+                    </Button>
+                    <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
+                      onClick={() => withdrawLeadTimeChange.mutate(pendingChange)}>
+                      ถอนคำขอ
+                    </Button>
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {canRequestLeadTime ? (
+              <div>
+                <Button type="button" size="sm" variant="secondary" data-testid={`pcr-lt-open-${current.id}`}
+                  onClick={() => setLeadTimeDialog({ quoteId: current.id, change: null })}>
+                  <Icon name="pencil" size={13} />
+                  ขอเปลี่ยนระยะเวลานำเข้า
+                </Button>
+              </div>
+            ) : null}
+            {decidedChanges.length > 0 ? (
+              <div className="grid gap-1 text-text-muted" data-testid={`pcr-lt-history-${current.id}`}>
+                <span className="font-bold">ประวัติการเปลี่ยนระยะเวลานำเข้า</span>
+                {decidedChanges.map((change) => (
+                  <p key={change.id} className="m-0">
+                    <span className={change.status === 'APPROVED' ? 'font-bold text-success-dark' : 'font-bold text-danger-dark'}>
+                      {change.status === 'APPROVED' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'}
+                    </span>
+                    {change.decidedAt ? ` ${formatShortThaiDay(String(change.decidedAt).slice(0, 10))}` : ''}
+                    {' · '}
+                    {change.lines.map((line) => `${lineNameById.get(line.pricingRequestItemId) ?? `รายการ #${line.pricingRequestItemId}`} ${leadTimeRangeText(line.oldMinDays, line.oldMaxDays)} → ${leadTimeRangeText(line.newMinDays, line.newMaxDays)}`).join(', ')}
+                    {change.status === 'REJECTED' && change.decisionReason ? ` · เหตุผล: ${change.decisionReason}` : ''}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            {irRow ? (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text-secondary" data-testid={`pcr-ir-${current.id}`}>
+                <Icon name="fileText" size={13} className="shrink-0 text-text-muted" />
+                <span className="font-bold text-text">{irRow.docNumber ?? 'ใบขอซื้อ'}</span>
+                <StatusBadge tone={irRow.status === 'ISSUED' ? 'success' : 'neutral'}>{irRow.status === 'ISSUED' ? 'ออกเลขแล้ว' : 'ฉบับร่าง'}</StatusBadge>
+                <Button type="button" size="sm" variant="secondary" disabled={downloadingIrId === irRow.id}
+                  onClick={() => downloadIr(irRow)}>
+                  {downloadingIrId === irRow.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null,
+        footer: {
+          editable,
+          note: draft.negotiationNote,
+          onNote: (value) => updateDraft({ negotiationNote: value }),
+          history: group.history.length
+            ? group.history.map((q) => `ครั้งที่ ${q.revisionNo} (${factoryQuoteStatusLabel(q.status).label})`).join(' · ')
+            : null,
+          attachments: (current.attachments ?? []).length || isImport(user) ? {
+            canUpload: isImport(user),
+            onUpload: (file) => uploadQuoteAttachment.mutate({ quote: current, file }),
+            list: (current.attachments ?? []).map((a) => ({ id: a.id, fileName: a.fileName, href: api.pricingRequests.factoryQuoteAttachmentUrl(a.id) })),
+          } : null,
+          canNegotiate,
+          negotiating: negotiateQuote.isPending,
+          onNegotiate: () => negotiateQuote.mutate(current),
+          showCancel: editable && dirty,
+          onCancel: discardEdits,
+          canConfirm,
+          confirming: confirmingFactoryQuoteIds.has(current.id),
+          onConfirm: () => confirmFactoryQuote(current, draft),
+          confirmedLine: confirmedState && !canConfirm ? `ยืนยันราคาเสนอแล้ว · ${current.items?.length ?? 0} รายการ` : null,
+          helper,
+        },
+        isContacted: contacted,
+        isDeclined: contacted && current.status === 'NOT_AVAILABLE',
+        isConfirmed: confirmedState,
+      };
+    });
+
+    const previewCards = pricePreviewGroups
+      .filter((group) => group.factoryName !== 'ยังไม่ได้ระบุโรงงาน')
+      .map((group) => {
+        const canAct = canContactFactory && inSendWindow;
+        return {
+          key: group.key,
+          quoteId: null,
+          name: group.factoryName,
+          meta: metaOf(group.items, group.items.length),
+          contactedLine: null,
+          steps: ['now', 'todo', 'todo'],
+          mail: canAct ? {
+            label: 'สร้างเมล', busy: previewBusyFactory === group.factoryName, onClick: () => openMailForPreview(group.factoryName),
+          } : null,
+          contact: canAct ? {
+            busy: previewBusyFactory === group.factoryName, onClick: () => setPreviewContactFactory(group.factoryName),
+          } : null,
+          terms: null,
+          rows: group.items.map((item) => ({
+            itemId: item.id,
+            name: itemDisplayName(item),
+            variant: [item.size, item.color, item.texture].filter(Boolean).join(' · '),
+            code: `รหัส ${productCodeOf(item)}`,
+            qty: `${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim(),
+            qtyDetail: qtyDetailOf(item),
+            spec: specFor(item),
+            price: { mode: 'none' },
+            thb: null,
+            priceEmpty: false,
+            leadPending: null,
+            lead: leadTimeWithUnit(item.leadTimeMinDays, item.leadTimeMaxDays),
+            approved: null,
+          })),
+          footer: null,
+          helper: NOT_CONTACTED_HELPER,
+          isContacted: false,
+          isConfirmed: false,
+        };
+      });
+
+    const allCards = [...previewCards, ...quoteCards];
+    const pending = allCards.filter((c) => !c.isConfirmed);
+    const firstUnassigned = missingFactoryItems[0]?.item;
+    const firstNotContacted = allCards.find((c) => !c.isContacted);
+    let next;
+    let sub;
+    const firstDeclined = allCards.find((c) => c.isDeclined);
+    if (summary?.status === 'CANCELLED') {
+      next = 'คำขอนี้ถูกยกเลิกแล้ว';
+      sub = '';
+    } else if (summary?.status === 'SUPERSEDED') {
+      next = 'คำขอนี้ถูกแทนด้วยรอบใหม่';
+      sub = '';
+    } else if (firstUnassigned && canSetItemFactory) {
+      next = `ระบุโรงงานให้ "${itemDisplayName(firstUnassigned)}" ก่อน`;
+      sub = 'รายการนี้ยังไม่มีโรงงาน จึงขอราคาไม่ได้ และคำขอจะยังไม่ไปถึง CEO';
+    } else if (firstUnassigned) {
+      // no picker is rendered in this status, so do not point at one
+      next = `ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ฝ่ายนำเข้าระบุไม่ได้ในขั้นนี้`;
+      sub = '';
+    } else if (firstDeclined) {
+      next = `${firstDeclined.name} แจ้งไม่พร้อมเสนอราคา`;
+      sub = ceoGateNotice ? 'ดูรายละเอียดด้านล่าง' : 'คำขอจะยังไม่ส่งถึง CEO จนกว่าโรงงานนี้จะพร้อมเสนอราคา';
+    } else if (allCards.length === 0) {
+      next = 'ไม่มีรายการที่ต้องขอราคาจากโรงงาน';
+      sub = '';
+    } else if (firstNotContacted) {
+      next = `ติดต่อ ${firstNotContacted.name}`;
+    } else if (pending.length > 0) {
+      next = `กรอกราคาและยืนยัน ${pending[0].name}`;
+    } else if (PRE_CEO_GATE_STATUSES.includes(summary?.status)) {
+      // every factory is confirmed, but the server moves the request on more than that (see ceoGateNotice)
+      next = 'ยืนยันราคาครบแล้ว แต่ยังไม่ส่งถึง CEO';
+      sub = ceoGateNotice ? 'ดูรายละเอียดด้านล่าง' : 'ระบบจะส่งถึง CEO เมื่อครบเงื่อนไข';
+    } else {
+      next = 'ส่งถึง CEO แล้ว';
+      sub = 'ยืนยันราคาครบทุกโรงงาน คำขอนี้ไปอยู่ที่ "รอ CEO พิจารณาราคา"';
+    }
+    if (sub === undefined) {
+      sub = pending.length === 1
+        ? 'ยืนยันโรงงานนี้แล้วคำขอนี้จะส่งถึง CEO อัตโนมัติ'
+        : `ยังเหลือ ${pending.length} โรงงาน · คำขอจะส่งถึง CEO อัตโนมัติเมื่อยืนยันครบทุกโรงงาน`;
+    }
+
+    return {
+      progress: {
+        figs: {
+          factories: String(allCards.length),
+          contacted: `${allCards.filter((c) => c.isContacted).length}/${allCards.length}`,
+          confirmed: `${allCards.filter((c) => c.isConfirmed).length}/${allCards.length}`,
+          items: String(factoryItemCount),
+        },
+        next,
+        sub,
+        segs: allCards.map((c) => (c.isConfirmed ? 'confirmed' : c.isContacted ? 'contacted' : 'none')),
+      },
+      missingBanner: canSetItemFactory ? null : renderMissingFactoryBanner(),
+      callout: canSetItemFactory && missingFactoryItems.length > 0 ? {
+        entries: missingFactoryItems.map(({ item, position }) => ({
+          itemId: item.id,
+          position,
+          name: itemDisplayName(item),
+          detail: `${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim(),
+          picker: renderFactoryPicker(item),
+        })),
+      } : null,
+      gateNotice: ceoGateNotice,
+      subtitle: canSetItemFactory,
+      generate: canContactFactory && inSendWindow && pricePreviewGroups.length > 0
+        ? { pending: generateDrafts.isPending, onClick: () => generateDrafts.mutate() } : null,
+      previewCards,
+      quoteCards,
+      stock: (request?.items ?? []).filter((item) => item.stockSource != null).map((item) => ({
+        id: item.id,
+        name: itemDisplayName(item),
+        variant: [item.size, item.color, item.texture].filter(Boolean).join(' · '),
+        qty: [`${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim(), qtyDetailOf(item)].filter(Boolean).join(' · '),
+      })),
+    };
+  }
+  const importModel = isImport(user) ? buildImportModel() : null;
+
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
-      {ceoNewForm ? (
+      {importModel ? (
+        <ImportPricingHeader summary={summary} status={status} actions={headerActions} />
+      ) : ceoNewForm ? (
         <CeoPricingHeader summary={summary} status={status} actions={headerActions} />
       ) : (
         <PageHeader
@@ -2719,7 +3138,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
         </div>
       ) : null}
 
-      {!ceoNewForm ? (
+      {importModel ? <ImportPricingWorkspace model={importModel} /> : null}
+
+      {!ceoNewForm && !importModel ? (
       <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
           <div className="text-sm"><strong>ดีล</strong> <Link to={user?.role === 'import' ? `/import/deals/${summary.ticketId}` : `/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
@@ -2747,7 +3168,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       </Panel>
       ) : null}
 
-      {ceoNewForm ? <CeoPricingWorkspace model={ceoModel} /> : (
+      {importModel ? null : ceoNewForm ? <CeoPricingWorkspace model={ceoModel} /> : (
       <Panel
         flush
         title="รายการสินค้าและราคาตั้งต้น"
@@ -2887,45 +3308,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     <span>เผื่อ (wastage): {formatWastage(item)}</span>
                   </div>
                 ) : null}
-                {/* Import's escape hatch. Only offered on a line that has NO factory: the backend
-                    refuses to re-route one that does (a factory quote may already be grouped under
-                    that name), so offering an editable value here would promise something the
-                    service would 409.
-                    B6 (GLA-135): a picker over the real factory master list, not a free-text
-                    input — see ImportFactoryPicker's own comment for why. */}
-                {/* QA BUG-20: a line that already has a factory offers no picker (re-routing is
-                    refused by the backend — a factory quote may already be grouped under that name).
-                    Rather than a silent dead-end, say WHY and what to do instead of guessing. */}
-                {canSetItemFactory && factoryName ? (
-                  <p className="mt-2 text-xs text-text-muted">
-                    ต้องการเปลี่ยนโรงงาน? ต้องสร้างคำขอราคารอบใหม่ — ระบบล็อกไว้กันใบขอราคาที่จัดกลุ่มตามโรงงานเพี้ยน
-                  </p>
-                ) : null}
-                {canSetItemFactory && !factoryName ? (
-                  <ImportFactoryPicker
-                    itemId={item.id}
-                    factories={factoriesQuery.data ?? []}
-                    countries={countriesQuery.data ?? []}
-                    loading={factoriesQuery.isLoading}
-                    loadFailed={factoriesQuery.isError}
-                    value={factoryDrafts[item.id] ?? ''}
-                    onChangeValue={(code) => setFactoryDrafts((current) => ({ ...current, [item.id]: code }))}
-                    saving={setItemFactory.isPending}
-                    onSave={() => setItemFactory.mutate(
-                      { itemId: item.id, factoryId: Number(factoryDrafts[item.id]) },
-                      { onSuccess: () => setFactoryDrafts((current) => {
-                        const next = { ...current };
-                        delete next[item.id];
-                        return next;
-                      }) },
-                    )}
-                    onFactoryAdded={(saved) => {
-                      queryClient.invalidateQueries({ queryKey: queryKeys.priceImportFactories() });
-                      setFactoryDrafts((current) => ({ ...current, [item.id]: String(saved.factoryId) }));
-                      showToast?.('success', `เพิ่มโรงงาน "${saved.name}" แล้ว`);
-                    }}
-                  />
-                ) : null}
               </div>
             );
           })}
@@ -3005,625 +3387,6 @@ export function PricingRequestDetailPage({ user, showToast }) {
               สร้างรอบแก้ไข
             </Button>
           </div>
-        </Panel>
-      ) : null}
-
-      {/* Import-only since 2026-10-01 (was canSeeRaw: import+ceo): the CEO prices inside the
-          รายการสินค้าและราคาตั้งต้น panel above and no longer gets the factory-quote workspace. */}
-      {isImport(user) ? (
-        <Panel
-          flush
-          title={`รายการสินค้า (${factoryItemCount} รายการ)`}
-          // CR-1: only while some line still has no factory mail. Per-factory สร้างเมล lives on each card.
-          actions={canContactFactory && inSendWindow && pricePreviewGroups.length > 0 ? (
-            <Button type="button" variant="secondary" disabled={generateDrafts.isPending} onClick={() => generateDrafts.mutate()} data-testid="pcr-generate-drafts">
-              สร้างเมลให้ทุกโรงงาน
-            </Button>
-          ) : null}
-        >
-          {/* Opus review of #1062 (2026-09-28): these two blocks used to be an if/else on
-              `factoryGroups.length === 0`, so the preview vanished the instant ANY factory quote
-              existed anywhere on the request — hiding an item whose factory was blank until Import
-              gap-filled it (canSetItemFactory, during FACTORY_ROUTING_STATUSES — never a re-route of
-              an already-set line, see setItemFactory's own Javadoc) AFTER drafts were already
-              generated for other items; that item has no quote row of its own. They now render
-              independently: the editable grid for whatever already has a quote, PLUS a preview for
-              whatever still doesn't — which can both be true at once. */}
-          {pricePreviewGroups.length > 0 ? (
-            <div className="flex flex-col gap-3 p-4" data-testid="pcr-price-preview">
-              {/* Opus review of #1062 (2026-09-28): "ยังไม่ได้สร้างร่างอีเมลขอราคา" (no draft has been
-                  generated AT ALL) is false in the mixed case this block now also covers — it can
-                  render ABOVE factory groups that already have a sent/answered quote, once another
-                  item's factory was only just gap-filled. Text now depends on which case this is. */}
-              <p className="rounded-md border border-warning-border bg-warning-bg-soft p-3 text-xs text-warning-dark">
-                {factoryGroups.length === 0 ? (
-                  <>
-                    ยังไม่ได้สร้างเมลขอราคา — ด้านล่างคือรายการที่ต้องขอราคา จัดกลุ่มตามโรงงาน
-                    {canContactFactory ? ' · กด “ติดต่อโรงงานแล้ว” ของแต่ละโรงงานเมื่อติดต่อแล้ว จึงกรอกราคาได้ (สร้างเมลหรือไม่ก็ได้)' : ''}
-                  </>
-                ) : (
-                  <>
-                    รายการที่ยังไม่ได้ขอราคาจากโรงงาน — ด้านล่างคือรายการที่ต้องขอราคาเพิ่ม จัดกลุ่มตามโรงงาน
-                    {canContactFactory ? ' · กด “สร้างเมลให้ทุกโรงงาน” ด้านบนเพื่อรวมรายการเหล่านี้เข้าไปในเมล' : ''}
-                  </>
-                )}
-              </p>
-              {pricePreviewGroups.map((group) => (
-                <div key={group.key} className="rounded-md border border-border bg-surface" data-testid="pcr-price-preview-group">
-                  <div className="flex flex-wrap items-center gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-2">
-                    <strong className="text-sm text-text">{group.factoryName}</strong>
-                    <span className="text-xs text-text-muted">({group.items.length} รายการ)</span>
-                    {canContactFactory && inSendWindow && group.factoryName !== 'ยังไม่ได้ระบุโรงงาน' ? (
-                      <div className="ml-auto flex flex-wrap items-center gap-2">
-                        <Button type="button" size="sm" variant="secondary" disabled={previewBusyFactory === group.factoryName}
-                          onClick={() => openMailForPreview(group.factoryName)}>
-                          <Icon name="mail" size={13} />
-                          สร้างเมล
-                        </Button>
-                        <Button type="button" size="sm" variant="primary" disabled={previewBusyFactory === group.factoryName}
-                          onClick={() => setPreviewContactFactory(group.factoryName)}>
-                          <Icon name="check" size={13} />
-                          ติดต่อโรงงานแล้ว
-                        </Button>
-                      </div>
-                    ) : (
-                      <span className="ml-auto text-2xs text-text-muted">กรอกราคาได้หลังติดต่อโรงงานแล้ว</span>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1 p-3 text-xs text-text-secondary">
-                    {group.items.map((item) => {
-                      const variant = [item.size, item.color, item.texture].filter(Boolean).join(' · ');
-                      return (
-                        <div key={item.id} className="flex flex-wrap items-baseline gap-x-2">
-                          <strong className="text-text">{itemDisplayName(item)}</strong>
-                          {variant ? <span>{variant}</span> : null}
-                          <span className="text-text-muted">· {item.requestedQty ?? '—'} {item.requestedUnit ?? ''}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {factoryGroups.length > 0 ? (
-            <div className="flex flex-col">
-              {ceoGateNotice ? (
-                <div role="status" data-testid="pcr-ceo-gate-notice" className="m-4 rounded-md border border-warning-border bg-warning-bg-soft p-3 text-xs text-warning-dark">
-                  <strong className="block">ยืนยันราคาเสนอแล้ว แต่ยังไม่ส่งถึง CEO</strong>
-                  <span>{ceoGateNotice}</span>
-                </div>
-              ) : null}
-              {/* Column headers (DESIGN.md §13's .table-head idiom: surface-muted band, overline
-                  caption) — shared FACTORY_ITEM_GRID keeps every item row below aligned to these
-                  same five tracks regardless of which factory group it belongs to. md: (768px) up
-                  only: below that each item reflows to a labelled stacked card instead (see the
-                  per-field mobile caption spans in the item-row map below), so an empty header
-                  strip would have nothing to head. */}
-              <div className={cn('hidden items-center gap-3 border-b border-border-subtle bg-surface-subtle px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-text-muted md:grid', FACTORY_ITEM_GRID)}>
-                {/* Owner ruling (2026-09-19): โรงงาน on PCR screens, not ยี่ห้อ -- PCR page only,
-                    TicketDetailPage's own identical header is untouched. */}
-                <span>รุ่น / สี / เนื้อผิว</span>
-                <span>จำนวน</span>
-                <span>ราคาที่เสนอ (แก้ไข)</span>
-                <span>ระยะเวลานำเข้า</span>
-                <span>ราคาที่ยืนยันแล้ว</span>
-              </div>
-              {factoryGroups.map((group) => {
-                const current = group.current;
-                const quoteStatus = factoryQuoteStatusLabel(current.status);
-                // The email-draft fields live in FactoryEmailDraftModal now (its own lookup against
-                // `emailModalQuote`/`emailDrafts`, opened via setEmailModalQuoteId below) — no
-                // per-group emailDraft needed in this closure any more.
-                // QA-40: outside the response window an unsaved draft is ignored, so the read-only grid
-                // shows what was saved rather than an edit nobody can submit or discard any more.
-                const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
-                const draft = unsavedDraft ?? {
-                  supplierQuoteRef: current.supplierQuoteRef ?? '',
-                  // R1: when every line is locked to ONE currency, that is the draft's currency too.
-                  defaultCurrency: (() => {
-                    const locked = [...new Set((current.items ?? []).map((i) => requestItemById.get(i.pricingRequestItemId)?.requestedCurrency).filter(Boolean))];
-                    return locked.length === 1 ? locked[0] : (current.defaultCurrency ?? 'THB');
-                  })(),
-                  paymentTerms: current.paymentTerms ?? '',
-                  leadTimeText: current.leadTimeText ?? '',
-                  revisionReason: '',
-                  negotiationNote: current.negotiationNote ?? '',
-                  items: defaultResponseItems(current, requestItemById),
-                };
-                // See confirmFactoryQuote's own doc comment: `responseDrafts[id]` exists in state
-                // only once a change handler has written to it, so its presence already means
-                // "Import touched this draft since it was last loaded from the server."
-                const dirty = Boolean(unsavedDraft);
-                // QA-40: past the response window the prices read as plain text, like any read-only grid.
-                const editable = isImport(user) && current.current && inResponseWindow
-                  && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
-                // CR-1 (GLA-167) R3 / B-R2: the price grid is locked until the factory has been marked
-                // ติดต่อโรงงานแล้ว — a DRAFT quote means "not contacted yet", and FactoryQuoteService#receive
-                // now 409s EVERY DRAFT quote (no exception outside the contact window any more; that
-                // exception, from #1062, is reversed). Locked inputs stay visible, dimmed, with the
-                // reason beside them — the grid is still the primary surface (owner ruling 2026-08-16).
-                const contacted = isFactoryContacted(current);
-                // READY_FOR_COSTING only offers ยืนยันราคาเสนอ again while dirty — see
-                // confirmFactoryQuote's doc comment for why an undirtied re-click must not be
-                // offered at all (it would either no-op-fail against markReady's own guard, or,
-                // if this branch called receive() unconditionally, spuriously bump the revision).
-                const canConfirm = isImport(user) && current.current && contacted && inResponseWindow
-                  && (['REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING'].includes(current.status)
-                    || (current.status === 'READY_FOR_COSTING' && dirty));
-                const canNegotiate = isImport(user) && current.status === 'RESPONSE_RECEIVED' && current.current && inResponseWindow;
-                // สร้างเมล is offered to import AND the CEO at every status (R5): to build + copy the
-                // mail while DRAFT, or just to re-read what was drafted afterwards. The modal is
-                // read-only once the quote leaves DRAFT or the request leaves the contact window.
-                // QA-40: except on a dead request (CANCELLED / SUPERSEDED), where there is no mail to build or re-read.
-                const canOpenEmailDraft = canContactFactory && !['CANCELLED', 'SUPERSEDED'].includes(summary?.status);
-                // ติดต่อโรงงานแล้ว: only for a current DRAFT quote inside the window markContacted
-                // accepts (FactoryQuoteService.DRAFT_STATUSES) — and never again after (R7, no undo).
-                const canMarkContacted = canContactFactory && current.current && current.status === 'DRAFT' && inSendWindow;
-                // Per-line locked terms (R1): a line carrying requestedCurrency + requestedPriceUnitBasis
-                // shows them read-only; only a LEGACY line (neither) keeps today's currency/unit selects.
-                const groupRequestItems = draft.items.map((line) => requestItemById.get(line.pricingRequestItemId));
-                const lockedTerms = lockedTermsList(
-                  groupRequestItems.filter(Boolean),
-                  (basis) => unitBasisCatalog.find((option) => option.code === basis)?.label ?? unitBasisLabel(basis),
-                );
-                const hasLegacyLines = groupRequestItems.some((item) => !hasLockedTerms(item));
-                // The legacy selects speak for the legacy lines only: the first one that carries no terms.
-                const legacyLine = draft.items.find((line) => !hasLockedTerms(requestItemById.get(line.pricingRequestItemId)));
-                const groupUnitBasis = legacyLine?.unitBasis ?? draft.items[0]?.unitBasis ?? '';
-                const groupCurrency = (legacyLine ? draft.defaultCurrency : null) || draft.items[0]?.currency || 'THB';
-                const groupUnitLabel = unitBasisCatalog.find((option) => option.code === groupUnitBasis)?.label
-                  ?? unitBasisLabel(groupUnitBasis);
-                const quoteIds = group.quotes.map((q) => q.id);
-                const pendingChange = leadTimeSplit.pending.find((change) => quoteIds.includes(change.factoryQuoteId)) ?? null;
-                const decidedChanges = leadTimeSplit.decided.filter((change) => quoteIds.includes(change.factoryQuoteId));
-                const pendingLineById = new Map((pendingChange?.lines ?? []).map((line) => [line.pricingRequestItemId, line]));
-                const irRow = (storedIrQuery.data ?? [])
-                  .filter((row) => row.status !== 'SUPERSEDED')
-                  .find((row) => (current.factoryId != null && row.factoryId != null
-                    ? row.factoryId === current.factoryId
-                    : row.factoryName === current.factoryName)) ?? null;
-                // Lines import may put in a lead-time change: import (non-stock) lines of THIS quote.
-                const leadTimeLines = draft.items
-                  .map((line) => requestItemById.get(line.pricingRequestItemId))
-                  .filter((item) => item && isImportLine(item))
-                  .map((item) => ({ item, name: itemDisplayName(item), current: { min: item.leadTimeMinDays, max: item.leadTimeMaxDays } }));
-                const canRequestLeadTime = isImport(user) && current.current && !pendingChange && leadTimeLines.length > 0
-                  && !['CANCELLED', 'SUPERSEDED', 'NOT_AVAILABLE'].includes(current.status);
-                const contactedName = contactedByName(current, request?.events);
-                // The chip answers "what do I do next with this factory" (IA F1): ยังไม่ติดต่อ -> ติดต่อแล้ว
-                // <date> -> ยืนยันราคาแล้ว. Statuses outside that path (not available / cancelled / superseded)
-                // keep their own label.
-                const chip = !contacted
-                  ? { tone: 'warning', label: 'ยังไม่ติดต่อ' }
-                  : current.status === 'READY_FOR_COSTING'
-                    ? { tone: 'success', label: 'ยืนยันราคาแล้ว' }
-                    : ['NOT_AVAILABLE', 'CANCELLED', 'SUPERSEDED'].includes(current.status)
-                      ? { tone: quoteStatus.tone, label: quoteStatus.label }
-                      : {
-                        tone: 'info',
-                        label: ['ติดต่อแล้ว', formatShortThaiDay(current.contactedOn)].filter(Boolean).join(' ')
-                          + (contactedName ? ` · โดย ${contactedName}` : ''),
-                      };
-
-                function updateDraft(patch) {
-                  setResponseDrafts({ ...responseDrafts, [current.id]: { ...draft, ...patch } });
-                }
-                function updateLine(index, patch) {
-                  const items = [...draft.items];
-                  items[index] = { ...items[index], ...patch };
-                  updateDraft({ items });
-                }
-                // The legacy selects only ever touch lines that carry no locked terms.
-                function updateCurrency(nextCurrency) {
-                  updateDraft({
-                    defaultCurrency: nextCurrency,
-                    items: draft.items.map((item) => (hasLockedTerms(requestItemById.get(item.pricingRequestItemId))
-                      ? item : { ...item, currency: nextCurrency })),
-                  });
-                }
-                function updateUnitBasis(nextBasis) {
-                  const nextLabel = unitBasisCatalog.find((option) => option.code === nextBasis)?.label;
-                  updateDraft({
-                    items: draft.items.map((item) => (hasLockedTerms(requestItemById.get(item.pricingRequestItemId))
-                      ? item : { ...item, unitBasis: nextBasis, quotedUnit: nextLabel ?? item.quotedUnit })),
-                  });
-                }
-                function discardEdits() {
-                  setResponseDrafts((cur) => {
-                    const next = { ...cur };
-                    delete next[current.id];
-                    return next;
-                  });
-                }
-
-                return (
-                  <div key={group.key} className="border-t border-border-subtle first:border-t-0" data-testid={`pcr-factory-card-${current.id}`}>
-                    {/* Factory header: name, line count, the contact-state chip, and the two actions.
-                        Never its own bordered card (DESIGN.md: "never nest a card inside a card") — a
-                        tonal surface-subtle band inside the flush Panel, same idiom as a table header. */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 bg-surface-subtle px-5 py-3 mobile:px-4">
-                      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
-                        <strong className="text-text">{group.factoryName}</strong>
-                        <span className="text-xs text-text-muted">({current.items?.length ?? 0} รายการ)</span>
-                        <span data-testid={`pcr-factory-status-${current.id}`}>
-                          <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge>
-                        </span>
-                        {contacted && !['READY_FOR_COSTING', 'NOT_AVAILABLE', 'CANCELLED', 'SUPERSEDED'].includes(current.status)
-                          && current.status !== 'REQUESTED' ? (
-                            <StatusBadge tone={quoteStatus.tone}>{quoteStatus.label}</StatusBadge>
-                          ) : null}
-                        {current.revisionNo > 1 ? <StatusBadge tone="neutral">ครั้งที่ {current.revisionNo}</StatusBadge> : null}
-                      </div>
-                      {canOpenEmailDraft || canMarkContacted ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          {canOpenEmailDraft ? (
-                            <Button type="button" variant="secondary" onClick={() => setEmailModalQuoteId(current.id)} data-testid={`pcr-open-email-draft-${current.id}`}>
-                              <Icon name="mail" size={14} />
-                              สร้างเมล
-                            </Button>
-                          ) : null}
-                          {canMarkContacted ? (
-                            <Button type="button" variant="primary" onClick={() => setContactQuoteId(current.id)} data-testid={`pcr-open-contact-${current.id}`}>
-                              <Icon name="check" size={14} />
-                              ติดต่อโรงงานแล้ว
-                            </Button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {/* The contacted note, kept visible for everyone who can see the card (R7: it is final). */}
-                    {contacted && current.contactedNote ? (
-                      <p className="m-0 border-b border-border-subtle px-5 py-2.5 text-xs text-text-secondary mobile:px-4" data-testid={`pcr-contact-note-${current.id}`}>
-                        <span className="font-bold text-text-muted">หมายเหตุการติดต่อ: </span>{current.contactedNote}
-                      </p>
-                    ) : null}
-
-                    {/* Hint (CR-1 R3): while the factory is not yet contacted the price inputs below are
-                        locked. Point import at the button instead of letting a price be typed out of order. */}
-                    {editable && !contacted ? (
-                      <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark mobile:px-4" data-testid={`pcr-await-contact-${current.id}`}>
-                        <Icon name="lock" size={14} />
-                        กด ติดต่อโรงงานแล้ว ก่อนกรอกราคา
-                      </div>
-                    ) : null}
-
-                    {/* Terms strip (R1): currency + price unit are Sales's, locked for import. A lock icon
-                        and plain words, so nobody hunts for a select that is deliberately not there. */}
-                    {lockedTerms.length > 0 ? (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border-subtle px-5 py-2.5 text-xs text-text-secondary mobile:px-4" data-testid={`pcr-factory-terms-${current.id}`}>
-                        <Icon name="lock" size={13} className="shrink-0 text-text-muted" />
-                        <strong className="text-text">{lockedTerms.join(' / ')}</strong>
-                        <span className="text-text-muted">· ตามคำขอของฝ่ายขาย</span>
-                      </div>
-                    ) : null}
-
-                    {/* Legacy lines (no requested terms) keep today's currency/unit controls. */}
-                    {hasLegacyLines ? (editable ? (
-                      <div className="flex flex-wrap items-end gap-4 border-b border-border-subtle px-5 py-3 mobile:px-4">
-                        <FormField
-                          label={<>สกุลเงิน<InfoTip label="สกุลเงิน" text="สกุลเงินที่โรงงานนี้เสนอราคามา อ้างอิงจากราคาตั้งต้นในแคตตาล็อกโดยอัตโนมัติ — เปลี่ยนได้หากโรงงานเสนอราคาเป็นสกุลเงินอื่น" /></>}
-                          htmlFor={`pcr-currency-${current.id}`}
-                        >
-                          <select
-                            id={`pcr-currency-${current.id}`}
-                            className="md:w-32"
-                            value={groupCurrency}
-                            onChange={(e) => updateCurrency(e.target.value)}
-                          >
-                            {(currencyOptions.includes(groupCurrency) ? currencyOptions : [groupCurrency, ...currencyOptions]).map((code) => (
-                              <option key={code} value={code}>{code}</option>
-                            ))}
-                          </select>
-                        </FormField>
-                        <FormField label="หน่วยราคา" htmlFor={`pcr-unit-${current.id}`}>
-                          <select
-                            id={`pcr-unit-${current.id}`}
-                            className="md:w-32"
-                            value={groupUnitBasis}
-                            onChange={(e) => updateUnitBasis(e.target.value)}
-                          >
-                            {unitBasisCatalog.map((option) => (
-                              <option key={option.code} value={option.code}>{`/ ${option.label}`}</option>
-                            ))}
-                          </select>
-                        </FormField>
-                      </div>
-                    ) : (
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-border-subtle px-5 py-2.5 text-xs text-text-muted mobile:px-4">
-                        <span>สกุลเงิน: {groupCurrency}</span>
-                        <span>{`หน่วยราคา: / ${groupUnitLabel}`}</span>
-                      </div>
-                    )) : null}
-
-                    {/* Item rows: ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน · ราคาที่เสนอ (แก้ไข) · ราคาที่ยืนยันแล้ว. */}
-                    {draft.items.map((line, index) => {
-                      const itemRef = `รายการ #${line.pricingRequestItemId}`;
-                      const requested = requestItemById.get(line.pricingRequestItemId);
-                      const productName = [requested?.catalogBrand ?? requested?.brand, requested?.catalogModel ?? requested?.model]
-                        .filter(Boolean).join(' ') || requested?.productDescription || itemRef;
-                      // size, then colour, then texture — matches the order this page has always
-                      // rendered them in (see the UAT-reported "cannot tell which price box belongs
-                      // to which item" fix this join predates), so the string a reader already
-                      // recognises does not silently reorder under the redesign.
-                      const variantLabel = [requested?.size, requested?.color, requested?.texture].filter(Boolean).join(' · ');
-                      const qty = requested?.requestedQty ?? line.quotedQuantity;
-                      const unitLabel = requested?.requestedUnit
-                        ?? unitBasisCatalog.find((option) => option.code === line.unitBasis)?.label
-                        ?? unitBasisLabel(line.unitBasis);
-                      // No backend field carries an "approved price" distinct from rawUnitPrice —
-                      // FactoryQuoteItemDto has none, and status lives on the QUOTE, not the line.
-                      // Reading it off current.status === READY_FOR_COSTING (this quote has been
-                      // confirmed via ยืนยันราคาเสนอ at least once since its last edit) is therefore an
-                      // inference, not a literal field read — documented here for a reviewer to
-                      // correct if the owner meant something else by "approved."
-                      //
-                      // Reads the SERVER item (current.items), never `line` (draft.items — the
-                      // editable value): approvedPrice must stay frozen at whatever was last
-                      // confirmed, so it visibly still differs from ราคาที่เสนอ the instant Import
-                      // types a new number, rather than instantly (and wrongly) claiming the unsaved
-                      // edit was already approved.
-                      const switchableUnit = ['PER_SQM', 'PER_PIECE'].includes(requested?.requestedPriceUnitBasis);
-                      const equivalentPrice = equivalentUnitPrice(line, requested);
-                      const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
-                      const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
-                      return (
-                        <div
-                          key={line.pricingRequestItemId}
-                          className={cn('grid items-center gap-3 border-b border-border-subtle px-5 py-3 last:border-b-0 mobile:flex mobile:flex-col mobile:items-stretch mobile:gap-1 mobile:px-4', FACTORY_ITEM_GRID)}
-                        >
-                          <div className="min-w-0">
-                            <div className="break-words text-sm font-bold text-text md:truncate">{productName}</div>
-                            <div className="break-words text-xs text-text-secondary">{variantLabel || '-'}</div>
-                          </div>
-                          <div className="text-sm text-text-secondary">
-                            <span className="mr-1 text-2xs font-bold uppercase text-text-muted md:hidden">จำนวน</span>
-                            {qty} {unitLabel}
-                          </div>
-                          <div className="min-w-0">
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">{editable ? 'ราคาที่เสนอ (แก้ไข)' : 'ราคาที่เสนอ'}</span>
-                            {editable && contacted ? (
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                {/* Factories sell on different terms: a line Sales asked per ตร.ม. or per แผ่น can be
-                                    quoted either way (any other requested unit stays locked). */}
-                                {switchableUnit ? (
-                                  <select
-                                    className="w-full md:w-24"
-                                    aria-label={`หน่วยราคา ${itemRef}`}
-                                    value={line.unitBasis}
-                                    onChange={(e) => updateLine(index, {
-                                      unitBasis: e.target.value,
-                                      quotedUnit: unitBasisCatalog.find((option) => option.code === e.target.value)?.label ?? line.quotedUnit,
-                                    })}
-                                  >
-                                    {['PER_SQM', 'PER_PIECE'].map((code) => (
-                                      <option key={code} value={code}>{`/ ${unitBasisCatalog.find((option) => option.code === code)?.label ?? unitBasisLabel(code)}`}</option>
-                                    ))}
-                                  </select>
-                                ) : null}
-                                <input
-                                  id={`pcr-quote-price-${current.id}-${line.pricingRequestItemId}`}
-                                  className="w-full md:w-28"
-                                  type="text"
-                                  inputMode="decimal"
-                                  placeholder={`ราคา/${unitBasisCatalog.find((option) => option.code === line.unitBasis)?.label ?? line.quotedUnit ?? ''}`}
-                                  aria-label={`ราคาที่เสนอ ${itemRef}`}
-                                  value={line.rawUnitPrice ?? ''}
-                                  onChange={(e) => updateLine(index, { rawUnitPrice: sanitizeDecimal(e.target.value) })}
-                                />
-                                {line.unitBasis === 'PER_SQM' && !(Number(requested?.sqmPerPiece) > 0) ? (
-                                  <input
-                                    id={`pcr-quote-sqm-${current.id}-${line.pricingRequestItemId}`}
-                                    className="w-full md:w-24"
-                                    type="text"
-                                    inputMode="decimal"
-                                    placeholder="ตร.ม./หน่วย"
-                                    aria-label={`ตร.ม./หน่วย ${itemRef}`}
-                                    value={line.sqmPerUnit ?? ''}
-                                    onChange={(e) => updateLine(index, { sqmPerUnit: sanitizeDecimal(e.target.value) })}
-                                  />
-                                ) : null}
-                                {equivalentPrice ? (
-                                  <span className="w-full text-xs text-text-muted" data-testid={`pcr-quote-equiv-${current.id}-${line.pricingRequestItemId}`}>
-                                    {`= ${equivalentPrice.value} ${line.currency}/${equivalentPrice.unitLabel}`}
-                                  </span>
-                                ) : null}
-                              </div>
-                            ) : editable ? (
-                              // Import, but the factory is not yet marked ติดต่อโรงงานแล้ว — a dimmed,
-                              // disabled stand-in so the column reads "you'll fill this after
-                              // contacting", not a usable field. The hint above the grid says why.
-                              <input
-                                className="w-full opacity-50 md:w-32"
-                                type="text"
-                                disabled
-                                value=""
-                                placeholder="ติดต่อโรงงานก่อน"
-                                aria-label={`ราคาที่เสนอ ${itemRef} — ต้องติดต่อโรงงานก่อน`}
-                                data-testid={`pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`}
-                              />
-                            ) : (
-                              <span className="text-sm text-text-secondary">{formatCurrency(line.rawUnitPrice, line.currency)}</span>
-                            )}
-                          </div>
-                          {/* ระยะเวลานำเข้า: the line's current range; with a PENDING change it reads
-                              "old → new" in amber until the owning rep / a sales manager decides (R2/R10).
-                              The old value stands until then — nothing downstream waits on it. */}
-                          <div className="min-w-0 text-sm text-text-secondary" data-testid={`pcr-lt-value-${current.id}-${line.pricingRequestItemId}`}>
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ระยะเวลานำเข้า</span>
-                            {pendingLineById.get(line.pricingRequestItemId) ? (
-                              <>
-                                <span className="tabular-nums">
-                                  {`${leadTimeRangeText(pendingLineById.get(line.pricingRequestItemId).oldMinDays, pendingLineById.get(line.pricingRequestItemId).oldMaxDays)} → ${leadTimeRangeText(pendingLineById.get(line.pricingRequestItemId).newMinDays, pendingLineById.get(line.pricingRequestItemId).newMaxDays)} วัน`}
-                                </span>
-                                <span className="block text-2xs font-bold text-warning-dark">รอฝ่ายขายอนุมัติ</span>
-                              </>
-                            ) : (
-                              <span className="tabular-nums">{leadTimeWithUnit(requested?.leadTimeMinDays, requested?.leadTimeMaxDays)}</span>
-                            )}
-                          </div>
-                          <div>
-                            <span className="mb-1 block text-2xs font-bold uppercase text-text-muted md:hidden">ราคาที่ยืนยันแล้ว</span>
-                            <span className="text-sm font-bold text-text">
-                              {approvedPrice != null ? formatCurrency(approvedPrice, serverItem?.currency ?? line.currency) : '–'}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {/* Lead-time change (R2/R10, option C), the approved/rejected history, and this factory's
-                        IR (R9, read-only). One compact block so the card keeps one reading order:
-                        terms -> grid -> what is pending / decided -> the IR. */}
-                    {pendingChange || canRequestLeadTime || decidedChanges.length > 0 || irRow ? (
-                      <div className="grid gap-2.5 border-b border-border-subtle px-5 py-3 text-xs mobile:px-4">
-                        {pendingChange ? (
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-warning-border bg-warning-bg-soft px-3 py-2" data-testid={`pcr-lt-pending-${current.id}`}>
-                            <StatusBadge tone="warning">รอฝ่ายขายอนุมัติ</StatusBadge>
-                            <span className="min-w-0 text-text-secondary">ขอเปลี่ยนระยะเวลานำเข้า — {pendingChange.reason}</span>
-                            {isImport(user) ? (
-                              <span className="ml-auto flex flex-wrap items-center gap-2">
-                                <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
-                                  onClick={() => setLeadTimeDialog({ quoteId: current.id, change: pendingChange })}>
-                                  แก้ไข
-                                </Button>
-                                <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
-                                  onClick={() => withdrawLeadTimeChange.mutate(pendingChange)}>
-                                  ถอนคำขอ
-                                </Button>
-                              </span>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {canRequestLeadTime ? (
-                          <div>
-                            <Button type="button" size="sm" variant="secondary" data-testid={`pcr-lt-open-${current.id}`}
-                              onClick={() => setLeadTimeDialog({ quoteId: current.id, change: null })}>
-                              <Icon name="pencil" size={13} />
-                              ขอเปลี่ยนระยะเวลานำเข้า
-                            </Button>
-                          </div>
-                        ) : null}
-                        {decidedChanges.length > 0 ? (
-                          <div className="grid gap-1 text-text-muted" data-testid={`pcr-lt-history-${current.id}`}>
-                            <span className="font-bold">ประวัติการเปลี่ยนระยะเวลานำเข้า</span>
-                            {decidedChanges.map((change) => (
-                              <p key={change.id} className="m-0">
-                                <span className={change.status === 'APPROVED' ? 'font-bold text-success-dark' : 'font-bold text-danger-dark'}>
-                                  {change.status === 'APPROVED' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'}
-                                </span>
-                                {change.decidedAt ? ` ${formatShortThaiDay(String(change.decidedAt).slice(0, 10))}` : ''}
-                                {' · '}
-                                {change.lines.map((line) => `${lineNameById.get(line.pricingRequestItemId) ?? `รายการ #${line.pricingRequestItemId}`} ${leadTimeRangeText(line.oldMinDays, line.oldMaxDays)} → ${leadTimeRangeText(line.newMinDays, line.newMaxDays)}`).join(', ')}
-                                {change.status === 'REJECTED' && change.decisionReason ? ` · เหตุผล: ${change.decisionReason}` : ''}
-                              </p>
-                            ))}
-                          </div>
-                        ) : null}
-                        {irRow ? (
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text-secondary" data-testid={`pcr-ir-${current.id}`}>
-                            <Icon name="fileText" size={13} className="shrink-0 text-text-muted" />
-                            <span className="font-bold text-text">{irRow.docNumber ?? 'ใบขอซื้อ'}</span>
-                            <StatusBadge tone={irRow.status === 'ISSUED' ? 'success' : 'neutral'}>{irRow.status === 'ISSUED' ? 'ออกเลขแล้ว' : 'ฉบับร่าง'}</StatusBadge>
-                            <Button type="button" size="sm" variant="secondary" disabled={downloadingIrId === irRow.id}
-                              onClick={() => downloadIr(irRow)}>
-                              {downloadingIrId === irRow.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
-                            </Button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {/* Attachments — unchanged functionality, relocated under the item rows now that
-                        the email composer they used to trail is a modal. */}
-                    {(current.attachments ?? []).length || isImport(user) ? (
-                      <div className="border-b border-border-subtle px-5 py-3 mobile:px-4">
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-bold text-text-muted">ไฟล์แนบ</span>
-                          {isImport(user) ? (
-                            // Left as a <label> wrapping the hidden file input, not <Button>: a
-                            // <button> cannot open the native file picker the way a <label>
-                            // wrapping its <input type="file"> does.
-                            <label className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'cursor-pointer')}>
-                              <input type="file" className="hidden" onChange={(event) => {
-                                const file = event.target.files?.[0];
-                                if (file) uploadQuoteAttachment.mutate({ quote: current, file });
-                                event.target.value = '';
-                              }} />
-                              <Icon name="upload" size={13} />
-                              แนบไฟล์
-                            </label>
-                          ) : null}
-                        </div>
-                        <div className="flex flex-col gap-1 text-xs text-text-muted">
-                          {(current.attachments ?? []).map((attachment) => (
-                            <a key={attachment.id} className="text-info underline" href={api.pricingRequests.factoryQuoteAttachmentUrl(attachment.id)} target="_blank" rel="noreferrer">
-                              {attachment.fileName}
-                            </a>
-                          ))}
-                          {(current.attachments ?? []).length === 0 ? <span>-</span> : null}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {/* หมายเหตุราคา — negotiationNote, a real backend field
-                        (ReceiveFactoryQuoteRequest.negotiationNote) already plumbed through
-                        defaultResponseItems' default state and cleanResponsePayload's outgoing
-                        shape, but with no <textarea> anywhere to actually set it (grep-verified: 0
-                        render sites before this task) — wiring an existing field to an existing
-                        control, not new backend surface. */}
-                    <div className="px-5 py-3 mobile:px-4">
-                      {editable ? (
-                        <FormField label="หมายเหตุราคา" htmlFor={`pcr-note-${current.id}`}>
-                          <textarea
-                            id={`pcr-note-${current.id}`}
-                            className="min-h-20"
-                            placeholder="ข้อมูลเพิ่มเติมเกี่ยวกับราคา (ถ้ามี)"
-                            value={draft.negotiationNote}
-                            onChange={(e) => updateDraft({ negotiationNote: e.target.value })}
-                          />
-                        </FormField>
-                      ) : draft.negotiationNote ? (
-                        <p className="m-0 text-xs text-text-muted"><strong>หมายเหตุราคา:</strong> {draft.negotiationNote}</p>
-                      ) : null}
-                      {group.history.length ? (
-                        <p className="m-0 mt-2 text-xs text-text-muted">
-                          ประวัติ: {group.history.map((q) => {
-                            const historyStatus = factoryQuoteStatusLabel(q.status);
-                            return `ครั้งที่ ${q.revisionNo} (${historyStatus.label})`;
-                          }).join(' · ')}
-                        </p>
-                      ) : null}
-                      <div className="mt-3 flex flex-wrap justify-end gap-2">
-                        {canNegotiate ? (
-                          <Button type="button" variant="secondary" disabled={negotiateQuote.isPending} onClick={() => negotiateQuote.mutate(current)}>
-                            เจรจา
-                          </Button>
-                        ) : null}
-                        {editable && dirty ? (
-                          <Button type="button" variant="secondary" onClick={discardEdits}>
-                            ยกเลิก
-                          </Button>
-                        ) : null}
-                        {canConfirm ? (
-                          <Button
-                            type="button"
-                            variant="primary"
-                            disabled={confirmingFactoryQuoteIds.has(current.id)}
-                            onClick={() => confirmFactoryQuote(current, draft)}
-                            data-testid="pcr-submit-to-ceo"
-                          >
-                            {confirmingFactoryQuoteIds.has(current.id) ? 'กำลังยืนยัน…' : 'ยืนยันราคาเสนอ'}
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
         </Panel>
       ) : null}
 
