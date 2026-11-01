@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PricingRequestDetailPage } from './PricingRequestDetailPage.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { formatThaiDate } from '../../utils/format.js';
+import { formatThaiDate, pricingDecisionStatusLabel, pricingRequestStatusLabel } from '../../utils/format.js';
 
 // This component (and PricingRequestCreateModal, which it opens in mode="revision"
 // for the customer-change-revision flow) is exercised here against a hand-rolled
@@ -575,6 +575,50 @@ function renderDetailPage({
 
 async function waitForLoaded(request = buildRequest()) {
   return screen.findByRole('heading', { level: 1, name: request.summary.requestCode });
+}
+
+// ── CEO pricing workspace redesign: shared helpers (new-form decision, CEO view) ────────────────
+// jsdom has no media queries, so the page renders BOTH the desktop table and the mobile cards and
+// hides one with Tailwind classes. The card inputs/figures reuse the table's data-testids, so
+// EVERY query on the redesigned workspace is SCOPED: within the table / a row (ceoTable, ceoRow)
+// or within a card (ceoCard). An unscoped getByTestId('pcr-ceo-margin-input-8001') is ambiguous by
+// design. The unique, unscoped ids are the summary bar's (pcr-ceo-save-all / -approve / -return)
+// and the mobile bar's (pcr-ceo-mobile-*).
+const ceoTable = () => within(screen.getByTestId('pcr-ceo-table'));
+const ceoRow = (id) => within(screen.getByTestId(`pcr-ceo-row-${id}`));
+const ceoCard = (id) => within(screen.getByTestId(`pcr-ceo-card-${id}`));
+const ceoSummary = () => within(screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' }));
+const ceoPricingPanel = () => screen.getByRole('region', { name: 'ตั้งราคารายการ' });
+const saveAllButton = () => screen.getByTestId('pcr-ceo-save-all');
+const nfItem = (overrides = {}) => buildDecisionItem({ sqmPerPiece: 0.36, ...overrides });
+const nfStock = (overrides = {}) => nfItem({
+  stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null, ...overrides,
+});
+// N request items named "SCG A1", "SCG A2", … (itemDisplayName = brand + model), ids 1..N.
+function requestItemsN(n) {
+  const base = buildRequest().items[0];
+  return Array.from({ length: n }, (_, i) => ({
+    ...base, id: i + 1, model: `A${i + 1}`, productDescription: `กระเบื้องพื้น SCG A${i + 1}`,
+  }));
+}
+function lastSavedDecisionItem() {
+  const calls = api.pricingRequests.updatePricingDecision.mock.calls;
+  return calls[calls.length - 1][1].items[0];
+}
+async function renderCeoNewForm({
+  items, priceMode = 'NET', requestItems, costings, factoryQuotes, user = ceoUser, showToast, decisions,
+} = {}) {
+  const request = buildRequest({ summary: { status: 'CEO_REVIEWING' }, ...(requestItems ? { items: requestItems } : {}) });
+  api.pricingRequests.listPricingDecisions.mockResolvedValue({
+    items: decisions ?? [buildDecision({ priceMode, items: items ?? [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] })],
+  });
+  const utils = renderDetailPage({ user, request, costings, factoryQuotes, showToast });
+  await waitForLoaded(request);
+  await screen.findByText('PCD-2026-0001');
+  return { request, ...utils };
+}
+function openRowDetails(name = 'SCG A1') {
+  fireEvent.click(ceoTable().getByRole('button', { name: `รายละเอียด ${name}` }));
 }
 
 beforeEach(() => {
@@ -2035,8 +2079,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
     });
 
-    it('new-form NET: the per-line margin is a LIVE input (no own button) that previews and saves via บันทึกราคา as marginPct', async () => {
-      // The live preview needs the selling buffer; with it = 1: cost 60 → margin 0.5 → list 90, net 90.
+    it('new-form NET: the per-line margin is a LIVE PERCENT input (no own button) that previews and saves via the one บันทึกราคา as the FRACTION marginPct', async () => {
+      // The live preview needs the selling buffer; with it = 1: cost 60 → margin 50% → list 90, net 90.
       api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
       try {
         const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -2048,20 +2092,21 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         await screen.findByText('PCD-2026-0001');
         await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
 
-        const input = screen.getByTestId('pcr-ceo-margin-input-8001');
-        expect(input.value).toBe('0.2');
-        // No separate margin save button — the realtime model has only the shared บันทึกราคา.
+        const row = () => within(screen.getByTestId('pcr-ceo-row-8001'));
+        const input = row().getByTestId('pcr-ceo-margin-input-8001');
+        // stored fraction 0.2 is DISPLAYED as the percent 20
+        expect(input.value).toBe('20');
+        // no per-row margin save and no per-row บันทึกราคา: the realtime model has only the one save
         expect(screen.queryByTestId('pcr-ceo-margin-save-8001')).toBeNull();
+        expect(screen.queryByTestId('pcr-ceo-save-price-8001')).toBeNull();
 
-        // Typing updates the realized-margin readout LIVE, before any save (cost 60 → margin 0.5 →
-        // net 90 → profit 30/unit, 50%).
-        fireEvent.change(input, { target: { value: '0.5' } });
-        await waitFor(() => expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).toMatch(/฿30\.00.*50\.0%/));
-        // ราคาตั้ง reflects the margin-derived list (read-only).
-        expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('90');
-        expect(screen.getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
+        // Typing 50 (percent) updates the row LIVE, before any save: margin 0.50 → list 90, net 90,
+        // profit 30/unit × 20 = ฿600.00 = 50.0% of cost. (Read as a fraction 50 it would be ฿3,060.)
+        fireEvent.change(input, { target: { value: '50' } });
+        await waitFor(() => expect(row().getByTestId('pcr-ceo-profit-8001').textContent).toMatch(/฿600\.00.*50\.0%/));
+        expect(row().getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('90.00');
 
-        fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+        fireEvent.click(saveAllButton());
         await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
           7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.5 })] }));
       } finally {
@@ -2070,50 +2115,37 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
 
     it('new-form SPECIAL_SQM: no margin input — margin is NET-only (owner ruling 2026-10-23), price set directly', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+      await renderCeoNewForm({ priceMode: 'SPECIAL_SQM', items: [nfItem()] });
 
       // Margin would be a no-op on the saved net here (SPECIAL_SQM sets the price directly), so the
       // input is hidden; the ราคาพิเศษ prefill still comes from the stored formula price (214.17).
-      expect(screen.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
-      expect(Number(screen.getByTestId('pcr-ceo-special-sqm-8001').value)).toBeCloseTo(214.17, 1);
-      // The กำไร readout does not mislabel a not-yet-saved SPECIAL_SQM line as "missing cost".
-      expect(screen.getByTestId('pcr-ceo-margin-readout-8001').textContent).not.toMatch(/ยังไม่มีต้นทุน/);
+      expect(ceoRow(8001).queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
+      expect(Number(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value)).toBeCloseTo(214.17, 1);
+      // A costed line is never mislabelled as missing its cost in the row.
+      expect(ceoRow(8001).getByTestId('pcr-ceo-cost-both-8001').textContent).toContain('60.00');
     });
 
-    it('margin input rejects an out-of-range value (> 999.999999), matching the server bound', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36 })] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+    it('margin input rejects an out-of-range PERCENT (server bound is the fraction 999.999999 = 99,999.9999%) and keeps the one save disabled', async () => {
+      await renderCeoNewForm({ priceMode: 'NET', items: [nfItem()] });
 
-      fireEvent.change(screen.getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '1000' } });
-      expect(screen.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '100000' } });
+      expect(saveAllButton().disabled).toBe(true);
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '-100' } });
+      expect(saveAllButton().disabled).toBe(true);
+      // an in-range percent frees it again (-50% is a legal markup > -100%)
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '-50' } });
+      expect(saveAllButton().disabled).toBe(false);
     });
 
-    // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %".
-    it('shows the realized margin (฿ + % of cost + total) on a NEW-FORM NET line', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        // cost 60 THB, net 72 THB (fx 1), qty 20 → profit 12/unit, 20% of cost, 240 total.
-        items: [buildDecision({ priceMode: 'NET', items: [buildDecisionItem({ sqmPerPiece: 0.36, netUnitPrice: 72 })] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+    // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %". Now the กำไร column:
+    // ฿ for the whole line + % of cost.
+    it('shows the realized profit (฿ for the line + % of cost) in the กำไร column of a NEW-FORM NET row', async () => {
+      // cost 60 THB, net 72 THB (fx 1), qty 20 → profit 12/unit, 20% of cost, ฿240 for the line.
+      await renderCeoNewForm({ priceMode: 'NET', items: [nfItem({ netUnitPrice: 72, listUnitPrice: 72 })] });
 
-      const readout = screen.getByTestId('pcr-ceo-margin-readout-8001').textContent;
-      expect(readout).toMatch(/฿12\.00/);
-      expect(readout).toMatch(/20\.0%/);
-      expect(readout).toMatch(/฿240\.00/);
+      const profit = ceoRow(8001).getByTestId('pcr-ceo-profit-8001').textContent;
+      expect(profit).toMatch(/฿240\.00/);
+      expect(profit).toMatch(/20\.0%/);
     });
 
     it('shows the realized margin on a LEGACY formula line, and dashes it out when the line has no cost', async () => {
@@ -2338,180 +2370,145 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByTestId('pcr-ceo-price-override-8001')).not.toBeNull();
     });
 
-    it('shows the mode picker for a new-form-eligible decision, and none of the legacy margin UI', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ items: [newFormItem()] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+    it('shows the "วิธีกรอกราคา" picker for a new-form-eligible decision, none of the legacy margin UI, and — with no mode chosen — no price input, only the blocker prompt', async () => {
+      await renderCeoNewForm({ priceMode: null, items: [newFormItem()] });
 
-      expect(screen.getByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).not.toBeNull();
-      expect(screen.getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' })).not.toBeNull();
-      expect(screen.getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' })).not.toBeNull();
-      expect(screen.getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' })).not.toBeNull();
-      // Opus review finding #1 (2026-09-19), and review minors #6/#8 (2026-09-19): the cost
-      // machinery (ปรับต้นทุนเอง, ประเภทสินค้า) is KEPT for a new-form item too, so the CEO can
-      // still correct cost/duty (e.g. mosaic at 10%) — it no longer disappears the way the first
-      // Phase 2 pass wrongly removed it, AND now renders in the card's MAIN BODY (no longer inside
-      // a collapsed "วิธีคำนวณราคานี้" section — no expanding needed). SUPERSEDED 2026-10-01:
-      // the cost controls now sit in a per-item "ต้นทุน" disclosure (collapsed unless blocked),
-      // and the separate "ปรับราคาตั้งเอง" button is replaced by the typed ราคาตั้ง/แผ่น input
-      // (pcr-ceo-list-price-{id}, NET only). With no mode chosen yet there is no price input and
-      // no override button, only the prompt to pick a mode.
+      const group = within(within(ceoPricingPanel()).getByRole('group', { name: 'วิธีกรอกราคา' }));
+      for (const name of ['ราคาตั้ง − ส่วนลด %', 'ราคาพิเศษ/ตร.ม.', 'ราคาสุทธิ/แผ่น']) {
+        expect(group.getByRole('button', { name }).getAttribute('aria-pressed')).toBe('false');
+      }
+      expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
+      // Opus review finding #1 / minors #6, #8 (2026-09-19) + 2026-10-01: ปรับราคาตั้งเอง is gone; with
+      // no mode chosen there is no price input at all.
       expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
-      expect(screen.getByText('เลือกวิธีกรอกราคากระเบื้องด้านบนก่อน')).not.toBeNull();
+      for (const id of ['pcr-ceo-margin-input-8001', 'pcr-ceo-list-price-8001', 'pcr-ceo-discount-8001',
+        'pcr-ceo-special-sqm-8001', 'pcr-ceo-direct-net-8001']) {
+        expect(ceoRow(8001).queryByTestId(id)).toBeNull();
+      }
+      expect(screen.queryByText('เลือกวิธีกรอกราคากระเบื้องด้านบนก่อน')).toBeNull();
+      expect(screen.getByRole('button', { name: 'รายการที่ 1 SCG A1 — เลือกวิธีกรอกราคาก่อน' })).not.toBeNull();
     });
 
-    it('keeps the cost override AND duty/product-type override reachable for a new-form item too (Opus review finding #1), inside the per-item ต้นทุน disclosure (2026-10-01: collapsed by default, was always-visible under review minor #8)', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    it.each([
+      ['NET', 'ใส่กำไร % แล้วระบบคำนวณราคาตั้งจากต้นทุน · ส่วนลด % หักจากราคาตั้ง'],
+      ['SPECIAL_SQM', 'ใส่ราคาพิเศษต่อ ตร.ม. (รวม VAT) ระบบคำนวณราคาสุทธิต่อแผ่นให้'],
+      ['DIRECT_NET', 'ใส่ราคาสุทธิต่อแผ่น (ก่อน VAT) ตรง ๆ'],
+    ])('%s: the picker carries its one-line mode hint', async (priceMode, hint) => {
+      await renderCeoNewForm({ priceMode, items: [newFormItem({ netUnitPrice: 100 })] });
+      expect(within(ceoPricingPanel()).getByText(hint)).not.toBeNull();
+    });
+
+    it('keeps the cost override reachable for a new-form item, inside the row\'s collapsed รายละเอียด (closed unless blocked)', async () => {
       const costingItem = buildCostingItemWithOverride({ id: 1 });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: costingItem.id })] })],
+      await renderCeoNewForm({
+        items: [newFormItem({ pricingCostingItemId: costingItem.id, listUnitPrice: 100, netUnitPrice: 100 })],
+        // buildDecision()'s default pricingCostingId (601) does NOT match buildCosting()'s default id (21)
+        costings: [buildCosting({ id: 601, items: [costingItem] })],
       });
-      // buildDecision()'s default pricingCostingId (601) does NOT match buildCosting()'s default
-      // id (21) -- same deliberate id: 601 override renderWithCostingItem's own comment explains.
-      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
-      // Collapsed by default when nothing blocks approval (this costing item is costable and not stale).
-      expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
-      expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
-      // GLA-152: the duty product-type select is gone (owner: "it's only tiles") — see the
-      // dedicated test in the 2026-10-01 describe.
-      expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
+      // Collapsed by default when nothing blocks approval (costable, not stale).
+      const toggle = ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(ceoTable().queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(ceoTable().getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      // GLA-152: the duty product-type select is gone — see the dedicated test in the 2026-10-01 describe.
+      expect(ceoTable().queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
     });
 
-    it('forces the ต้นทุน disclosure open when a line has a cost BLOCKER (uncostable or stale override), so the blocker is never hidden', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+    it('opens the รายละเอียด by default when a line has a cost BLOCKER (uncostable), so the blocker is never hidden', async () => {
       const costingItem = buildCostingItemWithOverride({ id: 1, uncostableReason: 'ไม่พบอัตราค่าขนส่ง' });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ items: [newFormItem({ pricingCostingItemId: costingItem.id })] })],
+      await renderCeoNewForm({
+        items: [newFormItem({ pricingCostingItemId: costingItem.id })],
+        costings: [buildCosting({ id: 601, items: [costingItem] })],
       });
-      renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
       // No click: open from the start.
-      expect(await screen.findByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
-      expect(screen.getByText('ไม่พบอัตราค่าขนส่ง')).not.toBeNull();
+      expect(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' }).getAttribute('aria-expanded')).toBe('true');
+      expect(await ceoTable().findByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      expect(ceoTable().getByText('ไม่พบอัตราค่าขนส่ง')).not.toBeNull();
     });
 
     // Reproduced against a genuine new-form decision, per the coordinator's screenshots of the
-    // mock demo (2026-09-19): a seeded decision item forced to PER_PIECE with sqmPerPiece 0.72 and
+    // mock demo (2026-09-19): a seeded item forced to PER_PIECE with sqmPerPiece 0.72 and
     // listUnitPrice = proposed (83), NET mode with 10% typed but NOT yet saved.
-    it('shows the auto formula price as a reference line "สูตร: ฿x / แผ่น · ฿y / ตร.ม." under the ราคาตั้ง input, without expanding anything (review minor #6; relabelled 2026-10-01)', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({
-          priceMode: 'NET',
-          items: [newFormItem({
-            sqmPerPiece: 0.72, proposedSellingPricePerRequestedUnit: 83, listUnitPrice: 83, netUnitPrice: 83,
-          })],
+    it('shows the auto formula price per แผ่น and per ตร.ม. in the ราคาตั้ง cell without opening anything (review minor #6)', async () => {
+      await renderCeoNewForm({
+        priceMode: 'NET',
+        items: [newFormItem({
+          sqmPerPiece: 0.72, proposedSellingPricePerRequestedUnit: 83, listUnitPrice: 83, netUnitPrice: 83,
         })],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
-      // Never inside CollapsibleSection any more -- no click/expand call in this test at all.
-      // getByText's regex match is a substring test against the whole matched element's
-      // textContent, so this returns the row itself (label + both <code> figures) -- checked
-      // this way rather than a second getByText(/฿83\.00/) because netUnitPrice is ALSO 83 here
-      // (ruling A's zero-discount auto-fill), which renders its own separate "฿83.00" elsewhere
-      // on the card.
-      const formulaPriceRow = screen.getByText(/^สูตร:/);
-      expect(formulaPriceRow.textContent).toContain('83.00');
-      // 83 / 0.72 = 115.2777... -> round2 -> 115.28.
-      expect(formulaPriceRow.textContent).toContain('115.28');
+      const cell = ceoRow(8001).getByTestId('pcr-ceo-formula-list-8001').textContent;
+      expect(cell).toContain('83.00');
+      // 83 / 0.72 = 115.2777... -> round2 -> 115.28 (a plain division, not the SPECIAL_SQM algorithm).
+      expect(cell).toContain('115.28');
     });
 
     it('the live preview reflects a typed discount even when a net price was already saved (review minor #7)', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({
-          priceMode: 'NET',
-          // Mirrors the repro exactly: listUnitPrice = proposed = 83, already saved at
-          // netUnitPrice = 83 (ruling A's zero-discount auto-fill), 1000 requested pieces so the
-          // line-total figures match the coordinator's own worked numbers.
-          items: [newFormItem({
-            sqmPerPiece: 0.72, listUnitPrice: 83, discountPct: null, netUnitPrice: 83, requestedQuantity: 1000,
-          })],
+      await renderCeoNewForm({
+        priceMode: 'NET',
+        // Mirrors the repro exactly: listUnitPrice = proposed = 83, already saved at netUnitPrice = 83,
+        // 1000 requested pieces so the line-total figures match the coordinator's own worked numbers.
+        items: [newFormItem({
+          sqmPerPiece: 0.72, listUnitPrice: 83, discountPct: null, netUnitPrice: 83, requestedQuantity: 1000,
         })],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
-      // Before typing: shows the SAVED net, no "ตัวอย่าง" caveat.
-      expect(screen.getByText(/฿83\.00/)).not.toBeNull();
-      expect(screen.queryByText(/ตัวอย่าง ยังไม่บันทึก/)).toBeNull();
+      // Before typing: shows the SAVED net, and the row is not flagged unsaved.
+      expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('83.00');
+      expect(ceoRow(8001).queryByText('ยังไม่บันทึก')).toBeNull();
 
-      fireEvent.change(screen.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
 
       // round2(83 x (1 - 10/100)) = 74.70 -- NOT the stale saved 83.00 any more.
-      expect(await screen.findByText(/74\.70/)).not.toBeNull();
-      expect(screen.getByText(/ตัวอย่าง ยังไม่บันทึก/)).not.toBeNull();
-      // รวมเป็นเงิน follows the live preview too: round2(1000 x 74.70) = 74,700.00.
-      expect(screen.getByText(/74,700\.00/)).not.toBeNull();
+      expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('74.70');
+      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
+      // รวม follows the live preview too: round2(1000 x 74.70) = 74,700.00.
+      expect(ceoRow(8001).getByTestId('pcr-ceo-total-8001').textContent).toContain('74,700.00');
     });
 
-    it('aligns "รวมเป็นเงิน" with the net-price figure, not detached near the top of the card (review minor #9)', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 83, netUnitPrice: 83 })] })],
+    // Rewritten 2026-10-01 then again for the table: ราคาตั้ง is a typed input on a STOCK line only
+    // (an import line's is the formula/override price, margin % is its input); ปรับต้นทุนเอง lives
+    // in the collapsed รายละเอียด; there is no ปรับราคาตั้งเอง button.
+    it('NET: a stock line types its ราคาตั้ง, an import line shows the formula price + margin %, ปรับต้นทุนเอง is one click away, no ปรับราคาตั้งเอง', async () => {
+      const costingItem = buildCostingItemWithOverride({ id: 1 });
+      await renderCeoNewForm({
+        requestItems: requestItemsN(2),
+        items: [
+          newFormItem({ id: 8001, pricingRequestItemId: 1, pricingCostingItemId: costingItem.id }),
+          nfStock({ id: 8002, pricingRequestItemId: 2, listUnitPrice: 150, netUnitPrice: 150 }),
+        ],
+        costings: [buildCosting({ id: 601, items: [costingItem] })],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
-      const netLabel = screen.getByText(/ราคาสุทธิ\/แผ่น/);
-      const totalLabel = screen.getByText(/รวมเป็นเงิน/);
-      expect(netLabel.closest('div')).toBe(totalLabel.closest('div'));
-    });
-
-    // Rewritten 2026-10-01 (was: ปรับต้นทุนเอง/ปรับราคาตั้งเอง buttons both in the main body, review
-    // minor #8). Now: ราคาตั้ง is the typed input beside the formula reference, in the main body;
-    // the ปรับราคาตั้งเอง button is gone; ปรับต้นทุนเอง lives in the collapsed ต้นทุน disclosure.
-    it('shows the ราคาตั้ง input and the formula reference in the main body in NET, with ปรับต้นทุนเอง one click away in ต้นทุน and no ปรับราคาตั้งเอง button', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ priceMode: 'NET', items: [newFormItem()] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
-
-      expect(screen.getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
-      expect(screen.getByText(/^สูตร:/)).not.toBeNull();
+      expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001')).not.toBeNull();
+      expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
+      expect(ceoRow(8001).getByTestId('pcr-ceo-formula-list-8001')).not.toBeNull();
+      expect(ceoRow(8002).getByTestId('pcr-ceo-list-price-8002').value).toBe('150');
+      expect(ceoRow(8002).queryByTestId('pcr-ceo-margin-input-8002')).toBeNull();
       expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
-      expect(screen.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
-      expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      expect(ceoTable().queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+      openRowDetails('SCG A1');
+      expect(ceoTable().getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
     });
 
     // Opus review minor #1 (2026-09-19): "ปรับราคาเอง" only ever affects the price under NET
     // (or before a mode is chosen) -- DIRECT_NET/SPECIAL_SQM never consult it, so offering it
     // there let the CEO believe an override priced a line it never touched.
-    it('hides ปรับราคาตั้งเอง under DIRECT_NET (review minor #1)', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({
-          priceMode: 'DIRECT_NET', items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })],
-        })],
+    it('hides ปรับราคาตั้งเอง under DIRECT_NET (review minor #1), ปรับต้นทุนเอง stays reachable in รายละเอียด', async () => {
+      await renderCeoNewForm({
+        priceMode: 'DIRECT_NET',
+        items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })],
+        costings: [buildCosting({ id: 601, items: [buildCostingItemWithOverride({ id: 1 })] })],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
       expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
-      // ปรับต้นทุนเอง stays reachable (inside the ต้นทุน disclosure since 2026-10-01) -- that IS the
-      // correct way to clear the uncosted gate here.
-      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
-      expect(screen.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      // ปรับต้นทุนเอง IS the correct way to clear the uncosted gate here.
+      openRowDetails('SCG A1');
+      expect(ceoTable().getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
     });
 
     it('hides ปรับราคาตั้งเอง under SPECIAL_SQM (review minor #1)', async () => {
@@ -2565,23 +2562,20 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    it('disables approve when an item has no cost and no ปรับราคาเอง — mirrors the server\'s uncosted gate', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({
-          priceMode: 'NET',
-          items: [newFormItem({
-            frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null,
-            manualSellingPricePerRequestedUnit: null,
-          })],
+    it('disables approve when an item has no cost and no ปรับราคาเอง — mirrors the server\'s uncosted gate, and the blocker line names it', async () => {
+      await renderCeoNewForm({
+        priceMode: 'NET',
+        items: [newFormItem({
+          frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null,
+          manualSellingPricePerRequestedUnit: null,
         })],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
       expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
-      expect(screen.getByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/)).not.toBeNull();
+      expect(within(screen.getByTestId('pcr-ceo-blockers')).getByRole('button', {
+        name: 'รายการที่ 1 SCG A1 — ต้องระบุต้นทุนเอง',
+      })).not.toBeNull();
+      expect(screen.queryByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/)).toBeNull();
     });
 
     it('picking NET calls updatePricingDecision with priceMode alone', async () => {
@@ -2600,28 +2594,20 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    // Rewritten 2026-10-01 (was: "no list-price input exists" — owner correction 2026-09-19 made the
-    // list price server-only). Owner Ploy reinstated a typed ราคาตั้ง/แผ่น under NET; the intent of
-    // this test (a discount-only edit previews against the list price and sends ONLY the discount)
-    // is kept, and the new input's presence/routing is pinned in the 2026-10-01 describe below.
-    it('NET mode: typing a discount previews against the list price and, with ราคาตั้ง untouched, saves only the discount (no override/list keys)', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 1000 })] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+    // Rewritten 2026-10-01 (ราคาตั้ง typed) and again for the table: the discount edit previews in the
+    // row and saves through the ONE บันทึกราคา.
+    it('NET mode: typing a discount previews against the list price in the row and, with ราคาตั้ง untouched, saves only the discount (no override/list keys)', async () => {
+      await renderCeoNewForm({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 1000 })] });
 
-      expect(screen.getByTestId('pcr-ceo-list-price-8001').value).toBe('1000');
-      fireEvent.change(screen.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001').value).toBe('1000');
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
 
       // Client PREVIEW only (round2(1000 * (1 - 10/100)) = 900.00) — never sent to the server as a
       // stored value; the server recomputes and returns its own netUnitPrice on save.
-      expect(await screen.findByText(/900\.00/)).not.toBeNull();
-      expect(screen.getByText(/ตัวอย่าง ยังไม่บันทึก/)).not.toBeNull();
+      expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('900.00');
+      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
 
-      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+      fireEvent.click(saveAllButton());
 
       await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
         7001,
@@ -2641,22 +2627,16 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
 
     it('SPECIAL_SQM mode: shows "คำนวณเมื่อบันทึก" instead of a client-computed preview', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] })],
-      });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
+      await renderCeoNewForm({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
 
-      fireEvent.change(screen.getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
 
       // Never a client-side number for this mode — WastageCalculator#netPerPieceFromSpecialSqm's
       // rounding order is the algorithm; only the real service may compute it (see
       // previewCeoNetUnitPrice's own header comment).
-      expect(screen.getByText('คำนวณเมื่อบันทึก')).not.toBeNull();
+      expect(ceoRow(8001).getByText('คำนวณเมื่อบันทึก')).not.toBeNull();
 
-      fireEvent.click(screen.getByTestId('pcr-ceo-save-price-8001'));
+      fireEvent.click(saveAllButton());
       await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
         7001,
         {
@@ -2675,36 +2655,31 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
 
     it('DIRECT_NET mode: preview IS the typed value; shows the server-saved netUnitPrice once present', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({
-          priceMode: 'DIRECT_NET',
-          items: [newFormItem({ directNetPrice: 777, netUnitPrice: 777 })],
-        })],
+      await renderCeoNewForm({
+        priceMode: 'DIRECT_NET',
+        items: [newFormItem({ directNetPrice: 777, netUnitPrice: 777 })],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
-      // Already saved (netUnitPrice present) — shown as the real figure, no "ตัวอย่าง" caveat.
-      expect(screen.getByText(/฿777\.00/)).not.toBeNull();
-      expect(screen.queryByText(/ตัวอย่าง ยังไม่บันทึก/)).toBeNull();
+      // Already saved (netUnitPrice present) — shown as the real figure, the row is not unsaved.
+      expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('777.00');
+      expect(ceoRow(8001).getByTestId('pcr-ceo-direct-net-8001').value).toBe('777');
+      expect(ceoRow(8001).queryByText('ยังไม่บันทึก')).toBeNull();
     });
 
-    it('disables approve until every new-form item has a netUnitPrice, and shows the Thai warning', async () => {
-      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-      api.pricingRequests.listPricingDecisions.mockResolvedValue({
-        items: [buildDecision({
-          priceMode: 'NET',
-          items: [newFormItem({ id: 8001, netUnitPrice: null }), newFormItem({ id: 8002, netUnitPrice: 900 })],
-        })],
+    it('disables approve until every new-form item has a netUnitPrice, and the blocker line names the one without', async () => {
+      await renderCeoNewForm({
+        priceMode: 'NET',
+        requestItems: requestItemsN(2),
+        items: [
+          newFormItem({ id: 8001, pricingRequestItemId: 1, netUnitPrice: null }),
+          newFormItem({ id: 8002, pricingRequestItemId: 2, netUnitPrice: 900 }),
+        ],
       });
-      renderDetailPage({ user: ceoUser, request });
-      await waitForLoaded(request);
-      await screen.findByText('PCD-2026-0001');
 
       expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
-      expect(screen.getByText('ทุกรายการต้องมีราคาตามวิธีกรอกราคาที่เลือกก่อนอนุมัติ')).not.toBeNull();
+      const blockers = within(screen.getByTestId('pcr-ceo-blockers'));
+      expect(blockers.getByRole('button', { name: 'รายการที่ 1 SCG A1 — ยังไม่มีราคา' })).not.toBeNull();
+      expect(blockers.queryByRole('button', { name: /รายการที่ 2/ })).toBeNull();
     });
 
     it('CEO-only: import never sees the mode picker or price-mode inputs (server already strips the fields; UI only ever renders this panel for ceo)', async () => {
@@ -5172,20 +5147,31 @@ describe('CEO pricing inside รายการสินค้าและรา
     return calls[calls.length - 1][1].items[0];
   }
 
-  it('puts the "วิธีกรอกราคากระเบื้อง" picker with all three modes inside the รายการสินค้าและราคาตั้งต้น panel', async () => {
-    await renderCeo();
-    const group = within(getPanel()).getByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
-    expect(within(group).getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' })).not.toBeNull();
-    expect(within(group).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' })).not.toBeNull();
-    expect(within(group).getByRole('button', { name: 'ราคาสุทธิต่อแผ่น' })).not.toBeNull();
+  it('puts the "วิธีกรอกราคา" picker (aria-pressed) with all three modes inside the ตั้งราคา panel', async () => {
+    await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
+    const panel = within(ceoPricingPanel());
+    // the panel heading carries the decision code, version and the ก่อน VAT note
+    const heading = panel.getByRole('heading', { level: 2, name: /^ตั้งราคา/ });
+    expect(heading.textContent).toContain('PCD-2026-0001');
+    expect(heading.textContent).toContain('เวอร์ชัน 1');
+    expect(heading.textContent).toContain('ราคาก่อน VAT (ใบเสนอราคาบวก VAT 7%)');
+    const group = within(panel.getByRole('group', { name: 'วิธีกรอกราคา' }));
+    expect(group.getByRole('button', { name: 'ราคาตั้ง − ส่วนลด %' }).getAttribute('aria-pressed')).toBe('false');
+    expect(group.getByRole('button', { name: 'ราคาพิเศษ/ตร.ม.' }).getAttribute('aria-pressed')).toBe('true');
+    expect(group.getByRole('button', { name: 'ราคาสุทธิ/แผ่น' }).getAttribute('aria-pressed')).toBe('false');
+    // the refresh / recalculate icon button stays in the panel
+    expect(panel.getByTestId('pcr-ceo-recalculate-cost')).not.toBeNull();
   });
 
-  it('does NOT render the factory-quote, ต้นทุนนำเข้า or CEO-decision panels for the CEO (wrong-way-round)', async () => {
+  it('does NOT render the factory-quote, ต้นทุนนำเข้า, CEO-decision, ภาพรวม or old รายการสินค้าและราคาตั้งต้น panels for the CEO (wrong-way-round)', async () => {
     await renderCeo();
     expect(screen.queryByRole('heading', { level: 2, name: /^รายการสินค้า \(\d+ รายการ\)$/ })).toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: 'ต้นทุนนำเข้า' })).toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: 'การพิจารณาราคาขายของ CEO' })).toBeNull();
-    expect(screen.queryByRole('group', { name: 'วิธีกรอกราคา' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
+    // the CEO header replaces the separate ภาพรวม panel, and the old pricing panel is now ตั้งราคา
+    expect(screen.queryByText('ภาพรวม')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 2, name: PANEL_TITLE })).toBeNull();
   });
 
   it('regression guard: Import still gets the factory รายการสินค้า (N รายการ) panel', async () => {
@@ -5195,42 +5181,43 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า \(\d+ รายการ\)$/ })).not.toBeNull();
   });
 
-  it('NET mode: shows a ราคาตั้ง/แผ่น input prefilled with the effective list price, next to ส่วนลด %', async () => {
-    await renderCeo({ items: [newFormItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
-    const panel = within(getPanel());
-    expect(panel.getByTestId('pcr-ceo-list-price-8001').value).toBe('100');
-    expect(panel.getByLabelText(/ราคาตั้ง\/แผ่น/)).not.toBeNull();
-    expect(panel.getByTestId('pcr-ceo-discount-8001')).not.toBeNull();
+  it('NET mode, STOCK line: ราคาตั้ง/แผ่น is a typed input prefilled with the saved list price, beside ส่วนลด %', async () => {
+    await renderCeo({ items: [nfStock({ listUnitPrice: 100, netUnitPrice: 100 })] });
+    const row = ceoRow(8001);
+    expect(row.getByTestId('pcr-ceo-list-price-8001').value).toBe('100');
+    expect(row.getByLabelText(/ราคาตั้ง\/แผ่น/)).not.toBeNull();
+    expect(row.getByTestId('pcr-ceo-discount-8001')).not.toBeNull();
+    // a stock line has no cost, so no margin % input
+    expect(row.queryByTestId('pcr-ceo-margin-input-8001')).toBeNull();
   });
 
-  it('NET mode: the prefill prefers manualSellingPricePerRequestedUnit over listUnitPrice', async () => {
+  it('NET mode, import line: the ราคาตั้ง input holds the override when there is one, else the list price (the formula stays shown under it)', async () => {
     await renderCeo({
       items: [newFormItem({ listUnitPrice: 100, manualSellingPricePerRequestedUnit: 150, netUnitPrice: 150 })],
     });
-    expect(within(getPanel()).getByTestId('pcr-ceo-list-price-8001').value).toBe('150');
+    expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001').value).toBe('150');
+    expect(ceoRow(8001).getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('สูตร');
   });
 
-  it('NET mode: typing discount 10 on list 100 previews ฿90.00 (unsaved)', async () => {
+  it('NET mode: typing discount 10 on list 100 previews ฿90.00 in the row (unsaved)', async () => {
     await renderCeo();
-    fireEvent.change(within(getPanel()).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
-    expect(await screen.findByText(/฿90\.00/)).not.toBeNull();
-    expect(screen.getByText(/ตัวอย่าง ยังไม่บันทึก/)).not.toBeNull();
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+    expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('90.00');
+    expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
   });
 
-  it('NET mode: typing a new ราคาตั้ง 200 with discount 10 previews ฿180.00', async () => {
-    await renderCeo();
-    const panel = within(getPanel());
-    fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '200' } });
-    fireEvent.change(panel.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
-    expect(await screen.findByText(/฿180\.00/)).not.toBeNull();
+  it('NET mode, STOCK line: typing a new ราคาตั้ง 200 with discount 10 previews ฿180.00', async () => {
+    await renderCeo({ items: [nfStock({ listUnitPrice: 100, netUnitPrice: 100 })] });
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001'), { target: { value: '200' } });
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+    expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('180.00');
   });
 
   it('IMPORT line: saving a changed ราคาตั้ง sends sellingPriceOverride + a non-blank decisionNote, never listUnitPrice', async () => {
     await renderCeo({ items: [newFormItem({ stockSource: null, listUnitPrice: 100, netUnitPrice: 100 })] });
-    const panel = within(getPanel());
-    fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '200' } });
-    fireEvent.change(panel.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
-    fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001'), { target: { value: '200' } });
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+    fireEvent.click(saveAllButton());
 
     await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
     const sent = lastSavedItem();
@@ -5240,11 +5227,22 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(sent).not.toHaveProperty('listUnitPrice');
   });
 
+  it('IMPORT line with an override: blanking ราคาตั้ง and saving clears the override', async () => {
+    await renderCeo({
+      items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
+    });
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001'), { target: { value: '' } });
+    fireEvent.click(saveAllButton());
+
+    await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+    expect(lastSavedItem().clearSellingPriceOverride).toBe(true);
+    expect(lastSavedItem().decisionNote).toMatch(/\S/);
+  });
+
   it('saving after changing ONLY the discount sends no sellingPriceOverride', async () => {
     await renderCeo();
-    const panel = within(getPanel());
-    fireEvent.change(panel.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
-    fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+    fireEvent.click(saveAllButton());
 
     await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
     const sent = lastSavedItem();
@@ -5254,16 +5252,12 @@ describe('CEO pricing inside รายการสินค้าและรา
   });
 
   it('STOCK line: ราคาตั้ง starts blank and saving 150 sends listUnitPrice 150, no sellingPriceOverride', async () => {
-    // Realistic stock line: no frozen landed cost (stock lines have none), so the test no longer
-    // leans on buildDecisionItem's default frozen cost of 60.
-    await renderCeo({ items: [newFormItem({
-      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null,
-    })] });
-    const panel = within(getPanel());
-    const input = panel.getByTestId('pcr-ceo-list-price-8001');
+    // Realistic stock line: no frozen landed cost (stock lines have none).
+    await renderCeo({ items: [nfStock()] });
+    const input = ceoRow(8001).getByTestId('pcr-ceo-list-price-8001');
     expect(input.value).toBe('');
     fireEvent.change(input, { target: { value: '150' } });
-    fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+    fireEvent.click(saveAllButton());
 
     await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
     const sent = lastSavedItem();
@@ -5271,17 +5265,17 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(sent.sellingPriceOverride == null).toBe(true);
   });
 
-  it('SPECIAL_SQM mode: only the ราคาพิเศษ บาท/ตร.ม. (รวม VAT) input, inside the panel; no ราคาตั้ง/ส่วนลด', async () => {
+  it('SPECIAL_SQM mode: only the ราคาพิเศษ บาท/ตร.ม. (รวม VAT) input in the row; no ราคาตั้ง/ส่วนลด', async () => {
     await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
-    const panel = within(getPanel());
-    expect(panel.getByTestId('pcr-ceo-special-sqm-8001')).not.toBeNull();
-    expect(panel.getByLabelText(/ราคาพิเศษ บาท\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
-    expect(panel.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
-    expect(panel.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
+    const row = ceoRow(8001);
+    expect(row.getByTestId('pcr-ceo-special-sqm-8001')).not.toBeNull();
+    expect(row.getByLabelText(/ราคาพิเศษ.*รวม VAT/)).not.toBeNull();
+    expect(row.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
+    expect(row.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
     // QA-31: the hint is the แผ่น/ตร.ม. figure the net is divided by (round2(1 / 0.36) = 2.78),
     // the same one the quotation editor shows — never the raw ตร.ม./แผ่น 0.36.
-    expect(panel.getByText('แผ่น/ตร.ม. 2.78')).not.toBeNull();
-    expect(panel.queryByText(/ตร\.ม\.\/แผ่น 0\.36/)).toBeNull();
+    expect(row.getByText(/2\.78 แผ่น\/ตร\.ม\./)).not.toBeNull();
+    expect(row.queryByText(/ตร\.ม\.\/แผ่น 0\.36/)).toBeNull();
   });
 
   // W5-03 (Ploy 2026-10-30): under ราคาพิเศษ/ตร.ม. and ราคาสุทธิ the quotation prints the net as
@@ -5290,21 +5284,20 @@ describe('CEO pricing inside รายการสินค้าและรา
     ['SPECIAL_SQM', { specialPriceSqm: 7000 }],
     ['DIRECT_NET', { directNetPrice: 399.15 }],
   ])('W5-03: %s — a priced STOCK line has no ราคาตั้ง field and does not block อนุมัติราคาขาย', async (priceMode, price) => {
-    await renderCeo({ priceMode, items: [newFormItem({
-      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: 399.15, ...price,
-    })] });
-    const panel = within(getPanel());
-    expect(panel.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
-    expect(screen.queryByText(/ต้องมีราคาตั้ง/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(false);
+    await renderCeo({ priceMode, items: [nfStock({ netUnitPrice: 399.15, ...price })] });
+    expect(ceoRow(8001).queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
+    expect(screen.queryByText(/ต้องใส่ราคาตั้ง/)).toBeNull();
+    expect(screen.queryByTestId('pcr-ceo-blockers')).toBeNull();
+    expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(false);
   });
 
-  it('W5-03: NET — a STOCK line without ราคาตั้ง still blocks อนุมัติราคาขาย', async () => {
-    await renderCeo({ priceMode: 'NET', items: [newFormItem({
-      stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null,
-    })] });
-    expect(within(getPanel()).getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
+  it('W5-03: NET — a STOCK line without ราคาตั้ง still blocks อนุมัติราคาขาย, and the blocker line says why', async () => {
+    await renderCeo({ priceMode: 'NET', items: [nfStock()] });
+    expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001')).not.toBeNull();
+    expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+    expect(within(screen.getByTestId('pcr-ceo-blockers')).getByRole('button', {
+      name: 'รายการที่ 1 SCG A1 — ต้องใส่ราคาตั้ง (สต็อก)',
+    })).not.toBeNull();
   });
 
   // Owner 2026-10-01: the CEO should not have to work these out. The formula price (CEO config:
@@ -5312,55 +5305,57 @@ describe('CEO pricing inside รายการสินค้าและรา
   describe('auto-calculated prices and ต้นทุน in both units', () => {
     it('pre-fills ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula price: 72/แผ่น at 0.36 ตร.ม. -> 72 x 2.78 x 1.07 = 214.17, and saves it', async () => {
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] }); // formula 72, sqmPerPiece 0.36
-      const panel = within(getPanel());
-      expect(panel.getByTestId('pcr-ceo-special-sqm-8001').value).toBe('214.17');
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false);
+      expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('214.17');
+      // the pre-fill is an unsaved draft: the row says so and the one save offers it
+      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
+      expect(saveAllButton().textContent).toContain('บันทึกราคา (1 รายการ)');
 
-      fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
+      fireEvent.click(saveAllButton());
       await waitFor(() => expect(lastSavedItem()).toEqual(expect.objectContaining({ specialPriceSqm: 214.17 })));
     });
 
     it('lets the CEO type over the pre-fill, and never replaces a saved ราคาพิเศษ', async () => {
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
-      fireEvent.change(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
-      expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('1350');
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
+      expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('1350');
       cleanup();
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem({ specialPriceSqm: 1350, netUnitPrice: 453.84 })] });
-      expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('1350');
+      expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('1350');
+      // a saved value is not an unsaved draft: no row flag, no save button
+      expect(ceoRow(8001).queryByText('ยังไม่บันทึก')).toBeNull();
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
     });
 
     it('pre-fills nothing without a formula price or without ตร.ม./แผ่น', async () => {
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem({ proposedSellingPricePerRequestedUnit: null })] });
-      expect(within(getPanel()).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('');
-      expect(within(getPanel()).getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+      expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('');
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
     });
 
-    it('shows the formula ราคาตั้ง/แผ่น under ราคาพิเศษ too (not only under NET)', async () => {
+    it('shows the formula ราคาตั้ง/แผ่น under ราคาพิเศษ too (the ราคาตั้ง (สูตร) column, not only under NET)', async () => {
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] });
-      expect(within(getPanel()).getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('72');
+      expect(ceoRow(8001).getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('72');
     });
 
-    it('shows ต้นทุน per แผ่น and per ตร.ม. up front (60 / 0.36 = 166.67), without opening the ต้นทุน section; none for a stock line', async () => {
+    it('shows ต้นทุน per แผ่น and per ตร.ม. up front in the row (60 / 0.36 = 166.67), without opening รายละเอียด; "ไม่มีต้นทุน (สต็อก)" for a stock line', async () => {
       await renderCeo({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 72, netUnitPrice: 72 })] });
-      const cost = within(getPanel()).getByTestId('pcr-ceo-cost-both-8001').textContent;
-      expect(cost).toContain('60');
-      expect(cost).toContain('/ แผ่น');
-      expect(cost).toContain('166.67');
-      expect(cost).toContain('/ ตร.ม.');
-      // The figure is the landed cost: factory price + freight + insurance + duty + clearance.
-      expect(cost).toContain('รวมค่าขนส่งและภาษีนำเข้า');
+      const cost = ceoRow(8001).getByTestId('pcr-ceo-cost-both-8001').textContent;
+      expect(cost).toContain('฿60.00');
+      expect(cost).toContain('฿166.67/ตร.ม.');
       cleanup();
-      await renderCeo({ priceMode: 'NET', items: [newFormItem({ stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 })] });
-      expect(within(getPanel()).queryByTestId('pcr-ceo-cost-both-8001')).toBeNull();
+      await renderCeo({ priceMode: 'NET', items: [nfStock({ listUnitPrice: 150, netUnitPrice: 150 })] });
+      const stockCost = ceoRow(8001).getByTestId('pcr-ceo-cost-both-8001').textContent;
+      expect(stockCost).toContain('ไม่มีต้นทุน (สต็อก)');
+      expect(stockCost).not.toContain('ตร.ม.');
     });
   });
 
-  it('DIRECT_NET mode: only the ราคาสุทธิต่อแผ่น input, inside the panel; no ราคาตั้ง/ส่วนลด', async () => {
+  it('DIRECT_NET mode: only the ราคาสุทธิ/แผ่น input in the row; no ราคาตั้ง/ส่วนลด', async () => {
     await renderCeo({ priceMode: 'DIRECT_NET', items: [newFormItem({ directNetPrice: 100, netUnitPrice: 100 })] });
-    const panel = within(getPanel());
-    expect(panel.getByTestId('pcr-ceo-direct-net-8001')).not.toBeNull();
-    expect(panel.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
-    expect(panel.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
+    const row = ceoRow(8001);
+    expect(row.getByTestId('pcr-ceo-direct-net-8001')).not.toBeNull();
+    expect(row.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
+    expect(row.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
   });
 
   it('NET mode: the separate ปรับราคาตั้งเอง button is gone (replaced by the input)', async () => {
@@ -5368,27 +5363,28 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
   });
 
-  it('อนุมัติราคาขาย and ตีกลับให้ฝ่ายนำเข้าแก้ไข live inside the panel', async () => {
+  it('อนุมัติราคาขาย and ตีกลับฝ่ายนำเข้า live in the summary bar (not in the pricing panel)', async () => {
     await renderCeo();
-    const panel = within(getPanel());
-    expect(panel.getByTestId('pcr-ceo-approve')).not.toBeNull();
-    expect(panel.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
+    const summary = ceoSummary();
+    expect(summary.getByTestId('pcr-ceo-approve')).not.toBeNull();
+    expect(summary.getByRole('button', { name: 'ตีกลับฝ่ายนำเข้า' })).not.toBeNull();
+    expect(within(ceoPricingPanel()).queryByTestId('pcr-ceo-approve')).toBeNull();
   });
 
-  it('approve stays disabled while any item has netUnitPrice null (inside the panel)', async () => {
+  it('approve stays disabled while any item has netUnitPrice null (summary bar)', async () => {
     await renderCeo({
       items: [newFormItem({ id: 8001, listUnitPrice: 100, netUnitPrice: null }), newFormItem({ id: 8002, netUnitPrice: 900 })],
     });
-    expect(within(getPanel()).getByTestId('pcr-ceo-approve').disabled).toBe(true);
+    expect(ceoSummary().getByTestId('pcr-ceo-approve').disabled).toBe(true);
   });
 
   it('IMPORT line with an active override: ปรับเอง + "ใช้ราคาตามสูตร" clears it with clearSellingPriceOverride and the same note', async () => {
     await renderCeo({
       items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
     });
-    const panel = within(getPanel());
-    expect(panel.getByText('ปรับเอง')).not.toBeNull();
-    fireEvent.click(panel.getByTestId('pcr-ceo-use-formula-price-8001'));
+    const row = ceoRow(8001);
+    expect(row.getAllByText('ปรับเอง').length).toBeGreaterThan(0);
+    fireEvent.click(row.getByTestId('pcr-ceo-use-formula-price-8001'));
 
     await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
     const sent = lastSavedItem();
@@ -5397,31 +5393,19 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(sent.sellingPriceOverride == null).toBe(true);
   });
 
-  it('IMPORT line with an override: blanking ราคาตั้ง and saving clears the override', async () => {
-    await renderCeo({
-      items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
-    });
-    const panel = within(getPanel());
-    fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '' } });
-    fireEvent.click(panel.getByTestId('pcr-ceo-save-price-8001'));
-
-    await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
-    expect(lastSavedItem().clearSellingPriceOverride).toBe(true);
-    expect(lastSavedItem().decisionNote).toMatch(/\S/);
-  });
-
-  it('prices each request card by pricingRequestItemId, and renders a decision item that matches no card after the cards', async () => {
+  it('lists every decision item as a row keyed by pricingRequestItemId (named from its request item), and renders a decision item that matches no request item after the rows', async () => {
     await renderCeo({
       items: [
-        newFormItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
         newFormItem({ id: 8002, pricingRequestItemId: 999, listUnitPrice: 222, netUnitPrice: 222 }),
+        newFormItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
       ],
     });
-    const panel = within(getPanel());
-    expect(panel.getByTestId('pcr-ceo-list-price-8001').value).toBe('100');
-    expect(panel.getByTestId('pcr-ceo-list-price-8002').value).toBe('222');
-    const card = panel.getByTestId('pcr-ceo-list-price-8001').closest('div.rounded-md');
-    expect(within(card).queryByTestId('pcr-ceo-list-price-8002')).toBeNull();
+    // rows follow the REQUEST's item order; the unmatched decision item comes after, never dropped
+    const rowIds = ceoTable().getAllByTestId(/^pcr-ceo-row-/).map((r) => r.getAttribute('data-testid'));
+    expect(rowIds).toEqual(['pcr-ceo-row-8001', 'pcr-ceo-row-8002']);
+    expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001').value).toBe('100');
+    expect(ceoRow(8002).getByTestId('pcr-ceo-list-price-8002').value).toBe('222');
+    expect(ceoRow(8001).queryByTestId('pcr-ceo-list-price-8002')).toBeNull();
   });
 
   describe('review fix round (Opus nits, 2026-10-01)', () => {
@@ -5434,21 +5418,22 @@ describe('CEO pricing inside รายการสินค้าและรา
       await screen.findByText('PCD-2026-0001');
     }
 
-    it('M1: a realistic stock line (no frozen cost) does not block approve and offers no cost controls', async () => {
+    it('M1: a realistic stock line (no frozen cost) does not block approve and offers no cost controls anywhere in its row or รายละเอียด', async () => {
       await renderCeoWithCosting({
         items: [newFormItem({
           stockSource: 'IN_THAILAND', pricingCostingItemId: 1, frozenLandedCostPerRequestedUnitThb: null,
           listUnitPrice: 150, netUnitPrice: 150,
         })],
       });
-      const panel = within(getPanel());
       // Java exempts stock lines from the cost gate (PricingDecisionService#approve) ...
-      expect(panel.getByTestId('pcr-ceo-approve').disabled).toBe(false);
-      expect(panel.queryByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/)).toBeNull();
-      // ... and 400s a cost override on one, so neither the disclosure nor its controls may render.
-      expect(panel.queryByRole('button', { name: /^ต้นทุน/ })).toBeNull();
-      expect(panel.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
-      expect(panel.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
+      expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(false);
+      expect(screen.queryByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/)).toBeNull();
+      expect(screen.queryByTestId('pcr-ceo-blockers')).toBeNull();
+      // ... and 400s a cost override on one, so no control may render, even with รายละเอียด open.
+      openRowDetails('SCG A1');
+      expect(ceoTable().queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+      expect(ceoTable().queryByRole('button', { name: 'ปรับต้นทุนเอง' })).toBeNull();
+      expect(ceoTable().queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
     });
 
     it('L1: an uncosted import line with an override still blocks approve outside NET (DIRECT_NET)', async () => {
@@ -5460,7 +5445,10 @@ describe('CEO pricing inside รายการสินค้าและรา
         })],
       });
       // Java: the override clears the uncosted gate only for priceMode null/NET.
-      expect(within(getPanel()).getByTestId('pcr-ceo-approve').disabled).toBe(true);
+      expect(ceoSummary().getByTestId('pcr-ceo-approve').disabled).toBe(true);
+      expect(within(screen.getByTestId('pcr-ceo-blockers')).getByRole('button', {
+        name: 'รายการที่ 1 SCG A1 — ต้องระบุต้นทุนเอง',
+      })).not.toBeNull();
     });
 
     it('L1 control: the same uncosted line with an override under NET is allowed through', async () => {
@@ -5470,14 +5458,15 @@ describe('CEO pricing inside รายการสินค้าและรา
           frozenLandedCostPerRequestedUnitThb: null, manualSellingPricePerRequestedUnit: 300, netUnitPrice: 300,
         })],
       });
-      expect(within(getPanel()).getByTestId('pcr-ceo-approve').disabled).toBe(false);
+      expect(ceoSummary().getByTestId('pcr-ceo-approve').disabled).toBe(false);
+      expect(screen.queryByTestId('pcr-ceo-blockers')).toBeNull();
     });
 
     it('L2a: ล้างส่วนลด sends ONLY the discount clear — a pending ราคาตั้ง draft is not committed and stays in the input', async () => {
-      await renderCeo({ items: [newFormItem({ listUnitPrice: 100, discountPct: 5, netUnitPrice: 95 })] });
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '200' } });
-      fireEvent.click(panel.getByTestId('pcr-ceo-clear-discount-8001'));
+      // ราคาตั้ง is a typed draft on a STOCK line only
+      await renderCeo({ items: [nfStock({ listUnitPrice: 100, discountPct: 5, netUnitPrice: 95 })] });
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001'), { target: { value: '200' } });
+      fireEvent.click(ceoRow(8001).getByTestId('pcr-ceo-clear-discount-8001'));
 
       await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
       const sent = lastSavedItem();
@@ -5487,7 +5476,7 @@ describe('CEO pricing inside รายการสินค้าและรา
       expect(sent.decisionNote == null).toBe(true);
       // The unsent ราคาตั้ง draft is kept locally.
       await waitFor(() => expect(api.pricingRequests.listPricingDecisions.mock.calls.length).toBeGreaterThan(1));
-      expect(panel.getByTestId('pcr-ceo-list-price-8001').value).toBe('200');
+      expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001').value).toBe('200');
     });
 
     it('L2b: a confirmed price-mode switch discards the per-item price drafts', async () => {
@@ -5504,45 +5493,43 @@ describe('CEO pricing inside รายการสินค้าและรา
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
 
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false);
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      expect(saveAllButton().disabled).toBe(false);
 
-      fireEvent.click(panel.getByTestId('pcr-ceo-price-mode-DIRECT_NET'));
+      fireEvent.click(screen.getByTestId('pcr-ceo-price-mode-DIRECT_NET'));
       const dialog = await screen.findByRole('dialog', { name: 'เปลี่ยนวิธีกรอกราคา' });
       fireEvent.click(within(dialog).getByRole('button', { name: 'เปลี่ยนวิธีกรอกราคา' }));
 
-      await waitFor(() => expect(panel.getByTestId('pcr-ceo-direct-net-8001')).not.toBeNull());
+      await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-direct-net-8001')).not.toBeNull());
       // The NET discount draft must not linger as a phantom pending edit under the new mode.
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
-      expect(screen.queryByText(/ตัวอย่าง ยังไม่บันทึก/)).toBeNull();
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
+      expect(ceoRow(8001).queryByText('ยังไม่บันทึก')).toBeNull();
     });
 
-    it('M2: a ราคาตั้ง of 0 or below shows an inline error and disables บันทึกราคา; blank on an override line is still allowed', async () => {
-      await renderCeo({
-        items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
-      });
-      const panel = within(getPanel());
-      const input = panel.getByTestId('pcr-ceo-list-price-8001');
-      fireEvent.change(input, { target: { value: '0' } });
-      expect(panel.getByText('ราคาตั้งต้องมากกว่า 0')).not.toBeNull();
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
-      fireEvent.change(input, { target: { value: '-5' } });
-      expect(panel.getByText('ราคาตั้งต้องมากกว่า 0')).not.toBeNull();
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+    it('M2: a ราคาตั้ง of 0 or below on a stock line shows an inline error and keeps the one save disabled; blank leaves nothing to save', async () => {
+      await renderCeo({ items: [nfStock({ listUnitPrice: 100, netUnitPrice: 100 })] });
+      const input = () => ceoRow(8001).getByTestId('pcr-ceo-list-price-8001');
+      fireEvent.change(input(), { target: { value: '0' } });
+      expect(ceoRow(8001).getByText('ราคาตั้งต้องมากกว่า 0')).not.toBeNull();
+      expect(saveAllButton().disabled).toBe(true);
+      fireEvent.change(input(), { target: { value: '-5' } });
+      expect(ceoRow(8001).getByText('ราคาตั้งต้องมากกว่า 0')).not.toBeNull();
+      expect(saveAllButton().disabled).toBe(true);
 
-      fireEvent.change(input, { target: { value: '' } });
-      expect(panel.queryByText('ราคาตั้งต้องมากกว่า 0')).toBeNull();
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(false);
+      // blank on a stock line: Java needs > 0, so there is nothing to save and no error either
+      fireEvent.change(input(), { target: { value: '' } });
+      expect(ceoRow(8001).queryByText('ราคาตั้งต้องมากกว่า 0')).toBeNull();
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
     });
 
-    it('L3: the missing-cost message points a new-form decision at "ต้นทุน", not the legacy "วิธีคำนวณราคานี้"', async () => {
+    it('L3: a new-form missing-cost line is named by the blocker line (ต้องระบุต้นทุนเอง), not by the old long "ดู ต้นทุน" paragraph', async () => {
       await renderCeo({
         items: [newFormItem({ frozenLandedCostPerRequestedUnitThb: null, netUnitPrice: null })],
       });
-      const msg = within(getPanel()).getByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/);
-      expect(msg.textContent).toContain('ดู "ต้นทุน" ของรายการ');
-      expect(msg.textContent).not.toContain('วิธีคำนวณราคานี้');
+      expect(within(screen.getByTestId('pcr-ceo-blockers')).getByRole('button', {
+        name: 'รายการที่ 1 SCG A1 — ต้องระบุต้นทุนเอง',
+      })).not.toBeNull();
+      expect(screen.queryByText(/ทุกรายการต้องมีต้นทุนก่อนอนุมัติ/)).toBeNull();
     });
 
     it('L3: a legacy decision keeps the "วิธีคำนวณราคานี้" wording', async () => {
@@ -5571,41 +5558,33 @@ describe('CEO pricing inside รายการสินค้าและรา
   });
 
   describe('fix round 2 (2026-10-01)', () => {
-    it('"ใช้ราคาตามสูตร" sends an EMPTY draft (no pending discount), clears the override, and spins on its own button', async () => {
+    it('"ใช้ราคาตามสูตร" sends an EMPTY draft (no pending discount), clears the override, and drops no other draft', async () => {
       await renderCeo({
         items: [newFormItem({ manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 })],
       });
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
-      fireEvent.click(panel.getByTestId('pcr-ceo-use-formula-price-8001'));
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      fireEvent.click(ceoRow(8001).getByTestId('pcr-ceo-use-formula-price-8001'));
       await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
       const sent = lastSavedItem();
       expect(sent.clearSellingPriceOverride).toBe(true);
       expect(sent.decisionNote).toMatch(/\S/);
       expect(sent.discountPct).toBeNull();
+      // scoped action: it did not run the batch save, so the discount draft is still pending
+      expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1);
     });
 
-    it('nit: บันทึกราคา stays disabled for an untouched/identical or blank-stock ราคาตั้ง draft', async () => {
-      await renderCeo({ items: [newFormItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
-      const panel = within(getPanel());
-      const save = panel.getByTestId('pcr-ceo-save-price-8001');
-      const input = panel.getByTestId('pcr-ceo-list-price-8001');
-      fireEvent.change(input, { target: { value: '100' } });
-      expect(save.disabled).toBe(true);
-      fireEvent.change(input, { target: { value: '120' } });
-      expect(save.disabled).toBe(false);
-      fireEvent.change(input, { target: { value: '100' } });
-      expect(save.disabled).toBe(true);
-      // Blank with no override: nothing to clear.
-      fireEvent.change(input, { target: { value: '' } });
-      expect(save.disabled).toBe(true);
-    });
-
-    it('nit: บันทึกราคา is disabled for a blank ราคาตั้ง draft on a stock line', async () => {
-      await renderCeo({ items: [newFormItem({ stockSource: 'IN_THAILAND', frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: 150, netUnitPrice: 150 })] });
-      const panel = within(getPanel());
-      fireEvent.change(panel.getByTestId('pcr-ceo-list-price-8001'), { target: { value: '' } });
-      expect(panel.getByTestId('pcr-ceo-save-price-8001').disabled).toBe(true);
+    it('nit: the one save is offered only for a real change — an untouched/identical or blank-stock ราคาตั้ง draft saves nothing', async () => {
+      await renderCeo({ items: [nfStock({ listUnitPrice: 100, netUnitPrice: 100 })] });
+      const input = () => ceoRow(8001).getByTestId('pcr-ceo-list-price-8001');
+      fireEvent.change(input(), { target: { value: '100' } });
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
+      fireEvent.change(input(), { target: { value: '120' } });
+      expect(saveAllButton().disabled).toBe(false);
+      fireEvent.change(input(), { target: { value: '100' } });
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
+      // Blank on a stock line: nothing to clear.
+      fireEvent.change(input(), { target: { value: '' } });
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
     });
 
     it('the CEO fetches fxRates, for the baht conversion of the catalogue price (GET /api/fx-rates is ceo/import)', async () => {
@@ -5618,7 +5597,7 @@ describe('CEO pricing inside รายการสินค้าและรา
       }
     });
 
-    it('GLA-152: no ประเภทสินค้า select or line on a CEO card (import line and stock line)', async () => {
+    it('GLA-152: no ประเภทสินค้า select or line on a CEO row or its รายละเอียด (import line and stock line)', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       const c1 = buildCostingItemWithOverride({ id: 1, productType: 'GLASS_MOSAIC' });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -5633,7 +5612,8 @@ describe('CEO pricing inside รายการสินค้าและรา
       renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [c1] })] });
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
-      fireEvent.click(screen.getByRole('button', { name: /^ต้นทุน/ }));
+      for (const toggle of ceoTable().getAllByRole('button', { name: /^รายละเอียด / })) fireEvent.click(toggle);
+      expect(ceoTable().getByTestId('pcr-ceo-details-8001')).not.toBeNull();
       expect(screen.queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
       expect(screen.queryByTestId('pcr-ceo-product-type-override-8002')).toBeNull();
       expect(screen.queryByText(/ประเภทสินค้า/)).toBeNull();
@@ -5668,35 +5648,37 @@ describe('CEO pricing inside รายการสินค้าและรา
         const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
         renderDetailPage({ user: ceoUser, request });
         await waitForLoaded(request);
-        return screen.findByPlaceholderText('0.30');
+        // the input is a PERCENT now (30), converted to the stored fraction (0.30) when sent
+        return screen.findByPlaceholderText('30');
       };
 
-      it('(a) shows the config defaultMarginPct and startPricingDecision sends it', async () => {
-        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.24, sellingBuffer: 1 } }) };
+      it('(a) shows the config defaultMarginPct as a PERCENT and startPricingDecision sends the fraction (0.29 -> "29" -> 0.29)', async () => {
+        // 0.29 * 100 = 28.999999999999996 in floating point: the display must not leak that.
+        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.29, sellingBuffer: 1 } }) };
         const input = await startReview();
-        await waitFor(() => expect(input.value).toBe('0.24'));
+        await waitFor(() => expect(input.value).toBe('29'));
         fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
         await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
-          501, expect.objectContaining({ defaultMarginPct: 0.24 }),
+          501, expect.objectContaining({ defaultMarginPct: 0.29 }),
         ));
       });
 
-      it('(b) falls back to 0.30 when the config read fails, and sends 0.30', async () => {
+      it('(b) falls back to 30 (%) when the config read fails, and sends the fraction 0.3', async () => {
         api.pricingFormulaConfig = { get: vi.fn().mockRejectedValue(new Error('boom')) };
         const input = await startReview();
-        expect(input.value).toBe('0.30');
+        expect(input.value).toBe('30');
         fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
         await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
           501, expect.objectContaining({ defaultMarginPct: 0.3 }),
         ));
       });
 
-      it('(c) keeps what the CEO typed, even after the config arrives', async () => {
+      it('(c) keeps what the CEO typed (35 %), even after the config arrives, and sends exactly 0.35', async () => {
         api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { defaultMarginPct: 0.24 } }) };
         const input = await startReview();
-        fireEvent.change(input, { target: { value: '0.35' } });
+        fireEvent.change(input, { target: { value: '35' } });
         await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
-        expect(input.value).toBe('0.35');
+        expect(input.value).toBe('35');
         fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
         await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
           501, expect.objectContaining({ defaultMarginPct: 0.35 }),
@@ -5711,25 +5693,16 @@ describe('CEO pricing inside รายการสินค้าและรา
     });
   });
 
-  it('per-item cost controls (ปรับต้นทุนเอง) stay reachable for the CEO inside the panel', async () => {
+  it('per-item cost controls (ปรับต้นทุนเอง) stay reachable for the CEO inside the row\'s รายละเอียด', async () => {
     const costingItem = buildCostingItemWithOverride({ id: 1 });
-    const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
-    api.pricingRequests.listPricingDecisions.mockResolvedValue({
-      items: [buildDecision({
-        priceMode: 'NET',
-        items: [newFormItem({ pricingCostingItemId: costingItem.id, listUnitPrice: 100, netUnitPrice: 100 })],
-      })],
+    // collapsed by default: costable, not stale
+    await renderCeoNewForm({
+      items: [newFormItem({ pricingCostingItemId: costingItem.id, listUnitPrice: 100, netUnitPrice: 100 })],
+      costings: [buildCosting({ id: 601, items: [costingItem] })],
     });
-    renderDetailPage({ user: ceoUser, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
-    await waitForLoaded(request);
-    await screen.findByText('PCD-2026-0001');
-
-    const panel = within(getPanel());
-    // Collapsed by default (costable, not stale): absent until the disclosure is opened.
-    expect(panel.queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
-    // /^ต้นทุน/ (anchored): the panel header's recalculate icon button is titled "คำนวณต้นทุนใหม่…".
-    fireEvent.click(panel.getByRole('button', { name: /^ต้นทุน/ }));
-    expect(panel.getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+    expect(ceoTable().queryByTestId('pcr-ceo-cost-override-8001')).toBeNull();
+    openRowDetails('SCG A1');
+    expect(ceoTable().getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
   });
 });
 
@@ -6093,24 +6066,30 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
     await screen.findByTestId('pcr-ceo-approve');
   }
 
-  it('W4-06: on a request whose every line is a stock line the CEO is not offered ตีกลับให้ฝ่ายนำเข้าแก้ไข', async () => {
+  it('W4-06: on a request whose every line is a stock line the CEO is not offered ตีกลับฝ่ายนำเข้า (summary bar and mobile bar)', async () => {
     await renderCeoReviewing([stockRequestItem({ id: 1 })], [stockDecisionItem({ pricingRequestItemId: 1 })]);
-    expect(screen.queryByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).toBeNull();
+    // positive control: the redesigned summary bar IS there, only the return control is not
+    expect(screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' })).not.toBeNull();
+    expect(screen.queryByTestId('pcr-ceo-return')).toBeNull();
+    expect(screen.queryByTestId('pcr-ceo-mobile-return')).toBeNull();
+    expect(screen.queryByRole('button', { name: /ตีกลับ/ })).toBeNull();
   });
 
-  it('W4-06: on a mixed request the CEO still has ตีกลับให้ฝ่ายนำเข้าแก้ไข (wrong-way-round)', async () => {
+  it('W4-06: on a mixed request the CEO still has ตีกลับฝ่ายนำเข้า (wrong-way-round)', async () => {
     await renderCeoReviewing([baseItem, stockRequestItem()],
       [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
-    expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
+    expect(screen.getByTestId('pcr-ceo-return').textContent).toContain('ตีกลับฝ่ายนำเข้า');
+    expect(screen.getByTestId('pcr-ceo-mobile-return')).not.toBeNull();
   });
 
-  // W4-01: the CEO's line cards say which lines are stock (the badge exists on the deal page already; the
+  // W4-01: the CEO's line rows say which lines are stock (the badge exists on the deal page already; the
   // request pages had none).
-  it('W4-01: the CEO pricing panel marks a stock line จากสต็อก and an import line not', async () => {
+  it('W4-01: the CEO pricing table marks a stock line จากสต็อก and an import line not', async () => {
     await renderCeoReviewing([baseItem, stockRequestItem()],
       [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
-    const panel = screen.getByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' }).closest('section');
-    expect(within(panel).getAllByText('จากสต็อก')).toHaveLength(1);
+    expect(ceoTable().getAllByText('จากสต็อก')).toHaveLength(1);
+    expect(ceoRow(8002).getByText('จากสต็อก')).not.toBeNull();
+    expect(ceoRow(8001).queryByText('จากสต็อก')).toBeNull();
   });
 
   describe('import view', () => {
@@ -6157,6 +6136,710 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
       await waitForLoaded(request);
       await screen.findByText('PCR-2026-0001');
       expect(screen.queryByRole('button', { name: 'สร้างรอบแก้ไข' })).toBeNull();
+    });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// CEO pricing workspace redesign (new-form decision, CEO view) — Phase A tests.
+// UI-LEVEL ONLY, per this file's header. Design: one header, a sticky summary bar, a pricing table
+// (desktop) / cards (mobile), a details row, ONE save. The table AND the cards are both rendered
+// (jsdom has no media queries) and hidden by Tailwind classes, so queries here are SCOPED (see the
+// helpers near the top of this file). The server stays the authority on every gate.
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+describe('CEO pricing workspace redesign — new-form decision, CEO view', () => {
+  describe('header, scope and the unchanged paths', () => {
+    it('header: PCR code, status badge, customer and the meta row replace the separate ภาพรวม panel', async () => {
+      const { request } = await renderCeoNewForm();
+      const header = within(screen.getByTestId('pcr-ceo-header'));
+      // the h1's accessible name stays EXACTLY the code (waitForLoaded depends on it): the badge sits beside it
+      expect(header.getByRole('heading', { level: 1, name: request.summary.requestCode })).not.toBeNull();
+      expect(header.getByText(pricingRequestStatusLabel('CEO_REVIEWING').label)).not.toBeNull();
+      expect(header.getByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
+      expect(header.getByRole('link', { name: 'PR-2026-0701' }).getAttribute('href')).toBe('/tickets/701');
+      expect(header.getByText(/^ผู้รับ:/).textContent).toContain('ผู้ออกแบบ ก.');
+      expect(header.getByText(/ต้องการภายใน/).textContent).toContain(formatThaiDate('2026-08-01'));
+      expect(header.getByText(/ฝ่ายนำเข้า/)).not.toBeNull();
+      expect(screen.queryByText('ภาพรวม')).toBeNull();
+    });
+
+    // Positive control first (the CEO DOES get the workspace), then the "cannot reach" cases.
+    it.each([['import', importUser], ['sales', salesOwner], ['sales_manager', salesManager]])(
+      '%s never sees the summary bar, the pricing table, the cards or the mobile bar (and keeps the ภาพรวม panel)',
+      async (_name, user) => {
+        const { request } = await renderCeoNewForm();
+        expect(screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' })).not.toBeNull();
+        expect(screen.getByTestId('pcr-ceo-table')).not.toBeNull();
+        cleanup();
+
+        renderDetailPage({ user, request });
+        await waitForLoaded(request);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+
+        expect(screen.queryByRole('region', { name: 'สรุปราคาคำขอนี้' })).toBeNull();
+        expect(screen.queryByRole('region', { name: 'ตั้งราคารายการ' })).toBeNull();
+        for (const id of ['pcr-ceo-table', 'pcr-ceo-cards', 'pcr-ceo-card-8001', 'pcr-ceo-mobile-bar',
+          'pcr-ceo-save-all', 'pcr-ceo-approve', 'pcr-ceo-return', 'pcr-ceo-header']) {
+          expect(screen.queryByTestId(id)).toBeNull();
+        }
+        expect(screen.queryByRole('group', { name: 'วิธีกรอกราคา' })).toBeNull();
+        expect(screen.getByText('ภาพรวม')).not.toBeNull();
+      },
+    );
+
+    // Guard (green before and after by design): the LEGACY path keeps its old markup for the CEO.
+    it('a LEGACY decision (no sqmPerPiece) still renders the old markup: no summary bar/table/mobile bar, ภาพรวม kept, per-row margin save and the old ตีกลับ label', async () => {
+      const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+
+      for (const id of ['pcr-ceo-table', 'pcr-ceo-cards', 'pcr-ceo-mobile-bar', 'pcr-ceo-save-all', 'pcr-ceo-header', 'pcr-ceo-summary']) {
+        expect(screen.queryByTestId(id)).toBeNull();
+      }
+      expect(screen.queryByRole('region', { name: 'สรุปราคาคำขอนี้' })).toBeNull();
+      expect(screen.queryByRole('group', { name: 'วิธีกรอกราคา' })).toBeNull();
+      expect(screen.getByText('ภาพรวม')).not.toBeNull();
+      expect(screen.getByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' })).not.toBeNull();
+      expect(screen.getByTestId('pcr-ceo-margin-save-8001')).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(false);
+    });
+  });
+
+  describe('summary bar', () => {
+    it('is the section "สรุปราคาคำขอนี้", sticky on desktop, and shows ตั้งราคาแล้ว n/N, ราคาขายรวม, ต้นทุนรวม (lines with cost AND net) and กำไรรวม ฿ + % of cost', async () => {
+      await renderCeoNewForm({
+        requestItems: requestItemsN(4),
+        items: [
+          nfItem({ id: 8001, pricingRequestItemId: 1, frozenLandedCostPerRequestedUnitThb: 60, listUnitPrice: 72, netUnitPrice: 72, requestedQuantity: 20 }),
+          nfItem({ id: 8002, pricingRequestItemId: 2, frozenLandedCostPerRequestedUnitThb: 100, listUnitPrice: 150, netUnitPrice: 150, requestedQuantity: 10 }),
+          nfStock({ id: 8003, pricingRequestItemId: 3, listUnitPrice: 50, netUnitPrice: 50, requestedQuantity: 4 }),
+          nfItem({ id: 8004, pricingRequestItemId: 4, frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null }),
+        ],
+      });
+
+      const region = screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' });
+      expect(region.className).toMatch(/sticky/);
+      const summary = ceoSummary();
+      // priced = server net present and not blocked: 8001, 8002, 8003 (8004 has no cost and no net)
+      expect(summary.getByTestId('pcr-ceo-sum-priced').textContent).toMatch(/ตั้งราคาแล้ว.*3\/4.*รายการ/);
+      // 72x20 + 150x10 + 50x4 = 3,140 (every line with a saved net — the existing ceoGrandTotal semantics)
+      expect(summary.getByTestId('pcr-ceo-sum-total').textContent).toMatch(/ราคาขายรวม \(ก่อน VAT\).*3,140/);
+      // cost only over lines that have BOTH a cost and a net: 60x20 + 100x10 = 2,200 (stock 8003 has none)
+      expect(summary.getByTestId('pcr-ceo-sum-cost').textContent).toMatch(/ต้นทุนรวม.*2,200/);
+      // profit = 240 + 500 = 740 = 33.6% of 2,200
+      expect(summary.getByTestId('pcr-ceo-sum-profit').textContent).toMatch(/กำไรรวม.*740.*33\.6%/);
+    });
+
+    it('buttons: บันทึกราคา (n รายการ) only when a row is dirty; ตีกลับฝ่ายนำเข้า; อนุมัติราคาขาย — and a single per-row-free save', async () => {
+      await renderCeoNewForm({ items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
+      expect(ceoSummary().getByRole('button', { name: 'ตีกลับฝ่ายนำเข้า' })).not.toBeNull();
+      expect(ceoSummary().getByRole('button', { name: 'อนุมัติราคาขาย' })).not.toBeNull();
+
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      expect(saveAllButton().textContent).toContain('บันทึกราคา (1 รายการ)');
+      // the per-row บันทึกราคา buttons are gone: exactly one button on the page starts with บันทึกราคา
+      expect(screen.getAllByRole('button', { name: /^บันทึกราคา/ })).toHaveLength(1);
+      expect(screen.queryByTestId('pcr-ceo-save-price-8001')).toBeNull();
+    });
+
+    it('approve stays disabled while any row has unsaved drafts, says why, and re-enables once the save lands (cannot approve past a draft)', async () => {
+      await renderCeoNewForm({ items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
+      const approve = () => screen.getByTestId('pcr-ceo-approve');
+      expect(approve().disabled).toBe(false);
+      expect(screen.queryByTestId('pcr-ceo-blockers')).toBeNull();
+      expect(screen.queryByTestId('pcr-ceo-dirty-note')).toBeNull();
+
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      expect(approve().disabled).toBe(true);
+      expect(screen.getByTestId('pcr-ceo-mobile-approve').disabled).toBe(true);
+      expect(screen.getByTestId('pcr-ceo-dirty-note').textContent).toContain('มีราคาที่แก้แล้วยังไม่บันทึก — กดบันทึกก่อนอนุมัติ');
+      // no blocker at all here: only the unsaved note
+      expect(screen.queryByTestId('pcr-ceo-blockers')).toBeNull();
+      fireEvent.click(approve());
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.pricingRequests.approvePricingDecision).not.toHaveBeenCalled();
+
+      fireEvent.click(saveAllButton());
+      await waitFor(() => expect(approve().disabled).toBe(false));
+      expect(screen.queryByTestId('pcr-ceo-dirty-note')).toBeNull();
+      expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1);
+
+      // same confirm as before, same call
+      fireEvent.click(approve());
+      fireEvent.click(await screen.findByRole('button', { name: 'อนุมัติ' }));
+      await waitFor(() => expect(api.pricingRequests.approvePricingDecision).toHaveBeenCalledWith(
+        7001, expect.objectContaining({ clientRequestId: expect.any(String) }),
+      ));
+    });
+
+    it('ตีกลับฝ่ายนำเข้า keeps the same confirm (reason required) and call', async () => {
+      await renderCeoNewForm();
+      fireEvent.click(ceoSummary().getByRole('button', { name: 'ตีกลับฝ่ายนำเข้า' }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('เหตุผลที่ตีกลับ'), { target: { value: 'ราคาต้นทุนคลาดเคลื่อน' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ตีกลับ' }));
+      await waitFor(() => expect(api.pricingRequests.returnPricingDecisionToImport).toHaveBeenCalledWith(
+        7001, { returnReason: 'ราคาต้นทุนคลาดเคลื่อน' },
+      ));
+    });
+  });
+
+  describe('blocker line "ยังอนุมัติไม่ได้:"', () => {
+    it.each([
+      ['ต้องระบุต้นทุนเอง', 'NET', () => nfItem({ frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null })],
+      ['ต้องใส่ราคาตั้ง (สต็อก)', 'NET', () => nfStock()],
+      ['ยังไม่มีราคา', 'NET', () => nfItem({ netUnitPrice: null })],
+      ['ยังไม่มีราคา', 'DIRECT_NET', () => nfItem({ netUnitPrice: null })],
+      ['เลือกวิธีกรอกราคาก่อน', null, () => nfItem()],
+    ])('names the blocking item and the reason "%s" (mode %s) and keeps approve disabled', async (reason, priceMode, makeItem) => {
+      await renderCeoNewForm({ priceMode, items: [makeItem()] });
+      const blockers = screen.getByTestId('pcr-ceo-blockers');
+      expect(blockers.textContent).toContain('ยังอนุมัติไม่ได้:');
+      expect(within(blockers).getByRole('button', { name: `รายการที่ 1 SCG A1 — ${reason}` })).not.toBeNull();
+      expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+    });
+
+    it('a STALE cost override blocks with "ต้นทุนที่ปรับล้าสมัย", tags the row and opens its รายละเอียด', async () => {
+      const costingItem = buildCostingItemWithOverride({
+        id: 1, manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม',
+        overrideFxRate: 1, overrideCalcConfigVersion: 1, calculationConfigVersion: 2, overrideStale: true,
+      });
+      await renderCeoNewForm({
+        items: [nfItem({ pricingCostingItemId: 1, listUnitPrice: 72, netUnitPrice: 72 })],
+        costings: [buildCosting({ id: 601, items: [costingItem] })],
+      });
+      expect(within(screen.getByTestId('pcr-ceo-blockers')).getByRole('button', {
+        name: 'รายการที่ 1 SCG A1 — ต้นทุนที่ปรับล้าสมัย',
+      })).not.toBeNull();
+      expect(ceoRow(8001).getByText('ต้นทุนที่ปรับล้าสมัย')).not.toBeNull();
+      expect(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' }).getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+    });
+
+    it('one reason per item, cost first: an uncostable line with no price reads ต้องระบุต้นทุนเอง, not ยังไม่มีราคา', async () => {
+      await renderCeoNewForm({
+        items: [nfItem({ frozenLandedCostPerRequestedUnitThb: null, listUnitPrice: null, netUnitPrice: null })],
+      });
+      const blockers = within(screen.getByTestId('pcr-ceo-blockers'));
+      expect(blockers.getAllByRole('button')).toHaveLength(1);
+      expect(blockers.queryByRole('button', { name: /ยังไม่มีราคา/ })).toBeNull();
+    });
+
+    it('clicking a blocker scrolls to that row and opens its รายละเอียด (the other rows stay closed)', async () => {
+      const scroll = vi.fn();
+      const original = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = scroll;
+      try {
+        await renderCeoNewForm({
+          requestItems: requestItemsN(2),
+          items: [
+            nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
+            nfItem({ id: 8002, pricingRequestItemId: 2, netUnitPrice: null }),
+          ],
+        });
+        expect(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A2' }).getAttribute('aria-expanded')).toBe('false');
+
+        fireEvent.click(within(screen.getByTestId('pcr-ceo-blockers')).getByRole('button', { name: 'รายการที่ 2 SCG A2 — ยังไม่มีราคา' }));
+
+        expect(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A2' }).getAttribute('aria-expanded')).toBe('true');
+        expect(ceoTable().getByTestId('pcr-ceo-details-8002')).not.toBeNull();
+        expect(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' }).getAttribute('aria-expanded')).toBe('false');
+        expect(scroll.mock.contexts.some((el) => ['pcr-ceo-row-8002', 'pcr-ceo-card-8002'].includes(el?.dataset?.testid))).toBe(true);
+      } finally {
+        if (original) Element.prototype.scrollIntoView = original; else delete Element.prototype.scrollIntoView;
+      }
+    });
+  });
+
+  describe('pricing panel and table', () => {
+    it('the costing-error alert stays in the panel after a failed recalculate', async () => {
+      api.pricingRequests.recalculatePricingDecisionCost.mockRejectedValue(new Error('คำนวณต้นทุนไม่สำเร็จ ทดสอบ'));
+      await renderCeoNewForm();
+      fireEvent.click(within(ceoPricingPanel()).getByTestId('pcr-ceo-recalculate-cost'));
+      const alert = await within(ceoPricingPanel()).findByTestId('pcr-ceo-costing-error');
+      expect(alert.textContent).toContain('คำนวณต้นทุนไม่สำเร็จ ทดสอบ');
+    });
+
+    it.each([
+      ['NET', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', 'กำไร %', 'ราคาตั้ง/แผ่น', 'ส่วนลด', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร', 'รายละเอียด']],
+      ['SPECIAL_SQM', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', 'ราคาตั้ง (สูตร)', 'ราคาพิเศษ', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร', 'รายละเอียด']],
+      ['DIRECT_NET', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', 'ราคาสุทธิ/แผ่น', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร', 'รายละเอียด']],
+    ])('%s: the table columns depend on the mode (always-columns + mode columns), one row per item', async (priceMode, headers) => {
+      await renderCeoNewForm({ priceMode, items: [nfItem({ netUnitPrice: 100, listUnitPrice: 100, directNetPrice: 100 })] });
+      const names = ceoTable().getAllByRole('columnheader').map((th) => th.textContent.trim()).filter(Boolean);
+      expect(names).toEqual(headers);
+      expect(ceoTable().getAllByTestId(/^pcr-ceo-row-/)).toHaveLength(1);
+    });
+
+    it('row cells: product (name, factory, size), จำนวน (แผ่น + ตร.ม.), ต้นทุน, net/แผ่น (+ /ตร.ม.), รวม, กำไร (฿ + %), margin shown as a percent', async () => {
+      await renderCeoNewForm({
+        priceMode: 'NET',
+        items: [nfItem({ listUnitPrice: 72, netUnitPrice: 72, proposedMarginPct: 0.3 })],
+      });
+      const row = ceoRow(8001);
+      expect(row.getByText('SCG A1')).not.toBeNull();
+      expect(row.getByText(/SCG Ceramics/)).not.toBeNull();
+      expect(row.getByText(/60x60/)).not.toBeNull();
+      expect(row.getByText('20 แผ่น')).not.toBeNull();
+      expect(row.getByText('7.2 ตร.ม.')).not.toBeNull();
+      expect(row.getByTestId('pcr-ceo-cost-both-8001').textContent).toMatch(/฿60\.00.*฿166\.67\/ตร\.ม\./);
+      expect(row.getByTestId('pcr-ceo-net-8001').textContent).toMatch(/฿72\.00.*฿200\.00\/ตร\.ม\./);
+      expect(row.getByTestId('pcr-ceo-total-8001').textContent).toContain('฿1,440.00');
+      expect(row.getByTestId('pcr-ceo-profit-8001').textContent).toMatch(/฿240\.00.*20\.0%/);
+      expect(row.getByTestId('pcr-ceo-margin-input-8001').value).toBe('30');
+    });
+
+    it('tags and row state: จากสต็อก / ต้องระบุต้นทุนเอง / ปรับเอง / ยังไม่บันทึก / มีราคาแล้ว, with data-state ok | dirty | blocked', async () => {
+      const uncostable = buildCostingItemWithOverride({ id: 4, uncostableReason: 'ไม่พบอัตราค่าขนส่ง' });
+      await renderCeoNewForm({
+        requestItems: requestItemsN(4),
+        costings: [buildCosting({ id: 601, items: [uncostable] })],
+        items: [
+          nfItem({ id: 8001, pricingRequestItemId: 1, pricingCostingItemId: 77, listUnitPrice: 100, netUnitPrice: 100 }),
+          nfStock({ id: 8002, pricingRequestItemId: 2, listUnitPrice: 50, netUnitPrice: 50 }),
+          nfItem({ id: 8003, pricingRequestItemId: 3, pricingCostingItemId: 78, manualSellingPricePerRequestedUnit: 150, listUnitPrice: 100, netUnitPrice: 150 }),
+          nfItem({ id: 8004, pricingRequestItemId: 4, pricingCostingItemId: 4, frozenLandedCostPerRequestedUnitThb: null, netUnitPrice: null }),
+        ],
+      });
+      const state = (id) => screen.getByTestId(`pcr-ceo-row-${id}`).getAttribute('data-state');
+      expect(ceoRow(8001).getByText('มีราคาแล้ว')).not.toBeNull();
+      expect(state(8001)).toBe('ok');
+      expect(ceoRow(8002).getByText('จากสต็อก')).not.toBeNull();
+      expect(ceoRow(8003).getAllByText('ปรับเอง').length).toBeGreaterThan(0);
+      expect(ceoRow(8004).getByText('ต้องระบุต้นทุนเอง')).not.toBeNull();
+      expect(ceoRow(8004).queryByText('มีราคาแล้ว')).toBeNull();
+      expect(state(8004)).toBe('blocked');
+      // no cost at all: a red "–" and a quick ปรับต้นทุนเอง button in the cost cell
+      expect(ceoRow(8004).getByTestId('pcr-ceo-cost-both-8004').textContent).toContain('–');
+      expect(ceoRow(8004).getByRole('button', { name: 'ปรับต้นทุนเอง' })).not.toBeNull();
+
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
+      expect(ceoRow(8001).queryByText('มีราคาแล้ว')).toBeNull();
+      expect(state(8001)).toBe('dirty');
+    });
+
+    it('the quick ปรับต้นทุนเอง button in a no-cost row opens the same cost-override dialog', async () => {
+      const uncostable = buildCostingItemWithOverride({ id: 1, uncostableReason: 'ไม่พบอัตราค่าขนส่ง' });
+      await renderCeoNewForm({
+        items: [nfItem({ pricingCostingItemId: 1, frozenLandedCostPerRequestedUnitThb: null, netUnitPrice: null })],
+        costings: [buildCosting({ id: 601, items: [uncostable] })],
+      });
+      fireEvent.click(ceoRow(8001).getByRole('button', { name: 'ปรับต้นทุนเอง' }));
+      expect(await screen.findByRole('dialog', { name: 'ปรับต้นทุนเอง' })).not.toBeNull();
+    });
+
+    it('history stays in the panel footer, collapsed until opened', async () => {
+      const returned = buildDecision({ id: 7000, decisionVersionNo: 1, status: 'RETURNED', items: [nfItem({ id: 8000 })] });
+      const current = buildDecision({ id: 7001, decisionVersionNo: 2, priceMode: 'NET', items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
+      await renderCeoNewForm({ decisions: [returned, current] });
+      const toggle = within(ceoPricingPanel()).getByRole('button', { name: /^ประวัติการพิจารณา \(2\)/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByText(/เวอร์ชัน 1(?!\d)/)).toBeNull();
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByText(/เวอร์ชัน 1(?!\d)/)).not.toBeNull();
+    });
+  });
+
+  describe('details row', () => {
+    it('the toggle (aria-label "รายละเอียด <name>", aria-expanded) opens สินค้า / ต้นทุน / ราคาที่ได้; the spec and Import\'s price moved here from the card', async () => {
+      const quote = buildFactoryQuote();
+      const costingItem = buildCostingItemWithOverride({ id: 1 });
+      await renderCeoNewForm({
+        items: [nfItem({ pricingCostingItemId: 1, listUnitPrice: 72, netUnitPrice: 72 })],
+        factoryQuotes: [{ ...quote, items: [{ ...quote.items[0], rawUnitPrice: 148 }] }],
+        costings: [buildCosting({ id: 601, items: [costingItem] })],
+      });
+      // closed by default (nothing blocks): neither the spec nor Import's price is on the row
+      expect(screen.queryByTestId('pcr-import-price-1')).toBeNull();
+      expect(screen.queryByText(/ขาว/)).toBeNull();
+      const toggle = ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      const details = within(ceoTable().getByTestId('pcr-ceo-details-8001'));
+      const product = within(details.getByRole('region', { name: 'สินค้า' }));
+      expect(product.getByText(/ขาว/)).not.toBeNull();
+      expect(product.getByText(/SCG Ceramics/)).not.toBeNull();
+      expect(product.getByTestId('pcr-import-price-1').textContent).toContain('148');
+      expect(within(details.getByRole('region', { name: 'ต้นทุน' })).getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
+      const result = details.getByRole('region', { name: 'ราคาที่ได้' }).textContent;
+      expect(result).toContain('72.00'); // net / แผ่น
+      expect(result).toContain('200.00'); // per ตร.ม.
+      expect(result).toContain('1,440.00'); // line total
+      expect(result).toContain('240.00'); // profit
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(ceoTable().queryByTestId('pcr-ceo-details-8001')).toBeNull();
+    });
+  });
+
+  describe('margin: typed and shown as a PERCENT, stored as a fraction', () => {
+    it('stored fractions display as percents without float noise (0.3 -> 30, 0.29 -> 29)', async () => {
+      await renderCeoNewForm({
+        requestItems: requestItemsN(2),
+        items: [
+          nfItem({ id: 8001, pricingRequestItemId: 1, proposedMarginPct: 0.3 }),
+          nfItem({ id: 8002, pricingRequestItemId: 2, proposedMarginPct: 0.29 }),
+        ],
+      });
+      expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').value).toBe('30');
+      expect(ceoRow(8002).getByTestId('pcr-ceo-margin-input-8002').value).toBe('29');
+      // displaying a stored value is not an edit
+      expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
+    });
+
+    it('typing 35 drives the LIVE formula with 0.35 and saves exactly marginPct 0.35 (not 35, not 0.35000000000000003)', async () => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        await renderCeoNewForm();
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+        fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '35' } });
+        // cost 60 x (1 + 0.35) x 1 = 81.00; as a fraction 35 it would read 2,160
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-formula-list-8001').textContent).toContain('81.00'));
+        fireEvent.click(saveAllButton());
+        await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+        expect(lastSavedDecisionItem().marginPct).toBe(0.35);
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
+  });
+
+  describe('one save', () => {
+    it('saves every dirty row through the existing per-item save, ONE call per row, sequentially; a failing row stays dirty with its error toasted, the others clear', async () => {
+      const showToast = vi.fn();
+      await renderCeoNewForm({
+        showToast,
+        requestItems: requestItemsN(2),
+        items: [
+          nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
+          nfItem({ id: 8002, pricingRequestItemId: 2, listUnitPrice: 100, netUnitPrice: 100 }),
+        ],
+      });
+      let releaseFirst;
+      const first = new Promise((resolve) => { releaseFirst = resolve; });
+      api.pricingRequests.updatePricingDecision
+        .mockImplementationOnce(() => first)
+        .mockRejectedValueOnce(new Error('บันทึกราคาไม่สำเร็จ ทดสอบ'));
+
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      fireEvent.change(ceoRow(8002).getByTestId('pcr-ceo-discount-8002'), { target: { value: '15' } });
+      expect(saveAllButton().textContent).toContain('บันทึกราคา (2 รายการ)');
+
+      fireEvent.click(saveAllButton());
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1));
+      // sequential: the second row is NOT sent while the first is still in flight
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+      expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1);
+      await act(async () => { releaseFirst({}); });
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(2));
+
+      const [firstCall, secondCall] = api.pricingRequests.updatePricingDecision.mock.calls;
+      expect(firstCall[0]).toBe(7001);
+      expect(firstCall[1].items).toHaveLength(1);
+      expect(firstCall[1].items[0]).toEqual(expect.objectContaining({ pricingDecisionItemId: 8001, discountPct: 10 }));
+      expect(secondCall[1].items).toHaveLength(1);
+      expect(secondCall[1].items[0]).toEqual(expect.objectContaining({ pricingDecisionItemId: 8002, discountPct: 15 }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'บันทึกราคาไม่สำเร็จ ทดสอบ'));
+      // row 1 saved -> draft cleared back to the stored value; row 2 failed -> still dirty with its draft
+      await waitFor(() => expect(ceoRow(8001).queryByText('ยังไม่บันทึก')).toBeNull());
+      expect(ceoRow(8001).getByTestId('pcr-ceo-discount-8001').value).toBe('');
+      expect(ceoRow(8002).getByText('ยังไม่บันทึก')).not.toBeNull();
+      expect(ceoRow(8002).getByTestId('pcr-ceo-discount-8002').value).toBe('15');
+      expect(saveAllButton().textContent).toContain('บันทึกราคา (1 รายการ)');
+      expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
+    });
+
+    it('the scoped actions ล้างส่วนลด and ใช้ราคาตามสูตร stay per row and do not run the batch save', async () => {
+      await renderCeoNewForm({
+        requestItems: requestItemsN(2),
+        items: [
+          nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, discountPct: 5, netUnitPrice: 95 }),
+          nfItem({ id: 8002, pricingRequestItemId: 2, listUnitPrice: 100, netUnitPrice: 100 }),
+        ],
+      });
+      fireEvent.change(ceoRow(8002).getByTestId('pcr-ceo-discount-8002'), { target: { value: '20' } });
+      fireEvent.click(ceoRow(8001).getByTestId('pcr-ceo-clear-discount-8001'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1));
+      expect(lastSavedDecisionItem()).toEqual(expect.objectContaining({ pricingDecisionItemId: 8001, clearDiscountPct: true }));
+      // row 2's pending discount was not committed by it
+      expect(ceoRow(8002).getByTestId('pcr-ceo-discount-8002').value).toBe('20');
+    });
+  });
+
+  describe('mobile (< 720px): cards instead of the table', () => {
+    it('renders the table, one card per item and the bottom bar together, each hidden by a Tailwind class (jsdom has no media queries)', async () => {
+      await renderCeoNewForm({ requestItems: requestItemsN(2), items: [
+        nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
+        nfItem({ id: 8002, pricingRequestItemId: 2, listUnitPrice: 100, netUnitPrice: 100 }),
+      ] });
+      expect(screen.getByTestId('pcr-ceo-table-wrap').className).toMatch(/hidden/);
+      expect(screen.getByTestId('pcr-ceo-cards').className).toMatch(/hidden/);
+      expect(screen.getByTestId('pcr-ceo-mobile-bar').className).toMatch(/hidden/);
+      expect(screen.getByTestId('pcr-ceo-cards').querySelectorAll('[data-testid^="pcr-ceo-card-"]')).toHaveLength(2);
+    });
+
+    it('a card has labelled 44px inputs and the 3-figure strip (สุทธิ/แผ่น, รวม, กำไร %); typing there feeds the same draft, and the bottom bar saves it', async () => {
+      await renderCeoNewForm();
+      const bar = within(screen.getByTestId('pcr-ceo-mobile-bar'));
+      // nothing dirty: the bar offers ตีกลับ + อนุมัติราคาขาย, not บันทึก
+      expect(bar.getByTestId('pcr-ceo-mobile-return')).not.toBeNull();
+      expect(bar.queryByTestId('pcr-ceo-mobile-save')).toBeNull();
+      expect(bar.getByTestId('pcr-ceo-mobile-approve')).not.toBeNull();
+
+      const card = ceoCard(8001);
+      const margin = card.getByLabelText(/^กำไร %/);
+      expect(margin.value).toBe('20');
+      expect(margin.className).toMatch(/44px|h-11/);
+      expect(card.getByLabelText(/^ส่วนลด %/).className).toMatch(/44px|h-11/);
+      expect(card.getByText('สุทธิ/แผ่น')).not.toBeNull();
+      expect(card.getByText('รวม')).not.toBeNull();
+      expect(card.getByText('กำไร')).not.toBeNull();
+
+      fireEvent.change(margin, { target: { value: '30' } });
+      // the table's input is the same draft
+      expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').value).toBe('30');
+      expect(bar.getByTestId('pcr-ceo-mobile-save').textContent).toContain('บันทึก (1)');
+      expect(bar.queryByTestId('pcr-ceo-mobile-return')).toBeNull();
+      expect(bar.getByTestId('pcr-ceo-mobile-approve').disabled).toBe(true);
+
+      fireEvent.click(bar.getByTestId('pcr-ceo-mobile-save'));
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledWith(
+        7001, { items: [expect.objectContaining({ pricingDecisionItemId: 8001, marginPct: 0.3 })] }));
+    });
+  });
+});
+
+// ── CEO workspace redesign: Opus review fixes ────────────────────────────────────────────────────
+describe('CEO pricing workspace redesign — review fixes', () => {
+  const heldUpdate = () => {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    api.pricingRequests.updatePricingDecision.mockImplementationOnce(() => held);
+    return () => act(async () => { release({}); });
+  };
+
+  describe('1. start review inside the workspace (no dead end after a RETURNED new-form decision)', () => {
+    it('a RETURNED new-form decision on a READY_FOR_CEO_REVIEW request still offers เริ่มพิจารณาราคาขาย, sending the default margin as a fraction', async () => {
+      const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({
+        items: [buildDecision({ status: 'RETURNED', priceMode: 'NET', items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] })],
+      });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      // the redesigned workspace is on screen (not the old panel) ...
+      expect(screen.getByTestId('pcr-ceo-table')).not.toBeNull();
+      // ... and the start control is inside the pricing panel
+      const start = within(ceoPricingPanel()).getByTestId('pcr-ceo-start-review');
+      fireEvent.click(start);
+      await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
+        501, expect.objectContaining({ defaultMarginPct: 0.3 }),
+      ));
+    });
+  });
+
+  describe('2. save-all cannot send or wipe a stale value', () => {
+    async function twoRowsDirty() {
+      await renderCeoNewForm({
+        requestItems: requestItemsN(1),
+        items: [nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, discountPct: 5, netUnitPrice: 95, manualSellingPricePerRequestedUnit: 100 })],
+      });
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+    }
+
+    it('while save-all is in flight every price input, the mode buttons, ล้างส่วนลด / ใช้ราคาตามสูตร and save-all are disabled', async () => {
+      await twoRowsDirty();
+      const release = heldUpdate();
+      fireEvent.click(saveAllButton());
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1));
+      expect(ceoRow(8001).getByTestId('pcr-ceo-discount-8001').disabled).toBe(true);
+      expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001').disabled).toBe(true);
+      expect(screen.getByTestId('pcr-ceo-price-mode-DIRECT_NET').disabled).toBe(true);
+      expect(ceoRow(8001).getByTestId('pcr-ceo-clear-discount-8001').disabled).toBe(true);
+      expect(ceoRow(8001).getByTestId('pcr-ceo-use-formula-price-8001').disabled).toBe(true);
+      expect(saveAllButton().disabled).toBe(true);
+      await release();
+    });
+
+    it('a double click sends each row once', async () => {
+      await twoRowsDirty();
+      const release = heldUpdate();
+      fireEvent.click(saveAllButton());
+      fireEvent.click(saveAllButton());
+      await release();
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+      expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1);
+    });
+
+    it('a draft changed after the send survives the success and stays dirty (only the sent value is dropped)', async () => {
+      await twoRowsDirty();
+      const release = heldUpdate();
+      fireEvent.click(saveAllButton());
+      await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalledTimes(1));
+      expect(api.pricingRequests.updatePricingDecision.mock.calls[0][1].items[0].discountPct).toBe(10);
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '20' } });
+      await release();
+      await waitFor(() => expect(screen.queryByTestId('pcr-ceo-mobile-save')).not.toBeNull());
+      expect(ceoRow(8001).getByTestId('pcr-ceo-discount-8001').value).toBe('20');
+      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
+    });
+  });
+
+  describe('3. start-review margin is unmistakably a percent', () => {
+    const startReview = async () => {
+      const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      return screen.findByLabelText('อัตรากำไรเริ่มต้น (%)');
+    };
+
+    it('is labelled (%), has a % suffix and the hint "เช่น 30 = 30%"', async () => {
+      await startReview();
+      expect(screen.getByText('เช่น 30 = 30%')).not.toBeNull();
+      expect(screen.getByTestId('pcr-ceo-start-margin-suffix').textContent).toBe('%');
+    });
+
+    it('refuses a fraction typed by habit (0.3): inline alert, start disabled, nothing sent', async () => {
+      const input = await startReview();
+      fireEvent.change(input, { target: { value: '0.3' } });
+      expect(screen.getByRole('alert').textContent).toContain('กรอกเป็น % เช่น 30');
+      const start = screen.getByTestId('pcr-ceo-start-review');
+      expect(start.disabled).toBe(true);
+      fireEvent.click(start);
+      expect(api.pricingRequests.startPricingDecision).not.toHaveBeenCalled();
+    });
+
+    it('30 sends the fraction 0.3', async () => {
+      const input = await startReview();
+      fireEvent.change(input, { target: { value: '30' } });
+      expect(screen.queryByRole('alert')).toBeNull();
+      fireEvent.click(screen.getByTestId('pcr-ceo-start-review'));
+      await waitFor(() => expect(api.pricingRequests.startPricingDecision).toHaveBeenCalledWith(
+        501, expect.objectContaining({ defaultMarginPct: 0.3 }),
+      ));
+    });
+  });
+
+  describe('4. an invalid margin is explained, in the row and in the card', () => {
+    it('-150 % shows the range alert under the margin input (table and mobile card)', async () => {
+      await renderCeoNewForm({ items: [nfItem()] });
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '-150' } });
+      expect(ceoRow(8001).getByRole('alert').textContent).toContain('อัตรากำไรต้องอยู่ระหว่าง');
+      expect(ceoCard(8001).getByRole('alert').textContent).toContain('อัตรากำไรต้องอยู่ระหว่าง');
+    });
+  });
+
+  describe('5. information that must not be lost from the new-form CEO view', () => {
+    it('the header carries the GLA-125 terms the old ภาพรวม panel showed', async () => {
+      const request = buildRequest({ summary: {
+        status: 'CEO_REVIEWING', paymentTermMode: 'CREDIT', creditDays: 30, validityDays: 15, unitCode: 'U-9', omitContactHonorific: true,
+      } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision({ priceMode: 'NET', items: [nfItem()] })] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      const header = screen.getByTestId('pcr-ceo-header').textContent;
+      expect(header).toContain('เงื่อนไขการชำระเงิน: เครดิต 30 วัน');
+      expect(header).toContain('ยืนราคา: 15 วัน');
+      expect(header).toContain('หน่วยงาน / รหัสผู้ออกแบบ: U-9');
+      expect(header).toContain('หน้าชื่อผู้รับ: ใช่');
+    });
+
+    it('the decision status badge sits beside the decision code in the panel heading', async () => {
+      await renderCeoNewForm();
+      const heading = within(ceoPricingPanel()).getByRole('heading', { level: 2 });
+      expect(heading.textContent).toContain(pricingDecisionStatusLabel('DRAFT').label);
+    });
+
+    it('details สินค้า shows รหัสสินค้า, the sales-entered โรงงาน, ขายแผ่นไม่เต็มกล่อง and เทียบ ตร.ม.', async () => {
+      const base = buildRequest().items[0];
+      await renderCeoNewForm({
+        requestItems: [{ ...base, roundToFullBox: false, requestedQtySqm: 7.2 }],
+        items: [nfItem({ listUnitPrice: 72, netUnitPrice: 72 })],
+      });
+      openRowDetails('SCG A1');
+      const product = within(ceoTable().getByTestId('pcr-ceo-details-8001')).getByRole('region', { name: 'สินค้า' }).textContent;
+      expect(product).toContain('รหัสสินค้า: SCG-A1');
+      expect(product).toContain('โรงงาน (ที่ฝ่ายขายกรอก): SCG');
+      expect(product).toContain('ขายแผ่นไม่เต็มกล่อง: ใช่');
+      expect(product).toContain('เทียบ ตร.ม.: 7.2 ตร.ม.');
+    });
+
+    it('the missing-factory warning still shows for the CEO', async () => {
+      const request = buildRequestWithBlankFactoryLine({ summary: { status: 'CEO_REVIEWING' } });
+      api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision({ priceMode: 'NET', items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] })] });
+      renderDetailPage({ user: ceoUser, request });
+      await waitForLoaded(request);
+      await screen.findByText('PCD-2026-0001');
+      expect(screen.getByText(/ยังไม่ได้ระบุโรงงาน 1 รายการ/)).not.toBeNull();
+    });
+
+    it('a request item with no decision item still appears as a row: name, qty, "ไม่อยู่ในมติราคานี้", no inputs', async () => {
+      await renderCeoNewForm({
+        requestItems: requestItemsN(2),
+        items: [nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 })],
+      });
+      const row = within(screen.getByTestId('pcr-ceo-row-req-2'));
+      expect(row.getByText('SCG A2')).not.toBeNull();
+      expect(row.getByText(/20 แผ่น/)).not.toBeNull();
+      expect(row.getByText('ไม่อยู่ในมติราคานี้')).not.toBeNull();
+      expect(screen.getByTestId('pcr-ceo-row-req-2').querySelectorAll('input')).toHaveLength(0);
+    });
+  });
+
+  describe('6. minor', () => {
+    it('negative profit is red, not green (summary and row)', async () => {
+      await renderCeoNewForm({ items: [nfItem({ listUnitPrice: 50, netUnitPrice: 50 })] }); // cost 60, net 50
+      expect(ceoSummary().getByTestId('pcr-ceo-sum-profit').querySelector('b').className).toMatch(/danger/);
+      expect(ceoSummary().getByTestId('pcr-ceo-sum-profit').querySelector('b').className).not.toMatch(/success/);
+      expect(ceoRow(8001).getByTestId('pcr-ceo-profit-8001').querySelector('b').className).toMatch(/danger/);
+    });
+
+    it('save-all shows ONE success toast with the count, not one per row', async () => {
+      const showToast = vi.fn();
+      await renderCeoNewForm({
+        showToast,
+        requestItems: requestItemsN(2),
+        items: [
+          nfItem({ id: 8001, pricingRequestItemId: 1, listUnitPrice: 100, netUnitPrice: 100 }),
+          nfItem({ id: 8002, pricingRequestItemId: 2, listUnitPrice: 100, netUnitPrice: 100 }),
+        ],
+      });
+      fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
+      fireEvent.change(ceoRow(8002).getByTestId('pcr-ceo-discount-8002'), { target: { value: '15' } });
+      fireEvent.click(saveAllButton());
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'บันทึกราคาแล้ว 2 รายการ'));
+      expect(showToast.mock.calls.filter((c) => c[0] === 'success')).toHaveLength(1);
+    });
+
+    it('the details column header has the sr-only name "รายละเอียด"', async () => {
+      await renderCeoNewForm();
+      expect(ceoTable().getByRole('columnheader', { name: 'รายละเอียด' })).not.toBeNull();
+    });
+  });
+
+  describe('7. non-THB decision', () => {
+    it('summary cost and profit convert the net with the decision fx rate (cost 60 THB, net 2 USD at 35 → ฿10/unit × 20 = ฿200, 16.7%)', async () => {
+      await renderCeoNewForm({
+        decisions: [buildDecision({
+          priceMode: 'NET', currency: 'USD', fxRateUsed: 35,
+          items: [nfItem({ listUnitPrice: 2, netUnitPrice: 2 })],
+        })],
+      });
+      expect(ceoSummary().getByTestId('pcr-ceo-sum-cost').textContent).toContain('1,200.00');
+      const profit = ceoSummary().getByTestId('pcr-ceo-sum-profit').textContent;
+      expect(profit).toContain('200.00');
+      expect(profit).toContain('16.7%');
     });
   });
 });
