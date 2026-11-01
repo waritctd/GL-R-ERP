@@ -790,9 +790,10 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     managerApprovedBy: 2, managerApprovedByName: 'สมหญิง ผจก.', managerApprovedAt: '2026-08-05T05:00:00Z',
     invoiceDetails: inv(703, 'INV-MA-0703', 2140000),
   });
-  const r704 = saleRecord({ id: 704, salesRepId: REP_B.id, salesRepName: REP_B.name, commissionableBase: 500000, actualReceived: 535000, weightMultiplier: 2, invoiceDetails: inv(704, 'INV-OK-0704', 535000) });
+  const r704 = saleRecord({ id: 704, sourceTicketId: 88, salesRepId: REP_B.id, salesRepName: REP_B.name, commissionableBase: 500000, actualReceived: 535000, weightMultiplier: 2, invoiceDetails: inv(704, 'INV-OK-0704', 535000) });
   const r705 = saleRecord({ id: 705, salesRepId: REP_A.id, salesRepName: REP_A.name, commissionableBase: 300000, actualReceived: 321000, invoiceDetails: inv(705, 'INV-OK-0705', 321000) });
   const r601 = submitted(601, 'INV-JUL-0601', REP_C, { payrollMonth: '2026-07-01', commissionableBase: 500000 }); // carried over from July
+  const r605 = submitted(605, 'INV-JUN-0605', REP_B, { payrollMonth: '2026-06-01' }); // two rounds back
   const r901 = submitted(901, 'INV-SEP-0901', REP_A, { payrollMonth: '2026-09-01' }); // a LATER round: neither queue nor callout in August
   const BY_MONTH = { '2026-08': [r701, r702, r703, r704, r705], '2026-07': [r601], '2026-09': [r901] };
 
@@ -811,6 +812,7 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
   const dto702 = dtoOf(r702, { ticketCode: 'TCK-0078', customerName: 'บริษัท สอง จำกัด', items: [stockLine(21, 'PADANA 80x80 ผิวด้าน', 10, 0)], weightedCommissionableBase: 1000000, estimatedCommission: 1234.5 });
   const dto703 = dtoOf(r703, { ticketCode: 'TCK-0079', customerName: 'บริษัท สาม จำกัด', items: [stockLine(31, 'PADANA 90x90 ผิวเงา', 10, 10)], weightedCommissionableBase: 2000000, estimatedCommission: 4321.09 });
   const dto601 = dtoOf(r601, { ticketCode: 'TCK-0060', weightedCommissionableBase: 500000, estimatedCommission: 100 });
+  const dto605 = dtoOf(r605, { ticketCode: 'TCK-0050', weightedCommissionableBase: 500000, estimatedCommission: 100 });
   const dto901 = dtoOf(r901, { ticketCode: 'TCK-0090', weightedCommissionableBase: 3000000, estimatedCommission: 100 });
 
   const repSummary = (salesRepId) => ({
@@ -946,11 +948,13 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
   });
 
   // ── 3. carry-over ─────────────────────────────────────────────────────────────────────────
-  it('a pending item of an EARLIER round shows as a carry-over callout (not in this round\'s queue), and "ไปที่รอบ" switches the whole page to it', async () => {
+  it('pending items of EARLIER rounds (two months) show as one carry-over callout, each with its own round, and "ไปที่รอบ" jumps to the OLDEST', async () => {
+    stub([...managerPending, dto605]);
     renderAt(salesManagerUser);
     const callout = await screen.findByTestId('carry-over-callout');
-    expect(callout.textContent).toContain('ค้างจากรอบ ก.ค. 2569: 1 รายการ');
-    expect(callout.textContent).toContain('INV-JUL-0601 (กมลชนก พูลสุข)');
+    expect(callout.textContent).toContain('ค้างจากรอบก่อน: 2 รายการ');
+    expect(callout.textContent).toContain('INV-JUN-0605 (วิภา รัตนกุล · รอบ มิ.ย. 2569)');
+    expect(callout.textContent).toContain('INV-JUL-0601 (กมลชนก พูลสุข · รอบ ก.ค. 2569)');
     expect(callout.textContent).toContain('ยังไม่ได้อนุมัติ');
     // a LATER round's item is neither carried over nor queued; the earlier one is not queued either
     expect(callout.textContent).not.toContain('INV-SEP-0901');
@@ -958,14 +962,15 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     expect(screen.queryByTestId('queue-row-601')).toBeNull();
     expect(screen.queryByTestId('queue-row-901')).toBeNull();
 
-    fireEvent.click(within(callout).getByRole('button', { name: 'ไปที่รอบ ก.ค. 2569' }));
+    fireEvent.click(within(callout).getByRole('button', { name: 'ไปที่รอบ มิ.ย. 2569' }));
 
-    expect(await within(await cycle()).findByText('กรกฎาคม 2569')).not.toBeNull();
-    expect(await screen.findByTestId('queue-row-601')).not.toBeNull();
+    expect(await within(await cycle()).findByText('มิถุนายน 2569')).not.toBeNull();
+    expect(await screen.findByTestId('queue-row-605')).not.toBeNull();
     expect(screen.queryByTestId('queue-row-701')).toBeNull();
-    expect(screen.queryByTestId('carry-over-callout')).toBeNull();
-    expect(screen.getByRole('region', { name: 'สรุปรายคน · ก.ค. 2569' })).not.toBeNull();
-    expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: '2026-07' });
+    expect(screen.getByRole('region', { name: 'สรุปรายคน · มิ.ย. 2569' })).not.toBeNull();
+    expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: '2026-06' });
+    // from the June round, July's item is an UPCOMING one
+    expect(screen.getByTestId('upcoming-callout').textContent).toContain('รอบถัดไป ก.ค. 2569');
   });
 
   // ── 4. the queue ──────────────────────────────────────────────────────────────────────────
@@ -1198,6 +1203,130 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     await act(async () => { pendingResolvers['2026-09'](); pendingResolvers['2026-08'](); });
     expect(within(all).getByText('INV-OCT-0951')).not.toBeNull();
     expect(within(all).queryByText('INV-OK-0704')).toBeNull();
+  });
+
+  // ── review round 2 ────────────────────────────────────────────────────────────────────────
+  it('the manual-add button is rendered at every width (no hidden / mobile:hidden) and opens the form', async () => {
+    renderAt(salesManagerUser);
+    const button = within(await cycle()).getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ });
+    expect(button.className).not.toMatch(/(^|\s)(mobile:)?hidden(\s|$)/);
+    fireEvent.click(button);
+    expect(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).not.toBeNull();
+  });
+
+  describe('approval steps of a REJECTED record', () => {
+    const openRejected = async (record) => {
+      api.commissions.list.mockImplementation(async ({ payrollMonth }) => ({ commissions: payrollMonth === '2026-08' ? [record] : [] }));
+      renderAt(salesManagerUser);
+      const all = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+      fireEvent.click(await within(all).findByRole('button', { name: 'ไม่อนุมัติ 1' }));
+      fireEvent.click(await within(all).findByRole('button', { name: `ดูรายละเอียด ${record.invoiceDetails.invoiceNumber}` }));
+      const status = within(await screen.findByTestId(`detail-panel-${record.id}`)).getByRole('region', { name: 'สถานะและเอกสาร' });
+      return within(status).getAllByRole('listitem'); // [invoice, manager, ceo, payroll]
+    };
+
+    it('rejected AFTER the manager approved: manager step done (name · date), CEO step "ไม่อนุมัติ"', async () => {
+      const steps = await openRejected(submitted(990, 'INV-REJ-0990', REP_A, { status: 'REJECTED', managerApprovedByName: 'สมหญิง ผจก.', managerApprovedAt: '2026-08-05T05:00:00Z' }));
+      expect(steps[1].textContent).toContain('สมหญิง ผจก.');
+      expect(steps[1].textContent).not.toContain('รออนุมัติ');
+      expect(steps[2].textContent).toContain('ไม่อนุมัติ');
+    });
+
+    it('rejected by the manager herself: manager step "ไม่อนุมัติ", CEO step "ยังไม่ถึงขั้นนี้"', async () => {
+      const steps = await openRejected(submitted(991, 'INV-REJ-0991', REP_A, { status: 'REJECTED' }));
+      expect(steps[1].textContent).toContain('ไม่อนุมัติ');
+      expect(steps[2].textContent).toContain('ยังไม่ถึงขั้นนี้');
+      expect(steps[2].textContent).not.toContain('ไม่อนุมัติ');
+    });
+  });
+
+  it('CEO strip: manual entries count in n, and their total shows as a second line "+ กรอกเอง ฿5,000.00" under the base', async () => {
+    const manual = saleRecord({
+      id: 802, kind: 'INCENTIVE', status: 'MANAGER_APPROVED', salesRepId: REP_A.id, salesRepName: REP_A.name, payrollMonth: '2026-08-01',
+      commissionableBase: 0, actualReceived: 0, manualAmount: 5000, manualReason: 'incentive', invoiceDetails: null, ...noApprovals,
+      managerApprovedByName: 'สมหญิง ผจก.', managerApprovedAt: '2026-08-05T05:00:00Z',
+    });
+    stub([dto703]);
+    api.commissions.list.mockImplementation(async ({ payrollMonth }) => ({ commissions: payrollMonth === '2026-08' ? [r703, manual] : [] }));
+    renderAt(ceoUser);
+    const box = await screen.findByTestId('cycle-box-MANAGER_APPROVED');
+    await waitFor(() => expect(box.textContent).toContain('2 รายการ'));
+    expect(box.textContent).toMatch(money(2000000));
+    expect(box.textContent).toContain('+ กรอกเอง ฿5,000.00');
+    expect(screen.getByTestId('cycle-box-APPROVED').textContent).not.toContain('กรอกเอง');
+  });
+
+  it('changing the month resets the all-records filter to ทั้งหมด and collapses every open panel', async () => {
+    const rejected = submitted(990, 'INV-REJ-0990', REP_A, { status: 'REJECTED' });
+    api.commissions.list.mockImplementation(async ({ payrollMonth }) => ({
+      commissions: payrollMonth === '2026-08' ? [...BY_MONTH['2026-08'], rejected] : (BY_MONTH[payrollMonth] ?? []),
+    }));
+    renderAt(salesManagerUser);
+    const all = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    fireEvent.click(await within(all).findByRole('button', { name: 'ไม่อนุมัติ 1' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ดูรายละเอียด INV-PEND-0701' }));
+    await screen.findByTestId('detail-panel-701');
+
+    fireEvent.click(within(await cycle()).getByRole('button', { name: 'รอบถัดไป' }));
+
+    const next = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    expect(await within(next).findByText('INV-SEP-0901')).not.toBeNull();
+    expect(within(next).getByRole('button', { name: 'ทั้งหมด 1' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryAllByTestId(/^detail-panel-/)).toHaveLength(0);
+  });
+
+  it('stepping to another month clears the previous month\'s rep estimates and open statement while the new ones load', async () => {
+    const julyRec = saleRecord({ id: 611, salesRepId: REP_A.id, salesRepName: REP_A.name, payrollMonth: '2026-07-01', invoiceDetails: inv(611, 'INV-JUL-0611') });
+    let release;
+    stub([]);
+    api.commissions.list.mockImplementation(async ({ payrollMonth }) => ({ commissions: payrollMonth === '2026-07' ? [julyRec] : BY_MONTH[payrollMonth] ?? [] }));
+    api.commissions.monthlySummary.mockImplementation(({ payrollMonth, salesRepId }) => {
+      if (payrollMonth === '2026-07') return new Promise((resolve) => { release = () => resolve({ summary: { ...repSummary(salesRepId), totalCommission: 111.11 } }); });
+      return Promise.resolve({ summary: repSummary(salesRepId) });
+    });
+    renderAt(salesManagerUser);
+    const rep = await screen.findByRole('region', { name: 'สรุปรายคน · ส.ค. 2569' });
+    await waitFor(() => expect(rep.textContent).toContain('฿12,345.67'));
+    fireEvent.click(within(rep).getByText(REP_A.name));
+    await screen.findByTestId('statement-total');
+
+    fireEvent.click(within(await cycle()).getByRole('button', { name: 'รอบก่อนหน้า' }));
+
+    const july = await screen.findByRole('region', { name: 'สรุปรายคน · ก.ค. 2569' });
+    await within(july).findByText(REP_A.name);
+    expect(july.textContent).not.toContain('฿12,345.67');
+    expect(within(july).getAllByRole('row').find((r) => r.textContent.includes(REP_A.name)).textContent).toContain('-');
+    expect(screen.queryByTestId('statement-total')).toBeNull();
+    await act(async () => { release(); });
+  });
+
+  it('after an approve, ONLY that record\'s rep summary is refetched (not every rep)', async () => {
+    api.commissions.approve.mockResolvedValue({});
+    // A fresh array per load, like the real backend: the same reference would hide a refetch keyed on `records`.
+    api.commissions.list.mockImplementation(async ({ payrollMonth }) => ({ commissions: [...(BY_MONTH[payrollMonth] ?? [])] }));
+    renderAt(salesManagerUser);
+    const row = await screen.findByTestId('queue-row-701');
+    await waitFor(() => expect(api.commissions.monthlySummary.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    const before = api.commissions.monthlySummary.mock.calls.length;
+
+    fireEvent.click(within(row).getByRole('button', { name: 'อนุมัติ' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'อนุมัติ' }));
+    await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(701));
+    await waitFor(() => expect(api.commissions.monthlySummary.mock.calls.length).toBeGreaterThan(before));
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+
+    const extra = api.commissions.monthlySummary.mock.calls.slice(before).map(([arg]) => arg.salesRepId);
+    expect(extra).toEqual([REP_A.id]);
+  });
+
+  it('the deal link comes from sourceTicketId for ANY sale record: an APPROVED record opened from the table links to /tickets/<id> ("เปิดดีล" when the code is unknown)', async () => {
+    renderAt(salesManagerUser);
+    const all = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    fireEvent.click(await within(all).findByRole('button', { name: 'ดูรายละเอียด INV-OK-0704' }));
+    const status = within(await screen.findByTestId('detail-panel-704')).getByRole('region', { name: 'สถานะและเอกสาร' });
+    expect(within(status).getByRole('link', { name: 'เปิดดีล' }).getAttribute('href')).toBe('/tickets/88');
+    expect(within(status).queryByRole('link', { name: /invoice\.pdf/ })).toBeNull();
   });
 
   // ── 5. the one detail panel ───────────────────────────────────────────────────────────────

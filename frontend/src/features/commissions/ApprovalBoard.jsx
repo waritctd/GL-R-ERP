@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { DataTable } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -40,7 +40,8 @@ const baseOf = (record) => (countsTowardBase(record) ? baseContribution(record) 
 function CycleHeader({ month, currentMonth, onMonth, records, stage, canCreateManual, onManual }) {
   const counts = COUNTED.map((status) => {
     const rows = records.filter((r) => r.status === status);
-    return { status, n: rows.length, sum: rows.reduce((total, r) => total + baseOf(r), 0) };
+    const manualSum = rows.filter((r) => isManualKind(r.kind)).reduce((total, r) => total + Number(r.manualAmount || 0), 0);
+    return { status, n: rows.length, sum: rows.reduce((total, r) => total + baseOf(r), 0), manualSum };
   });
   const total = counts.reduce((sum, c) => sum + c.n, 0);
   const done = counts[2].n;
@@ -66,7 +67,7 @@ function CycleHeader({ month, currentMonth, onMonth, records, stage, canCreateMa
         </div>
         <span className="text-md text-text-muted">{`จากยอดรับเงิน ${shortMonth(shiftMonth(month, -1))} · จ่ายพร้อมเงินเดือน ${shortMonth(month)}`}</span>
         {canCreateManual ? (
-          <Button type="button" variant="secondary" className="whitespace-nowrap mobile:hidden" onClick={onManual}>
+          <Button type="button" variant="secondary" className="whitespace-nowrap mobile:min-h-11 mobile:w-full" onClick={onManual}>
             <Icon name="plus" size={14} />
             เพิ่มค่าคอมด้วยตนเอง
           </Button>
@@ -94,6 +95,7 @@ function CycleHeader({ month, currentMonth, onMonth, records, stage, canCreateMa
               <dd className="m-0 text-lg font-extrabold tabular-nums">
                 {`${c.n} รายการ`}
                 <small className="ml-1 text-sm font-semibold text-text-muted">{formatMoney(c.sum)}</small>
+                {c.manualSum !== 0 ? <small className="block text-sm font-semibold text-text-muted">{`+ กรอกเอง ${formatMoney(c.manualSum)}`}</small> : null}
               </dd>
             </div>
           ))}
@@ -105,13 +107,12 @@ function CycleHeader({ month, currentMonth, onMonth, records, stage, canCreateMa
 
 function CarryOver({ items, onGo }) {
   if (!items.length) return null;
-  const first = items[0];
-  const target = monthOf(first.commission);
+  const target = monthOf(items[0].commission); // oldest first
   return (
     <div data-testid="carry-over-callout" className="flex flex-wrap items-center justify-between gap-2.5 rounded-md border border-warning-border bg-warning-bg-soft px-3.5 py-2.5 text-warning-dark">
       <span>
-        <b>{`ค้างจากรอบ ${shortMonth(target)}: ${items.length} รายการ`}</b>
-        {` · ${items.map((e) => `${e.commission.invoiceDetails?.invoiceNumber ?? `#${e.commission.id}`} (${e.commission.salesRepName || e.commission.salesRepId})`).join(', ')} ยังไม่ได้อนุมัติ`}
+        <b>{`ค้างจากรอบก่อน: ${items.length} รายการ`}</b>
+        {` · ${items.map((e) => `${e.commission.invoiceDetails?.invoiceNumber ?? `#${e.commission.id}`} (${e.commission.salesRepName || e.commission.salesRepId} · รอบ ${shortMonth(monthOf(e.commission))})`).join(', ')} ยังไม่ได้อนุมัติ`}
       </span>
       <Button type="button" variant="secondary" className="whitespace-nowrap" onClick={() => onGo(target)}>
         {`ไปที่รอบ ${shortMonth(target)}`}
@@ -284,6 +285,20 @@ export function ApprovalBoard({
   const [queueOpen, setQueueOpen] = useState(null);
   const [tableOpen, setTableOpen] = useState(null);
   const [filter, setFilter] = useState('all');
+  // Records with a weight save in flight. Lives here (always mounted) so the lock covers every open
+  // panel of the record, its approve / reject buttons, and survives collapsing the panel.
+  const [savingIds, setSavingIds] = useState(() => new Set());
+  const setRecordSaving = (id, on) => setSavingIds((current) => {
+    const next = new Set(current);
+    if (on) next.add(id); else next.delete(id);
+    return next;
+  });
+  // A new round starts clean: no stale filter, no open panels.
+  useEffect(() => {
+    setFilter('all');
+    setQueueOpen(null);
+    setTableOpen(null);
+  }, [month]);
 
   const counted = useMemo(() => records.filter((r) => COUNTED.includes(r.status)), [records]);
   const entries = useMemo(() => pending ?? [], [pending]);
@@ -322,6 +337,8 @@ export function ApprovalBoard({
       entry={pendingById.get(record.id)}
       canEdit={canReview(record)}
       canAdjust={user.role === 'sales_manager' && record.status === 'SUBMITTED'}
+      recordSaving={savingIds.has(record.id)}
+      onSavingChange={(on) => setRecordSaving(record.id, on)}
       editor={editor(record)}
       onEdit={() => onEdit(record)}
       onAdjust={onAdjust}
@@ -405,10 +422,10 @@ export function ApprovalBoard({
         <span className="flex flex-wrap justify-end gap-1.5">
           {canReview(record) ? (
             <>
-              <Button type="button" variant="icon" className="border-success text-success" title={`${stageWho}อนุมัติ`} aria-label={`${stageWho}อนุมัติ`} disabled={saving} onClick={() => onApprove(record.id)}>
+              <Button type="button" variant="icon" className="border-success text-success" title={`${stageWho}อนุมัติ`} aria-label={`${stageWho}อนุมัติ`} disabled={saving || savingIds.has(record.id)} onClick={() => onApprove(record.id)}>
                 <Icon name="check" size={14} />
               </Button>
-              <Button type="button" variant="icon" className="border-danger text-danger" title={`${stageWho}ปฏิเสธ`} aria-label={`${stageWho}ปฏิเสธ`} disabled={saving} onClick={() => onReject(record.id)}>
+              <Button type="button" variant="icon" className="border-danger text-danger" title={`${stageWho}ปฏิเสธ`} aria-label={`${stageWho}ปฏิเสธ`} disabled={saving || savingIds.has(record.id)} onClick={() => onReject(record.id)}>
                 <Icon name="close" size={14} />
               </Button>
             </>
@@ -456,7 +473,7 @@ export function ApprovalBoard({
               isCeo={isCeo}
               open={queueOpen === entry.commission.id}
               onToggle={() => setQueueOpen((cur) => (cur === entry.commission.id ? null : entry.commission.id))}
-              saving={saving}
+              saving={saving || savingIds.has(entry.commission.id)}
               onApprove={() => onApprove(entry.commission.id)}
               onReject={() => onReject(entry.commission.id)}
               panel={panelFor(entry.commission, queueOpen === entry.commission.id)}

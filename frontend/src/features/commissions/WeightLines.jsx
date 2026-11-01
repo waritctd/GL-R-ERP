@@ -21,7 +21,7 @@ const SAVED_FLASH_MS = 2500;
  * recomputed here), and on failure the overlay for exactly those lines is dropped, which reverts the
  * segment, and an inline alert names the line(s). The WHOLE entry is one write at a time.
  */
-export function WeightLines({ entry, canAdjust, onAdjust, onEntryUpdate, onSaved }) {
+export function WeightLines({ entry, canAdjust, recordSaving = false, onSavingChange, onAdjust, onEntryUpdate, onSaved }) {
   const { commission: record, items = [] } = entry;
   const [optimistic, setOptimistic] = useState({});
   const [lineState, setLineState] = useState({}); // itemId -> 'saving' | 'saved' | 'error'
@@ -30,7 +30,9 @@ export function WeightLines({ entry, canAdjust, onAdjust, onEntryUpdate, onSaved
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
   const weightOf = (item) => optimistic[item.itemId] ?? item.weightMultiplier;
-  const anySaving = Object.values(lineState).includes('saving');
+  // `recordSaving` is the board's lock for this record: it also covers a save started from ANOTHER
+  // open panel of the same record, and survives this panel being collapsed mid-save.
+  const anySaving = recordSaving || Object.values(lineState).includes('saving');
   const errorId = `weights-${record.id}-error`;
   const stockLines = items.filter(isStockLine);
 
@@ -60,6 +62,7 @@ export function WeightLines({ entry, canAdjust, onAdjust, onEntryUpdate, onSaved
     setLineState((current) => Object.fromEntries(Object.entries(current).filter(([, value]) => value !== 'error')));
     setOptimistic((current) => ({ ...current, ...Object.fromEntries(todo.map((l) => [l.itemId, l.weightMultiplier])) }));
     setStates(ids, 'saving');
+    onSavingChange?.(true);
     const dropOverlay = () => setOptimistic((current) => {
       const next = { ...current };
       ids.forEach((id) => { delete next[id]; });
@@ -69,7 +72,7 @@ export function WeightLines({ entry, canAdjust, onAdjust, onEntryUpdate, onSaved
       const response = await onAdjust(record.id, { lines: todo });
       onEntryUpdate(response.pending);
       // The month's records and any picked rep's statement moved with this weight: reload them.
-      onSaved?.();
+      onSaved?.(record.id);
       dropOverlay();
       setStates(ids, 'saved');
       timers.current.push(setTimeout(() => {
@@ -85,6 +88,8 @@ export function WeightLines({ entry, canAdjust, onAdjust, onEntryUpdate, onSaved
       setStates(ids, 'error');
       const names = todo.map((l) => items.find((i) => i.itemId === l.itemId)?.description).filter(Boolean);
       setError(`ปรับน้ำหนัก ${names.join(', ')} ไม่สำเร็จ${failure?.message ? ` — ${failure.message}` : ''}`);
+    } finally {
+      onSavingChange?.(false);
     }
   }
 

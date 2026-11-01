@@ -102,7 +102,6 @@ export function CommissionPage({ user, showToast }) {
   const [pickedRepId, setPickedRepId] = useState('');
   const [repSummaries, setRepSummaries] = useState({});
   const repSummaryRequestId = useRef(0);
-  const [repSummaryNonce, setRepSummaryNonce] = useState(0); // bumped to force a reload of the picked rep's statement
 
   // account: "record invoice" / create-from-deal flow
   const [ticketIdInput, setTicketIdInput] = useState(searchParams.get('ticketId') || '');
@@ -201,9 +200,9 @@ export function CommissionPage({ user, showToast }) {
 
   // A weight change moves the month's base: reload the records table and the picked rep's statement
   // so "สรุปรายคน" and the table are not left showing the old figures.
-  function reloadAfterWeightChange() {
+  function reloadAfterWeightChange(recordId) {
     load();
-    setRepSummaryNonce((n) => n + 1);
+    refreshRep(recordId);
   }
 
   function replacePendingEntry(updated) {
@@ -258,19 +257,34 @@ export function CommissionPage({ user, showToast }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [month]);
 
-  // "สรุปรายคน": re-fetch every listed rep's summary whenever the month or the month's records change.
+  // "สรุปรายคน": fetch every listed rep's summary when the month or the SET of reps changes; a
+  // change to one record (approve / reject / deductions / weights) refetches only that record's rep.
+  const repIdsKey = [...new Set(records.filter((record) => APPROVAL_STATUSES.includes(record.status)).map((record) => record.salesRepId))].sort((a, b) => a - b).join(',');
+  const monthRef = useRef(month);
+  monthRef.current = month;
+  useEffect(() => { setRepSummaries({}); }, [month]); // nothing from the previous month while the new one loads
   useEffect(() => {
     if (!canReview) return;
-    const repIds = [...new Set(records.filter((record) => APPROVAL_STATUSES.includes(record.status)).map((record) => record.salesRepId))];
     const requestId = (repSummaryRequestId.current += 1);
-    Promise.all(repIds.map((salesRepId) => api.commissions.monthlySummary({ payrollMonth: month, salesRepId })
+    Promise.all((repIdsKey ? repIdsKey.split(',') : []).map(Number).map((salesRepId) => api.commissions.monthlySummary({ payrollMonth: month, salesRepId })
       .then((response) => [salesRepId, response.summary ?? null])
       .catch(() => [salesRepId, null])))
       .then((entries) => {
         if (repSummaryRequestId.current === requestId) setRepSummaries(Object.fromEntries(entries.filter(([, summary]) => summary)));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- canReview is fixed for the page's lifetime.
-  }, [records, month, repSummaryNonce]);
+  }, [repIdsKey, month]);
+
+  function refreshRep(recordId) {
+    const salesRepId = findRecord(recordId)?.salesRepId;
+    if (!canReview || salesRepId == null) return;
+    const forMonth = month;
+    api.commissions.monthlySummary({ payrollMonth: forMonth, salesRepId })
+      .then((response) => {
+        if (monthRef.current === forMonth && response.summary) setRepSummaries((current) => ({ ...current, [salesRepId]: response.summary }));
+      })
+      .catch(() => {});
+  }
 
   // Best-effort convenience picker for account: the deals TicketRepository's account-role list
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
@@ -580,6 +594,7 @@ export function CommissionPage({ user, showToast }) {
       setEditingId(null);
       showToast('success', 'อัปเดตค่าคอมแล้ว');
       invalidatePayrollUpstream();
+      refreshRep(id);
       await load();
       if (canReview) await loadPending();
     } catch (error) {
@@ -595,6 +610,7 @@ export function CommissionPage({ user, showToast }) {
       await api.commissions.approve(approveId);
       showToast('success', 'อนุมัติค่าคอมแล้ว');
       invalidatePayrollUpstream();
+      refreshRep(approveId);
       await load();
       if (canReview) await loadPending();
     } catch (error) {
@@ -615,6 +631,7 @@ export function CommissionPage({ user, showToast }) {
       await api.commissions.reject(rejectId, { reviewerNote });
       showToast('success', 'ปฏิเสธค่าคอมแล้ว');
       invalidatePayrollUpstream();
+      refreshRep(rejectId);
       await load();
       if (canReview) await loadPending();
     } catch (error) {

@@ -42,10 +42,11 @@ const who = (name, at) => `${name || '-'} · ${formatThaiDate(at)}`;
  * entry is known; (c) where the record is in approval, plus deal / invoice / file references.
  */
 export function InvoiceDetailPanel({
-  record, entry, canEdit, canAdjust, editor, onEdit, onAdjust, onEntryUpdate, onSaved,
+  record, entry, canEdit, canAdjust, recordSaving, onSavingChange, editor, onEdit, onAdjust, onEntryUpdate, onSaved,
 }) {
   const manual = isManualKind(record.kind);
-  const mgrDone = record.status === 'MANAGER_APPROVED' || record.status === 'APPROVED';
+  const rejected = record.status === 'REJECTED';
+  const mgrDone = record.status === 'MANAGER_APPROVED' || record.status === 'APPROVED' || Boolean(record.managerApprovedAt);
   const ceoDone = record.status === 'APPROVED';
   const invoice = record.invoiceDetails;
   const hasWeights = entry && (entry.items ?? []).length > 0;
@@ -71,7 +72,7 @@ export function InvoiceDetailPanel({
 
         {hasWeights ? (
           <div className={cn('min-w-0', divider)}>
-            <WeightLines entry={entry} canAdjust={canAdjust} onAdjust={onAdjust} onEntryUpdate={onEntryUpdate} onSaved={onSaved} />
+            <WeightLines entry={entry} canAdjust={canAdjust} recordSaving={recordSaving} onSavingChange={onSavingChange} onAdjust={onAdjust} onEntryUpdate={onEntryUpdate} onSaved={onSaved} />
           </div>
         ) : null}
 
@@ -80,27 +81,25 @@ export function InvoiceDetailPanel({
           <ol className="m-0 grid list-none p-0">
             <Step state="done" title="บัญชีบันทึกใบกำกับ" sub={invoice?.invoiceDate ? formatThaiDate(invoice.invoiceDate) : formatThaiDate(record.createdAt)} />
             <Step
-              state={mgrDone ? 'done' : 'now'}
+              state={mgrDone ? 'done' : rejected ? undefined : 'now'}
               title="ผู้จัดการฝ่ายขาย"
-              sub={mgrDone ? who(record.managerApprovedByName, record.managerApprovedAt) : record.status === 'REJECTED' ? 'ไม่อนุมัติ' : 'รออนุมัติ'}
+              sub={mgrDone ? who(record.managerApprovedByName, record.managerApprovedAt) : rejected ? 'ไม่อนุมัติ' : 'รออนุมัติ'}
             />
             <Step
-              state={ceoDone ? 'done' : mgrDone ? 'now' : undefined}
+              state={ceoDone ? 'done' : mgrDone && !rejected ? 'now' : undefined}
               title="CEO"
-              sub={ceoDone ? who(record.ceoApprovedByName, record.ceoApprovedAt) : mgrDone ? 'รออนุมัติ' : 'ยังไม่ถึงขั้นนี้'}
+              sub={ceoDone ? who(record.ceoApprovedByName, record.ceoApprovedAt) : rejected && mgrDone ? 'ไม่อนุมัติ' : mgrDone && !rejected ? 'รออนุมัติ' : 'ยังไม่ถึงขั้นนี้'}
             />
             <Step title="จ่ายกับเงินเดือน" sub={formatThaiMonthYearFromMonthInputValue(monthOf(record))} />
           </ol>
           <div className="grid gap-1 text-sm text-text-muted">
-            {entry?.ticketCode ? (
+            {!manual && record.sourceTicketId ? (
               <span>
                 ดีล{' '}
-                {record.sourceTicketId
-                  ? <Link to={`/tickets/${record.sourceTicketId}`} className="font-bold text-link">{entry.ticketCode}</Link>
-                  : entry.ticketCode}
-                {entry.customerName ? ` · ${entry.customerName}` : ''}
+                <Link to={`/tickets/${record.sourceTicketId}`} className="font-bold text-link">{entry?.ticketCode ?? 'เปิดดีล'}</Link>
+                {entry?.customerName ? ` · ${entry.customerName}` : ''}
               </span>
-            ) : null}
+            ) : entry?.ticketCode ? <span>{`ดีล ${entry.ticketCode}${entry.customerName ? ` · ${entry.customerName}` : ''}`}</span> : null}
             {invoice ? <span>{`ใบกำกับ ${invoice.invoiceNumber} · ${formatThaiDate(invoice.invoiceDate)}`}</span> : null}
             {invoice?.invoiceAttachmentFileName ? <span>{`ไฟล์ ${invoice.invoiceAttachmentFileName}`}</span> : null}
           </div>

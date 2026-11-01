@@ -541,3 +541,71 @@ describe('who can change weights, and when the weights section appears', () => {
     await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledWith(701, { lines: [{ itemId: 11, weightMultiplier: 3 }] }));
   });
 });
+
+// A weight save in flight locks the WHOLE record everywhere: every open panel of it and its
+// approve / reject buttons (queue row and table action icons). The lock lives in the board, so it
+// survives collapsing the panel.
+describe('a weight save in flight locks the whole record', () => {
+  let resolveSave;
+  const radiosOf = (name) => screen.getAllByRole('radiogroup', { name }).flatMap((g) => within(g).getAllByRole('radio'));
+  const allRegion = () => screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+  const toggle = (scope) => within(scope).getByRole('button', { name: 'ดูรายละเอียด INV-PEND-0701' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.commissions.list.mockResolvedValue({ commissions: [submittedRecord()] });
+    api.commissions.reps.mockResolvedValue({ reps: [] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: null });
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto()] });
+    api.commissions.adjustItemWeights.mockImplementation(() => new Promise((r) => { resolveSave = r; }));
+  });
+
+  it('approve / reject (queue row AND table icons) are disabled during the save and enabled after it resolves', async () => {
+    await openDesk();
+    const all = await allRegion();
+    await within(all).findByRole('button', { name: 'ผู้จัดการอนุมัติ' });
+    fireEvent.click(radio(STOCK_A, '×2'));
+
+    await waitFor(() => expect(isDisabled(within(queueRow()).getByRole('button', { name: 'อนุมัติ' }))).toBe(true));
+    expect(isDisabled(within(queueRow()).getByRole('button', { name: 'ไม่อนุมัติ' }))).toBe(true);
+    expect(isDisabled(within(all).getByRole('button', { name: 'ผู้จัดการอนุมัติ' }))).toBe(true);
+    expect(isDisabled(within(all).getByRole('button', { name: 'ผู้จัดการปฏิเสธ' }))).toBe(true);
+
+    await act(async () => { resolveSave({ pending: pendingDto({ 11: 2 }) }); });
+    await waitFor(() => expect(isDisabled(within(queueRow()).getByRole('button', { name: 'อนุมัติ' }))).toBe(false));
+    expect(isDisabled(within(all).getByRole('button', { name: 'ผู้จัดการอนุมัติ' }))).toBe(false);
+  });
+
+  it('the same record open in the queue AND the table: a save in one disables the segments and bulk button of the other, and a click there sends nothing', async () => {
+    await openDesk();
+    fireEvent.click(toggle(await allRegion()));
+    await waitFor(() => expect(screen.getAllByTestId('detail-panel-701')).toHaveLength(2));
+    const [queueGroup] = screen.getAllByRole('radiogroup', { name: `น้ำหนัก ${STOCK_A}` });
+    fireEvent.click(within(queueGroup).getByRole('radio', { name: '×2' }));
+
+    await waitFor(() => expect(isDisabled(within(queueGroup).getByRole('radio', { name: '×2' }))).toBe(true));
+    radiosOf(`น้ำหนัก ${STOCK_A}`).forEach((r) => expect(isDisabled(r)).toBe(true));
+    screen.getAllByRole('button', { name: 'สต็อกทั้งหมด ×2' }).forEach((b) => expect(isDisabled(b)).toBe(true));
+    const [, tableGroup] = screen.getAllByRole('radiogroup', { name: `น้ำหนัก ${STOCK_A}` });
+    fireEvent.click(within(tableGroup).getByRole('radio', { name: '×3' }));
+    expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveSave({ pending: pendingDto({ 11: 2 }) }); });
+  });
+
+  it('collapsing and reopening the panel mid-save keeps the lock (segments and approve stay disabled)', async () => {
+    await openDesk();
+    fireEvent.click(radio(STOCK_A, '×2'));
+    await waitFor(() => expect(isDisabled(radio(STOCK_A, '×2'))).toBe(true));
+
+    fireEvent.click(toggle(screen.getByTestId('queue-row-701'))); // collapse
+    expect(screen.queryByTestId('detail-panel-701')).toBeNull();
+    fireEvent.click(toggle(screen.getByTestId('queue-row-701'))); // reopen
+
+    await screen.findByTestId('detail-panel-701');
+    radiosOf(`น้ำหนัก ${STOCK_A}`).forEach((r) => expect(isDisabled(r)).toBe(true));
+    expect(isDisabled(within(queueRow()).getByRole('button', { name: 'อนุมัติ' }))).toBe(true);
+
+    await act(async () => { resolveSave({ pending: pendingDto({ 11: 2 }) }); });
+  });
+});
