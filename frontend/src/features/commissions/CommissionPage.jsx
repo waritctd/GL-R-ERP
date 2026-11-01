@@ -154,9 +154,6 @@ export function CommissionPage({ user, showToast }) {
   const canCreateManual = ROLE_PERMISSIONS.canCreateManualCommission.includes(user.role); // sales_manager, ceo
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role); // hr
   const isSales = user.role === 'sales';
-  // ?view=pending (an old notification target) is no longer a separate page: the queue leads the
-  // default page for sales_manager and ceo, so the param is simply ignored.
-
   const pendingViewApplied = useRef(false);
   const loadRequestId = useRef(0);
   async function loadPending() {
@@ -182,7 +179,7 @@ export function CommissionPage({ user, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch once on mount; showToast is stable enough.
   }, [canReview]);
 
-  // The desk owns the optimistic state; this only performs the write and keeps payroll fresh. The
+  // WeightLines owns the optimistic state; this only performs the write and keeps payroll fresh. The
   // server recomputes effectiveWeight / weightedCommissionableBase / estimatedCommission and the
   // entry is replaced with its answer, never patched locally.
   async function adjustWeights(recordId, payload) {
