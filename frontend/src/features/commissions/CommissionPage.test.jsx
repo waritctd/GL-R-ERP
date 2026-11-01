@@ -1,6 +1,6 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { Link, MemoryRouter } from 'react-router-dom';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
@@ -1131,6 +1131,29 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     renderAt(salesManagerUser, '/commissions?view=pending');
     expect(await screen.findByTestId('queue-row-901')).not.toBeNull();
     expect(within(await cycle()).getByText('กันยายน 2569')).not.toBeNull();
+  });
+
+  // The notification bell navigates in-app, so the page is often ALREADY mounted on /commissions.
+  it('?view=pending reached while already on the page (no remount) still re-fetches the queue and jumps; a second click jumps again', async () => {
+    stub([]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <MemoryRouter initialEntries={['/commissions']}>
+        <QueryClientProvider client={queryClient}>
+          <Link to="/commissions?view=pending">bell</Link>
+          <CommissionPage user={salesManagerUser} showToast={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    expect(within(await cycle()).getByText('สิงหาคม 2569')).not.toBeNull();
+    stub([dto901]); // a new item arrived for next month's round -> the notification
+    fireEvent.click(screen.getByRole('link', { name: 'bell' }));
+    expect(await screen.findByTestId('queue-row-901')).not.toBeNull();
+    expect(within(await cycle()).getByText('กันยายน 2569')).not.toBeNull();
+    fireEvent.click(within(await cycle()).getByRole('button', { name: 'รอบก่อนหน้า' }));
+    expect(within(await cycle()).getByText('สิงหาคม 2569')).not.toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'bell' }));
+    expect(await within(await cycle()).findByText('กันยายน 2569')).not.toBeNull();
   });
 
   it('?view=pending with nothing pending falls back to the current round', async () => {

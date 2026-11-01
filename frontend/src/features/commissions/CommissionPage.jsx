@@ -79,7 +79,7 @@ function summaryFromFinanceDeal(deal) {
 }
 
 export function CommissionPage({ user, showToast }) {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [month, setMonth] = useState(() => (ROLE_PERMISSIONS.canApproveCommissions.includes(user.role) ? bangkokMonth() : thisMonth));
   const [records, setRecords] = useState([]);
@@ -154,17 +154,16 @@ export function CommissionPage({ user, showToast }) {
   const canCreateManual = ROLE_PERMISSIONS.canCreateManualCommission.includes(user.role); // sales_manager, ceo
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role); // hr
   const isSales = user.role === 'sales';
-  const pendingViewApplied = useRef(false);
   const loadRequestId = useRef(0);
-  async function loadPending() {
+  const viewParam = searchParams.get('view');
+  async function loadPending({ jumpToEarliest = false } = {}) {
     try {
       const response = await api.commissions.pendingApproval();
       const entries = response.commissions ?? [];
       setPending(entries);
       // The notification link (?view=pending) opens on the EARLIEST round that holds her own
       // pending items (carry-over first, else current, else upcoming); none -> the current round.
-      if (!pendingViewApplied.current && searchParams.get('view') === 'pending') {
-        pendingViewApplied.current = true;
+      if (jumpToEarliest) {
         const months = entries.map((entry) => monthOf(entry.commission)).filter(Boolean).sort();
         if (months.length) setMonth(months[0]);
       }
@@ -174,10 +173,22 @@ export function CommissionPage({ user, showToast }) {
   }
 
   useEffect(() => {
-    if (!canReview) return;
+    if (!canReview || viewParam === 'pending') return; // the effect below loads it instead
     loadPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch once on mount; showToast is stable enough.
   }, [canReview]);
+
+  // ?view=pending is acted on whenever it APPEARS, not only on mount: the notification bell navigates
+  // in-app, often while this page is already open. The param is then dropped so the next click on a
+  // notification changes the URL again and jumps again.
+  useEffect(() => {
+    if (!canReview || viewParam !== 'pending') return;
+    loadPending({ jumpToEarliest: true });
+    const params = new URLSearchParams(searchParams);
+    params.delete('view');
+    setSearchParams(params, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the param itself.
+  }, [canReview, viewParam]);
 
   // WeightLines owns the optimistic state; this only performs the write and keeps payroll fresh. The
   // server recomputes effectiveWeight / weightedCommissionableBase / estimatedCommission and the
