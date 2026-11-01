@@ -15,12 +15,21 @@ import { UserMenu } from './UserMenu.jsx';
 
 // Tailwind port of `.content-scroll` (styles.css): the gutters are CSS custom
 // properties (not plain utilities) because `.content-scroll`'s own padding
-// references them, TicketDetailPage.jsx overwrites `--deal-header-h` via
-// ResizeObserver, and DepositNoticePage.jsx measures scrollWidth against this
+// references them, and DepositNoticePage.jsx measures scrollWidth against this
 // same padding — every one of those call sites keys off these exact
 // custom-property names, so the names themselves must survive the port
 // unchanged even though the declarations move from a CSS rule to inline
-// arbitrary-property utilities.
+// arbitrary-property utilities. (`--deal-header-h` is still written by
+// TicketDetailPage.jsx's ResizeObserver, but is now consumed only by the deal
+// page's content scroll-margin.)
+//
+// There is deliberately no desktop scroll-padding-top here. Native focus scrolls
+// the focused element clear of scroll-padding, so a padding sized to the sticky
+// deal header made focusing any control inside that header (and, via the 18rem
+// fallback, anything in the top ~300px of every page) scroll the page. The deal
+// page instead puts an equivalent scroll-margin-top on its content's descendants
+// (TicketDetailPage.jsx content wrapper), which clears the sticky header for
+// focus and jumps without ever applying to the header's own controls.
 const CONTENT_SCROLL_CLASS = cn(
   // `content-scroll` carries no CSS of its own (the rule was deleted with the
   // rest of the legacy shell) — it survives as a *selector* hook. The
@@ -65,7 +74,10 @@ const CONTENT_SCROLL_CLASS = cn(
   'min-w-0 max-w-full flex-1 overflow-auto [scrollbar-gutter:stable]',
   '[--deal-scroll-pad-y:28px] [--deal-scroll-pad-x:max(32px,env(safe-area-inset-right))] [--deal-scroll-pad-left:max(32px,env(safe-area-inset-left))]',
   'pt-[var(--deal-scroll-pad-y)] pr-[var(--deal-scroll-pad-x)] pb-[42px] pl-[var(--deal-scroll-pad-left)]',
-  'scroll-pt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))] scroll-pb-8',
+  // A condensing sticky chrome shrinks ~200-230px; with scroll anchoring on, the browser subtracts
+  // that from scrollTop, which clamps to 0 and un-condenses the chrome, in a loop. Any page that
+  // mounts a `data-sticky-chrome` element (TicketDetailPage) opts this scroller out of anchoring.
+  'scroll-pb-8 has-[[data-sticky-chrome]]:[overflow-anchor:none]',
   'mobile:[--deal-scroll-pad-y:16px] mobile:[--deal-scroll-pad-x:max(16px,env(safe-area-inset-right))] mobile:[--deal-scroll-pad-left:max(16px,env(safe-area-inset-left))]',
   'mobile:pb-[32px] mobile:scroll-pt-4 mobile:scroll-pb-[calc(112px_+_env(safe-area-inset-bottom))]',
   // Item 5 (owner-approved polish): the content gutter widens from 32px to
