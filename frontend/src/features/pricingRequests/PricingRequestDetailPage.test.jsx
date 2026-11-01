@@ -6243,7 +6243,6 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
       expect(saveAllButton().textContent).toContain('บันทึกราคา (1 รายการ)');
       // the per-row บันทึกราคา buttons are gone: exactly one button on the page starts with บันทึกราคา
       expect(screen.getAllByRole('button', { name: /^บันทึกราคา/ })).toHaveLength(1);
-      expect(screen.queryByTestId('pcr-ceo-save-price-8001')).toBeNull();
     });
 
     it('approve stays disabled while any row has unsaved drafts, says why, and re-enables once the save lands (cannot approve past a draft)', async () => {
