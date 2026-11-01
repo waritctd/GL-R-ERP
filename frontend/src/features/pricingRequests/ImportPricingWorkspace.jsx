@@ -309,6 +309,64 @@ function CardFooter({ card }) {
   );
 }
 
+function LeadTimeBlock({ block }) {
+  const { id, pending, request, history, ir } = block;
+  return (
+    <div className="grid gap-2.5 border-b border-border-subtle px-5 py-3 text-xs mobile:px-4">
+      {pending ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-warning-border bg-warning-bg-soft px-3 py-2" data-testid={`pcr-lt-pending-${id}`}>
+          <StatusBadge tone="warning">รอฝ่ายขายอนุมัติ</StatusBadge>
+          <span className="min-w-0 text-text-secondary">ขอเปลี่ยนระยะเวลานำเข้า — {pending.reason}</span>
+          {pending.canAct ? (
+            <span className="ml-auto flex flex-wrap items-center gap-2">
+              <Button type="button" size="sm" variant="secondary" disabled={pending.busy} onClick={pending.onEdit}>
+                แก้ไข
+              </Button>
+              <Button type="button" size="sm" variant="secondary" disabled={pending.busy} onClick={pending.onWithdraw}>
+                ถอนคำขอ
+              </Button>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {request ? (
+        <div>
+          <Button type="button" size="sm" variant="secondary" data-testid={`pcr-lt-open-${id}`} onClick={request.onClick}>
+            <Icon name="pencil" size={13} />
+            ขอเปลี่ยนระยะเวลานำเข้า
+          </Button>
+        </div>
+      ) : null}
+      {history.length > 0 ? (
+        <div className="grid gap-1 text-text-muted" data-testid={`pcr-lt-history-${id}`}>
+          <span className="font-bold">ประวัติการเปลี่ยนระยะเวลานำเข้า</span>
+          {history.map((h) => (
+            <p key={h.id} className="m-0">
+              <span className={h.approved ? 'font-bold text-success-dark' : 'font-bold text-danger-dark'}>
+                {h.approved ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'}
+              </span>
+              {h.day}
+              {' · '}
+              {h.lines}
+              {h.reason}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      {ir ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text-secondary" data-testid={`pcr-ir-${id}`}>
+          <Icon name="fileText" size={13} className="shrink-0 text-text-muted" />
+          <span className="font-bold text-text">{ir.docNumber}</span>
+          <StatusBadge tone={ir.issued ? 'success' : 'neutral'}>{ir.issued ? 'ออกเลขแล้ว' : 'ฉบับร่าง'}</StatusBadge>
+          <Button type="button" size="sm" variant="secondary" disabled={ir.busy} onClick={ir.onDownload}>
+            {ir.busy ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function FactoryCard({ card }) {
   const id = card.quoteId;
   return (
@@ -363,7 +421,7 @@ function FactoryCard({ card }) {
           {card.rows.map((row) => <FactoryRow key={row.itemId} row={row} quoteId={id} />)}
         </tbody>
       </table>
-      {card.leadBlock}
+      {card.leadBlock ? <LeadTimeBlock block={card.leadBlock} /> : null}
       {card.footer ? <CardFooter card={card} /> : (
         <p data-testid={card.helperTestId} className="m-0 px-5 py-3 text-right text-xs text-text-muted mobile:px-4 mobile:text-left">{card.helper}</p>
       )}

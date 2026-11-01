@@ -52,7 +52,6 @@ import {
   itemDisplayName,
   itemFactoryName,
   ceoGateBlockerMessage,
-  PRE_CEO_GATE_STATUSES,
   groupFactoryQuotesByFactory,
   pricingRequestRecipientLabel,
   unitBasisLabel,
@@ -63,6 +62,9 @@ import {
   ceoRowFigures, cleanNumber, fractionToPct, lineProfitThb, marginOutOfRange, pctToFraction, round2,
 } from './ceoPricingRow.js';
 import { ImportPricingHeader, ImportPricingWorkspace } from './ImportPricingWorkspace.jsx';
+import {
+  formatOrDash, formatQty, qtyOf, specFor, productCodeOf, variantOf, qtyDetailOf, metaOf, nextStep,
+} from './importPricingModel.js';
 import { FactoryContactDialog } from './FactoryContactDialog.jsx';
 import { LeadTimeChangeBanner } from './LeadTimeChangeBanner.jsx';
 import { LeadTimeChangeDialog } from './LeadTimeChangeDialog.jsx';
@@ -109,14 +111,6 @@ const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE
 // stays โรงงาน, for both the sales-entered value below and Import's own SetItemFactoryRequest
 // control — read-only display of the new sales-entered tile fields on each item card. `—` for
 // anything a legacy (pre-V185) item never carried. ─────────────────────────────────────────────
-function formatOrDash(value, suffix = '') {
-  return value == null || value === '' ? '—' : `${value}${suffix}`;
-}
-
-function qtyOf(item) {
-  return `${item.requestedQty ?? '—'} ${item.requestedUnit ?? ''}`.trim();
-}
-
 function formatLeadTime(item) {
   if (item?.leadTimeMinDays == null && item?.leadTimeMaxDays == null) return '—';
   const min = item.leadTimeMinDays ?? '?';
@@ -324,11 +318,6 @@ function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
 
 const CURRENCY_SYMBOLS = { EUR: '€', THB: '฿', USD: '$', CNY: '¥', JPY: '¥', GBP: '£' };
 const QUOTE_UNIT_SUFFIX = { PER_SQM: '/ตร.ม.', PER_PIECE: '/แผ่น', PER_BOX: '/กล่อง', PER_LINEAR_M: '/เมตร' };
-
-/** Quantities shown with up to 2 decimals, no trailing zeros (7.2, 5, 7.25). */
-function formatQty(value) {
-  return Number(Number(value).toFixed(2)).toLocaleString('en-US');
-}
 
 /**
  * The typed price expressed in the OTHER unit (per ตร.ม. <-> per แผ่น), so import sees both without
@@ -2691,30 +2680,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   // Import view-model for ImportPricingWorkspace (gates and handlers live here; the component only draws).
   function buildImportModel() {
-    const specFor = (item) => [
-      ['สี', formatOrDash(item?.color)],
-      ['ผิว', formatOrDash(item?.texture)],
-      ['ขนาด', formatOrDash(item?.size)],
-      ['ความหนา', formatOrDash(item?.thicknessMm, ' มม.')],
-      ['ขายแผ่นไม่เต็มกล่อง', item?.piecesPerBox != null ? (item.roundToFullBox === false ? 'ใช่' : 'ไม่ใช่') : '—'],
-      ['โรงงาน (ที่ฝ่ายขายกรอก)', item?.brand?.trim() || '—'],
-      ['ประเทศต้นทาง', `${formatOrDash(item?.originCountry)}${item?.originCountry === 'อื่นๆ' ? ` (${formatOrDash(item.originCountryOther)})` : ''}`],
-    ];
-    const productCodeOf = (item) => item?.productCode?.trim() || item?.catalogProductCode || '—';
-    const variantOf = (item) => [item?.size, item?.color, item?.texture].filter(Boolean).join(' · ');
-    const qtyDetailOf = (item) => [
-      item?.requestedQtySqm != null ? `${item.requestedQtySqm} ตร.ม.` : null,
-      item?.boxes != null ? `${item.boxes} กล่อง` : null,
-    ].filter(Boolean).join(' · ');
-    const originOf = (items) => items.map((i) => i?.originCountry).find(Boolean) ?? null;
-    const metaOf = (items, count) => [originOf(items), `${count} รายการ`].filter(Boolean).join(' · ');
     const NOT_CONTACTED_HELPER = 'ติดต่อโรงงานก่อน จึงกรอกราคาและยืนยันได้';
 
     const quoteCards = factoryGroups.map((group) => {
       const current = group.current;
       const quoteStatus = factoryQuoteStatusLabel(current.status);
       const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
-      const draft = unsavedDraft ?? {
+      const seedDraft = () => ({
         supplierQuoteRef: current.supplierQuoteRef ?? '',
         defaultCurrency: (() => {
           const locked = [...new Set((current.items ?? []).map((i) => requestItemById.get(i.pricingRequestItemId)?.requestedCurrency).filter(Boolean))];
@@ -2725,7 +2697,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
         revisionReason: '',
         negotiationNote: current.negotiationNote ?? '',
         items: defaultResponseItems(current, requestItemById),
-      };
+      });
+      const draft = unsavedDraft ?? seedDraft();
       const dirty = Boolean(unsavedDraft);
       const editable = isImport(user) && current.current && inResponseWindow
         && ['DRAFT', 'REQUESTED', 'RESPONSE_RECEIVED', 'NEGOTIATING', 'READY_FOR_COSTING'].includes(current.status);
@@ -2754,13 +2727,17 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const contactedName = contactedByName(current, request?.events);
       const confirmedState = current.status === 'READY_FOR_COSTING' && !dirty;
 
+      // Functional updates: two edits in one batch must both land, so build from the LATEST draft.
       function updateDraft(patch) {
-        setResponseDrafts({ ...responseDrafts, [current.id]: { ...draft, ...patch } });
+        setResponseDrafts((cur) => ({ ...cur, [current.id]: { ...(cur[current.id] ?? seedDraft()), ...patch } }));
       }
       function updateLine(index, patch) {
-        const items = [...draft.items];
-        items[index] = { ...items[index], ...patch };
-        updateDraft({ items });
+        setResponseDrafts((cur) => {
+          const latest = cur[current.id] ?? seedDraft();
+          const items = [...latest.items];
+          items[index] = { ...items[index], ...patch };
+          return { ...cur, [current.id]: { ...latest, items } };
+        });
       }
       function discardEdits() {
         setResponseDrafts((cur) => {
@@ -2783,7 +2760,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ?? unitBasisLabel(line.unitBasis);
         // Every line switches แผ่น / ตร.ม.; a line Sales asked per กล่อง or per เมตร also keeps that unit.
         const requestedBasis = requested?.requestedPriceUnitBasis ?? requested?.requestedUnitBasis ?? line.unitBasis;
-        const unitCodes = ['PER_PIECE', 'PER_SQM', ...(['PER_BOX', 'PER_LINEAR_M'].includes(requestedBasis) ? [requestedBasis] : [])];
+        const unitCodes = [...new Set([
+          'PER_PIECE', 'PER_SQM',
+          ...(['PER_BOX', 'PER_LINEAR_M'].includes(requestedBasis) ? [requestedBasis] : []),
+          line.unitBasis,
+        ].filter(Boolean))];
         const unitName = (code) => unitBasisCatalog.find((option) => option.code === code)?.label ?? unitBasisLabel(code);
         const lineCurrency = line.currency || draft.defaultCurrency || 'THB';
         const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
@@ -2831,7 +2812,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             testId: `pcr-quote-price-locked-${current.id}-${line.pricingRequestItemId}`,
           };
         } else {
-          price = { mode: 'text', text: formatCurrency(line.rawUnitPrice, line.currency) };
+          price = { mode: 'text', text: formatCurrency(line.rawUnitPrice, lineCurrency) };
         }
         return {
           itemId: line.pricingRequestItemId,
@@ -2850,7 +2831,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ? `${leadTimeRangeText(pendingLine.oldMinDays, pendingLine.oldMaxDays)} → ${leadTimeRangeText(pendingLine.newMinDays, pendingLine.newMaxDays)} วัน`
             : null,
           lead: leadTimeWithUnit(requested?.leadTimeMinDays, requested?.leadTimeMaxDays),
-          approved: approvedPrice != null ? formatCurrency(approvedPrice, serverItem?.currency ?? line.currency) : null,
+          approved: approvedPrice != null ? formatCurrency(approvedPrice, serverItem?.currency || lineCurrency) : null,
         };
       });
 
@@ -2893,64 +2874,30 @@ export function PricingRequestDetailPage({ user, showToast }) {
           lockReason: editable && !contacted,
         },
         rows,
-        leadBlock: pendingChange || canRequestLeadTime || decidedChanges.length > 0 || irRow ? (
-          <div className="grid gap-2.5 border-b border-border-subtle px-5 py-3 text-xs mobile:px-4">
-            {pendingChange ? (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-warning-border bg-warning-bg-soft px-3 py-2" data-testid={`pcr-lt-pending-${current.id}`}>
-                <StatusBadge tone="warning">รอฝ่ายขายอนุมัติ</StatusBadge>
-                <span className="min-w-0 text-text-secondary">ขอเปลี่ยนระยะเวลานำเข้า — {pendingChange.reason}</span>
-                {isImport(user) ? (
-                  <span className="ml-auto flex flex-wrap items-center gap-2">
-                    <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
-                      onClick={() => setLeadTimeDialog({ quoteId: current.id, change: pendingChange })}>
-                      แก้ไข
-                    </Button>
-                    <Button type="button" size="sm" variant="secondary" disabled={withdrawLeadTimeChange.isPending}
-                      onClick={() => withdrawLeadTimeChange.mutate(pendingChange)}>
-                      ถอนคำขอ
-                    </Button>
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-            {canRequestLeadTime ? (
-              <div>
-                <Button type="button" size="sm" variant="secondary" data-testid={`pcr-lt-open-${current.id}`}
-                  onClick={() => setLeadTimeDialog({ quoteId: current.id, change: null })}>
-                  <Icon name="pencil" size={13} />
-                  ขอเปลี่ยนระยะเวลานำเข้า
-                </Button>
-              </div>
-            ) : null}
-            {decidedChanges.length > 0 ? (
-              <div className="grid gap-1 text-text-muted" data-testid={`pcr-lt-history-${current.id}`}>
-                <span className="font-bold">ประวัติการเปลี่ยนระยะเวลานำเข้า</span>
-                {decidedChanges.map((change) => (
-                  <p key={change.id} className="m-0">
-                    <span className={change.status === 'APPROVED' ? 'font-bold text-success-dark' : 'font-bold text-danger-dark'}>
-                      {change.status === 'APPROVED' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'}
-                    </span>
-                    {change.decidedAt ? ` ${formatShortThaiDay(String(change.decidedAt).slice(0, 10))}` : ''}
-                    {' · '}
-                    {change.lines.map((line) => `${lineNameById.get(line.pricingRequestItemId) ?? `รายการ #${line.pricingRequestItemId}`} ${leadTimeRangeText(line.oldMinDays, line.oldMaxDays)} → ${leadTimeRangeText(line.newMinDays, line.newMaxDays)}`).join(', ')}
-                    {change.status === 'REJECTED' && change.decisionReason ? ` · เหตุผล: ${change.decisionReason}` : ''}
-                  </p>
-                ))}
-              </div>
-            ) : null}
-            {irRow ? (
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-text-secondary" data-testid={`pcr-ir-${current.id}`}>
-                <Icon name="fileText" size={13} className="shrink-0 text-text-muted" />
-                <span className="font-bold text-text">{irRow.docNumber ?? 'ใบขอซื้อ'}</span>
-                <StatusBadge tone={irRow.status === 'ISSUED' ? 'success' : 'neutral'}>{irRow.status === 'ISSUED' ? 'ออกเลขแล้ว' : 'ฉบับร่าง'}</StatusBadge>
-                <Button type="button" size="sm" variant="secondary" disabled={downloadingIrId === irRow.id}
-                  onClick={() => downloadIr(irRow)}>
-                  {downloadingIrId === irRow.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        ) : null,
+        leadBlock: pendingChange || canRequestLeadTime || decidedChanges.length > 0 || irRow ? {
+          id: current.id,
+          pending: pendingChange ? {
+            reason: pendingChange.reason,
+            canAct: isImport(user),
+            busy: withdrawLeadTimeChange.isPending,
+            onEdit: () => setLeadTimeDialog({ quoteId: current.id, change: pendingChange }),
+            onWithdraw: () => withdrawLeadTimeChange.mutate(pendingChange),
+          } : null,
+          request: canRequestLeadTime ? { onClick: () => setLeadTimeDialog({ quoteId: current.id, change: null }) } : null,
+          history: decidedChanges.map((change) => ({
+            id: change.id,
+            approved: change.status === 'APPROVED',
+            day: change.decidedAt ? ` ${formatShortThaiDay(String(change.decidedAt).slice(0, 10))}` : '',
+            lines: change.lines.map((line) => `${lineNameById.get(line.pricingRequestItemId) ?? `รายการ #${line.pricingRequestItemId}`} ${leadTimeRangeText(line.oldMinDays, line.oldMaxDays)} → ${leadTimeRangeText(line.newMinDays, line.newMaxDays)}`).join(', '),
+            reason: change.status === 'REJECTED' && change.decisionReason ? ` · เหตุผล: ${change.decisionReason}` : '',
+          })),
+          ir: irRow ? {
+            docNumber: irRow.docNumber ?? 'ใบขอซื้อ',
+            issued: irRow.status === 'ISSUED',
+            busy: downloadingIrId === irRow.id,
+            onDownload: () => downloadIr(irRow),
+          } : null,
+        } : null,
         footer: {
           editable,
           note: draft.negotiationNote,
@@ -3021,48 +2968,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
       });
 
     const allCards = [...previewCards, ...quoteCards];
-    const pending = allCards.filter((c) => !c.isConfirmed);
-    const firstUnassigned = missingFactoryItems[0]?.item;
-    const firstNotContacted = allCards.find((c) => !c.isContacted);
-    let next;
-    let sub;
-    const firstDeclined = allCards.find((c) => c.isDeclined);
-    if (summary?.status === 'CANCELLED') {
-      next = 'คำขอนี้ถูกยกเลิกแล้ว';
-      sub = '';
-    } else if (summary?.status === 'SUPERSEDED') {
-      next = 'คำขอนี้ถูกแทนด้วยรอบใหม่';
-      sub = '';
-    } else if (firstUnassigned && canSetItemFactory) {
-      next = `ระบุโรงงานให้ "${itemDisplayName(firstUnassigned)}" ก่อน`;
-      sub = 'รายการนี้ยังไม่มีโรงงาน จึงขอราคาไม่ได้ และคำขอจะยังไม่ไปถึง CEO';
-    } else if (firstUnassigned) {
-      // no picker is rendered in this status, so do not point at one
-      next = `ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ฝ่ายนำเข้าระบุไม่ได้ในขั้นนี้`;
-      sub = '';
-    } else if (firstDeclined) {
-      next = `${firstDeclined.name} แจ้งไม่พร้อมเสนอราคา`;
-      sub = ceoGateNotice ? 'ดูรายละเอียดด้านล่าง' : 'คำขอจะยังไม่ส่งถึง CEO จนกว่าโรงงานนี้จะพร้อมเสนอราคา';
-    } else if (allCards.length === 0) {
-      next = 'ไม่มีรายการที่ต้องขอราคาจากโรงงาน';
-      sub = '';
-    } else if (firstNotContacted) {
-      next = `ติดต่อ ${firstNotContacted.name}`;
-    } else if (pending.length > 0) {
-      next = `กรอกราคาและยืนยัน ${pending[0].name}`;
-    } else if (PRE_CEO_GATE_STATUSES.includes(summary?.status)) {
-      // every factory is confirmed, but the server moves the request on more than that (see ceoGateNotice)
-      next = 'ยืนยันราคาครบแล้ว แต่ยังไม่ส่งถึง CEO';
-      sub = ceoGateNotice ? 'ดูรายละเอียดด้านล่าง' : 'ระบบจะส่งถึง CEO เมื่อครบเงื่อนไข';
-    } else {
-      next = 'ส่งถึง CEO แล้ว';
-      sub = 'ยืนยันราคาครบทุกโรงงาน คำขอนี้ไปอยู่ที่ "รอ CEO พิจารณาราคา"';
-    }
-    if (sub === undefined) {
-      sub = pending.length === 1
-        ? 'ยืนยันโรงงานนี้แล้วคำขอนี้จะส่งถึง CEO อัตโนมัติ'
-        : `ยังเหลือ ${pending.length} โรงงาน · คำขอจะส่งถึง CEO อัตโนมัติเมื่อยืนยันครบทุกโรงงาน`;
-    }
+    const { next, sub } = nextStep({
+      status: summary?.status,
+      cards: allCards,
+      missingCount: missingFactoryItems.length,
+      firstUnassignedName: missingFactoryItems[0] ? itemDisplayName(missingFactoryItems[0].item) : '',
+      canSetItemFactory,
+      hasGateNotice: Boolean(ceoGateNotice),
+    });
+    const stock = (request?.items ?? []).filter((item) => item.stockSource != null);
 
     return {
       progress: {
@@ -3070,7 +2984,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           factories: String(allCards.length),
           contacted: `${allCards.filter((c) => c.isContacted).length}/${allCards.length}`,
           confirmed: `${allCards.filter((c) => c.isConfirmed).length}/${allCards.length}`,
-          items: String(factoryItemCount),
+          items: String(factoryItemCount + stock.length),
         },
         next,
         sub,
@@ -3092,7 +3006,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
         ? { pending: generateDrafts.isPending, onClick: () => generateDrafts.mutate() } : null,
       previewCards,
       quoteCards,
-      stock: (request?.items ?? []).filter((item) => item.stockSource != null).map((item) => ({
+      stock: stock.map((item) => ({
         id: item.id,
         name: itemDisplayName(item),
         variant: variantOf(item),

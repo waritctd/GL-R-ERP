@@ -7866,6 +7866,78 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
     });
   });
 
+  describe('review round 3', () => {
+    const unitGroup = (n) => within(screen.getByRole('group', { name: new RegExp(`^หน่วยราคา รายการ #${n}`) }));
+    const renderOne = async (quote, request = buildRequest()) => {
+      renderDetailPage({ user: importUser, request, factoryQuotes: [quote] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-factory-card-91');
+    };
+
+    it('1. a legacy line saved per กล่อง (request per แผ่น) keeps / กล่อง as a pressed option of the unit switch', async () => {
+      const base = buildFactoryQuote();
+      await renderOne(buildFactoryQuote({ status: 'REQUESTED', items: [{ ...base.items[0], unitBasis: 'PER_BOX', quotedUnit: 'กล่อง' }] }));
+      const buttons = unitGroup(1).getAllByRole('button');
+      expect(buttons.map((b) => b.textContent.trim())).toEqual(['/ แผ่น', '/ ตร.ม.', '/ กล่อง']);
+      expect(buttons[2].getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('2. read-only price text of a line with an empty currency shows the fallback code, not a blank', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: '', rawUnitPrice: 12.5 }] });
+      await renderOne(quote, buildRequest({ summary: { status: 'CANCELLED' } }));
+      const cell = screen.getByTestId('pcr-quote-price-cell-91-1').textContent;
+      expect(cell).toContain('12.5 EUR');
+    });
+
+    it('2b. the approved price of a confirmed line with an empty currency shows the fallback code', async () => {
+      const base = buildFactoryQuote();
+      const quote = buildFactoryQuote({ status: 'READY_FOR_COSTING', defaultCurrency: 'EUR', items: [{ ...base.items[0], currency: '', rawUnitPrice: 12.5 }] });
+      await renderOne(quote);
+      expect(screen.getByTestId('pcr-factory-row-1').textContent).toContain('12.5 EUR');
+    });
+
+    it('3. two unit switches fired in one batch both persist (no stale-closure overwrite)', async () => {
+      const request = crRequest({ items: [crItem({ id: 1, requestedPriceUnitBasis: undefined }), crItem({ id: 2, model: 'A2', requestedPriceUnitBasis: undefined })] });
+      await renderOne(contactedQuote({ items: [line(91, 1, { unitBasis: 'PER_PIECE', quotedUnit: 'แผ่น' }), line(91, 2, { unitBasis: 'PER_PIECE', quotedUnit: 'แผ่น' })] }), request);
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ รายการ #1/), { target: { value: '10' } });
+      fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ รายการ #2/), { target: { value: '11' } });
+      const sqm1 = unitGroup(1).getByRole('button', { name: '/ ตร.ม.' });
+      const sqm2 = unitGroup(2).getByRole('button', { name: '/ ตร.ม.' });
+      act(() => { fireEvent.click(sqm1); fireEvent.click(sqm2); });
+      fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+      await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalled());
+      const { items } = api.pricingRequests.receiveFactoryQuote.mock.calls[0][1];
+      expect(items.map((i) => i.unitBasis)).toEqual(['PER_SQM', 'PER_SQM']);
+    });
+
+    it('4. สินค้า counts the stock lines too (1 factory line + 1 stock line = 2)', async () => {
+      const base = item({ id: 1, resolvedFactoryName: SCG });
+      const request = buildRequest({ items: [base, { ...base, id: 2, model: 'S1', stockSource: 'IN_THAILAND', resolvedFactoryName: null }] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      await screen.findByTestId('pcr-stock-card');
+      expect(fig('items')).toBe('2');
+    });
+
+    it('5. the ตร.ม. under a factory row is formatted (4.319999999999999 -> 4.32)', async () => {
+      const request = buildRequest({ items: [item({ id: 1, resolvedFactoryName: SCG, requestedQtySqm: 4.319999999999999 })] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      const row = (await screen.findByTestId('pcr-factory-row-1')).textContent;
+      expect(row).toContain('4.32 ตร.ม.');
+      expect(row).not.toContain('4.319999');
+    });
+
+    it('6. the card meta names the typed country for "อื่นๆ"', async () => {
+      const request = buildRequest({ items: [item({ id: 1, resolvedFactoryName: SCG, originCountry: 'อื่นๆ', originCountryOther: 'เวียดนาม' })] });
+      renderDetailPage({ user: importUser, request, factoryQuotes: [fq(91, SCG, 1, { status: 'REQUESTED' })] });
+      await waitForLoaded(request);
+      const head = (await screen.findByTestId('pcr-factory-head-91')).textContent;
+      expect(head).toContain('อื่นๆ (เวียดนาม)');
+    });
+  });
+
   describe('the CEO and Sales see the page as before (cannot reach)', () => {
     it.each([['ceo', ceoUser], ['sales', salesOwner], ['sales_manager', salesManager]])(
       '%s: no progress strip, no factory section, no import header — item cards and ภาพรวม are still there (positive control: import gets the new page)',
