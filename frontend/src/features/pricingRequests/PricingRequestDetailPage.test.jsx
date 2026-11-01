@@ -6842,3 +6842,28 @@ describe('CEO pricing workspace redesign — review fixes', () => {
     });
   });
 });
+
+describe('CEO margin % input: a fraction typed by habit is warned about, never blocked', () => {
+  const WARNING = '= 0.3% — ถ้าตั้งใจ 30% ให้กรอก 30';
+
+  it('0.3 shows the non-blocking warning in the table row and the mobile card; save-all stays enabled and saves marginPct 0.003', async () => {
+    await renderCeoNewForm({ items: [nfItem()] });
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '0.3' } });
+    const rowWarning = ceoRow(8001).getByText(WARNING);
+    expect(rowWarning.getAttribute('role')).toBeNull();
+    expect(rowWarning.className).toMatch(/warning-dark/);
+    expect(ceoCard(8001).getByText(WARNING)).not.toBeNull();
+    expect(ceoRow(8001).queryByRole('alert')).toBeNull();
+    expect(saveAllButton().disabled).toBe(false);
+    fireEvent.click(saveAllButton());
+    await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+    expect(lastSavedDecisionItem().marginPct).toBe(0.003);
+  });
+
+  it.each(['30', '1'])('%s shows no warning', async (value) => {
+    await renderCeoNewForm({ items: [nfItem()] });
+    fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value } });
+    expect(ceoRow(8001).queryByText(/ถ้าตั้งใจ/)).toBeNull();
+    expect(ceoCard(8001).queryByText(/ถ้าตั้งใจ/)).toBeNull();
+  });
+});

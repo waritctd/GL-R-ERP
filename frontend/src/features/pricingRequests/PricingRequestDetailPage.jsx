@@ -2234,6 +2234,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
         value: rawDraft.marginPct ?? fractionToPct(item.proposedMarginPct),
         invalid: marginInvalid,
         error: MARGIN_RANGE_ERROR_PCT,
+        // 0 < n < 1 is legal (a real margin under 1%) but is usually a fraction typed by habit: warn, never block.
+        looksLikeFraction: marginDraftRaw != null && marginDraftRaw !== '' && Number(marginDraftRaw) > 0 && Number(marginDraftRaw) < 1,
       },
       list: {
         value: formulaFromMargin != null ? formulaFromMargin : (listDraft ?? currentList ?? ''),

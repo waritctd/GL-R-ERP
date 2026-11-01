@@ -109,6 +109,11 @@ function priceFields(row, model, card) {
     const margin = row.margin.show
       ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
         {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
+        {row.margin.looksLikeFraction ? (
+          <span className="text-2xs text-warning-dark">
+            {`= ${row.margin.value}% — ถ้าตั้งใจ ${Number((Number(row.margin.value) * 100).toFixed(6))}% ให้กรอก ${Number((Number(row.margin.value) * 100).toFixed(6))}`}
+          </span>
+        ) : null}
       </div>)
       : <span className="text-text-muted">–</span>;
     const list = (
