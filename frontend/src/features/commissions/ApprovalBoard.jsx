@@ -189,10 +189,10 @@ function QueueRow({ entry, isCeo, open, onToggle, saving, onApprove, onReject, p
               <b className={cn('tabular-nums font-extrabold', amount < 0 && 'text-danger')}>{formatMoney(amount)}</b>
             </span>
           ) : (
-          <span className="grid">
-            <small className="text-sm text-text-muted">{weight !== 1 ? 'ฐานค่าคอม (หลังถ่วง)' : 'ฐานค่าคอม'}</small>
-            <b className="tabular-nums font-extrabold">{formatMoney(entry.weightedCommissionableBase)}</b>
-          </span>
+            <span className="grid">
+              <small className="text-sm text-text-muted">{weight !== 1 ? 'ฐานค่าคอม (หลังถ่วง)' : 'ฐานค่าคอม'}</small>
+              <b className="tabular-nums font-extrabold">{formatMoney(entry.weightedCommissionableBase)}</b>
+            </span>
           )}
           {!manual && weight !== 1 ? (
             <span className="grid">
@@ -202,10 +202,10 @@ function QueueRow({ entry, isCeo, open, onToggle, saving, onApprove, onReject, p
           ) : null}
         </div>
         {manual ? <span /> : (
-        <div className="grid mobile:col-start-2 mobile:row-start-1 mobile:text-right">
-          <small className="text-sm text-text-muted">ค่าคอมโดยประมาณ</small>
-          <b className="tabular-nums font-extrabold">{formatMoney(entry.estimatedCommission)}</b>
-        </div>
+          <div className="grid mobile:col-start-2 mobile:row-start-1 mobile:text-right">
+            <small className="text-sm text-text-muted">ค่าคอมโดยประมาณ</small>
+            <b className="tabular-nums font-extrabold">{formatMoney(entry.estimatedCommission)}</b>
+          </div>
         )}
         <div className="flex justify-end gap-2 mobile:col-span-full">
           <Button type="button" variant="secondary" className="border-success text-success hover:bg-success-bg mobile:min-h-11 mobile:flex-1" disabled={saving} onClick={onApprove}>
