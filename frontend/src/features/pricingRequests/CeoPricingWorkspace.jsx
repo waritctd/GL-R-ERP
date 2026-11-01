@@ -70,8 +70,11 @@ function Tags({ row }) {
       {row.uncostable ? <StatusBadge tone="danger">ต้องระบุต้นทุนเอง</StatusBadge> : null}
       {row.stale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
       {row.hasPriceOverride ? <StatusBadge tone="info">ปรับเอง</StatusBadge> : null}
-      {row.dirty ? <StatusBadge tone="warning">ยังไม่บันทึก</StatusBadge> : null}
-      {!row.blocker && !row.dirty ? <StatusBadge tone="success">มีราคาแล้ว</StatusBadge> : null}
+      {row.saving ? <StatusBadge tone="info">กำลังบันทึก…</StatusBadge> : null}
+      {row.dirty && !row.saving ? (
+        <StatusBadge tone="warning">{row.autoSpecialPending ? 'ใช้ราคาตามสูตร — ยังไม่บันทึก' : 'ยังไม่บันทึก'}</StatusBadge>
+      ) : null}
+      {!row.blocker && !row.dirty && row.item.netUnitPrice != null ? <StatusBadge tone="success">มีราคาแล้ว</StatusBadge> : null}
     </div>
   );
 }
@@ -136,7 +139,7 @@ function priceFields(row, model, card) {
       <div className="grid gap-1">
         {lbl('ส่วนลด %', <Num row={row} card={card} field="discountPct" label="ส่วนลด %" suffix="%" max="100" disabled={!editable || lock} value={row.discount} testid={`pcr-ceo-discount-${id}`} />)}
         {editable && row.hasDiscount ? (
-          <Button type="button" variant="secondary" size="sm" loading={row.clearingDiscount} disabled={lock} onClick={row.clearDiscount} data-testid={`pcr-ceo-clear-discount-${id}`}>
+          <Button type="button" variant="secondary" size="sm" loading={row.clearingDiscount} disabled={lock || row.saving} onClick={row.clearDiscount} data-testid={`pcr-ceo-clear-discount-${id}`}>
             ล้างส่วนลด
           </Button>
         ) : null}
@@ -181,7 +184,7 @@ function CostCell({ row, model }) {
       <>
         <b className="text-danger">–</b>
         {editable ? (
-          <Button type="button" variant="text" size="sm" onClick={row.openCostOverride} data-testid={`pcr-ceo-cost-override-quick-${id}`}>
+          <Button type="button" variant="text" size="sm" disabled={model.savingAll} onClick={row.openCostOverride} data-testid={`pcr-ceo-cost-override-quick-${id}`}>
             ปรับต้นทุนเอง
           </Button>
         ) : null}
@@ -232,7 +235,7 @@ function Details({ row, model }) {
         <h4 className="m-0 flex flex-wrap items-center gap-2 text-sm">
           ต้นทุน/แผ่น
           {editable && !row.isStock ? (
-            <Button type="button" variant="secondary" size="sm" onClick={row.openCostOverride} data-testid={`pcr-ceo-cost-override-${id}`}>
+            <Button type="button" variant="secondary" size="sm" disabled={model.savingAll} onClick={row.openCostOverride} data-testid={`pcr-ceo-cost-override-${id}`}>
               {row.hasCostOverride ? 'แก้ไขต้นทุนที่ปรับ' : 'ปรับต้นทุนเอง'}
             </Button>
           ) : null}
@@ -275,6 +278,7 @@ export function CeoPricingWorkspace({ model }) {
   const [toggled, setToggled] = useState({});
   const [historyOpen, setHistoryOpen] = useState(false);
   const els = useRef({});
+  const modePicker = useRef(null);
   const isOpen = (row) => toggled[row.item.id] ?? row.defaultOpen;
   const toggle = (row) => setToggled((prev) => ({ ...prev, [row.item.id]: !isOpen(row) }));
   const jump = (row) => {
@@ -318,9 +322,14 @@ export function CeoPricingWorkspace({ model }) {
         <div className="h-1 overflow-hidden rounded-full bg-surface-subtle" aria-hidden="true">
           <i className="block h-full bg-success" style={{ width: `${rows.length ? (summary.priced / rows.length) * 100 : 0}%` }} />
         </div>
-        {blockers.length ? (
+        {blockers.length || model.modeBlocker ? (
           <div role="status" data-testid="pcr-ceo-blockers" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-danger">
             <b>ยังอนุมัติไม่ได้:</b>
+            {model.modeBlocker ? (
+              <Button type="button" variant="text" size="sm" className="underline" onClick={() => modePicker.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })}>
+                เลือกวิธีกรอกราคาก่อน
+              </Button>
+            ) : null}
             {blockers.map((row) => (
               <Button key={row.item.id} type="button" variant="text" size="sm" className="underline" onClick={() => jump(row)}>
                 {`รายการที่ ${row.position} ${row.name} — ${row.blocker}`}
@@ -328,7 +337,7 @@ export function CeoPricingWorkspace({ model }) {
             ))}
           </div>
         ) : null}
-        {!blockers.length && model.dirtyCount > 0 ? (
+        {!blockers.length && !model.modeBlocker && model.dirtyCount > 0 ? (
           <div data-testid="pcr-ceo-dirty-note" className="text-sm text-warning-dark">มีราคาที่แก้แล้วยังไม่บันทึก — กดบันทึกก่อนอนุมัติ</div>
         ) : null}
       </section>
@@ -349,7 +358,7 @@ export function CeoPricingWorkspace({ model }) {
         {model.startReview ? <div className="border-b border-border-subtle p-4">{model.startReview}</div> : null}
         <div className="flex flex-wrap items-center gap-3 border-b border-border-subtle p-4">
           <b className="text-sm">วิธีกรอกราคา</b>
-          <div className="inline-flex flex-wrap gap-1" role="group" aria-label="วิธีกรอกราคา">
+          <div ref={modePicker} className="inline-flex flex-wrap gap-1" role="group" aria-label="วิธีกรอกราคา">
             {MODES.map(([code, label]) => (
               <Button
                 key={code}
