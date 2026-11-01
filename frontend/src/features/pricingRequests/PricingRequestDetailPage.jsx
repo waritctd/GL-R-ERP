@@ -257,6 +257,7 @@ const MAX_MARGIN_PCT = 999.999999;
 function marginOutOfRange(n) {
   return n == null || Number.isNaN(n) || n <= -1 || n > MAX_MARGIN_PCT;
 }
+// The same bound as MARGIN_RANGE_ERROR, stated in percent for the new-form NET margin input.
 const MARGIN_RANGE_ERROR_PCT = 'อัตรากำไรต้องอยู่ระหว่าง -100 ถึง 99999.9999 (%) (ราคาขายต้องไม่ติดลบและไม่เกินขอบเขต)';
 const MARGIN_RANGE_ERROR = 'อัตรากำไรต้องอยู่ระหว่าง -1 ถึง 999.999999 (ราคาขายต้องไม่ติดลบและไม่เกินขอบเขต)';
 
@@ -1354,8 +1355,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Phase 2 (owner rulings 2026-09-18/19, V187): per-item draft state for the CEO price-mode
   // inputs (list price/discount, ราคาพิเศษ, or ราคาสุทธิ) — keyed by pricingDecisionItemId, only
   // ever populated for a new-form-eligible decision. Kept in local state (rather than firing a
-  // mutation per keystroke) so the CEO can type before saving; "บันทึกราคา" below sends the
-  // whole row in one PUT, mirroring how the legacy override modal collects input before submit.
+  // mutation per keystroke) so the CEO can type before saving; the one "บันทึกราคา (n รายการ)" sends
+  // each dirty row in its own PUT, mirroring how the legacy override modal collects input before submit.
   const [ceoPriceDrafts, setCeoPriceDrafts] = useState({});
   const [savingAllCeoRows, setSavingAllCeoRows] = useState(false);
   function updateCeoPriceDraft(itemId, patch) {
@@ -1452,8 +1453,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // (e.g. "ล้างส่วนลด") must set the matching `clearXxx` flag instead.
   // Owner correction (2026-09-19): `listUnitPrice`/`clearListUnitPrice` were dropped from this
   // payload because the CEO could not type ราคาตั้ง — it was always the server formula price.
-  // 2026-10-01 (owner Ploy) REINSTATES a CEO-typed ราคาตั้ง under NET, in the รายการสินค้าและ
-  // ราคาตั้งต้น panel. It is routed by line type because the backend accepts the two fields on
+  // 2026-10-01 (owner Ploy) REINSTATES a CEO-typed ราคาตั้ง under NET, in the CEO pricing
+  // workspace (CeoPricingWorkspace). It is routed by line type because the backend accepts the two fields on
   // different lines (PricingDecisionService#applyItemUpdates):
   //   - IMPORT line (stockSource null): `sellingPriceOverride` + a mandatory `decisionNote`. NOT
   //     `listUnitPrice`, which the backend refuses with a 400 on import lines. An override is
@@ -1463,45 +1464,45 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // Neither key is sent unless the CEO actually changed ราคาตั้ง, so a discount-only save leaves
   // the override alone. Blanking the input on an import line that has an override clears it.
   const saveCeoItemPriceFn = ({ decision, item, draft, clears = {} }) => {
-      const isStockLine = item.stockSource != null;
-      // Per-line margin (owner request 2026-10-21): under NET a live อัตรากำไร draft is saved as
-      // marginPct — the server derives ราคาตั้ง from it via the formula (no override, no reason),
-      // mutually exclusive with a manual ราคาตั้ง override, so when present it is the ONLY list-side
-      // field sent.
-      const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
-        ? pctToFraction(draft.marginPct) : null;
-      const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
-      const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
-      const listValue = cleanNumber(listDraft);
-      const listPart = {};
-      if (marginValue != null) {
-        listPart.marginPct = marginValue;
-      } else if (clears.clearSellingPriceOverride) {
-        Object.assign(listPart, { clearSellingPriceOverride: true, decisionNote: CEO_LIST_PRICE_NOTE });
-      } else if (listDraft !== undefined && listValue != null && (currentList == null || listValue !== Number(currentList))) {
-        if (isStockLine) listPart.listUnitPrice = listValue;
-        else Object.assign(listPart, { sellingPriceOverride: listValue, decisionNote: CEO_LIST_PRICE_NOTE });
-      } else if (listDraft === '' && !isStockLine && item.manualSellingPricePerRequestedUnit != null) {
-        Object.assign(listPart, { clearSellingPriceOverride: true, decisionNote: CEO_LIST_PRICE_NOTE });
-      }
-      return api.pricingRequests.updatePricingDecision(decision.id, {
-        items: [{
-          pricingDecisionItemId: item.id,
-          discountPct: clears.clearDiscountPct ? null : cleanNumber(draft.discountPct),
-          clearDiscountPct: Boolean(clears.clearDiscountPct),
-          specialPriceSqm: clears.clearSpecialPriceSqm ? null : cleanNumber(draft.specialPriceSqm),
-          clearSpecialPriceSqm: Boolean(clears.clearSpecialPriceSqm),
-          directNetPrice: clears.clearDirectNetPrice ? null : cleanNumber(draft.directNetPrice),
-          clearDirectNetPrice: Boolean(clears.clearDirectNetPrice),
-          // QA fix (2026-09-28): the backend's UpdatePricingDecisionItemRequest declares
-          // clearSellingPriceOverride as a primitive boolean. Omitting it fails Jackson
-          // deserialization and the whole request 400s with a bare "คำขอไม่ถูกต้อง" -- so it is
-          // always present; listPart overrides it to true only for an explicit clear.
-          clearSellingPriceOverride: false,
-          ...listPart,
-        }],
-      });
-    };
+    const isStockLine = item.stockSource != null;
+    // Per-line margin (owner request 2026-10-21): under NET a live อัตรากำไร draft is saved as
+    // marginPct — the server derives ราคาตั้ง from it via the formula (no override, no reason),
+    // mutually exclusive with a manual ราคาตั้ง override, so when present it is the ONLY list-side
+    // field sent.
+    const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
+      ? pctToFraction(draft.marginPct) : null;
+    const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
+    const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
+    const listValue = cleanNumber(listDraft);
+    const listPart = {};
+    if (marginValue != null) {
+      listPart.marginPct = marginValue;
+    } else if (clears.clearSellingPriceOverride) {
+      Object.assign(listPart, { clearSellingPriceOverride: true, decisionNote: CEO_LIST_PRICE_NOTE });
+    } else if (listDraft !== undefined && listValue != null && (currentList == null || listValue !== Number(currentList))) {
+      if (isStockLine) listPart.listUnitPrice = listValue;
+      else Object.assign(listPart, { sellingPriceOverride: listValue, decisionNote: CEO_LIST_PRICE_NOTE });
+    } else if (listDraft === '' && !isStockLine && item.manualSellingPricePerRequestedUnit != null) {
+      Object.assign(listPart, { clearSellingPriceOverride: true, decisionNote: CEO_LIST_PRICE_NOTE });
+    }
+    return api.pricingRequests.updatePricingDecision(decision.id, {
+      items: [{
+        pricingDecisionItemId: item.id,
+        discountPct: clears.clearDiscountPct ? null : cleanNumber(draft.discountPct),
+        clearDiscountPct: Boolean(clears.clearDiscountPct),
+        specialPriceSqm: clears.clearSpecialPriceSqm ? null : cleanNumber(draft.specialPriceSqm),
+        clearSpecialPriceSqm: Boolean(clears.clearSpecialPriceSqm),
+        directNetPrice: clears.clearDirectNetPrice ? null : cleanNumber(draft.directNetPrice),
+        clearDirectNetPrice: Boolean(clears.clearDirectNetPrice),
+        // QA fix (2026-09-28): the backend's UpdatePricingDecisionItemRequest declares
+        // clearSellingPriceOverride as a primitive boolean. Omitting it fails Jackson
+        // deserialization and the whole request 400s with a bare "คำขอไม่ถูกต้อง" -- so it is
+        // always present; listPart overrides it to true only for an explicit clear.
+        clearSellingPriceOverride: false,
+        ...listPart,
+      }],
+    });
+  };
   const saveCeoItemPrice = useActionMutation(saveCeoItemPriceFn, 'บันทึกราคาแล้ว');
   // บันทึกราคา (n รายการ) saves row after row and toasts ONCE, so its per-row saves are silent on success.
   const saveCeoRowQuiet = useActionMutation(saveCeoItemPriceFn, null);
@@ -2081,7 +2082,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       (item) => decisionCostingItems.get(item.pricingCostingItemId)?.overrideStale,
     );
     // Phase 2 (owner rulings 2026-09-18/19, V187): a new-form decision is priced
-    // entirely through the mode picker below — margin/"ปรับราคาเอง" never apply to it.
+    // entirely through the mode picker (CeoPricingWorkspace) — margin/"ปรับราคาเอง" never apply to it.
     const newForm = isNewFormEligibleDecision(decision);
     const missingCeoPrice = newForm ? decision.items.filter((item) => item.netUnitPrice == null) : [];
     // Opus review finding #1 (2026-09-19): mirrors PricingDecisionService.approve's own
@@ -2184,6 +2185,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     else if (st.staleOverrideItems.includes(item)) blocker = 'ต้นทุนที่ปรับล้าสมัย';
     else if (st.missingStockListPrice.includes(item)) blocker = 'ต้องใส่ราคาตั้ง (สต็อก)';
     else if (st.missingCeoPrice.includes(item)) blocker = 'ยังไม่มีราคา';
+    const savingThis = saveCeoItemPrice.isPending && saveCeoItemPrice.variables?.item?.id === item.id;
     const stale = !isStockLine && Boolean(costingItem?.overrideStale);
     const uncostable = !isStockLine && (Boolean(costingItem?.uncostableReason) || st.missingCost.includes(item));
     const name = requestItem ? itemDisplayName(requestItem)
@@ -2258,11 +2260,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       draft,
       defaultOpen: Boolean(costingItem?.uncostableReason || costingItem?.overrideStale)
         || blocker === 'ต้องระบุต้นทุนเอง' || blocker === 'ต้นทุนที่ปรับล้าสมัย',
-      saving: saveCeoItemPrice.isPending && saveCeoItemPrice.variables?.item?.id === item.id,
-      clearingDiscount: saveCeoItemPrice.isPending && saveCeoItemPrice.variables?.item?.id === item.id
-        && Boolean(saveCeoItemPrice.variables?.clears?.clearDiscountPct),
-      clearingOverride: saveCeoItemPrice.isPending && saveCeoItemPrice.variables?.item?.id === item.id
-        && Boolean(saveCeoItemPrice.variables?.clears?.clearSellingPriceOverride),
+      saving: savingThis,
+      clearingDiscount: savingThis && Boolean(saveCeoItemPrice.variables?.clears?.clearDiscountPct),
+      clearingOverride: savingThis && Boolean(saveCeoItemPrice.variables?.clears?.clearSellingPriceOverride),
       setDraft: (patch) => updateCeoPriceDraft(item.id, patch),
       openCostOverride: () => setCostOverrideItem({ decision, item, costingItem }),
       // ล้างส่วนลด / ใช้ราคาตามสูตร are scoped actions: each sends ONLY its own clear (an empty draft), so
@@ -2592,16 +2592,15 @@ export function PricingRequestDetailPage({ user, showToast }) {
   }
 
   function renderMissingFactoryBanner() {
+    if (!missingFactoryItems.length) return null;
     return (
-      missingFactoryItems.length ? (
-            <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
-              {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
-              {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
-              {canSetItemFactory
-                ? ' — เลือกโรงงานในรายการด้านล่างแล้วกดบันทึก'
-                : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
-            </p>
-      ) : null
+      <p className="rounded-md border border-warning-border bg-warning-bg p-3 text-xs text-warning-dark">
+        {`ยังไม่ได้ระบุโรงงาน ${missingFactoryItems.length} รายการ — ระบบจะสร้างเมลให้เฉพาะรายการที่ระบุโรงงานแล้ว ส่วนรายการต่อไปนี้ต้องระบุโรงงานก่อนจึงจะขอราคาได้: `}
+        {missingFactoryItems.map((entry) => `รายการที่ ${entry.position} (${itemDisplayName(entry.item)})`).join(', ')}
+        {canSetItemFactory
+          ? ' — เลือกโรงงานในรายการด้านล่างแล้วกดบันทึก'
+          : ' — ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้'}
+      </p>
     );
   }
 
@@ -2662,7 +2661,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
 
   // Which decision item prices which request card. The decision item carries its request item's id
   // (PricingDecisionItemDto#pricingRequestItemId); index order is only the fallback for a DTO that
-  // omits it. A decision item that matches no card is rendered after the cards, never dropped.
+  // omits it. A decision item that matches no request item row is rendered after the rows, never dropped.
   const ceoState = ceoWorkspace && currentDecision ? ceoDecisionState(currentDecision) : null;
   const ceoPricingByRequestItem = new Map();
   const ceoUnmatchedDecisionItems = [];
@@ -2875,9 +2874,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           </Button>
         ) : null}
       >
-        {/* CEO pricing workspace (owner Ploy, 2026-10-01): this panel is where the CEO prices the
-            request — decision header, ก่อน VAT note, costing error and the price-mode picker on
-            top; a pricing row inside each item card; totals, approve/return and history below. */}
+        {/* LEGACY (non-new-form) decision panel only: the decision header, ก่อน VAT note and costing
+            error on top; the item cards, then the legacy decision cards, actions and history below.
+            A new-form decision renders CeoPricingWorkspace instead. */}
         {ceoWorkspace ? (
           <div className="flex flex-col gap-3 border-b border-border-subtle p-4">
             {ceoState ? renderCeoDecisionHeader(ceoState) : null}

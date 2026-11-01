@@ -57,6 +57,12 @@ export function CeoPricingHeader({ summary, status, actions }) {
   );
 }
 
+// Row edge: blocked -> danger, unsaved -> warning.
+function edgeClass(row) {
+  if (row.blocker) return 'border-l-4 border-l-danger';
+  return row.dirty ? 'border-l-4 border-l-warning' : '';
+}
+
 function Tags({ row }) {
   return (
     <div className="mt-1 flex flex-wrap gap-1">
@@ -70,7 +76,7 @@ function Tags({ row }) {
   );
 }
 
-function Num({ row, field, label, testid, value, disabled, ariaLabel, suffix, card, max = undefined }) {
+function Num({ row, field, label, testid, value, disabled, suffix, card, max }) {
   return (
     <span className={cn('inline-flex items-center gap-1', card && 'w-full')}>
       <input
@@ -80,7 +86,7 @@ function Num({ row, field, label, testid, value, disabled, ariaLabel, suffix, ca
         max={max}
         inputMode="decimal"
         className={card ? CARD_INPUT : cn(INPUT, suffix === '%' ? 'w-20' : 'w-28')}
-        aria-label={ariaLabel ?? `${label} ${row.name}`}
+        aria-label={`${label} ${row.name}`}
         disabled={disabled}
         value={value}
         onChange={(e) => row.setDraft({ [field]: e.target.value })}
@@ -91,24 +97,23 @@ function Num({ row, field, label, testid, value, disabled, ariaLabel, suffix, ca
   );
 }
 
-// The price inputs of one row, in column order for the current mode. `card` swaps the aria-label
-// (a wrapping <label> names the input there) and the 44px height.
+// The price inputs of one row, in column order for the current mode. `card` wraps each input in a
+// visible <label> and uses the 44px height; the aria-label is the same in both.
 function priceFields(row, model, card) {
   const { priceMode, editable, fmt } = model;
   // while save-all is in flight nothing may change: a value typed now would be sent stale or wiped
   const lock = model.savingAll;
   const id = row.item.id;
   const lbl = (text, node) => (card ? <label className="grid gap-1 text-sm font-bold">{text}{node}</label> : node);
-  const aria = (text) => (card ? undefined : `${text} ${row.name}`);
   if (priceMode === 'NET') {
     const margin = row.margin.show
-      ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" ariaLabel={aria('กำไร %')} suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
+      ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
         {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
       </div>)
       : <span className="text-text-muted">–</span>;
     const list = (
       <div className="grid gap-1">
-        {lbl('ราคาตั้ง/แผ่น', <Num row={row} card={card} field="listUnitPrice" label="ราคาตั้ง/แผ่น" ariaLabel={aria('ราคาตั้ง/แผ่น')} disabled={!editable || lock || row.list.disabled} value={row.list.value} testid={`pcr-ceo-list-price-${id}`} max={row.list.max} />)}
+        {lbl('ราคาตั้ง/แผ่น', <Num row={row} card={card} field="listUnitPrice" label="ราคาตั้ง/แผ่น" disabled={!editable || lock || row.list.disabled} value={row.list.value} testid={`pcr-ceo-list-price-${id}`} max={row.list.max} />)}
         {row.list.invalid ? <span role="alert" className="text-2xs text-danger">ราคาตั้งต้องมากกว่า 0</span> : null}
         {row.formulaPerPiece != null ? (
           <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-formula-list-${id}`}>
@@ -124,7 +129,7 @@ function priceFields(row, model, card) {
     );
     const discount = (
       <div className="grid gap-1">
-        {lbl('ส่วนลด %', <Num row={row} card={card} field="discountPct" label="ส่วนลด %" ariaLabel={aria('ส่วนลด %')} suffix="%" max="100" disabled={!editable || lock} value={row.discount} testid={`pcr-ceo-discount-${id}`} />)}
+        {lbl('ส่วนลด %', <Num row={row} card={card} field="discountPct" label="ส่วนลด %" suffix="%" max="100" disabled={!editable || lock} value={row.discount} testid={`pcr-ceo-discount-${id}`} />)}
         {editable && row.hasDiscount ? (
           <Button type="button" variant="secondary" size="sm" loading={row.clearingDiscount} disabled={lock} onClick={row.clearDiscount} data-testid={`pcr-ceo-clear-discount-${id}`}>
             ล้างส่วนลด
@@ -140,7 +145,7 @@ function priceFields(row, model, card) {
       : <span className="text-text-muted">–</span>;
     const special = (
       <div className="grid gap-1">
-        {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" ariaLabel={aria('ราคาพิเศษ/ตร.ม. (รวม VAT)')} suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} />)}
+        {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} />)}
         <span className="text-2xs text-text-muted">
           {row.item.sqmPerPiece != null ? `รวม VAT · ${row.piecesPerSqm} แผ่น/ตร.ม.` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
         </span>
@@ -149,7 +154,7 @@ function priceFields(row, model, card) {
     return [formula, special];
   }
   if (priceMode === 'DIRECT_NET') {
-    return [lbl('ราคาสุทธิ/แผ่น', <Num row={row} card={card} field="directNetPrice" label="ราคาสุทธิ/แผ่น" ariaLabel={aria('ราคาสุทธิ/แผ่น')} suffix="/แผ่น" disabled={!editable || lock} value={row.direct} max={row.directMax} testid={`pcr-ceo-direct-net-${id}`} />)];
+    return [lbl('ราคาสุทธิ/แผ่น', <Num row={row} card={card} field="directNetPrice" label="ราคาสุทธิ/แผ่น" suffix="/แผ่น" disabled={!editable || lock} value={row.direct} max={row.directMax} testid={`pcr-ceo-direct-net-${id}`} />)];
   }
   return [];
 }
@@ -373,7 +378,7 @@ export function CeoPricingWorkspace({ model }) {
               {rows.map((row) => {
                 const open = isOpen(row);
                 const id = row.item.id;
-                const edge = row.blocker ? 'border-l-4 border-l-danger' : row.dirty ? 'border-l-4 border-l-warning' : '';
+                const edge = edgeClass(row);
                 return [
                   <tr
                     key={`r${id}`}
@@ -423,7 +428,7 @@ export function CeoPricingWorkspace({ model }) {
           {rows.map((row) => {
             const id = row.item.id;
             const open = isOpen(row);
-            const edge = row.blocker ? 'border-l-4 border-l-danger' : row.dirty ? 'border-l-4 border-l-warning' : '';
+            const edge = edgeClass(row);
             return (
               <div
                 key={id}
