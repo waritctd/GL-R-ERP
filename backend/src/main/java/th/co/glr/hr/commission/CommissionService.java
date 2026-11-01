@@ -441,14 +441,16 @@ public class CommissionService {
     private record DealLinkage(BigDecimal payableSnapshot, boolean mismatch) {}
 
     /**
-     * The sales manager's "รออนุมัติ" list: every SUBMITTED SALE record, any payroll month, oldest first.
+     * The caller's "รอคุณอนุมัติ" queue: sales_manager -> SUBMITTED SALE records, ceo -> MANAGER_APPROVED SALE
+     * records, any payroll month, oldest first.
      * sales_manager and ceo only (checked here; the controller's {@code @PreAuthorize} is a second layer).
      */
     public List<PendingCommissionDto> listPendingApproval(UserPrincipal actor) {
         if (!PENDING_VIEW_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        return commissions.findSubmittedSaleRecords().stream().map(this::toPending).toList();
+        String stage = "ceo".equals(actor.role()) ? CommissionStatus.MANAGER_APPROVED : CommissionStatus.SUBMITTED;
+        return commissions.findPendingSaleRecords(stage).stream().map(this::toPending).toList();
     }
 
     /**

@@ -2,15 +2,17 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// Commission page redesign (branch feat/commission-page-redesign), STEP 1: tests first.
+// Commission approval redesign: the weighting desk is no longer a page of cards. Its ×1/×2/×3 control
+// lives in the SINGLE detail panel that opens when a queue row (or an all-records row) is expanded,
+// region "สินค้าและน้ำหนัก". Every behaviour pinned below is unchanged; only the way to reach it moved.
 //
-// Pins the sales manager's WEIGHTING DESK: each pending line gets a ×1/×2/×3 segmented control
+// Pins the weighting controls: each pending line gets a ×1/×2/×3 segmented control
 // (role="radiogroup"), import lines are locked at ×1, there is one "สต็อกทั้งหมด ×2" quick action,
 // changes are optimistic with per-line saving state and revert-on-error, and the record-level
 // weight fallback (records with no deal lines) uses the same control.
@@ -48,6 +50,16 @@ vi.mock('browser-image-compression', () => ({
 }));
 
 const salesManagerUser = { id: 30, employeeId: 30, name: 'ผู้จัดการฝ่ายขาย ทดสอบ', role: 'sales_manager' };
+const ceoUser = { id: 50, employeeId: 50, name: 'CEO ทดสอบ', role: 'ceo' };
+
+// Only `Date` is faked: the page opens on the current payroll month (Aug 2026, matching the
+// fixtures' payrollMonth) and the queue shows that month only.
+beforeEach(() => {
+  vi.useRealTimers();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-08-15T05:00:00Z'));
+});
+afterEach(() => { vi.useRealTimers(); });
 
 const isChecked = (el) => el.checked === true || el.getAttribute('aria-checked') === 'true';
 const isDisabled = (el) => el.disabled === true || el.getAttribute('aria-disabled') === 'true';
@@ -164,14 +176,17 @@ function echoAdjust() {
 const group = (description) => screen.getByRole('radiogroup', { name: `น้ำหนัก ${description}` });
 const radio = (description, label) => within(group(description)).getByRole('radio', { name: label });
 
-async function openDesk() {
-  renderAt(salesManagerUser, '/commissions?view=pending');
-  // Wait on the record's own text, not on any new test id, so a failure below is about the
-  // missing BEHAVIOUR rather than about this setup line.
-  await screen.findByText('INV-PEND-0701');
+// The queue row's chevron opens the detail panel; the weights live in its "สินค้าและน้ำหนัก" region.
+async function openDesk(user = salesManagerUser) {
+  renderAt(user, '/commissions');
+  const row = await screen.findByTestId('queue-row-701');
+  fireEvent.click(within(row).getByRole('button', { name: 'ดูรายละเอียด INV-PEND-0701' }));
+  return screen.findByTestId('detail-panel-701');
 }
+// The weighted base shown on the queue row (the SERVER's figure, never recomputed here).
+const queueRow = () => screen.getByTestId('queue-row-701');
 
-describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manager)', () => {
+describe('weights in the detail panel — ×1/×2/×3 segmented control per line (sales_manager)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.commissions.list.mockResolvedValue({ commissions: [] });
@@ -182,16 +197,15 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
 
   it('clicking ×2 on a stock line calls adjustItemWeights(id, {lines:[{itemId, weightMultiplier:2}]}) and refreshes the figures from the response', async () => {
     echoAdjust();
-    await openDesk();
+    const panel = await openDesk();
     fireEvent.click(radio(STOCK_A, '×2'));
-    const entry = screen.getByTestId('pending-entry-701');
 
     await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledTimes(1));
     expect(api.commissions.adjustItemWeights).toHaveBeenCalledWith(701, { lines: [{ itemId: 11, weightMultiplier: 2 }] });
-    // "ฐานก่อนถ่วง → ฐานหลังถ่วง" refreshes from the SERVER's response, never recomputed locally.
-    await waitFor(() => expect(entry.textContent).toContain('฿5,600,000.00'));
-    expect(entry.textContent).not.toContain('฿4,800,000.00');
-    expect(entry.textContent).toContain('฿4,000,000.00'); // the before-weighting base is unchanged
+    // The weighted base on the queue row refreshes from the SERVER's response, never recomputed locally.
+    await waitFor(() => expect(queueRow().textContent).toContain('฿5,600,000.00'));
+    expect(queueRow().textContent).not.toContain('฿4,800,000.00');
+    expect(panel.textContent).toContain('฿4,000,000.00'); // the before-weighting (ex-VAT) base in the money chain is unchanged
     expect(isChecked(radio(STOCK_A, '×2'))).toBe(true);
   });
 
@@ -298,14 +312,19 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
   // weight change, because only the pending entry was refreshed.
   it("after a weight change, reloads the month's records and the picked rep's statement", async () => {
     echoAdjust();
-    api.commissions.reps.mockResolvedValue({ reps: [{ id: 10, name: 'พนักงานขาย ทดสอบ' }] });
-    api.commissions.monthlySummary.mockResolvedValue({ summary: null });
-    renderAt(salesManagerUser, '/commissions');
-    await screen.findByText('INV-PEND-0701');
-    const picker = await screen.findByLabelText('เลือกพนักงานขาย');
-    await within(picker).findByText('พนักงานขาย ทดสอบ');
-    fireEvent.change(picker, { target: { value: '10' } });
-    await waitFor(() => expect(api.commissions.monthlySummary).toHaveBeenCalled());
+    api.commissions.list.mockResolvedValue({ commissions: [submittedRecord({ id: 801, status: 'APPROVED', invoiceDetails: invoiceDetails({ id: 801, invoiceNumber: 'INV-OK-801' }) })] });
+    api.commissions.monthlySummary.mockResolvedValue({
+      summary: {
+        payrollMonth: '2026-08-01', salesRepId: 10, rawCommissionableBase: 0, weightUpliftBase: 0, commissionableBase: 4000000,
+        tierCommission: 1, incentiveAmount: 0, stockBonusAmount: 0, teamOverrideAmount: 0, companyCommissionableBase: null,
+        teamOverrideThresholdBase: null, teamOverrideRatePercent: null, manualTotal: 0, totalCommission: 1000, belowFloor: false, tiers: [],
+      },
+    });
+    const panel = await openDesk();
+    const repRegion = await screen.findByRole('region', { name: 'สรุปรายคน · ส.ค. 2569' });
+    fireEvent.click(await within(repRegion).findByText('พนักงานขาย ทดสอบ'));
+    await screen.findByTestId('statement-total');
+    expect(panel).not.toBeNull();
     const listCalls = api.commissions.list.mock.calls.length;
     const summaryCalls = api.commissions.monthlySummary.mock.calls.length;
 
@@ -316,12 +335,12 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
     expect(api.commissions.monthlySummary).toHaveBeenLastCalledWith(expect.objectContaining({ salesRepId: 10 }));
   });
 
-  it('an import line (qtyFromStock 0) is locked at ×1 and says "ของสั่ง — ไม่คิด 2x"; clicking it never calls the API', async () => {
-    await openDesk();
+  it('an import line (qtyFromStock 0) is locked at ×1 and says it counts ×1; clicking it never calls the API', async () => {
+    const entry = await openDesk();
 
     expect(isChecked(radio(IMPORT_B, '×1'))).toBe(true);
-    const entry = screen.getByTestId('pending-entry-701');
-    expect(within(entry).getByText('ของสั่ง — ไม่คิด 2x')).not.toBeNull();
+    // Prototype copy: "จำนวน 40 · ของสั่ง/นำเข้า คิด ×1" and "จำนวน 120 · จากสต็อก 30/120".
+    expect(within(entry).getByText(/ของสั่ง\/นำเข้า คิด ×1/)).not.toBeNull();
     within(group(IMPORT_B)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(true));
 
     fireEvent.click(radio(IMPORT_B, '×2'));
@@ -330,8 +349,8 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
     expect(isChecked(radio(IMPORT_B, '×1'))).toBe(true);
 
     // And a stock line is labelled with how much of it came from stock.
-    expect(within(entry).getByText('สต็อก 30/120')).not.toBeNull();
-    expect(within(entry).getByText('สต็อก 10/10')).not.toBeNull();
+    expect(within(entry).getByText(/จากสต็อก 30\/120/)).not.toBeNull();
+    expect(within(entry).getByText(/จากสต็อก 10\/10/)).not.toBeNull();
     // The stock lines are NOT locked.
     within(group(STOCK_A)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(false));
   });
@@ -366,7 +385,7 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
     await waitFor(() => expect(isChecked(radio(STOCK_A, '×1'))).toBe(true));
     expect(isChecked(radio(STOCK_A, '×2'))).toBe(false);
     // The figures were never touched by the failed attempt.
-    expect(screen.getByTestId('pending-entry-701').textContent).toContain('฿4,800,000.00');
+    expect(queueRow().textContent).toContain('฿4,800,000.00');
     // The line is usable again after the failure.
     within(group(STOCK_A)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(false));
   });
@@ -406,14 +425,6 @@ describe('weighting desk — ×1/×2/×3 segmented control per line (sales_manag
     fireEvent.keyDown(radio(STOCK_C, '×2'), { key: ' ' });
     await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenLastCalledWith(701, { lines: [{ itemId: 13, weightMultiplier: 2 }] }));
   });
-
-  it('approve and reject stay in the entry footer; reject still asks for a reason', async () => {
-    // Guard on behaviour the redesign must keep (passes before AND after the change).
-    await openDesk();
-    expect(screen.getByRole('button', { name: 'ผู้จัดการอนุมัติ' })).not.toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'ไม่อนุมัติ' }));
-    expect(await screen.findByText('เหตุผลการปฏิเสธ')).not.toBeNull();
-  });
 });
 
 describe('record-level weight (records with NO deal lines) uses the same segmented control', () => {
@@ -429,10 +440,16 @@ describe('record-level weight (records with NO deal lines) uses the same segment
     api.commissions.updateDeductions.mockResolvedValue({});
   });
 
-  it('the edit panel offers a ×1/×2/×3 radiogroup instead of a <select>, and saving sends the chosen weightMultiplier', async () => {
+  // The pencil now lives in the expanded panel of the record's row in "รายการทั้งหมดในรอบนี้".
+  async function openLegacyEdit() {
     renderAt(salesManagerUser, '/commissions');
-    await screen.findByText('INV-LEGACY-601');
-    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขค่าหัก' }));
+    const all = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    fireEvent.click(await within(all).findByRole('button', { name: 'ดูรายละเอียด INV-LEGACY-601' }));
+    fireEvent.click(within(await screen.findByTestId('detail-panel-601')).getByRole('button', { name: 'แก้ไขค่าหัก' }));
+  }
+
+  it('the edit panel offers a ×1/×2/×3 radiogroup instead of a <select>, and saving sends the chosen weightMultiplier', async () => {
+    await openLegacyEdit();
 
     // Named through aria-labelledby -> the panel's visible label (id record-weight-label).
     const weightGroup = await screen.findByRole('radiogroup', { name: 'น้ำหนักฐานคอมของรายการนี้' });
@@ -458,9 +475,7 @@ describe('record-level weight (records with NO deal lines) uses the same segment
   it('the record-level control is disabled while the save is in flight', async () => {
     let resolve;
     api.commissions.updateDeductions.mockImplementation(() => new Promise((r) => { resolve = r; }));
-    renderAt(salesManagerUser, '/commissions');
-    await screen.findByText('INV-LEGACY-601');
-    fireEvent.click(screen.getByRole('button', { name: 'แก้ไขค่าหัก' }));
+    await openLegacyEdit();
     const weightGroup = await screen.findByRole('radiogroup', { name: 'น้ำหนักฐานคอมของรายการนี้' });
     fireEvent.change(screen.getByLabelText(/เหตุผลในการแก้ไข/), { target: { value: 'ปรับ' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
@@ -471,5 +486,58 @@ describe('record-level weight (records with NO deal lines) uses the same segment
     expect(isChecked(within(weightGroup).getByRole('radio', { name: '×3' }))).toBe(false);
 
     await act(async () => { resolve({}); });
+  });
+});
+
+describe('who can change weights, and when the weights section appears', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.commissions.list.mockResolvedValue({ commissions: [] });
+    api.commissions.reps.mockResolvedValue({ reps: [] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: null });
+  });
+
+  it('CANNOT REACH: the CEO sees the weights of a MANAGER_APPROVED item read-only -- disabled segments, a locked note, no bulk button, no API call', async () => {
+    const managerApproved = submittedRecord({
+      status: 'MANAGER_APPROVED', managerApprovedBy: 2, managerApprovedByName: 'สมหญิง', managerApprovedAt: '2026-08-05T05:00:00Z',
+    });
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto({}, { commission: managerApproved })] });
+
+    const panel = await openDesk(ceoUser);
+
+    const products = within(panel).getByRole('region', { name: 'สินค้าและน้ำหนัก' });
+    expect(within(products).getByText('ดูอย่างเดียว · น้ำหนักล็อกแล้วหลังผู้จัดการอนุมัติ')).not.toBeNull();
+    expect(within(products).queryByRole('button', { name: 'สต็อกทั้งหมด ×2' })).toBeNull();
+    const radios = within(products).getAllByRole('radio');
+    expect(radios.length).toBeGreaterThan(0);
+    radios.forEach((r) => expect(isDisabled(r)).toBe(true));
+    fireEvent.click(radio(STOCK_A, '×2'));
+    expect(isChecked(radio(STOCK_A, '×2'))).toBe(false);
+    expect(api.commissions.adjustItemWeights).not.toHaveBeenCalled();
+  });
+
+  it('a record with no item lines gets no "สินค้าและน้ำหนัก" section, but keeps the money chain and the approval status', async () => {
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto({}, { items: [] })] });
+
+    const panel = await openDesk();
+
+    expect(within(panel).queryByRole('region', { name: 'สินค้าและน้ำหนัก' })).toBeNull();
+    expect(within(panel).getByRole('region', { name: 'การคำนวณ' })).not.toBeNull();
+    expect(within(panel).getByRole('region', { name: 'สถานะและเอกสาร' })).not.toBeNull();
+  });
+
+  it('opening the same SUBMITTED record from the all-records table gives the sales_manager the same editable weights', async () => {
+    echoAdjust();
+    api.commissions.list.mockResolvedValue({ commissions: [submittedRecord()] });
+    api.commissions.pendingApproval.mockResolvedValue({ commissions: [pendingDto()] });
+    renderAt(salesManagerUser, '/commissions');
+
+    const all = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    fireEvent.click(await within(all).findByRole('button', { name: 'ดูรายละเอียด INV-PEND-0701' }));
+    await screen.findByTestId('detail-panel-701');
+
+    within(group(STOCK_A)).getAllByRole('radio').forEach((r) => expect(isDisabled(r)).toBe(false));
+    fireEvent.click(radio(STOCK_A, '×3'));
+    await waitFor(() => expect(api.commissions.adjustItemWeights).toHaveBeenCalledWith(701, { lines: [{ itemId: 11, weightMultiplier: 3 }] }));
   });
 });

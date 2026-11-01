@@ -30,6 +30,15 @@ export function formatThaiMonthYearFromMonthInputValue(value) {
   return `${thaiMonths[monthIndex]} ${Number(match[1]) + 543}`;
 }
 
+const thaiMonthsLong = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+// Full month name + BE year for a "YYYY-MM" value ("พฤศจิกายน 2569"); '-' when it is not one.
+export function formatThaiMonthYearLongFromMonthInputValue(value) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value || '');
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 12) return '-';
+  return `${thaiMonthsLong[Number(match[2]) - 1]} ${Number(match[1]) + 543}`;
+}
+
 export function formatShortDate(value) {
   if (!value) return '-';
   // A bare "YYYY-MM-DD" (no time component — e.g. a LocalDate field, or an `<input type="date">`

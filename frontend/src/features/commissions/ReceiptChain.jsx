@@ -37,9 +37,10 @@ function Line({ op, label, value, tone, strong = false, muted = false }) {
  * CommissionCalculator.calculateInvoice consumed); "ที่เข้าฐาน" is the display-only product of the
  * ex-VAT figure and the weight payroll uses. Deductions that are zero are left out. Used for the
  * rep's receipt ledger and for the manager / CEO review table's row expansion. `compact` drops the
- * status and weight badges for callers whose own row already shows them (the ledger).
+ * status and weight badges for callers whose own row already shows them (the ledger). `bare`
+ * drops the invoice / approver / file footer for callers that show those elsewhere (the detail panel).
  */
-export function ReceiptChain({ record, compact = false }) {
+export function ReceiptChain({ record, compact = false, bare = false }) {
   const status = statusInfo(record.status);
   const approvals = (
     <div className="grid grid-cols-2 gap-3 text-sm text-text-muted sm:grid-cols-4">
@@ -101,12 +102,12 @@ export function ReceiptChain({ record, compact = false }) {
         <Line op="=" label="ที่เข้าฐาน" value={countsTowardBase(record) ? formatMoney(baseContribution(record)) : 'ไม่เข้าฐาน'} strong />
       </dl>
       {explanation ? <p className="m-0 text-sm text-text-muted">{explanation}</p> : null}
-      <div className="grid grid-cols-2 gap-3 text-sm text-text-muted sm:grid-cols-4">
+      {bare ? null : <div className="grid grid-cols-2 gap-3 text-sm text-text-muted sm:grid-cols-4">
         <span>Invoice: {invoice.invoiceNumber} · {formatThaiDate(invoice.invoiceDate)}</span>
         <span>ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}</span>
         <span>CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}</span>
         <span>ไฟล์: {invoice.invoiceAttachmentFileName || '-'}</span>
-      </div>
+      </div>}
     </div>
   );
 }

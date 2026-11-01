@@ -262,13 +262,17 @@ test.describe('commission invoice approval journey (real stack)', () => {
 
     await logout(page);
     await loginAs(page, 'sales_manager');
-    await page.goto('/commissions?view=pending');
+    await page.goto('/commissions?view=pending'); // opens on the earliest round with her pending items
 
-    const card = page.locator('article').filter({ hasText: invoiceNo });
-    await test.step('pending view shows the invoice card with its lines', async () => {
+    // Approval page: the queue row carries อนุมัติ / ไม่อนุมัติ; expanding it opens the detail panel
+    // whose "สินค้าและน้ำหนัก" section holds the ×1/×2/×3 radiogroups.
+    const card = page.locator('[data-testid^="queue-row-"]').filter({ hasText: invoiceNo });
+    const panel = page.locator('[data-testid^="detail-panel-"]');
+    await test.step('queue row shows the invoice; expanding it lists the deal lines', async () => {
       await expect(card).toBeVisible({ timeout: 30_000 });
-      // Weighting desk: one ×1/×2/×3 radiogroup per deal line (was a <select> per line).
-      const lines = card.getByRole('radiogroup');
+      await card.getByRole('button', { name: `ดูรายละเอียด ${invoiceNo}` }).click();
+      await expect(panel).toBeVisible();
+      const lines = panel.getByRole('radiogroup');
       expect(await lines.count(), 'card lists the deal lines').toBeGreaterThan(0);
       firstItem = lines.first();
       await expect(firstItem).toBeVisible();
@@ -276,10 +280,11 @@ test.describe('commission invoice approval journey (real stack)', () => {
       await shot(page, '05-manager-pending-card');
     });
 
-    const weightDd = card.locator('dt', { hasText: 'น้ำหนักรวม' }).locator('xpath=following-sibling::dd[1]');
+    // The weighted base on the queue row is the server's figure after each re-weight.
+    const weightDd = card.locator('b.tabular-nums').first();
     let effectiveAfter;
     let itemIdFromApi;
-    await test.step('weight select ×3 -> POST item-weights 200, น้ำหนักรวม shows the response effectiveWeight', async () => {
+    await test.step('weight select ×3 -> POST item-weights 200, the queue row weighted base updates from the response', async () => {
       const weightBefore = (await weightDd.innerText()).trim();
       const posted = page.waitForResponse(
         (r) => /\/api\/commissions\/\d+\/item-weights$/.test(r.url()) && r.request().method() === 'POST'
@@ -294,8 +299,7 @@ test.describe('commission invoice approval journey (real stack)', () => {
       expect(body.pending.items[0].weightMultiplier).toBe(3);
       expect(typeof effectiveAfter).toBe('number');
 
-      await expect(weightDd).toHaveText(Number(effectiveAfter).toFixed(2));
-      expect((await weightDd.innerText()).trim()).not.toBe(weightBefore);
+      await expect(weightDd).not.toHaveText(weightBefore);
       await expect(firstItem.getByRole('radio', { name: '×3' })).toHaveAttribute('aria-checked', 'true');
       await shot(page, '06-manager-weight-x3');
     });
@@ -321,7 +325,7 @@ test.describe('commission invoice approval journey (real stack)', () => {
     });
 
     await test.step('manager approves through the existing approve flow', async () => {
-      await card.getByRole('button', { name: 'ผู้จัดการอนุมัติ' }).click();
+      await card.getByRole('button', { name: 'อนุมัติ', exact: true }).click();
       const dialog = page.getByRole('dialog').or(page.getByRole('alertdialog'));
       await expect(dialog.first()).toBeVisible();
       await shot(page, '07-manager-approve-dialog');

@@ -1,31 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
-import { DataTable } from '../../components/common/DataTable.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid, formGridSpan2, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { Tabs } from '../../components/common/Tabs.jsx';
 import { cn } from '../../utils/cn.js';
 import { InvoiceFromDealForm } from './InvoiceFromDealForm.jsx';
 import { emptyInvoiceForm, prepareInvoiceAttachment, toCreateFromDealPayload } from './invoiceFromDeal.js';
-import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiDate, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
+import { commissionStatusLabel as statusInfo, dealStageLabel, formatMoney, formatThaiMonthYearFromMonthInputValue } from '../../utils/format.js';
+import { ApprovalBoard } from './ApprovalBoard.jsx';
 import { CommissionStatement } from './CommissionStatement.jsx';
-import { MANUAL_KIND_LABELS, MANUAL_KINDS, describeCommissionWeight, isManualKind, kindLabel } from './commissionRecord.js';
-import { ReceiptChain } from './ReceiptChain.jsx';
+import { MANUAL_KIND_LABELS, MANUAL_KINDS, isManualKind } from './commissionRecord.js';
 import { ReceiptLedger } from './ReceiptLedger.jsx';
 import { WeightSegmented } from './WeightSegmented.jsx';
-import { WeightingDesk } from './WeightingDesk.jsx';
 
 /* Hallmark · redesign · system: design.md (Operations Control Desk) · pre-emit critique: P4 H4 E3 S4 R4 V3 (V: design.md locks the system, so variety is deliberately low; E3: the stock-line segmented states are proven by tests, but only the locked import-line state was seen in a browser) */
 const thisMonth = new Date().toISOString().slice(0, 7);
+
+// The sales_manager / ceo page opens on the current PAYROLL month in Bangkok time (UTC+7, no DST).
+// `thisMonth` above is a UTC slice: between 00:00 and 07:00 on the 1st it is still last month.
+const bangkokMonth = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7);
+const APPROVAL_STATUSES = ['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED'];
 
 const emptyCreateForm = emptyInvoiceForm();
 
@@ -62,104 +64,6 @@ function useDebouncedValue(value, delayMs) {
   return debounced;
 }
 
-/**
- * Mobile record card for a commission record. `.commission-table` is
- * intentionally excluded from the CSS reflow-cards path (styles.css ~L1938)
- * because six columns of amounts/status can't reflow into readable stacked
- * rows — it just scrolls horizontally, and with 0 rows the bare table-head
- * (min-width: 900px at <=1040px, styles.css ~L1795) still overflows
- * `.content-scroll`. Supplying `mobileCard` here bypasses the grid/table-head
- * markup below 720px entirely (DataTable's `asCards` path), which removes
- * that overflow and shows only what's needed to identify the record.
- */
-/**
- * `canReview`/`onApprove`/`onReject` mirror the exact same `canReviewRecord`
- * check and `setApproveId`/`reject` handlers used by the desktop table's
- * action column. Without this, mobile users had no way to approve or reject
- * a commission at all — DataTable's `mobileCard` path renders only this
- * component and drops the desktop `actions` column entirely, which silently
- * broke the "CEO/manager can approve or reject" mobile task.
- */
-function CommissionCard({ record, canReview, isCeoReview, saving, expanded, onToggleExpand, onApprove, onReject }) {
-  const status = statusInfo(record.status);
-  const manual = isManualKind(record.kind);
-  return (
-    <>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-          {manual ? (MANUAL_KIND_LABELS[record.kind] || record.kind) : record.invoiceDetails.invoiceNumber}
-        </strong>
-        <span className="flex items-center gap-1.5">
-          {manual ? <StatusBadge tone="info">Manual</StatusBadge> : null}
-          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-          <Button
-            type="button"
-            variant="icon"
-            aria-expanded={expanded}
-            title="ดูรายละเอียดการคำนวณ"
-            aria-label="ดูรายละเอียดการคำนวณ"
-            onClick={onToggleExpand}
-          >
-            <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-          </Button>
-        </span>
-      </div>
-
-      <span className="min-w-0 truncate text-xs text-text-muted">
-        {record.salesRepName || record.salesRepId}
-      </span>
-
-      {manual ? (
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <strong className={cn('text-md font-extrabold text-text', Number(record.manualAmount || 0) < 0 && 'text-danger')}>
-            {formatMoney(record.manualAmount)}
-          </strong>
-          <span className="truncate text-2xs text-text-muted">{record.manualReason}</span>
-        </span>
-      ) : (
-        <span className="flex min-w-0 items-baseline gap-2">
-          <strong className="text-md font-extrabold text-text">{formatMoney(record.actualReceived)}</strong>
-          <span className="text-2xs text-text-muted">ฐาน {formatMoney(record.commissionableBase)}</span>
-        </span>
-      )}
-
-      <div className="flex flex-wrap gap-1.5">
-        {describeCommissionWeight(record) ? (
-          <StatusBadge tone="info">{describeCommissionWeight(record).compactLabel}</StatusBadge>
-        ) : null}
-        {record.dealAmountMismatch && (
-          <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
-        )}
-      </div>
-
-      {canReview && (
-        <div className="mt-1 flex gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            className="min-h-11 flex-1 text-success border-success"
-            disabled={saving}
-            onClick={(event) => { event.stopPropagation(); onApprove(); }}
-          >
-            <Icon name="check" size={14} />
-            {isCeoReview ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            className="min-h-11 flex-1 text-danger border-danger"
-            disabled={saving}
-            onClick={(event) => { event.stopPropagation(); onReject(); }}
-          >
-            <Icon name="close" size={14} />
-            ไม่อนุมัติ
-          </Button>
-        </div>
-      )}
-    </>
-  );
-}
-
 // The subset of a ticket summary the create-from-deal form reads, taken from FinanceDealDto.
 function summaryFromFinanceDeal(deal) {
   if (!deal) return null;
@@ -175,9 +79,9 @@ function summaryFromFinanceDeal(deal) {
 }
 
 export function CommissionPage({ user, showToast }) {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const [month, setMonth] = useState(thisMonth);
+  const [month, setMonth] = useState(() => (ROLE_PERMISSIONS.canApproveCommissions.includes(user.role) ? bangkokMonth() : thisMonth));
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
   // Sales-only monthly tier summary — server-computed (CommissionService#monthlySummary), fetched
@@ -187,15 +91,16 @@ export function CommissionPage({ user, showToast }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // sales_manager/ceo รออนุมัติ view (?view=pending): every SUBMITTED sale record across ALL payroll
-  // months (GET /api/commissions/pending-approval) -- independent of the month filter above.
+  // sales_manager/ceo queue: the caller's own-stage sale records across ALL payroll months
+  // (GET /api/commissions/pending-approval: manager -> SUBMITTED, ceo -> MANAGER_APPROVED); the board
+  // filters it to the shown month client-side.
   const [pending, setPending] = useState(null); // null = not loaded yet
-  const [pendingLoading, setPendingLoading] = useState(false);
 
-  // sales_manager / ceo "สรุปรายคน": the same statement the rep sees, for a chosen rep. The
-  // request counter drops a slow response for a previously picked rep / month.
+  // sales_manager / ceo "สรุปรายคน": every rep's monthly summary for the shown month (the estimated
+  // commission column) and the rep whose full statement is open. The request counter drops a slow
+  // response for a previous month.
   const [pickedRepId, setPickedRepId] = useState('');
-  const [repSummary, setRepSummary] = useState(null);
+  const [repSummaries, setRepSummaries] = useState({});
   const repSummaryRequestId = useRef(0);
   const [repSummaryNonce, setRepSummaryNonce] = useState(0); // bumped to force a reload of the picked rep's statement
 
@@ -219,7 +124,6 @@ export function CommissionPage({ user, showToast }) {
   const [deductionPreview, setDeductionPreview] = useState({ actualReceived: 0, commissionableBase: 0 });
   const deductionPreviewRequestId = useRef(0);
 
-  const [expandedId, setExpandedId] = useState(null);
   const [clawbackId, setClawbackId] = useState(null); // record id pending clawback reason, or null
   const [rejectId, setRejectId] = useState(null);
   const [approveId, setApproveId] = useState(null); // record id pending approve confirmation, or null
@@ -250,38 +154,33 @@ export function CommissionPage({ user, showToast }) {
   const canCreateManual = ROLE_PERMISSIONS.canCreateManualCommission.includes(user.role); // sales_manager, ceo
   const payrollOnly = ROLE_PERMISSIONS.canViewPayrollCommissions.includes(user.role); // hr
   const isSales = user.role === 'sales';
-  const view = canReview && searchParams.get('view') === 'pending' ? 'pending' : 'all';
-  const canAdjustWeights = user.role === 'sales_manager'; // CommissionService#adjustItemWeights: sales_manager only
-  // Worklist first: the sales_manager's queue (every SUBMITTED sale, any month) leads her page.
-  // The CEO's queue is the MANAGER_APPROVED records in the table below, so she keeps the old
-  // ทั้งหมด / รออนุมัติ tabs, where "รออนุมัติ" is the same queue read-only.
-  const isSalesManager = user.role === 'sales_manager';
-  const showWorklist = isSalesManager || view === 'pending';
+  // ?view=pending (an old notification target) is no longer a separate page: the queue leads the
+  // default page for sales_manager and ceo, so the param is simply ignored.
 
-  function selectView(next) {
-    const params = new URLSearchParams(searchParams);
-    if (next === 'pending') params.set('view', 'pending');
-    else params.delete('view');
-    setSearchParams(params, { replace: true });
-  }
-
+  const pendingViewApplied = useRef(false);
+  const loadRequestId = useRef(0);
   async function loadPending() {
-    setPendingLoading(true);
     try {
       const response = await api.commissions.pendingApproval();
-      setPending(response.commissions ?? []);
+      const entries = response.commissions ?? [];
+      setPending(entries);
+      // The notification link (?view=pending) opens on the EARLIEST round that holds her own
+      // pending items (carry-over first, else current, else upcoming); none -> the current round.
+      if (!pendingViewApplied.current && searchParams.get('view') === 'pending') {
+        pendingViewApplied.current = true;
+        const months = entries.map((entry) => (entry.commission.payrollMonth || '').slice(0, 7)).filter(Boolean).sort();
+        if (months.length) setMonth(months[0]);
+      }
     } catch (error) {
       showToast('error', error.message || 'โหลดรายการรออนุมัติไม่สำเร็จ');
-    } finally {
-      setPendingLoading(false);
     }
   }
 
   useEffect(() => {
-    if (!showWorklist) return;
+    if (!canReview) return;
     loadPending();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch on entering the view; showToast is stable enough.
-  }, [showWorklist]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch once on mount; showToast is stable enough.
+  }, [canReview]);
 
   // The desk owns the optimistic state; this only performs the write and keeps payroll fresh. The
   // server recomputes effectiveWeight / weightedCommissionableBase / estimatedCommission and the
@@ -318,13 +217,15 @@ export function CommissionPage({ user, showToast }) {
     }
     if (canListRecords) {
       setLoading(true);
+      // A slower response for an earlier month must not overwrite the newer month's rows.
+      const requestId = (loadRequestId.current += 1);
       try {
         const response = await api.commissions.list({ payrollMonth: month });
-        setRecords(response.commissions ?? []);
+        if (loadRequestId.current === requestId) setRecords(response.commissions ?? []);
       } catch (error) {
-        showToast('error', error.message || 'โหลดข้อมูลค่าคอมไม่สำเร็จ');
+        if (loadRequestId.current === requestId) showToast('error', error.message || 'โหลดข้อมูลค่าคอมไม่สำเร็จ');
       } finally {
-        setLoading(false);
+        if (loadRequestId.current === requestId) setLoading(false);
       }
       if (isSales) {
         // Server-computed monthly tier summary (CommissionService#monthlySummary) — never
@@ -349,18 +250,19 @@ export function CommissionPage({ user, showToast }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [month]);
 
-  // "สรุปรายคน": re-fetch the chosen rep's statement whenever the rep or the month changes.
+  // "สรุปรายคน": re-fetch every listed rep's summary whenever the month or the month's records change.
   useEffect(() => {
-    if (!canReview || !pickedRepId) {
-      setRepSummary(null);
-      return;
-    }
+    if (!canReview) return;
+    const repIds = [...new Set(records.filter((record) => APPROVAL_STATUSES.includes(record.status)).map((record) => record.salesRepId))];
     const requestId = (repSummaryRequestId.current += 1);
-    api.commissions.monthlySummary({ payrollMonth: month, salesRepId: Number(pickedRepId) })
-      .then((response) => { if (repSummaryRequestId.current === requestId) setRepSummary(response.summary ?? null); })
-      .catch(() => { if (repSummaryRequestId.current === requestId) setRepSummary(null); });
+    Promise.all(repIds.map((salesRepId) => api.commissions.monthlySummary({ payrollMonth: month, salesRepId })
+      .then((response) => [salesRepId, response.summary ?? null])
+      .catch(() => [salesRepId, null])))
+      .then((entries) => {
+        if (repSummaryRequestId.current === requestId) setRepSummaries(Object.fromEntries(entries.filter(([, summary]) => summary)));
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- canReview is fixed for the page's lifetime.
-  }, [pickedRepId, month, repSummaryNonce]);
+  }, [records, month, repSummaryNonce]);
 
   // Best-effort convenience picker for account: the deals TicketRepository's account-role list
   // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
@@ -421,234 +323,14 @@ export function CommissionPage({ user, showToast }) {
     return () => { cancelled = true; };
   }, [canCreateManual]);
 
-  const totals = useMemo(() => {
-    const base = records.reduce((sum, item) => sum + Number(item.commissionableBase || 0), 0);
-    const approved = records.filter((item) => item.status === 'APPROVED').length;
-    const submitted = records.filter((item) => item.status === 'SUBMITTED').length;
-    const managerApproved = records.filter((item) => item.status === 'MANAGER_APPROVED').length;
-    return { base, approved, submitted, managerApproved };
-  }, [records]);
-
-  function canManagerReview(record) {
-    return record.status === 'SUBMITTED' && user.role === 'sales_manager';
+  // A record by id from the month's records, or from the queue (same record, any round).
+  function findRecord(id) {
+    return records.find((record) => record.id === id) ?? (pending ?? []).map((entry) => entry.commission).find((record) => record.id === id);
   }
 
   function canCeoReview(record) {
     return record.status === 'MANAGER_APPROVED' && user.role === 'ceo';
   }
-
-  function canReviewRecord(record) {
-    return canManagerReview(record) || canCeoReview(record);
-  }
-
-  const commissionColumns = useMemo(() => {
-    const columns = [
-      {
-        // A dedicated expand/collapse toggle column. DataTable's whole-row
-        // `onRowClick` exists again (a mouse-only `<tr onClick>` plus an
-        // interactive-target guard — not the row-as-<button> that was
-        // removed with the native-table migration for nesting the actions
-        // column's icon-buttons inside a button, and not a keyboard
-        // affordance either any more), but it is opt-in and this page
-        // deliberately does not pass it: every row here already carries its
-        // own per-row buttons (this expand toggle, plus the review actions
-        // below), so a whole-row click target would compete with them rather
-        // than add anything. Only this column's own button toggles the calc
-        // panel.
-        key: 'expand',
-        header: '',
-        render: (record) => (
-          <Button
-            type="button"
-            variant="icon"
-            aria-expanded={expandedId === record.id}
-            title="ดูรายละเอียดการคำนวณ"
-            aria-label="ดูรายละเอียดการคำนวณ"
-            onClick={() => setExpandedId((current) => (current === record.id ? null : record.id))}
-          >
-            <Icon name={expandedId === record.id ? 'chevronUp' : 'chevronDown'} size={14} />
-          </Button>
-        ),
-      },
-      {
-        key: 'invoiceNumber',
-        header: 'Invoice / รายการ',
-        sortable: true,
-        sortAccessor: (record) => (isManualKind(record.kind) ? kindLabel(record.kind) : record.invoiceDetails.invoiceNumber),
-        searchAccessor: (record) => (isManualKind(record.kind)
-          ? `${kindLabel(record.kind)} ${record.manualReason || ''}`
-          : record.invoiceDetails.invoiceNumber),
-        render: (record) => (isManualKind(record.kind) ? (
-          <span>
-            <span className="flex items-center gap-1.5">
-              <strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong>
-              <StatusBadge tone="info">Manual</StatusBadge>
-            </span>
-            <small className="block text-text-muted">{record.manualReason}</small>
-          </span>
-        ) : (
-          <span>
-            <strong>{record.invoiceDetails.invoiceNumber}</strong>
-            <small className="block text-text-muted">{kindLabel(record.kind)} · {formatThaiDate(record.invoiceDetails.invoiceDate)}</small>
-            <small className="block text-text-muted">ไฟล์: {record.invoiceDetails.invoiceAttachmentFileName || '-'}</small>
-          </span>
-        )),
-      },
-      {
-        key: 'salesRepName',
-        header: 'Sales',
-        sortable: true,
-        sortAccessor: (record) => record.salesRepName || record.salesRepId,
-        searchAccessor: (record) => record.salesRepName || record.salesRepId,
-        render: (record) => <span>{record.salesRepName || record.salesRepId}</span>,
-      },
-      {
-        key: 'actualReceived',
-        header: 'ยอดรับจริง / จำนวนเงิน',
-        align: 'right',
-        sortable: true,
-        sortAccessor: (record) => (isManualKind(record.kind) ? Number(record.manualAmount || 0) : Number(record.actualReceived || 0)),
-        render: (record) => {
-          if (isManualKind(record.kind)) {
-            const amount = Number(record.manualAmount || 0);
-            return <code className={amount < 0 ? 'text-danger' : undefined}>{formatMoney(amount)}</code>;
-          }
-          return (
-            <span>
-              <code>{formatMoney(record.actualReceived)}</code>
-              {describeCommissionWeight(record) && (
-                <span className="block mt-1">
-                  <StatusBadge tone="info">{describeCommissionWeight(record).label}</StatusBadge>
-                </span>
-              )}
-              {record.dealAmountMismatch && (
-                // The whole point of the Step 9 cross-check flag: surfaced right next to the
-                // amount so a reviewer sees it before approving, never buried elsewhere.
-                <span className="block mt-1">
-                  <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge>
-                </span>
-              )}
-            </span>
-          );
-        },
-      },
-      {
-        key: 'commissionableBase',
-        header: 'ฐานค่าคอม',
-        align: 'right',
-        sortable: true,
-        // Manual entries never touch the tier calc (feat/commission-manual-adjustments) — sorted
-        // last under this column since there is no base to compare.
-        sortAccessor: (record) => (isManualKind(record.kind) ? -1 : Number(record.commissionableBase || 0)),
-        render: (record) => (isManualKind(record.kind)
-          ? <span className="text-xs text-text-muted">ไม่มีฐานคำนวณ</span>
-          : <code>{formatMoney(record.commissionableBase)}</code>),
-      },
-      {
-        key: 'status',
-        header: 'สถานะ',
-        render: (record) => {
-          const status = statusInfo(record.status);
-          return (
-            <span>
-              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              <small className="mt-1 block text-text-muted">
-                ผู้จัดการ: {record.managerApprovedAt ? `${record.managerApprovedByName || '-'} · ${formatThaiDate(record.managerApprovedAt)}` : '-'}
-              </small>
-              <small className="block text-text-muted">
-                CEO: {record.ceoApprovedAt ? `${record.ceoApprovedByName || '-'} · ${formatThaiDate(record.ceoApprovedAt)}` : '-'}
-              </small>
-            </span>
-          );
-        },
-      },
-    ];
-
-    // Sales is read-only (Slice A3): no actions column at all — approve/reject/edit are all
-    // sales_manager/ceo capabilities, and there is nothing else for sales to do to a commission.
-    if (!canReview) return columns;
-
-    columns.push({
-      key: 'actions',
-      header: '',
-      render: (record) => (
-        <span className="flex flex-wrap justify-end gap-1.5">
-          {!isManualKind(record.kind) && canReviewRecord(record) && (
-            // Deduction editing is an invoice-input concept (grossAmount, bankFees, ...) — a
-            // manual entry has no invoiceDetails at all (feat/commission-manual-adjustments), so
-            // there is nothing here for beginEdit to populate.
-            //
-            // P0 fix (fix/commission-approved-record-immutable): reuse the SAME gate the approve
-            // button below uses, not just !isManualKind. CommissionService#updateDeductions now
-            // refuses an APPROVED record outright (and a CLAWBACK's own id, which is always
-            // created APPROVED and so is already excluded by this same status check) — as of
-            // V102's census every one of prod's 1,132 commission records is APPROVED, so an
-            // unguarded pencil would 409 on 100% of them. canReviewRecord(record) is narrower than
-            // the backend actually allows (it also requires the viewing actor's role to match the
-            // record's specific stage — sales_manager only at SUBMITTED, ceo only at
-            // MANAGER_APPROVED — where the backend's requireManagerOrCeo would accept either role
-            // at either stage); that's intentional here, matching the approve/reject buttons
-            // exactly rather than exposing a wider edit affordance those two don't also expose.
-            <Button
-              type="button"
-              variant="icon"
-              title="แก้ไขค่าหัก"
-              aria-label="แก้ไขค่าหัก"
-              onClick={(event) => { event.stopPropagation(); beginEdit(record); }}
-            >
-              <Icon name="pencil" size={14} />
-            </Button>
-          )}
-          {canReviewRecord(record) && (
-            // Success-tinted (not just muted-gray) so approve reads as the
-            // positive, serious action — matches DESIGN.md success token.
-            <Button
-              type="button"
-              variant="icon"
-              className="text-success border-success"
-              title={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
-              aria-label={canCeoReview(record) ? 'CEO อนุมัติ' : 'ผู้จัดการอนุมัติ'}
-              disabled={saving}
-              onClick={(event) => { event.stopPropagation(); setApproveId(record.id); }}
-              data-testid="commission-approve"
-            >
-              <Icon name="check" size={14} />
-            </Button>
-          )}
-          {canReviewRecord(record) && (
-            // Danger stays outlined per DESIGN.md ("danger is outlined, not
-            // filled") — the icon-button is already an outline shape, so this
-            // just tints the outline/icon danger-red to separate it from approve.
-            <Button
-              type="button"
-              variant="icon"
-              className="text-danger border-danger"
-              title={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
-              aria-label={canCeoReview(record) ? 'CEO ปฏิเสธ' : 'ผู้จัดการปฏิเสธ'}
-              disabled={saving}
-              onClick={(event) => { event.stopPropagation(); reject(record.id); }}
-            >
-              <Icon name="close" size={14} />
-            </Button>
-          )}
-          {record.kind === 'SALE' && record.status === 'APPROVED' && (
-            <Button
-              type="button"
-              variant="icon"
-              title="บันทึกหักคืน"
-              aria-label="บันทึกหักคืน"
-              disabled={saving}
-              onClick={(event) => { event.stopPropagation(); clawback(record.id); }}
-            >
-              <Icon name="close" size={14} />
-            </Button>
-          )}
-        </span>
-      ),
-    });
-    return columns;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canReview, saving, user.role, expandedId]);
 
   function updateCreateForm(field, value) {
     setCreateForm((current) => ({ ...current, [field]: value }));
@@ -836,7 +518,7 @@ export function CommissionPage({ user, showToast }) {
     // the PREVIOUS row's (or the empty draft's) numbers and flash them into the money preview
     // before the real values arrive. Wait until the debounce has caught up with the live draft.
     if (debouncedDeductionDraft !== deductionDraft) return;
-    const editingRecord = records.find((record) => record.id === editingId);
+    const editingRecord = findRecord(editingId);
     if (!editingRecord) return;
     const requestId = (deductionPreviewRequestId.current += 1);
     api.commissions.simulate({
@@ -891,6 +573,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'อัปเดตค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
+      if (canReview) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'อัปเดตไม่สำเร็จ');
     } finally {
@@ -905,7 +588,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'อนุมัติค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
-      if (showWorklist) await loadPending();
+      if (canReview) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'อนุมัติไม่สำเร็จ');
     } finally {
@@ -925,7 +608,7 @@ export function CommissionPage({ user, showToast }) {
       showToast('success', 'ปฏิเสธค่าคอมแล้ว');
       invalidatePayrollUpstream();
       await load();
-      if (showWorklist) await loadPending();
+      if (canReview) await loadPending();
     } catch (error) {
       showToast('error', error.message || 'ปฏิเสธไม่สำเร็จ');
     } finally {
@@ -961,50 +644,11 @@ export function CommissionPage({ user, showToast }) {
     const [year, monthNumber] = [Number(match[1]), Number(match[2])];
     return monthNumber === 1 ? `${year - 1}-12` : `${year}-${String(monthNumber - 1).padStart(2, '0')}`;
   })();
-  const pickedRepName = repOptions.find((rep) => String(rep.id) === String(pickedRepId))?.name;
-  const monthScoped = !canCreateFromDeal && view === 'all';
+  const monthScoped = !canCreateFromDeal && !canReview; // sales + hr keep the free month input
 
   return (
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
-      <PageHeader title="ค่าคอมมิชชัน" subtitle="ตรวจสอบ อนุมัติ และติดตามค่าคอมมิชชันของฝ่ายขาย" />
-
-      {user.role === 'ceo' ? (
-        <Tabs
-          ariaLabel="มุมมองค่าคอม"
-          idPrefix="commission-view"
-          value={view}
-          onChange={selectView}
-          items={[
-            { id: 'all', label: 'ทั้งหมด' },
-            { id: 'pending', label: 'รออนุมัติ', badge: pending ? pending.length : undefined, badgeLabel: pending ? `${pending.length} รายการ` : undefined },
-          ]}
-        />
-      ) : null}
-
-      {showWorklist ? (
-        <WeightingDesk
-          title={isSalesManager ? 'รอคุณอนุมัติ' : 'รอผู้จัดการฝ่ายขายอนุมัติ'}
-          entries={pending}
-          loading={pendingLoading}
-          canAdjust={canAdjustWeights}
-          busy={saving}
-          canReviewRecord={canManagerReview}
-          onAdjust={adjustWeights}
-          onEntryUpdate={replacePendingEntry}
-          onSaved={reloadAfterWeightChange}
-          onApprove={setApproveId}
-          onReject={reject}
-        />
-      ) : null}
-
-      {isSalesManager && view === 'pending' ? (
-        <div>
-          <Button type="button" variant="text" className="whitespace-nowrap mobile:min-h-11" onClick={() => selectView('all')}>
-            ดูสรุปรายคนและรายการทั้งเดือน
-            <Icon name="chevronRight" size={14} />
-          </Button>
-        </div>
-      ) : null}
+      <PageHeader title="ค่าคอมมิชชัน" subtitle={canReview ? 'อนุมัติค่าคอมของฝ่ายขายสำหรับรอบจ่ายเงินเดือน' : 'ตรวจสอบ อนุมัติ และติดตามค่าคอมมิชชันของฝ่ายขาย'} />
 
       {monthScoped ? (
         <div className="grid gap-2 border-b border-border pb-4">
@@ -1033,17 +677,6 @@ export function CommissionPage({ user, showToast }) {
               รอบถัดไป
               <Icon name="chevronRight" size={14} />
             </Button>
-            {canCreateManual && (
-              <Button
-                type="button"
-                variant="secondary"
-                className="whitespace-nowrap pointer-coarse:min-h-11 mobile:flex-1 min-[721px]:ml-auto"
-                onClick={() => (showManualForm ? setShowManualForm(false) : openManualForm())}
-              >
-                <Icon name="plus" size={14} />
-                เพิ่มค่าคอมด้วยตนเอง
-              </Button>
-            )}
           </div>
           {receiptMonth ? (
             <p className="m-0 text-md font-bold text-text-secondary [overflow-wrap:anywhere]">
@@ -1053,7 +686,51 @@ export function CommissionPage({ user, showToast }) {
         </div>
       ) : null}
 
-      {payrollOnly ? (
+      {canReview ? (
+        <ApprovalBoard
+          user={user}
+          month={month}
+          currentMonth={bangkokMonth()}
+          onMonth={setMonth}
+          records={records}
+          loading={loading}
+          pending={pending}
+          summaries={repSummaries}
+          pickedRepId={pickedRepId}
+          onPickRep={setPickedRepId}
+          saving={saving}
+          canCreateManual={canCreateManual}
+          onManual={() => (showManualForm ? setShowManualForm(false) : openManualForm())}
+          manualForm={canCreateManual && showManualForm ? (
+            <ManualCommissionForm
+              form={manualForm}
+              onChange={updateManualForm}
+              repOptions={repOptions}
+              onSubmit={submitManual}
+              onCancel={() => setShowManualForm(false)}
+              saving={manualSaving}
+            />
+          ) : null}
+          onApprove={setApproveId}
+          onReject={reject}
+          onClawback={clawback}
+          onEdit={beginEdit}
+          editor={(record) => (editingId === record.id ? (
+            <ManagerReviewEditPanel
+              record={record}
+              draft={deductionDraft}
+              onChange={updateDeductionDraft}
+              preview={deductionPreview}
+              saving={saving}
+              onSave={() => saveDeductions(record.id)}
+              onCancel={() => setEditingId(null)}
+            />
+          ) : null)}
+          onAdjust={adjustWeights}
+          onEntryUpdate={replacePendingEntry}
+          onSaved={reloadAfterWeightChange}
+        />
+      ) : payrollOnly ? (
         <PayrollSummary summary={summary} loading={loading} />
       ) : canCreateFromDeal ? (
         <AccountCreateFromDeal
@@ -1072,114 +749,10 @@ export function CommissionPage({ user, showToast }) {
           saving={saving}
           recentlyCreated={recentlyCreated}
         />
-      ) : view === 'all' ? (
+      ) : isSales ? (
         <>
-          {canCreateManual && showManualForm && (
-            <ManualCommissionForm
-              form={manualForm}
-              onChange={updateManualForm}
-              repOptions={repOptions}
-              onSubmit={submitManual}
-              onCancel={() => setShowManualForm(false)}
-              saving={manualSaving}
-            />
-          )}
-
-          {isSales ? (
-            <>
-              {monthlyTierSummary ? <CommissionStatement summary={monthlyTierSummary} /> : null}
-              <ReceiptLedger records={records} loading={loading} />
-            </>
-          ) : (
-            <>
-              <section aria-label="สรุปค่าคอมเดือนนี้" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 nav-drawer:grid-cols-[minmax(0,1fr)]">
-                <div className="grid min-w-0 gap-1">
-                  <p className="m-0 text-sm font-bold text-text-secondary">ฐานค่าคอมเดือนนี้</p>
-                  <p className="m-0 text-4xl font-extrabold leading-tight tabular-nums text-text [overflow-wrap:anywhere] mobile:text-3xl">{formatMoney(totals.base)}</p>
-                </div>
-                <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
-                  {[
-                    ['approved', 'อนุมัติแล้ว', totals.approved],
-                    ['submitted', 'รอผู้จัดการ', totals.submitted],
-                    ['managerApproved', 'รอ CEO', totals.managerApproved],
-                  ].map(([key, label, value]) => (
-                    <div key={key} className="grid min-w-0 gap-0.5">
-                      <dt className="text-sm text-text-muted">{label}</dt>
-                      <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${value} รายการ`}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-
-              <section aria-labelledby="by-rep-heading" className="grid min-w-0 gap-3">
-                <h2 id="by-rep-heading" className="m-0 text-lg font-extrabold text-text">สรุปรายคน</h2>
-                <div className="grid w-[320px] max-w-full gap-1.5 mobile:w-full">
-                  <label htmlFor="commission-rep-picker" className="text-sm font-bold">เลือกพนักงานขาย</label>
-                  <select
-                    id="commission-rep-picker"
-                    value={pickedRepId}
-                    onChange={(event) => setPickedRepId(event.target.value)}
-                    className="hover:border-border-muted pointer-coarse:min-h-11"
-                  >
-                    <option value="">— เลือกพนักงานขาย —</option>
-                    {repOptions.map((rep) => <option key={rep.id} value={String(rep.id)}>{rep.name}</option>)}
-                  </select>
-                </div>
-                {pickedRepId && repSummary ? (
-                  <CommissionStatement summary={repSummary} heading={`ค่าคอมของ ${pickedRepName ?? 'พนักงานขาย'}`} />
-                ) : (
-                  <p className="m-0 text-sm text-text-muted">
-                    {pickedRepId ? 'กำลังโหลดสรุปค่าคอม…' : 'เลือกพนักงานขายเพื่อดูสรุปค่าคอมเดือนนี้ในรูปแบบเดียวกับที่พนักงานเห็น'}
-                  </p>
-                )}
-              </section>
-
-              <DataTable
-                columns={commissionColumns}
-                rows={records}
-                getRowKey={(record) => record.id}
-                gridClassName="commission-table"
-                renderExpanded={(record) => (record.id === expandedId ? <ReceiptChain record={record} /> : null)}
-                mobileCard={(record) => (
-                  <CommissionCard
-                    record={record}
-                    canReview={canReview && canReviewRecord(record)}
-                    isCeoReview={canCeoReview(record)}
-                    saving={saving}
-                    expanded={expandedId === record.id}
-                    onToggleExpand={() => setExpandedId((current) => (current === record.id ? null : record.id))}
-                    onApprove={() => setApproveId(record.id)}
-                    onReject={() => reject(record.id)}
-                  />
-                )}
-                pageSize={20}
-                searchable
-                searchPlaceholder="ค้นหาเลขที่ใบกำกับ / ชื่อ Sales"
-                loading={loading}
-                emptyState={{
-                  icon: 'badge',
-                  title: 'ยังไม่มีรายการค่าคอม',
-                  description: 'ค่าคอมจากใบกำกับที่บันทึกเดือนนี้จะอยู่ในรอบเดือนถัดไป — ลองกด "รอบถัดไป" หรือรอฝ่ายบัญชีบันทึกใบกำกับ',
-                }}
-              />
-
-              {editingId != null && (() => {
-                const editingRecord = records.find((record) => record.id === editingId);
-                if (!editingRecord) return null;
-                return (
-                  <ManagerReviewEditPanel
-                    record={editingRecord}
-                    draft={deductionDraft}
-                    onChange={updateDeductionDraft}
-                    preview={deductionPreview}
-                    saving={saving}
-                    onSave={() => saveDeductions(editingRecord.id)}
-                    onCancel={() => setEditingId(null)}
-                  />
-                );
-              })()}
-            </>
-          )}
+          {monthlyTierSummary ? <CommissionStatement summary={monthlyTierSummary} /> : null}
+          <ReceiptLedger records={records} loading={loading} />
         </>
       ) : null}
 
