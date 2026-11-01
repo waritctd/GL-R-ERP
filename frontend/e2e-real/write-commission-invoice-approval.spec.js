@@ -269,6 +269,14 @@ test.describe('commission invoice approval journey (real stack)', () => {
     const card = page.locator('[data-testid^="queue-row-"]').filter({ hasText: invoiceNo });
     const panel = page.locator('[data-testid^="detail-panel-"]');
     await test.step('queue row shows the invoice; expanding it lists the deal lines', async () => {
+      // ?view=pending opens the EARLIEST round with her pending items; seeded or earlier records can
+      // sit in an earlier round than this invoice (dated today -> next month's round), so step › to it.
+      await expect(page.getByRole('region', { name: 'รอบจ่ายค่าคอม' })).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText('กำลังโหลดรายการรออนุมัติ…')).toHaveCount(0, { timeout: 30_000 });
+      for (let step = 0; step < 13 && !(await card.isVisible()); step += 1) {
+        await page.getByRole('button', { name: 'รอบถัดไป', exact: true }).click();
+        await page.waitForLoadState('networkidle');
+      }
       await expect(card).toBeVisible({ timeout: 30_000 });
       await card.getByRole('button', { name: `ดูรายละเอียด ${invoiceNo}` }).click();
       await expect(panel).toBeVisible();
