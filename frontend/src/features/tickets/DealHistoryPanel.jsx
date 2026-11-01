@@ -94,7 +94,7 @@ function eventMessage(event) {
 
 // Payment-track events get a success-toned dot, fulfillment-track events get
 // an info-toned dot — mirrors the two colour groups used by the sub-status
-// chips in DealStagePanel. Exported (Slice E) so DealMoneyTimeline.jsx can
+// chips in DealStagePanel. Exported (Slice E) so DealPaymentSection.jsx can
 // filter `ticket.events` down to the payment track for its own timeline
 // without redeclaring this list — two copies drifting apart is exactly how
 // an event would silently stop appearing on one of the two surfaces.

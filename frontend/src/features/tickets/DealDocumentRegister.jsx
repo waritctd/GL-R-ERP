@@ -40,7 +40,7 @@ export function canReadStoredImportRequests(user, summary) {
  * older versions always visible beneath it (see dealDocumentVersions.js for grouping).
  *
  * Deliberately a ROLL-UP, not a replacement: DealQuotationPanel/DealLegacyQuotations (also in this
- * same tab), DealDepositPanel (การเงิน), the docActions remaining-invoice button (DealStagePanel),
+ * same tab), DealPaymentSection (การเงิน), the docActions remaining-invoice button (DealStagePanel),
  * and DealAttachmentsPanel (ประวัติ) all keep their existing create/issue/upload/delete affordances
  * exactly where they are — this component only ever reads and downloads. Do not add a mutation
  * here; if a document needs an action, it belongs on the panel that already owns that document's

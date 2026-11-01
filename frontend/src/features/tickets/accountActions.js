@@ -1,6 +1,6 @@
 // Account (ฝ่ายบัญชี) role-scoped views: the single "what does ฝ่ายบัญชี do next
 // on this deal" helper, factored out of the account-only gates that already
-// live in DealDepositPanel.jsx (Step 3 "รับชำระมัดจำ") and TicketDetailPage.jsx
+// live in /finance/deals/:id and TicketDetailPage.jsx
 // (`can.confirmFinalPayment` / `can.confirmClose`) so AccountOverview.jsx and
 // AccountFinancePage.jsx never invent a second copy of "when is this deal
 // account's turn" logic that could drift from what the primary-action button
@@ -17,10 +17,8 @@
 // (see backend/.../ticket/TicketSummaryDto.java), so one helper serves both
 // the Overview's list-derived rows and a single ticket's `can.*` computation.
 
-// Mirrors DealDepositPanel.jsx's bypassesNotice() / backend DepositPolicy
-// .bypassesDepositNotice() exactly — kept as its own small copy (not
-// imported) because DealDepositPanel's version is a private, unexported
-// function local to that component.
+// Mirrors backend DepositPolicy.bypassesDepositNotice() exactly (dealMoneyStatus.js
+// has the same triple) — kept as its own small copy.
 const DEPOSIT_POLICY_BYPASSES_NOTICE = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
 
 function depositBypassed(ticket) {

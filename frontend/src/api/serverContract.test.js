@@ -550,14 +550,19 @@ const UNREACHABLE_FROM_UI = new Set([
   // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer + hrApi/mockApi
   // wiring landed on GLA-129 step 4 part 1; the /finance ใบวางบิล tab that calls the rest of these
   // eleven methods is step 4 part 3, a separate branch not yet merged. `GET
-  // /api/customers/{}/billing-notes` (listForCustomer) left this list on part 2 — the redesigned
-  // deal-page การเงิน tab's DealDocumentPipeline now reads it to resolve the ใบวางบิล step's status
-  // (a client-side join against the deal's own remaining invoice, no new endpoint). Cancel/issue/
-  // mark-received/mark-settled/revise and the create/update/delete/candidates/file routes are all
-  // still write-side or picker-only, with no screen yet. BillingNoteService/BillingNoteController/
+  // /api/customers/{}/billing-notes` (listForCustomer) is back on this list (owner design
+  // 2026-10-31): the deal-page การเงิน tab's ใบวางบิล step that read it left this release. Cancel/
+  // issue/mark-received/mark-settled/revise and the create/update/delete/candidates/file routes are
+  // all still write-side or picker-only, with no screen yet. BillingNoteService/BillingNoteController/
   // BillingNoteRenderer are already covered by BillingNoteServiceIntegrationTest (real Postgres,
   // including the wrong-way-round authz suite) and BillingNoteRendererTest. Remove this block once
   // those screens call the rest through hrApi.js.
+  'GET /api/customers/{}/billing-notes',
+  // Owner design 2026-10-31: the deal page no longer sets billing dates (วางบิล is out of this
+  // release's scope; /finance keeps its own billing) nor the deposit policy (the มัดจำ card is gone;
+  // the % comes from the accepted quotation).
+  'POST /api/tickets/{}/billing',
+  'POST /api/tickets/{}/deposit-policy',
   'DELETE /api/billing-notes/{}',
   'GET /api/billing-notes/{}',
   'GET /api/billing-notes/{}/file',

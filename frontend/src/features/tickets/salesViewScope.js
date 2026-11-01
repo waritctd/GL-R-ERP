@@ -24,7 +24,7 @@ const SECTION_IDS = [
   'payment',        // "การชำระเงิน": amounts payable/paid/outstanding, receipt history, record-payment
   'delivery',       // "การส่งมอบ / นำเข้า" (Phase 3 Slice S4, handoff 105): DealFulfilmentPanel — IR/shipping/goods-received/delivery + optional factory-PO detail
   'quotation',      // "ใบเสนอราคา" (legacy): the 3 pre-redesign ticket-native quotation rows, read-only
-  'depositNotice',  // "มัดจำ" (Phase 3 Slice S3, handoff 105): DealDepositPanel — policy/notice/payment
+  'depositNotice',  // "มัดจำ" (Phase 3 Slice S3, handoff 105): the deposit-notice reads (DealPaymentSection, DealDocumentRegister)
   // "การอนุมัติราคา" (the CEO approve/reject decision panel) is gone — Phase 2 Slice S2 retired
   // ticket-native price approval along with its routes (see docs/agent-handoffs/104). CEO price
   // decisions now happen on the PricingRequest chain (PricingRequestDetailPage), gated there.

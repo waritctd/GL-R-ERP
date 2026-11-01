@@ -1,4 +1,5 @@
 import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 
 // One copy of "create this deal's deposit-notice draft", shared by DepositNoticePage's สร้าง button
 // and the deal page's main button (owner rulings 2026-10-28).
@@ -22,4 +23,19 @@ export async function createDepositNoticeDraft(ticketId, noteTemplates) {
   return api.depositNotices.createDraft(ticketId, noteTemplates
     ? { notes: noteTemplates.filter((t) => t.defaultSelected).map((t) => t.text) }
     : {});
+}
+
+/** The ticket's deposit-notice list: one key + fetcher shared by the deal page's main button and its reads. */
+export const depositNoticesQueryOptions = (ticketId) => ({
+  queryKey: queryKeys.depositNotices(ticketId),
+  queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
+});
+
+/** The ticket's DRAFT deposit notice, else its latest ISSUED one, else null. */
+export function pickDepositNotice(docs = []) {
+  const draft = docs.find((d) => d.status === 'DRAFT');
+  const latestIssued = [...docs]
+    .filter((d) => d.status === 'ISSUED')
+    .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0];
+  return draft ?? latestIssued ?? null;
 }
