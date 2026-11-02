@@ -73,6 +73,9 @@ export const queryKeys = {
   // see CommissionPage.jsx's imperative load()); kept here so CeoOverview's
   // unfiltered fetch shares one cache entry with anything else that reads
   // "every commission record" for the current payroll month.
+  // GET /api/commissions/pending-approval: the caller's own approval queue (dashboard landings).
+  // Always cached as the endpoint returns it: the response's `commissions` entries, unreshaped.
+  commissionsPendingApproval: () => ['commissions', 'pending-approval'],
   commissionsList: (payrollMonth) => ['commissions', 'list', payrollMonth ?? ''],
   // Issue #422 B5: reserved for a future react-query migration of CommissionPage's payrollReady()
   // read (GET /api/commissions/payroll-ready, the hr-only summary view) -- CommissionPage itself

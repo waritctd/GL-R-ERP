@@ -60,6 +60,7 @@ class DashboardMoneyTotalsIntegrationTest extends AbstractPostgresIntegrationTes
         for (JsonNode c : table.get("cases")) {
             BigDecimal outstandingBefore = dashboard.financeOutstanding();
             BigDecimal forecastBefore = dashboard.forecastValue();
+            BigDecimal overdueBefore = dashboard.overdueOutstanding();
 
             BigDecimal paid = c.get("paid").decimalValue();
             buildDeal(c, payable);
@@ -70,6 +71,12 @@ class DashboardMoneyTotalsIntegrationTest extends AbstractPostgresIntegrationTes
                 .as("financeOutstanding delta: %s", c.get("name").asText()).isEqualByComparingTo(expectedOutstanding);
             assertThat(dashboard.forecastValue().subtract(forecastBefore))
                 .as("forecastValue delta: %s", c.get("name").asText()).isEqualByComparingTo(expectedForecast);
+            // เกินกำหนดชำระ: the unpaid balance of exactly the deals the deal list flags `overdue`, summed on
+            // the server so it never stops at the list's 500-row page.
+            BigDecimal expectedOverdue = c.get("overdue").asBoolean()
+                ? payable.subtract(paid).max(BigDecimal.ZERO) : BigDecimal.ZERO;
+            assertThat(dashboard.overdueOutstanding().subtract(overdueBefore))
+                .as("overdueOutstanding delta: %s", c.get("name").asText()).isEqualByComparingTo(expectedOverdue);
         }
     }
 

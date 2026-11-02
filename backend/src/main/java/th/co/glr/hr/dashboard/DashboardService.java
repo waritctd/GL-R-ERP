@@ -76,7 +76,8 @@ public class DashboardService {
             cashReceived,
             cashByRep,
             seesCash ? dashboardRepository.financeOutstanding() : null,
-            seesCash ? dashboardRepository.forecastValue() : null
+            seesCash ? dashboardRepository.forecastValue() : null,
+            seesCash ? dashboardRepository.overdueOutstanding() : null
         );
     }
 

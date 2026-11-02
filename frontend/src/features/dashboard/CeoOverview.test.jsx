@@ -1,13 +1,13 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
 import { bangkokMonthStartIso } from '../../utils/format.js';
 import {
-  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows, moneyFixtureTickets,
+  CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows,
 } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
@@ -24,13 +24,14 @@ vi.mock('../../api/index.js', () => ({
   api: {
     tickets: { list: vi.fn() },
     pricingRequests: { queue: vi.fn() },
-    commissions: { list: vi.fn() },
+    commissions: { list: vi.fn(), pendingApproval: vi.fn() },
     overtime: { list: vi.fn() },
     leave: { list: vi.fn() },
   },
 }));
 
 const monthStart = bangkokMonthStartIso();
+const THIS_MONTH = monthStart.slice(0, 7);
 
 const ceoUser = { id: 1, employeeId: 999, name: 'ผู้บริหาร ทดสอบ', role: 'ceo' };
 const ceoEmployee = { nameTh: 'สมศักดิ์ ผู้บริหาร', nickName: 'บอส' };
@@ -44,6 +45,15 @@ const dashboardSummary = {
   cashReceivedByRep: CASH_BY_REP,
   ...SERVER_TOTALS,
 };
+
+const never = () => new Promise(() => {});
+
+function leaveRequest(id) {
+  return {
+    id, employeeName: `พนักงานลา ${id}`, leaveTypeNameTh: 'ลากิจ',
+    startDate: '2026-07-25', endDate: '2026-07-26', managerEmployeeId: 999,
+  };
+}
 
 function mockAllData() {
   api.pricingRequests.queue.mockResolvedValue({
@@ -78,10 +88,21 @@ function mockAllData() {
       },
     ],
   });
+  // The CEO's queue is what the approval page shows: SALE records from pending-approval (any month)
+  // plus this round's manual entries (inserted MANAGER_APPROVED) from the month's list.
+  api.commissions.pendingApproval.mockResolvedValue({
+    commissions: [{ commission: { id: 301, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'SALE' }, ticketCode: 'TK-301' }],
+  });
   api.commissions.list.mockResolvedValue({
     commissions: [
+      { id: 303, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'ADJUSTMENT' },
+      { id: 304, status: 'MANAGER_APPROVED', salesRepName: 'สมหญิง ขายเก่ง', kind: 'STOCK_BONUS' },
+      // Already in pending-approval: never counted twice.
       { id: 301, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'SALE' },
       { id: 302, status: 'SUBMITTED', salesRepName: 'ยังไม่ถึง CEO', kind: 'SALE' },
+      // Manual entries already decided (or rejected) are not waiting on the CEO.
+      { id: 305, status: 'APPROVED', salesRepName: 'อนุมัติแล้ว', kind: 'INCENTIVE' },
+      { id: 306, status: 'REJECTED', salesRepName: 'ถูกปฏิเสธ', kind: 'ADJUSTMENT' },
     ],
   });
   api.overtime.list.mockImplementation((params = {}) => {
@@ -111,14 +132,11 @@ function mockAllData() {
     if (params.status === 'SUBMITTED') {
       return Promise.resolve({
         requests: [
-          {
-            id: 401, employeeName: 'พนักงาน ลาไม่มีผู้จัดการ', leaveTypeNameTh: 'ลากิจ',
-            startDate: '2026-07-25', endDate: '2026-07-26', managerEmployeeId: 999,
-          },
+          leaveRequest(401),
           // CEO leave-approval reach (2026-09-01): managerEmployeeId here is someone OTHER than the
           // CEO (55, not 999) -- kept in the fixture specifically to prove leaveRows no longer
           // filters by FK-manager match. REVIEW_ALL_ROLES gaining "ceo" means the CEO can review
-          // EVERY ใบลา, so this row renders too now, unlike before this change.
+          // EVERY ใบลา.
           { id: 402, employeeName: 'พนักงาน ลามีผู้จัดการอื่น', managerEmployeeId: 55 },
         ],
       });
@@ -132,10 +150,13 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
+let lastClient;
+
 function renderOverview(summary = dashboardSummary) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  lastClient = queryClient;
 
   return render(
     <QueryClientProvider client={queryClient}>
@@ -154,16 +175,6 @@ function renderOverview(summary = dashboardSummary) {
   );
 }
 
-// `label` can also match a worklist-row CTA with the same Thai text (e.g.
-// "ตรวจปิดงาน" is both the ตรวจปิดงาน pulse tile's label and its row's own
-// CTA button) — scope to the element that actually carries the `.stat-label`
-// class, not just any element with matching text.
-function statCardValue(label) {
-  const labelEl = screen.getAllByText(label).find((el) => el.classList.contains('stat-label'));
-  const card = labelEl.closest('.stat-card');
-  return card.querySelector('.stat-value').textContent;
-}
-
 // No @testing-library/jest-dom in this project (see src/test/setup.js) — plain
 // .textContent assertions instead of toHaveTextContent, matching every other
 // test file in this repo.
@@ -171,193 +182,279 @@ function probeText() {
   return screen.getByTestId('location-probe').textContent;
 }
 
+const group = (key) => screen.getByTestId(`worklist-group-${key}`);
+const findGroup = (key) => screen.findByTestId(`worklist-group-${key}`);
+
 describe('CeoOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAllData();
   });
 
-  it('derives the exec pulse counts from the mocked cross-domain data', async () => {
+  it('fetches each worklist source once, with the same filters as before', async () => {
     renderOverview();
-
-    await screen.findByText('อนุมัติราคา');
-
-    // ราคา: only READY_FOR_CEO_REVIEW/CEO_REVIEWING count (SUBMITTED does not).
-    expect(statCardValue('อนุมัติราคา')).toBe('2');
-    // ปิดงาน: only the ticket with closeConfirmedAt set and still open.
-    expect(statCardValue('ตรวจปิดงาน')).toBe('1');
-    // ค่าคอม: only MANAGER_APPROVED.
-    expect(statCardValue('ค่าคอมรออนุมัติ')).toBe('1');
-    // OT (MANAGER_APPROVED + manager-less-direct-to-CEO) + ลา (ALL of it, CEO leave-approval reach,
-    // 2026-09-01) = 2 + 2.
-    expect(statCardValue('OT·ลา รออนุมัติ')).toBe('4');
+    await findGroup('price');
 
     expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
     expect(api.tickets.list).toHaveBeenCalledWith({});
+    // Only the CEO's own queue, never the whole commission history.
+    expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
+    expect(api.commissions.list).toHaveBeenCalledTimes(1);
+    expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
     expect(api.overtime.list).toHaveBeenCalledWith({ status: 'MANAGER_APPROVED' });
     expect(api.overtime.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
     expect(api.leave.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
   });
 
-  it('renders one worklist row per domain and excludes rows the CEO cannot act on', async () => {
-    renderOverview();
+  describe('loading (progressive, never all-or-nothing)', () => {
+    it('shows the money band from the dashboard summary while every worklist query is still loading', () => {
+      [api.tickets.list, api.pricingRequests.queue, api.commissions.list, api.commissions.pendingApproval, api.overtime.list, api.leave.list]
+        .forEach((fn) => fn.mockImplementation(never));
+      renderOverview();
 
-    await screen.findByText('รออนุมัติจากคุณ');
-
-    // Two price rows (501, 502) — 503 (SUBMITTED) must not appear.
-    expect(screen.getByTestId('worklist-row-price-501')).not.toBeNull();
-    expect(screen.getByTestId('worklist-row-price-502')).not.toBeNull();
-    expect(screen.queryByTestId('worklist-row-price-503')).toBeNull();
-
-    expect(screen.getByTestId('worklist-row-close-701')).not.toBeNull();
-    expect(screen.queryByTestId('worklist-row-close-702')).toBeNull();
-
-    expect(screen.getByTestId('worklist-row-commission-301')).not.toBeNull();
-    expect(screen.queryByTestId('worklist-row-commission-302')).toBeNull();
-
-    expect(screen.getByTestId('worklist-row-ot-201')).not.toBeNull();
-    expect(screen.getByTestId('worklist-row-ot-202')).not.toBeNull();
-    expect(screen.queryByTestId('worklist-row-ot-203')).toBeNull();
-
-    // Both leave rows now render (CEO leave-approval reach, 2026-09-01) -- 402's managerEmployeeId
-    // (55) is not the CEO's, but the CEO can review every ใบลา now, not just ones whose FK manager
-    // happens to be them. This is the one domain where "excludes rows the CEO cannot act on" (this
-    // test's title) no longer excludes anything -- there is no longer such a row for leave.
-    expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
-    expect(screen.getByTestId('worklist-row-leave-402')).not.toBeNull();
-  });
-
-  it('deep-links the ราคา CTA to the pricing-request detail page instead of mutating inline', async () => {
-    renderOverview();
-    const row = await screen.findByTestId('worklist-row-price-501');
-
-    expect(within(row).getByText('ตั้งราคา')).not.toBeNull();
-    fireEvent.click(within(row).getByText('ตั้งราคา'));
-
-    await screen.findByTestId('location-probe');
-    expect(probeText()).toContain('/pricing-requests/501');
-    // No pricing-decision/costing mutation method exists on the mocked api surface at
-    // all (see the vi.mock above) — this component genuinely cannot call one.
-  });
-
-  it('deep-links the ปิดงาน CTA to the ticket detail page', async () => {
-    renderOverview();
-    const row = await screen.findByTestId('worklist-row-close-701');
-
-    fireEvent.click(within(row).getByText('ตรวจปิดงาน'));
-
-    await screen.findByTestId('location-probe');
-    expect(probeText()).toContain('/tickets/701');
-  });
-
-  it('deep-links the ค่าคอม CTA to /commissions', async () => {
-    renderOverview();
-    const row = await screen.findByTestId('worklist-row-commission-301');
-
-    fireEvent.click(within(row).getByText('อนุมัติ'));
-
-    await screen.findByTestId('location-probe');
-    expect(probeText()).toContain('/commissions');
-  });
-
-  it('deep-links the OT CTA to the OT tab of the requests page', async () => {
-    renderOverview();
-    const row = await screen.findByTestId('worklist-row-ot-201');
-
-    fireEvent.click(within(row).getByText('อนุมัติ'));
-
-    await screen.findByTestId('location-probe');
-    expect(probeText()).toContain('/employee-requests');
-    expect(probeText()).toContain('tab=ot');
-  });
-
-  it('deep-links the ลา CTA to /leave', async () => {
-    renderOverview();
-    const row = await screen.findByTestId('worklist-row-leave-401');
-
-    fireEvent.click(within(row).getByText('อนุมัติ'));
-
-    await screen.findByTestId('location-probe');
-    expect(probeText()).toContain('/leave');
-  });
-
-  it('renders the company snapshot from the derived ticket figures and dashboardSummary', async () => {
-    renderOverview();
-
-    await screen.findByText('ผลบริษัทเดือนนี้');
-
-    // Overdue receivables: only the overdue ticket's outstanding balance (703).
-    expect(screen.getByText('ลูกหนี้ค้าง/เกินกำหนด').nextSibling.textContent).toBe('฿15,000.00');
-    expect(screen.getByText('กำลังพล').nextSibling.textContent).toBe('42 คน');
-    expect(screen.getByText('มาสายวันนี้').nextSibling.textContent).toBe('3 คน');
-  });
-
-  it('splits this month\'s cash received per sales rep, adding up to เงินรับแล้ว, with no invented target/quota', async () => {
-    renderOverview();
-
-    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
-    expect(within(panel).getByText('สมชาย ขายดี').nextSibling.textContent).toBe('฿90,000.50');
-    expect(within(panel).getByText('สมหญิง ขายเก่ง').nextSibling.textContent).toBe('฿35,000.00');
-    // The bars add up to the เงินรับแล้ว (เดือนนี้) figure shown beside them.
-    const barTotal = [...panel.querySelectorAll('code')]
-      .reduce((sum, el) => sum + Number(el.textContent.replace(/[฿,]/g, '')), 0);
-    expect(barTotal).toBeCloseTo(CASH_RECEIVED_THIS_MONTH, 2);
-    expectFigure('เงินรับแล้ว (เดือนนี้)', '฿125,000.50');
-    // The old basis -- deals the CEO closed this month at amountPaid (TK-702, ฿50,000) -- is gone.
-    expect(within(panel).queryByText('฿50,000.00')).toBeNull();
-    // No percentage/quota text is rendered anywhere in that panel.
-    expect(within(panel).queryByText(/%/)).toBeNull();
-  });
-
-  it('sorts the rep rows by amount, largest first, whatever order the server sent', async () => {
-    renderOverview();
-
-    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
-    const names = [...panel.querySelectorAll('span.truncate')].map((el) => el.textContent);
-    expect(names).toEqual(['สมชาย ขายดี', 'สมหญิง ขายเก่ง']);
-  });
-
-  it('lists every rep so the bars still add up to เงินรับแล้ว with more than eight reps', async () => {
-    const reps = Array.from({ length: 9 }, (_, i) => ({ repName: `เซลส์ ${i + 1}`, amount: 1000 }));
-    renderOverview({ ...dashboardSummary, cashReceivedThisMonth: 9000, cashReceivedByRep: reps });
-
-    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
-    expect(panel.querySelectorAll('code')).toHaveLength(9);
-  });
-
-  it('keeps the empty-state text when no cash was received per rep', async () => {
-    renderOverview({ ...dashboardSummary, cashReceivedByRep: [] });
-
-    const panel = (await screen.findByText('ยอดตามทีม/ฝ่าย')).closest('section');
-    expect(within(panel).getByText('ยังไม่มีเงินรับเข้าในเดือนนี้')).not.toBeNull();
-  });
-  it('shows the same three money figures as /finance and the sales-manager dashboard', async () => {
-    api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
-    renderOverview();
-    await screen.findByText('อนุมัติราคา');
-
-    expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
-    expectFigure('ค้างรับ', EXPECTED.outstanding);
-    expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
-  });
-
-  it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', async () => {
-    api.tickets.list.mockResolvedValue({ tickets: moneyFixtureTickets });
-    renderOverview({ ...dashboardSummary, financeOutstanding: undefined, forecastValue: undefined });
-    await screen.findByText('อนุมัติราคา');
-
-    expectFigure('ค้างรับ', '—');
-    expectFigure('ยอดคาดการณ์', '—');
-  });
-
-  it('no longer shows the closed-sales and pipeline figures', async () => {
-    renderOverview();
-    await screen.findByText('ผลบริษัทเดือนนี้');
-
-    ['ยอดขายเดือนนี้', 'ยอดขายปิดแล้ว', 'ปิดงานแล้ว', 'Pipeline บริษัท'].forEach((label) => {
-      expect(figureRows(label), label).toEqual([]);
+      // Synchronous: no await. The summary is already in hand, so the figures render on the first paint.
+      expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
+      expectFigure('ค้างรับ', EXPECTED.outstanding);
+      expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
+      expect(screen.getByText('ทีมงานวันนี้')).not.toBeNull();
     });
-    // The other company-result rows stay.
-    expect(screen.getByText('ลูกหนี้ค้าง/เกินกำหนด')).not.toBeNull();
+
+    it('renders a group as soon as its own query lands, while a slow one (the deal list) keeps loading', async () => {
+      api.tickets.list.mockImplementation(never);
+      renderOverview();
+
+      const price = await findGroup('price');
+      expect(within(price).getByTestId('worklist-row-price-501')).not.toBeNull();
+      expect((await findGroup('leave')).textContent).toContain('พนักงานลา 401');
+      // Only the deal-list-backed ปิดงาน group waits; every figure is a server total.
+      expect(group('close').getAttribute('aria-busy')).toBe('true');
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
+      // The total would be a partial sum here, so it waits for every source.
+      expect(screen.queryByTestId('worklist-total')).toBeNull();
+    });
+
+    it('keeps what it already shows when a background refetch fails', async () => {
+      renderOverview();
+      await screen.findByTestId('worklist-row-close-701');
+      api.tickets.list.mockRejectedValue(new Error('offline'));
+      await act(async () => {
+        await lastClient.refetchQueries();
+        await new Promise((resolve) => { setTimeout(resolve, 20); }); // let the error notification render
+      });
+      // The refetch really failed (React Query keeps the last data alongside the error).
+      expect(lastClient.getQueryCache().findAll().some((q) => q.state.status === 'error')).toBe(true);
+
+      expect(screen.getByTestId('worklist-row-close-701')).not.toBeNull();
+      expect(screen.queryByText('โหลดไม่สำเร็จ')).toBeNull();
+    });
+
+    it('shows a failed source as failed instead of loading forever, and the rest still render', async () => {
+      api.tickets.list.mockRejectedValue(new Error('boom'));
+      renderOverview();
+
+      await findGroup('price');
+      const close = await screen.findByText('โหลดไม่สำเร็จ');
+      expect(close.closest('[data-testid="worklist-group-close"]').getAttribute('aria-busy')).toBeNull();
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
+      expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
+    });
+  });
+
+  describe('money band', () => {
+    it('shows the same three money figures as /finance and the sales-manager dashboard', () => {
+      renderOverview();
+
+      expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
+      expectFigure('ค้างรับ', EXPECTED.outstanding);
+      expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+    });
+
+    it('shows the server\'s overdue total, never a sum of the 500-row deal list', async () => {
+      renderOverview();
+      await findGroup('close');
+
+      // The one overdue deal in the list owes 15,000; the server total covers every deal.
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
+      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿15,000.00');
+    });
+
+    it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', () => {
+      renderOverview({ ...dashboardSummary, financeOutstanding: undefined, forecastValue: undefined, overdueOutstanding: undefined });
+
+      expectFigure('ค้างรับ', '—');
+      expectFigure('ยอดคาดการณ์', '—');
+      expectFigure('เกินกำหนดชำระ', '—');
+    });
+
+    it('drops the four count tiles and the old closed-sales / pipeline figures', async () => {
+      renderOverview();
+      await findGroup('price');
+
+      expect(document.querySelector('.stat-card')).toBeNull();
+      ['อนุมัติราคา', 'ค่าคอมรออนุมัติ', 'OT·ลา รออนุมัติ', 'ยอดขายเดือนนี้', 'ยอดขายปิดแล้ว', 'Pipeline บริษัท']
+        .forEach((label) => expect(screen.queryByText(label), label).toBeNull());
+      expect(screen.queryByText(/Close verifications|Manager approved|Final approvals/)).toBeNull();
+    });
+  });
+
+  describe('รอคุณตัดสินใจ worklist', () => {
+    it('groups in money-blocking order with a count per group and a total badge', async () => {
+      renderOverview();
+      await findGroup('close');
+
+      const order = [...document.querySelectorAll('[data-testid^="worklist-group-"]')]
+        .map((el) => el.dataset.testid.replace('worklist-group-', ''));
+      expect(order).toEqual(['price', 'close', 'commission', 'ot', 'leave']);
+
+      expect(group('price').textContent).toContain('2 รายการ');
+      expect(group('close').textContent).toContain('1 รายการ');
+      expect(group('commission').textContent).toContain('3 รายการ');
+      expect(group('ot').textContent).toContain('2 รายการ');
+      expect(group('leave').textContent).toContain('2 รายการ');
+      expect(screen.getByTestId('worklist-total').textContent).toBe('10');
+      // Screen readers get words, not a bare number (aria-label on a plain span is ignored).
+      expect(screen.getByText('รวม 10 รายการ').className).toContain('sr-only');
+    });
+
+    it('keeps only the rows the CEO can act on', async () => {
+      renderOverview();
+      await findGroup('close');
+
+      expect(screen.getByTestId('worklist-row-price-501')).not.toBeNull();
+      expect(screen.getByTestId('worklist-row-price-502')).not.toBeNull();
+      expect(screen.queryByTestId('worklist-row-price-503')).toBeNull();
+
+      expect(screen.getByTestId('worklist-row-close-701')).not.toBeNull();
+      expect(screen.queryByTestId('worklist-row-close-702')).toBeNull();
+
+      expect(screen.getByTestId('worklist-row-ot-201')).not.toBeNull();
+      expect(screen.getByTestId('worklist-row-ot-202')).not.toBeNull();
+      expect(screen.queryByTestId('worklist-row-ot-203')).toBeNull();
+
+      expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
+      expect(screen.getByTestId('worklist-row-leave-402')).not.toBeNull();
+    });
+
+    it('shows at most three rows per group and links the rest to the owning page', async () => {
+      api.leave.list.mockResolvedValue({ requests: [401, 402, 403, 404, 405].map(leaveRequest) });
+      renderOverview();
+      const leave = await findGroup('leave');
+
+      expect(leave.querySelectorAll('[data-testid^="worklist-row-leave-"]')).toHaveLength(3);
+      expect(leave.textContent).toContain('5 รายการ');
+      fireEvent.click(within(leave).getByRole('button', { name: /อีก 2 รายการ/ }));
+
+      await screen.findByTestId('location-probe');
+      expect(probeText()).toBe('/leave');
+    });
+
+    it('opens the owning page from a group\'s ดูทั้งหมด', async () => {
+      renderOverview();
+      const ot = await findGroup('ot');
+
+      fireEvent.click(within(ot).getByRole('button', { name: /ดูทั้งหมด/ }));
+
+      await screen.findByTestId('location-probe');
+      expect(probeText()).toBe('/employee-requests?tab=ot');
+    });
+
+    it('collapses every commission awaiting the CEO into one row that opens the approval queue', async () => {
+      renderOverview();
+      const commission = await findGroup('commission');
+
+      const row = within(commission).getByTestId('worklist-row-commission');
+      // Each rep once, however many of their records wait; the SUBMITTED one is the manager's, not here.
+      expect(row.textContent).toContain('สมชาย ขายดี, สมหญิง ขายเก่ง');
+      expect(row.textContent).not.toContain('ยังไม่ถึง CEO');
+      expect(row.textContent).not.toMatch(/อนุมัติแล้ว|ถูกปฏิเสธ|Incentive/);
+      expect(row.textContent).toContain('ค่าคอมขาย');
+      expect(row.textContent).toContain('ปรับปรุง/รับช่วงงาน');
+      expect(row.textContent).toContain('โบนัสขายสต็อก');
+      // The one row already stands for all three records: nothing is hidden behind "อีก N".
+      expect(within(commission).queryByRole('button', { name: /อีก/ })).toBeNull();
+
+      fireEvent.click(within(row).getByRole('button', { name: 'เปิดหน้าอนุมัติ' }));
+      await screen.findByTestId('location-probe');
+      expect(probeText()).toBe('/commissions?view=pending');
+    });
+
+    it.each([
+      ['pending-approval', () => api.commissions.pendingApproval],
+      ['this month\'s list', () => api.commissions.list],
+    ])('marks the commission group failed when %s fails, and the rest still render', async (_, source) => {
+      source().mockRejectedValue(new Error('offline'));
+      renderOverview();
+
+      const commission = await findGroup('commission');
+      expect(await within(commission).findByText('โหลดไม่สำเร็จ')).not.toBeNull();
+      expect(screen.getByTestId('worklist-row-price-501')).not.toBeNull();
+    });
+
+    it('says so when nothing waits on the CEO', async () => {
+      api.pricingRequests.queue.mockResolvedValue({ items: [] });
+      api.tickets.list.mockResolvedValue({ tickets: [] });
+      api.commissions.list.mockResolvedValue({ commissions: [] });
+      api.commissions.pendingApproval.mockResolvedValue({ commissions: [] });
+      api.overtime.list.mockResolvedValue({ requests: [] });
+      api.leave.list.mockResolvedValue({ requests: [] });
+      renderOverview();
+
+      expect(await screen.findByText('ไม่มีรายการที่รอการตัดสินใจจากคุณตอนนี้')).not.toBeNull();
+      expect(document.querySelector('[data-testid^="worklist-group-"]')).toBeNull();
+    });
+
+    it.each([
+      ['price-501', 'ตั้งราคา', '/pricing-requests/501'],
+      ['close-701', 'ตรวจปิดงาน', '/tickets/701'],
+      ['ot-201', 'อนุมัติ', '/employee-requests?tab=ot'],
+      ['leave-401', 'อนุมัติ', '/leave'],
+    ])('deep-links the %s row CTA instead of mutating inline', async (rowId, cta, path) => {
+      renderOverview();
+      const row = await screen.findByTestId(`worklist-row-${rowId}`);
+
+      fireEvent.click(within(row).getByRole('button', { name: cta }));
+
+      await screen.findByTestId('location-probe');
+      expect(probeText()).toBe(path);
+    });
+  });
+
+  describe('side panels', () => {
+    it('splits this month\'s cash per sales rep, largest first, adding up to เงินรับแล้ว, with no invented target', () => {
+      renderOverview();
+
+      const panel = screen.getByText('เงินรับตามพนักงานขาย').closest('section');
+      const rows = [...panel.querySelectorAll('[data-testid="rep-row"]')];
+      expect(rows.map((el) => el.querySelector('[data-testid="rep-name"]').textContent))
+        .toEqual(['สมชาย ขายดี', 'สมหญิง ขายเก่ง']);
+      const total = rows
+        .map((el) => Number(el.querySelector('[data-testid="rep-amount"]').textContent.replace(/[฿,]/g, '')))
+        .reduce((sum, n) => sum + n, 0);
+      expect(total).toBeCloseTo(CASH_RECEIVED_THIS_MONTH, 2);
+      expect(within(panel).queryByText(/%/)).toBeNull();
+    });
+
+    it('lists every rep, even more than eight', () => {
+      const reps = Array.from({ length: 9 }, (_, i) => ({ repName: `เซลส์ ${i + 1}`, amount: 1000 }));
+      renderOverview({ ...dashboardSummary, cashReceivedThisMonth: 9000, cashReceivedByRep: reps });
+
+      const panel = screen.getByText('เงินรับตามพนักงานขาย').closest('section');
+      expect(panel.querySelectorAll('[data-testid="rep-row"]')).toHaveLength(9);
+    });
+
+    it('explains the empty rep panel', () => {
+      renderOverview({ ...dashboardSummary, cashReceivedByRep: [] });
+
+      const panel = screen.getByText('เงินรับตามพนักงานขาย').closest('section');
+      expect(within(panel).getByText('ยังไม่มีเงินรับเข้าเดือนนี้')).not.toBeNull();
+    });
+
+    it('shows headcount and lateness under ทีมงานวันนี้', () => {
+      renderOverview();
+
+      expectFigure('กำลังพล', '42 คน');
+      expectFigure('มาสายวันนี้', '3 คน');
+    });
   });
 });
