@@ -1,5 +1,4 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E4 S4 R5 V5 */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -7,21 +6,39 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
+import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, useStageCatalog } from '../tickets/stageCatalog.js';
+import { Figure, failed } from './dashboardParts.jsx';
 
 // useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
 // stable while the data is unchanged, and the worklist memo below holds.
 const dataOfQueries = (results) => results.map((result) => result.data);
 
-const FOLLOW_UP_LIST_LIMIT = 6;
+const QUIET_VISIBLE = 3;
 
-function WorklistRow({ deal, action, onClick }) {
+// The worklist's four groups, in reading order. `of` picks a group from the action key.
+const GROUPS = [
+  { key: 'follow', label: 'ติดตามลูกค้า', hint: 'ถึงกำหนดหรือเลยนัด', dot: 'bg-danger' },
+  { key: 'next', label: 'ต้องทำต่อ', hint: 'ขั้นต่อไปเป็นของคุณ', dot: 'bg-warning' },
+  { key: 'wait', label: 'รอผู้อื่น', hint: 'รอ ผจก.ขาย/CEO อนุมัติ', dot: 'bg-border-strong' },
+  { key: 'quiet', label: 'ไม่มีความเคลื่อนไหว', hint: 'ยังไม่มีบันทึกล่าสุด', dot: 'bg-border-strong', muted: true },
+];
+
+// Which group a worklist row reads under. Every other action (a PCR to create, a quotation to
+// issue, an order to confirm, …) is the rep's next step, however long the deal has been still.
+function groupOf(action) {
+  if (action.key === SALES_ACTION.FOLLOW_UP) return 'follow';
+  if (action.key === SALES_ACTION.AWAIT_DIRECT_APPROVAL) return 'wait';
+  if (action.key === SALES_ACTION.LOG_ACTIVITY) return 'quiet';
+  return 'next';
+}
+
+function WorklistRow({ deal, action, followUp, muted, onClick }) {
   // DESIGN.md §15: tone says whose move it is. Every rep-actionable bucket (the slice-2 direct
   // SUBMIT/CONFIRM included) falls through to warning; AWAIT_DIRECT_APPROVAL is waiting on
   // ผจก.ขาย/CEO, so it reads neutral like the other not-mine-yet row.
@@ -35,8 +52,9 @@ function WorklistRow({ deal, action, onClick }) {
   return (
     <button
       type="button"
+      data-testid={`sales-row-${deal.id}`}
       onClick={onClick}
-      className="flex min-h-11 w-full items-center justify-between gap-3 border-0 border-b border-border-subtle bg-transparent py-3 text-left text-text last:border-b-0 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]"
+      className={`flex min-h-11 w-full items-center justify-between gap-3 border-0 border-t border-border-subtle bg-transparent px-5 py-3 text-left text-text transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)] mobile:px-3.5 mobile:min-h-[44px] ${muted ? 'opacity-80' : ''}`}
     >
       <span className="flex min-w-0 flex-col gap-0.5">
         <strong className="min-w-0 truncate text-sm font-bold text-text">{deal.customerName || deal.title}</strong>
@@ -44,8 +62,10 @@ function WorklistRow({ deal, action, onClick }) {
           {[deal.code, deal.projectName].filter(Boolean).join(' · ')}
         </span>
       </span>
-      <span className="flex shrink-0 items-center gap-2">
+      <span className="flex shrink-0 flex-wrap items-center justify-end gap-2">
         <StatusBadge tone={badgeTone}>{action.label}</StatusBadge>
+        {followUp === 'overdue' ? <StatusBadge tone="danger">เลยนัด {formatThaiDate(deal.nextFollowUpAt)}</StatusBadge> : null}
+        {followUp === 'today' ? <StatusBadge tone="teal">นัดวันนี้</StatusBadge> : null}
         <Icon name="chevronRight" size={16} className="text-text-faint" />
       </span>
     </button>
@@ -53,12 +73,14 @@ function WorklistRow({ deal, action, onClick }) {
 }
 
 /**
- * Sales' personal-cockpit landing (role-scoped views, Sales branch): "what
- * needs me today" — pulse counts, a next-action worklist, this month's
- * commission estimate, and follow-ups coming due. The full pipeline
- * (`รายการดีล`/TicketListPage) stays a separate nav item; this page never
- * duplicates its filters/table, only surfaces what needs the rep's attention
- * right now. Own-scoped end to end: api.tickets.list/api.pricingRequests.queue
+ * Sales' personal-cockpit landing (role-scoped views, Sales branch): "what needs me today".
+ * Top to bottom: a money band (this month's commission estimate and base, plus the open-deal
+ * value), then one worklist grouped by whose move it is: ติดตามลูกค้า, ต้องทำต่อ, รอผู้อื่น,
+ * ไม่มีความเคลื่อนไหว (the last capped at three rows, expandable). Each row opens its deal and
+ * carries the next action and, when due, the follow-up date. The full pipeline
+ * (`รายการดีล`/TicketListPage) stays a separate nav item; this page never duplicates its
+ * filters/table. Nothing is gated on both queries: each figure and the worklist load (or say
+ * they failed) on their own. Own-scoped end to end: api.tickets.list/api.pricingRequests.queue
  * both already scope to `created_by` server-side for role === 'sales' (see
  * salesViewScope.js's header note on mock-vs-Java authority) — this component
  * adds no client-side ownership filtering of its own beyond `lifecycle === 'ACTIVE'`.
@@ -129,135 +151,118 @@ export function SalesOverview({ user, employee }) {
     return sortWorklist(items);
   }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationRows]);
 
-  const pulse = useMemo(() => {
-    let overdueFollowUp = 0;
-    let followUpToday = 0;
-    for (const deal of activeDeals) {
-      const status = followUpStatus(deal, todayIso);
-      if (status === 'overdue') overdueFollowUp += 1;
-      else if (status === 'today') followUpToday += 1;
-    }
-    const pendingQuotation = pricingRequests.filter((pr) => pr.status === 'APPROVED_FOR_QUOTATION').length;
-    const pipelineValue = activeDeals.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
-    return { overdueFollowUp, followUpToday, pendingQuotation, pipelineValue };
-  }, [activeDeals, pricingRequests, todayIso]);
+  const openValue = useMemo(
+    () => activeDeals.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0),
+    [activeDeals],
+  );
 
-  const followUpsDue = useMemo(() => activeDeals
-    .filter((deal) => followUpStatus(deal, todayIso) != null)
-    .sort((a, b) => new Date(a.nextFollowUpAt) - new Date(b.nextFollowUpAt))
-    .slice(0, FOLLOW_UP_LIST_LIMIT), [activeDeals, todayIso]);
-
-  const commission = useMemo(() => ({
-    base: commissionSummaryQuery.data?.commissionableBase ?? 0,
-    estimate: commissionSummaryQuery.data?.totalCommission ?? 0,
-  }), [commissionSummaryQuery.data]);
+  const grouped = useMemo(() => {
+    const byKey = Object.fromEntries(GROUPS.map((g) => [g.key, []]));
+    worklist.forEach((item) => byKey[groupOf(item.action)].push(item));
+    return byKey;
+  }, [worklist]);
+  const [showAllQuiet, setShowAllQuiet] = useState(false);
 
   const greetName = employee?.nickName || employee?.nameTh || user?.name || '';
+
+  const summary = commissionSummaryQuery.data;
+  const dash = (query, value) => (failed(query) ? '—' : value ?? <Skeleton width={96} height={22} className="mobile:ml-auto" />);
+  const dealsFailed = failed(ticketsQuery) || failed(pricingRequestsQuery);
 
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี ${greetingName(greetName)}`}
-        subtitle={`ดีลของฉัน · ${formatThaiDate(todayIso)} — งานและลูกค้าที่ต้องติดตามวันนี้`}
-        actions={(
-          <Button type="button" variant="text" onClick={() => navigate('/tickets')}>
-            ดูรายการดีลทั้งหมด
-            <Icon name="chevronRight" size={14} />
-          </Button>
-        )}
+        title="ดีลของฉัน"
+        subtitle={`สวัสดี, ${greetingName(greetName)} · ${formatThaiDate(todayIso)}`}
+        actions={<Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูรายการดีลทั้งหมด</Button>}
       />
 
-      <StatGrid>
-        <StatCard
-          icon="triangleAlert"
-          label="เกินกำหนดติดตาม"
-          value={pulse.overdueFollowUp}
-          helper="Overdue follow-up"
-          tone="rose"
-          onClick={() => navigate('/tickets')}
-        />
-        <StatCard
-          icon="clock"
-          label="ติดตามวันนี้"
-          value={pulse.followUpToday}
-          helper="Due today"
-          tone="teal"
-          onClick={() => navigate('/tickets')}
-        />
-        <StatCard
-          icon="fileText"
-          label="รอออกใบเสนอราคา"
-          value={pulse.pendingQuotation}
-          helper="Ready to quote"
-          tone="amber"
-          onClick={() => navigate('/tickets')}
-        />
-        <StatCard
-          icon="badgeDollar"
-          label="มูลค่า pipeline"
-          value={formatMoney(pulse.pipelineValue)}
-          helper="Open deals"
-          tone="indigo"
-        />
-      </StatGrid>
+      <section className="rounded-md border border-border bg-surface p-5 mobile:p-3.5" aria-label="ตัวเลขเดือนนี้">
+        <dl className="m-0 grid grid-cols-[1.5fr_1fr_1fr] gap-x-6 nav-drawer:grid-cols-2 nav-drawer:gap-y-4 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
+          <Figure
+            lead
+            label="ค่าคอมประมาณการ (เดือนนี้)"
+            value={dash(commissionSummaryQuery, summary && formatMoney(summary.totalCommission ?? 0))}
+            caption={<Button type="button" variant="text" size="sm" onClick={() => navigate('/commissions')} className="mobile:min-h-[44px]">ดูรายละเอียดค่าคอม</Button>}
+          />
+          <Figure
+            label="ฐานคิดค่าคอม"
+            value={dash(commissionSummaryQuery, summary && formatMoney(summary.commissionableBase ?? 0))}
+            caption="ยอดที่ใช้คิดค่าคอมเดือนนี้"
+          />
+          <Figure
+            label="มูลค่าดีลที่เปิดอยู่"
+            value={dash(ticketsQuery, ticketsQuery.data && formatMoney(openValue))}
+            caption="ทุกดีลที่ยังไม่ปิด"
+          />
+        </dl>
+      </section>
 
-      <div className="grid grid-cols-[1.15fr_0.85fr] items-start gap-[18px] nav-drawer:grid-cols-1">
-        <Panel title="สิ่งที่ต้องทำ">
-          {loading ? (
-            <p className="m-0 text-sm text-text-muted">กำลังโหลดงานที่ต้องทำ…</p>
-          ) : worklist.length === 0 ? (
-            <div className="grid min-h-[220px] place-items-center content-center gap-2 text-center text-text-muted">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</div>
-          ) : (
-            <div className="flex flex-col">
-              {worklist.map(({ deal, action }) => (
-                <WorklistRow key={deal.id} deal={deal} action={action} onClick={() => navigate(`/tickets/${deal.id}`)} />
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        <div className="grid gap-[18px]">
-          <Panel
-            title="ค่าคอมเดือนนี้"
-            actions={(
-              <Button type="button" variant="text" onClick={() => navigate('/commissions')}>ดูรายละเอียด</Button>
-            )}
-          >
-            <dl className="m-0 grid gap-2">
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="!text-xs !text-text-muted">ค่าคอมประมาณการ</dt>
-                <dd className="m-0 text-xl font-extrabold text-text">{formatMoney(commission.estimate)}</dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-3 border-t border-border-subtle pt-2">
-                <dt className="!text-xs !text-text-muted">ฐานคิดค่าคอม</dt>
-                <dd className="m-0 text-sm font-bold text-text-secondary">{formatMoney(commission.base)}</dd>
-              </div>
-            </dl>
-          </Panel>
-
-          <Panel title="ติดตามที่ครบกำหนด">
-            {followUpsDue.length === 0 ? (
-              <p className="m-0 text-sm text-text-muted">ไม่มีนัดติดตามที่ครบกำหนด</p>
-            ) : (
-              <div className="flex flex-col">
-                {followUpsDue.map((deal) => (
-                  <button
+      <Panel
+        flush
+        title="สิ่งที่ต้องทำ"
+        actions={!loading && !dealsFailed ? (
+          <span className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
+            <span data-testid="worklist-total" aria-hidden="true">{worklist.length}</span>
+            <span className="sr-only">รวม {worklist.length} ดีล</span>
+          </span>
+        ) : null}
+      >
+        {dealsFailed ? (
+          <p className="m-0 px-5 py-4 text-sm font-bold text-danger mobile:px-3.5">โหลดไม่สำเร็จ</p>
+        ) : loading ? (
+          <div className="grid gap-2 px-5 py-4 mobile:px-3.5" role="status" aria-busy="true" aria-label="กำลังโหลดงานที่ต้องทำ">
+            <Skeleton height={36} />
+            <Skeleton height={36} />
+            <Skeleton height={36} />
+          </div>
+        ) : worklist.length === 0 ? (
+          <div className="flex items-center gap-3 px-5 py-4 text-text-muted mobile:px-3.5">
+            <Icon name="check" size={18} />
+            <span className="text-sm font-bold">ไม่มีสิ่งที่ต้องดำเนินการตอนนี้</span>
+          </div>
+        ) : (
+          GROUPS.filter((g) => grouped[g.key].length > 0).map((g) => {
+            const items = grouped[g.key];
+            const collapsible = g.key === 'quiet' && items.length > QUIET_VISIBLE;
+            const capped = collapsible && !showAllQuiet;
+            const shown = capped ? items.slice(0, QUIET_VISIBLE) : items;
+            return (
+              <div key={g.key} data-testid={`sales-group-${g.key}`}>
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2.5 mobile:px-3.5">
+                  <span aria-hidden="true" className={`size-2 rounded-full ${g.dot}`} />
+                  <span className={`text-sm font-extrabold ${g.muted ? 'text-text-muted' : 'text-text'}`}>{g.label}</span>
+                  <span className="text-xs tabular-nums text-text-muted">{items.length} ดีล</span>
+                  <span className="text-xs text-text-faint">· {g.hint}</span>
+                </div>
+                {shown.map(({ deal, action }) => (
+                  <WorklistRow
                     key={deal.id}
-                    type="button"
+                    deal={deal}
+                    action={action}
+                    followUp={followUpStatus(deal, todayIso)}
+                    muted={g.muted}
                     onClick={() => navigate(`/tickets/${deal.id}`)}
-                    className="flex min-h-11 items-center justify-between gap-2 border-0 border-b border-border-subtle bg-transparent py-2 text-left text-text last:border-b-0 transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:bg-surface-hover focus-visible:shadow-[inset_var(--shadow-focus-ring)]"
-                  >
-                    <span className="min-w-0 truncate text-sm text-text">{deal.customerName || deal.title}</span>
-                    <StatusBadge tone={followUpStatus(deal, todayIso) === 'overdue' ? 'danger' : 'teal'}>
-                      {formatThaiDate(deal.nextFollowUpAt)}
-                    </StatusBadge>
-                  </button>
+                  />
                 ))}
+                {collapsible ? (
+                  // One button that stays put (keyboard focus is kept) and folds the group back.
+                  <Button
+                    type="button"
+                    variant="text"
+                    size="sm"
+                    aria-expanded={showAllQuiet}
+                    onClick={() => setShowAllQuiet((open) => !open)}
+                    className="mx-5 mb-2 mobile:mx-3.5 mobile:min-h-[44px]"
+                  >
+                    {showAllQuiet ? 'แสดงน้อยลง' : `แสดงอีก ${items.length - QUIET_VISIBLE} ดีล`}
+                  </Button>
+                ) : null}
               </div>
-            )}
-          </Panel>
-        </div>
-      </div>
+            );
+          })
+        )}
+      </Panel>
     </PageStack>
   );
 }

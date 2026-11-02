@@ -53,16 +53,23 @@ export const CASH_BY_REP = [
 ];
 // The server totals on /api/dashboard/summary. Deliberately NOT what the fixture rows add up to
 // (293,545.25 and 80,000.25): /api/tickets is capped at 500 rows, so a screen that sums rows is wrong.
-export const SERVER_TOTALS = { financeOutstanding: 411111.11, forecastValue: 222222.22 };
+export const SERVER_TOTALS = { financeOutstanding: 411111.11, forecastValue: 222222.22, overdueOutstanding: 52525.25 };
 export const EXPECTED = {
   cash: '฿125,000.50',
   outstanding: '฿411,111.11',
   forecast: '฿222,222.22',
+  overdue: '฿52,525.25',
 };
 
-/** Text of every row/tile carrying `label`: a StatCard, or a <dt>/<dd> pair in a <dl>. */
+/**
+ * Text of every row/tile carrying `label`: a StatCard, or a <dt>/<dd> pair in a <dl>. A badge or chip
+ * that happens to use the same words is not a figure, so it is skipped rather than read as an empty one.
+ */
 export function figureRows(label) {
-  return screen.queryAllByText(label).map((el) => el.closest('.stat-card, dl > div')?.textContent ?? '');
+  return screen.queryAllByText(label)
+    .map((el) => el.closest('.stat-card, dl > div'))
+    .filter(Boolean)
+    .map((el) => el.textContent);
 }
 
 export function expectFigure(label, value) {

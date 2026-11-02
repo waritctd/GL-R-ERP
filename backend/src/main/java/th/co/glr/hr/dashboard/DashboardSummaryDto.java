@@ -38,7 +38,9 @@ public record DashboardSummaryDto(
     /** /finance's คงค้างรวม as a server total (account-scope deals with an account to-do); null unless account/ceo/sales_manager. */
     BigDecimal financeOutstanding,
     /** Payable of ACTIVE deals before ORDER_RECEIVED; null unless account/ceo/sales_manager. */
-    BigDecimal forecastValue
+    BigDecimal forecastValue,
+    /** Unpaid balance of deals the deal list flags overdue (sum of amountOutstanding where overdue); null unless account/ceo/sales_manager. */
+    BigDecimal overdueOutstanding
 ) {
     public static DashboardSummaryDto of(
         String role,
@@ -54,7 +56,7 @@ public record DashboardSummaryDto(
         NotificationSummaryDto notifications
     ) {
         return of(role, employeeId, divisionId, manager, generatedAt, headcount, pendingApprovals,
-            attendance, latestPayrollPeriodId, tickets, notifications, null, null, null, null);
+            attendance, latestPayrollPeriodId, tickets, notifications, null, null, null, null, null);
     }
 
     public static DashboardSummaryDto of(
@@ -72,7 +74,8 @@ public record DashboardSummaryDto(
         BigDecimal cashReceivedThisMonth,
         List<CashByRepDto> cashReceivedByRep,
         BigDecimal financeOutstanding,
-        BigDecimal forecastValue
+        BigDecimal forecastValue,
+        BigDecimal overdueOutstanding
     ) {
         return new DashboardSummaryDto(
             role,
@@ -102,7 +105,8 @@ public record DashboardSummaryDto(
             cashReceivedThisMonth,
             cashReceivedByRep,
             financeOutstanding,
-            forecastValue
+            forecastValue,
+            overdueOutstanding
         );
     }
 }
