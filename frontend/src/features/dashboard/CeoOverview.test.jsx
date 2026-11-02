@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
@@ -140,10 +140,13 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
+let lastClient;
+
 function renderOverview(summary = dashboardSummary) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  lastClient = queryClient;
 
   return render(
     <QueryClientProvider client={queryClient}>
@@ -215,6 +218,22 @@ describe('CeoOverview', () => {
       expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿');
       // The total would be a partial sum here, so it waits for every source.
       expect(screen.queryByTestId('worklist-total')).toBeNull();
+    });
+
+    it('keeps what it already shows when a background refetch fails', async () => {
+      renderOverview();
+      await screen.findByTestId('worklist-row-close-701');
+      api.tickets.list.mockRejectedValue(new Error('offline'));
+      await act(async () => {
+        await lastClient.refetchQueries();
+        await new Promise((resolve) => { setTimeout(resolve, 20); }); // let the error notification render
+      });
+      // The refetch really failed (React Query keeps the last data alongside the error).
+      expect(lastClient.getQueryCache().findAll().some((q) => q.state.status === 'error')).toBe(true);
+
+      expect(screen.getByTestId('worklist-row-close-701')).not.toBeNull();
+      expectFigure('เกินกำหนดชำระ', '฿15,000.00');
+      expect(screen.queryByText('โหลดไม่สำเร็จ')).toBeNull();
     });
 
     it('shows a failed source as failed instead of loading forever, and the rest still render', async () => {

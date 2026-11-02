@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -7,11 +7,11 @@ import { Avatar } from '../../components/common/Avatar.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { Panel, PageStack, StatGrid } from '../../components/common/Layout.jsx';
-import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
-import { StatCard } from '../../components/common/StatCard.jsx';
+import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { Figure, failed, moneySum } from './CeoOverview.jsx';
 
 // No server-side status filter exists on GET /api/commissions (mirrors
 // CommissionController#list — payrollMonth is the only query param it
@@ -37,48 +37,86 @@ function isDealOpen(ticket) {
 }
 
 /**
- * Sales Manager role-scoped landing (team cockpit): pulse (team ยอด this
- * month / commissions awaiting the manager's own review / deals needing
- * attention / open team pipeline) + the ค่าคอมรออนุมัติ worklist (deep-links
- * into CommissionPage's existing approve flow — never duplicates the
- * approval mutation itself) + a "ดีลทีมที่ต้องดูแล" worklist + a right rail
- * (leaderboard, close-rate). See docs/role-scoped-views.md. Manager keeps
- * every existing nav item (รายการดีล / คิวขอราคา / ค่าคอมมิชชัน / แคตตาล็อก)
- * — this is only a new landing, nothing here removes a route or a permission.
+ * Sales Manager role-scoped landing (team cockpit), top to bottom: the money
+ * band (เงินรับแล้ว / ค้างรับ / เกินกำหนดชำระ / ยอดคาดการณ์, same figures as the
+ * CEO landing), then two columns. Left: ค่าคอมรอคุณตรวจ (deep-links into
+ * CommissionPage's approve flow, never duplicates the approval mutation) and
+ * ดีลที่ต้องดูแล (reason chips, overdue -> follow-up due -> stale). Right: the
+ * same deals counted per rep, and อัตราปิดงาน. Nothing is gated on both queries:
+ * the band renders from the summary at once, and each panel loads (or says it
+ * failed) on its own. See docs/role-scoped-views.md. Manager keeps every
+ * existing nav item; this is only a landing, nothing removes a route or permission.
  *
- * KNOWN DATA GAP (documented, not silently worked around — same convention
- * as AccountOverview's own note above its ticket query): `api.tickets.list({})`
- * currently returns every ticket for sales_manager, exactly as it does for
- * ceo — mockApi.js's `tickets.list` only narrows the response for
- * 'sales'/'import'/'account' (see the comment directly above that filter in
- * mockApi.js). This view treats the response as "team" scope per the
- * role-scoped-views plan, matching how TicketDashboard already consumes this
- * same endpoint for this role today; if/when the real
- * TicketRepository.appendRoleScope narrows sales_manager to their own
- * division/team, this component needs no change — only the row count moves.
- * No authorization was loosened or tightened by this branch (UI-only landing,
- * not a new authz surface).
+ * KNOWN DATA GAP (documented, not silently worked around): `api.tickets.list({})`
+ * currently returns every ticket for sales_manager, exactly as it does for ceo
+ * (mockApi's `tickets.list` only narrows for 'sales'/'import'/'account'). This
+ * view treats the response as "team" scope, matching TicketDashboard; if the
+ * real TicketRepository.appendRoleScope narrows sales_manager to their team,
+ * this component needs no change. No authorization is loosened or tightened.
  *
- * `api.dashboard.summary()` is deliberately NOT used here even though the
- * task brief lists it: for sales_manager, mockApi's `dashboardTickets()`
- * scope is 'none' (only 'import'/'ceo'/'sales' get a non-empty tickets
- * block), so its `tickets.*` counts are always zero for this role, and its
- * `pendingApprovals.commissions` count also includes MANAGER_APPROVED
- * records the manager cannot act on (only CEO can). Deriving every pulse
- * number directly from `api.tickets.list({})` / `api.commissions.list(...)`
- * below is strictly more correct than reading either of those summary
- * fields would be — flagged here rather than silently diverging from the
- * plan's data-source list.
- *
- * There is also no sales-target/quota field anywhere in the data model (mock
- * or Java DTO), so "ยอดทีมเดือนนี้" renders as a plain ฿ total with a
- * "ปิดแล้ว N ดีล" helper instead of the plan's "target progress bar" — no
- * target number exists to measure progress against, and inventing one would
- * be fabricating business data (CLAUDE.md). Flagged as a follow-up decision
- * for the plan owner, not fabricated here.
+ * เงินรับแล้ว / ค้างรับ / ยอดคาดการณ์ come from `dashboardSummary` (server totals;
+ * rows are capped, so they are never summed here). Only เกินกำหนดชำระ is derived
+ * from the ticket list. The summary's `pendingApprovals.commissions` is not used:
+ * it also counts MANAGER_APPROVED records only the CEO can act on. There is no
+ * sales-target/quota field anywhere in the data model, so nothing here shows
+ * progress against a target.
  */
-export function ManagerOverview({ user, employee, dashboardSummary, showToast }) {
+
+const MAX_COMMISSIONS = 5;
+const MAX_DEALS = 5;
+
+// Order is the sort order (overdue -> follow-up due -> stale); `bar` colours the per-rep stack.
+const REASONS = [
+  { key: 'overdue', label: 'เกินกำหนดชำระ', short: 'เกินกำหนด', tone: 'danger', bar: 'bg-danger' },
+  { key: 'followUp', label: 'ถึงกำหนดติดตาม', short: 'ถึงกำหนดติดตาม', tone: 'warning', bar: 'bg-warning' },
+  { key: 'stale', label: 'ไม่มีความเคลื่อนไหว 7 วัน', short: 'ไม่เคลื่อนไหว', tone: 'neutral', bar: 'bg-border-strong' },
+];
+
+// Same precedence the list always used: overdue, then stale, then a past follow-up date.
+function dealReason(ticket, now) {
+  if (ticket.overdue) return 'overdue';
+  if (ticket.stale) return 'stale';
+  if (ticket.nextFollowUpAt && new Date(ticket.nextFollowUpAt) < now) return 'followUp';
+  return null;
+}
+
+const timeOf = (t) => (t.stageUpdatedAt ? new Date(t.stageUpdatedAt).getTime() : 0);
+
+const PANEL_ROW = 'px-5 py-3 mobile:px-3.5';
+
+function PanelSkeleton({ label }) {
+  return (
+    <div className="grid gap-2 px-5 py-4 mobile:px-3.5" role="status" aria-busy="true" aria-label={label}>
+      <Skeleton height={36} />
+      <Skeleton height={36} />
+    </div>
+  );
+}
+
+function Failed() {
+  return <p className="m-0 px-5 py-4 text-sm font-bold text-danger mobile:px-3.5">โหลดไม่สำเร็จ</p>;
+}
+
+function Empty({ children }) {
+  return (
+    <div className="flex items-center gap-3 px-5 py-4 text-text-muted mobile:px-3.5">
+      <Icon name="check" size={18} />
+      <span className="text-sm font-bold">{children}</span>
+    </div>
+  );
+}
+
+function CountPill({ count }) {
+  return (
+    <span aria-label={`${count} รายการ`} className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
+      {count}
+    </span>
+  );
+}
+
+export function ManagerOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
+  const [reasonFilter, setReasonFilter] = useState('all');
 
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
@@ -89,261 +127,238 @@ export function ManagerOverview({ user, employee, dashboardSummary, showToast })
     queryFn: () => api.commissions.list({ status: 'SUBMITTED' }).then((r) => r.commissions ?? []),
   });
 
-  useEffect(() => {
-    const error = ticketsQuery.error || commissionsQuery.error;
-    if (error) showToast?.('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
-  }, [ticketsQuery.error, commissionsQuery.error, showToast]);
-
-  const loading = ticketsQuery.isLoading || commissionsQuery.isLoading;
-  // Memoized (not a plain `?? []` fallback) so every useMemo below that
-  // depends on `tickets` doesn't re-derive on every render just because a
-  // fresh `[]` fallback is a new reference each time.
-  const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
-  // Defensive client-side filter — see the TEAM_COMMISSIONS_QUERY_KEY comment
-  // above: the mock (and possibly the real endpoint) does not filter by
-  // status server-side.
+  // null while loading: each panel shows its own skeleton, the rest of the page is already up.
+  const tickets = ticketsQuery.data ?? null;
+  // Defensive client-side filter — see the TEAM_COMMISSIONS_QUERY_KEY comment above.
   const pendingCommissions = useMemo(
-    () => (commissionsQuery.data ?? []).filter((record) => record.status === 'SUBMITTED'),
+    () => commissionsQuery.data?.filter((record) => record.status === 'SUBMITTED') ?? null,
     [commissionsQuery.data],
   );
+  const ticketsById = useMemo(() => new Map((tickets ?? []).map((t) => [t.id, t])), [tickets]);
 
-  const ticketsById = useMemo(() => new Map(tickets.map((t) => [t.id, t])), [tickets]);
-
-  const openTickets = useMemo(() => tickets.filter(isDealOpen), [tickets]);
   const outstanding = dashboardSummary?.financeOutstanding;
   const forecast = dashboardSummary?.forecastValue;
   const cashReceived = dashboardSummary?.cashReceivedThisMonth;
+  const overdueReceivables = useMemo(
+    () => (tickets ? moneySum(tickets.filter((t) => t.overdue), (t) => t.amountOutstanding) : null),
+    [tickets],
+  );
 
-  // "ดีลต้องดูแล": an open deal with no activity in 7 days (`ticket.stale`,
-  // mirrors TicketRepository.enrichSummary's own staleness window — see
-  // features/tickets/dealTrackingMeta.js's STALE_ACTIVITY_DAYS), a payment
-  // overdue (`ticket.overdue`), or a follow-up date already in the past.
-  const attentionTickets = useMemo(() => {
-    // `new Date()` (not `Date.now()`, which the react-hooks purity rule
-    // flags as a well-known impure call inside render).
-    const now = new Date();
-    return openTickets
-      .filter((t) => t.stale || t.overdue || (t.nextFollowUpAt && new Date(t.nextFollowUpAt) < now))
-      .sort((a, b) => {
-        // Payment slipping outranks an unattended lead.
-        if (Boolean(a.overdue) !== Boolean(b.overdue)) return a.overdue ? -1 : 1;
-        const aTime = a.stageUpdatedAt ? new Date(a.stageUpdatedAt).getTime() : 0;
-        const bTime = b.stageUpdatedAt ? new Date(b.stageUpdatedAt).getTime() : 0;
-        return aTime - bTime; // longest-untouched first
-      });
-  }, [openTickets]);
+  // "ดีลที่ต้องดูแล": open deals with a reason, grouped overdue -> follow-up due -> stale,
+  // longest-untouched first inside each group.
+  const attention = useMemo(() => {
+    if (!tickets) return null;
+    const now = new Date(); // not Date.now(): the purity rule flags it inside render
+    return tickets
+      .filter(isDealOpen)
+      .map((ticket) => ({ ticket, reason: dealReason(ticket, now) }))
+      .filter((row) => row.reason)
+      .sort((a, b) => REASONS.findIndex((r) => r.key === a.reason) - REASONS.findIndex((r) => r.key === b.reason)
+        || timeOf(a.ticket) - timeOf(b.ticket));
+  }, [tickets]);
 
-  const wonCount = useMemo(() => tickets.filter(isDealWon).length, [tickets]);
-  const lostCount = useMemo(() => tickets.filter(isDealLost).length, [tickets]);
+  const reasonCounts = useMemo(
+    () => Object.fromEntries(REASONS.map((r) => [r.key, attention?.filter((row) => row.reason === r.key).length ?? 0])),
+    [attention],
+  );
+  // A chosen reason whose deals are all gone (paid, followed up) falls back to ทั้งหมด rather than
+  // stranding the list on an empty filter.
+  const activeFilter = reasonFilter !== 'all' && reasonCounts[reasonFilter] > 0 ? reasonFilter : 'all';
+  const visibleDeals = attention?.filter((row) => activeFilter === 'all' || row.reason === activeFilter) ?? [];
+
+  const repRows = useMemo(() => {
+    const byRep = new Map();
+    (attention ?? []).forEach(({ ticket, reason }) => {
+      const name = ticket.createdByName || '-';
+      const entry = byRep.get(name) ?? { name, total: 0, overdue: 0, followUp: 0, stale: 0 };
+      entry[reason] += 1;
+      entry.total += 1;
+      byRep.set(name, entry);
+    });
+    return [...byRep.values()].sort((a, b) => b.total - a.total);
+  }, [attention]);
+  const repMax = repRows[0]?.total ?? 0;
+
+  const wonCount = tickets?.filter(isDealWon).length ?? 0;
+  const lostCount = tickets?.filter(isDealLost).length ?? 0;
   const closeRate = wonCount + lostCount > 0 ? (wonCount / (wonCount + lostCount)) * 100 : null;
 
-  // Same rows as the CEO's ยอดตามทีม/ฝ่าย panel: this month's cash received per rep, from the summary.
-  const leaderboard = useMemo(
-    () => [...(dashboardSummary?.cashReceivedByRep ?? [])]
-      .map((row) => ({ name: row.repName, amount: Number(row.amount) || 0 }))
-      .sort((a, b) => b.amount - a.amount),
-    [dashboardSummary?.cashReceivedByRep],
-  );
-  const leaderboardMax = leaderboard[0]?.amount || 0;
-
-  const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
   const today = formatThaiDate(new Date().toISOString());
+  const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
+  const money = (value) => (value == null ? '—' : formatMoney(value));
+  const commissionsShown = pendingCommissions?.slice(0, MAX_COMMISSIONS) ?? [];
+  const dealsShown = visibleDeals.slice(0, MAX_DEALS);
 
   return (
     <PageStack>
       <PageHeader
-        title={`สวัสดี ${greetingName(firstName)}`}
-        subtitle={`ภาพรวมทีมขาย · ${today} — ผลงานทีม · ค่าคอมที่รอคุณตรวจ · ดีลที่ต้องดูแล`}
-        actions={<Button type="button" variant="text" onClick={() => navigate('/tickets')}>ดูดีลทีม →</Button>}
+        title="ภาพรวมทีมขาย"
+        subtitle={`${greeting} · ${today}`}
+        actions={<Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูดีลทีม</Button>}
       />
 
-      {loading ? (
-        <div aria-busy="true" aria-label="กำลังโหลดข้อมูลทีมขาย">
-          <StatGrid>
-            <SkeletonCard lines={1} />
-            <SkeletonCard lines={1} />
-            <SkeletonCard lines={1} />
-            <SkeletonCard lines={1} />
-            <SkeletonCard lines={1} />
-          </StatGrid>
-          <Panel style={{ marginTop: 14 }}>
-            <SkeletonText lines={5} />
-          </Panel>
-        </div>
-      ) : (
-        <>
-          {/* Team pulse. */}
-          <StatGrid>
-            <StatCard
-              icon="badgeDollar"
-              label="เงินรับแล้ว (เดือนนี้)"
-              value={cashReceived == null ? '—' : formatMoney(cashReceived)}
-              helper="รับเงินจริงในเดือนนี้"
-              tone="teal"
-            />
-            <StatCard
-              icon="clock"
-              label="ค้างรับ"
-              value={outstanding == null ? '—' : formatMoney(outstanding)}
-              helper="ตามหน้าการเงิน"
-              tone="amber"
-            />
-            <StatCard
-              icon="clock"
-              label="ค่าคอมรออนุมัติ"
-              value={pendingCommissions.length}
-              helper="รอคุณตรวจ"
-              tone={pendingCommissions.length > 0 ? 'amber' : 'indigo'}
-              onClick={pendingCommissions.length > 0 ? () => navigate('/commissions') : undefined}
-            />
-            <StatCard
-              icon="triangleAlert"
-              label="ดีลต้องดูแล"
-              value={attentionTickets.length}
-              helper="ค้าง/เกินติดตาม"
-              tone={attentionTickets.length > 0 ? 'rose' : 'indigo'}
-              onClick={() => navigate('/tickets')}
-            />
-            <StatCard
-              icon="briefcase"
-              label="ยอดคาดการณ์"
-              value={forecast == null ? '—' : formatMoney(forecast)}
-              helper="ดีลก่อนขั้น 10"
-              tone="blue"
-              onClick={() => navigate('/tickets')}
-            />
-          </StatGrid>
+      <section className="rounded-md border border-border bg-surface p-5 mobile:p-3.5" aria-label="ผลทีมเดือนนี้">
+        <dl className="m-0 grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-x-6 nav-drawer:grid-cols-2 nav-drawer:gap-y-4 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
+          <Figure lead label="เงินรับแล้ว (เดือนนี้)" value={money(cashReceived)} caption="เงินที่บัญชียืนยันรับแล้ว" />
+          <Figure label="ค้างรับ" value={money(outstanding)} caption="ยอดคงค้างรวม (หน้าการเงิน)" />
+          <Figure
+            danger
+            label="เกินกำหนดชำระ"
+            value={failed(ticketsQuery) ? '—' : overdueReceivables == null ? <Skeleton width={96} height={22} className="mobile:ml-auto" /> : formatMoney(overdueReceivables)}
+            caption="ดีลทีมที่เลยกำหนดชำระ"
+          />
+          <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
+        </dl>
+      </section>
 
-          <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
-            <div className="grid gap-[18px]">
-              {/* Centerpiece: ค่าคอมรออนุมัติ worklist — deep-links to
-                  CommissionPage's own manager-approve flow, never duplicates
-                  the approval mutation here. */}
-              <Panel title="ค่าคอมรออนุมัติ" flush>
-                {pendingCommissions.length === 0 ? (
-                  <div className="flex items-center gap-3 p-5 text-text-muted">
-                    <Icon name="check" size={18} />
-                    <span className="text-sm font-bold">ไม่มีค่าคอมรออนุมัติตอนนี้</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col">
-                    {pendingCommissions.map((record) => {
-                      const linkedTicket = record.sourceTicketId ? ticketsById.get(record.sourceTicketId) : null;
-                      const ref = [record.invoiceDetails?.invoiceNumber, linkedTicket?.code].filter(Boolean).join(' · ');
-                      return (
-                        <div
-                          key={record.id}
-                          className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch mobile:gap-2.5 mobile:p-4"
-                        >
-                          <div className="flex min-w-0 flex-1 items-center gap-3">
-                            <Avatar name={record.salesRepName} size="sm" />
-                            <div className="min-w-0 flex-1">
-                              <strong className="block truncate text-sm font-extrabold text-text">
-                                {record.salesRepName || `#${record.salesRepId}`}
-                              </strong>
-                              <code className="block truncate text-2xs text-text-muted">{ref || '-'}</code>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-3 mobile:w-full mobile:justify-between">
-                            <span className="text-right">
-                              <strong className="block tabular-nums text-sm text-text">{formatMoney(record.commissionableBase)}</strong>
-                              <span className="block text-2xs text-text-muted">ฐานค่าคอม</span>
-                            </span>
-                            <Button
-                              type="button"
-                              variant="success"
-                              className="mobile:flex-1 mobile:min-h-11"
-                              onClick={() => navigate('/commissions')}
-                            >
-                              ตรวจ · อนุมัติ
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </Panel>
-
-              {/* ดีลทีมที่ต้องดูแล — stalled / overdue-follow-up open deals. */}
-              <Panel title="ดีลทีมที่ต้องดูแล" flush>
-                {attentionTickets.length === 0 ? (
-                  <div className="flex items-center gap-3 p-5 text-text-muted">
-                    <Icon name="check" size={18} />
-                    <span className="text-sm font-bold">ไม่มีดีลที่ต้องติดตามตอนนี้</span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col">
-                    {attentionTickets.map((ticket) => {
-                      const reason = ticket.overdue
-                        ? 'เกินกำหนดชำระ'
-                        : ticket.stale
-                          ? 'ไม่มีความเคลื่อนไหว 7 วัน'
-                          : 'ถึงกำหนดติดตาม';
-                      return (
-                        <button
-                          type="button"
-                          key={ticket.id}
-                          onClick={() => navigate(`/tickets/${ticket.id}`)}
-                          className="flex cursor-pointer items-center justify-between gap-3 border-0 border-t border-border bg-transparent px-5 py-3 text-left text-text first:border-t-0 hover:bg-surface-hover mobile:flex-col mobile:items-stretch mobile:gap-2 mobile:p-4"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-                                {ticket.customerName || ticket.title}
-                              </strong>
-                              <StatusBadge tone={ticket.overdue ? 'danger' : 'warning'}>{reason}</StatusBadge>
-                            </div>
-                            <code className="block text-2xs text-text-muted">{ticket.code} · {ticket.createdByName || '-'}</code>
-                          </div>
-                          <Icon name="chevronRight" size={16} className="shrink-0 text-text-faint" />
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </Panel>
-            </div>
-
-            {/* Right rail — team leaderboard + close rate. */}
-            <div className="grid gap-[18px]">
-              <Panel title="อันดับทีม (เดือนนี้)">
-                {leaderboard.length === 0 ? (
-                  <p className="m-0 text-sm text-text-muted">ยังไม่มีเงินรับเข้าในเดือนนี้</p>
-                ) : (
-                  <div className="grid gap-3">
-                    {leaderboard.map((rep, index) => (
-                      <div key={index} className="grid gap-1">
-                        <div className="flex items-center justify-between gap-2 text-sm">
-                          <span className="min-w-0 truncate font-bold text-text">{index + 1}. {rep.name}</span>
-                          <strong className="tabular-nums text-text">{formatMoney(rep.amount)}</strong>
-                        </div>
-                        {/* Teal fill — DESIGN.md's "Rationed Teal Rule" reserves teal
-                            for progress-bar fills exactly like this one. */}
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-subtle">
-                          <div
-                            className="h-full rounded-full bg-accent"
-                            style={{ width: `${leaderboardMax > 0 ? Math.max(4, (rep.amount / leaderboardMax) * 100) : 0}%` }}
-                          />
+      <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
+        <div className="grid gap-[18px]">
+          <Panel flush title="ค่าคอมรอคุณตรวจ" actions={pendingCommissions ? <CountPill count={pendingCommissions.length} /> : null}>
+            {failed(commissionsQuery) ? (
+              <Failed />
+            ) : pendingCommissions === null ? (
+              <PanelSkeleton label="กำลังโหลดค่าคอมรอคุณตรวจ" />
+            ) : pendingCommissions.length === 0 ? (
+              <Empty>ไม่มีค่าคอมรออนุมัติตอนนี้</Empty>
+            ) : (
+              <>
+                {commissionsShown.map((record) => {
+                  const ref = [record.invoiceDetails?.invoiceNumber, ticketsById.get(record.sourceTicketId)?.code].filter(Boolean).join(' · ');
+                  return (
+                    <div key={record.id} data-testid={`commission-row-${record.id}`} className={`flex items-center justify-between gap-3 border-t border-border first:border-t-0 ${PANEL_ROW}`}>
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                        <Avatar name={record.salesRepName} size="sm" />
+                        <div className="min-w-0 flex-1">
+                          <strong className="block truncate text-sm font-extrabold text-text">{record.salesRepName || `#${record.salesRepId}`}</strong>
+                          <code className="block truncate text-2xs text-text-muted">{ref || '-'}</code>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </Panel>
-
-              <Panel title="อัตราปิดงาน">
-                <div className="text-center">
-                  <strong className="block text-3xl font-extrabold tabular-nums text-text">
-                    {closeRate == null ? '—' : `${closeRate.toFixed(0)}%`}
-                  </strong>
-                  <span className="text-xs text-text-muted">{wonCount} ปิดสำเร็จ / {lostCount} เสีย</span>
+                      <span className="shrink-0 text-right">
+                        <strong className="block tabular-nums text-sm text-text">{formatMoney(record.commissionableBase)}</strong>
+                        <span className="block text-2xs text-text-muted">ฐานค่าคอม</span>
+                      </span>
+                    </div>
+                  );
+                })}
+                <div className={`flex flex-wrap items-center justify-between gap-3 border-t border-border ${PANEL_ROW}`}>
+                  <span className="text-sm text-text-muted">
+                    {pendingCommissions.length > MAX_COMMISSIONS ? `อีก ${pendingCommissions.length - MAX_COMMISSIONS} รายการ · ` : ''}
+                    รวมฐาน <strong className="tabular-nums text-text">{formatMoney(moneySum(pendingCommissions, (c) => c.commissionableBase))}</strong>
+                  </span>
+                  <Button type="button" variant="success" onClick={() => navigate('/commissions?view=pending')} className="mobile:min-h-[44px]">
+                    เปิดหน้าอนุมัติ
+                  </Button>
                 </div>
-              </Panel>
-            </div>
-          </div>
-        </>
-      )}
+              </>
+            )}
+          </Panel>
+
+          <Panel flush title="ดีลที่ต้องดูแล" actions={attention ? <CountPill count={attention.length} /> : null}>
+            {failed(ticketsQuery) ? (
+              <Failed />
+            ) : attention === null ? (
+              <PanelSkeleton label="กำลังโหลดดีลที่ต้องดูแล" />
+            ) : attention.length === 0 ? (
+              <Empty>ไม่มีดีลที่ต้องติดตามตอนนี้</Empty>
+            ) : (
+              <>
+                <div role="group" aria-label="กรองตามเหตุผล" className={`flex flex-wrap gap-2 ${PANEL_ROW}`}>
+                  {[{ key: 'all', label: 'ทั้งหมด', count: attention.length }, ...REASONS.map((r) => ({ ...r, count: reasonCounts[r.key] })).filter((chip) => chip.count > 0)].map((chip) => (
+                    <Button
+                      key={chip.key}
+                      type="button"
+                      size="sm"
+                      variant={activeFilter === chip.key ? 'primary' : 'secondary'}
+                      aria-pressed={activeFilter === chip.key}
+                      onClick={() => setReasonFilter(chip.key)}
+                      className="mobile:min-h-[44px]"
+                    >
+                      {chip.label} {chip.count}
+                    </Button>
+                  ))}
+                </div>
+                {dealsShown.map(({ ticket, reason }) => {
+                  const meta = REASONS.find((r) => r.key === reason);
+                  return (
+                    <button
+                      type="button"
+                      key={ticket.id}
+                      data-testid={`deal-row-${ticket.id}`}
+                      onClick={() => navigate(`/tickets/${ticket.id}`)}
+                      className={`flex w-full cursor-pointer items-center justify-between gap-3 border-0 border-t border-border bg-transparent text-left text-text hover:bg-surface-hover mobile:min-h-[44px] ${PANEL_ROW}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <strong className="min-w-0 truncate text-sm font-extrabold text-text">{ticket.customerName || ticket.title}</strong>
+                          <StatusBadge tone={meta.tone}>{reason === 'overdue' ? `${meta.label} ${formatMoney(ticket.amountOutstanding)}` : meta.label}</StatusBadge>
+                        </div>
+                        <code className="block text-2xs text-text-muted">{ticket.code} · {ticket.createdByName || '-'}</code>
+                      </div>
+                      <Icon name="chevronRight" size={16} className="shrink-0 text-text-faint" />
+                    </button>
+                  );
+                })}
+                <div className={`flex flex-wrap items-center justify-between gap-3 border-t border-border ${PANEL_ROW}`}>
+                  <span className="text-sm text-text-muted">แสดง {dealsShown.length} จาก {visibleDeals.length}</span>
+                  {visibleDeals.length > MAX_DEALS ? (
+                    <Button type="button" variant="text" size="sm" onClick={() => navigate('/tickets')} className="mobile:min-h-[44px]">
+                      ดูอีก {visibleDeals.length - MAX_DEALS} ดีล
+                    </Button>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </Panel>
+        </div>
+
+        <div className="grid gap-[18px]">
+          <Panel title="ดีลที่ต้องดูแล ตามพนักงาน">
+            {failed(ticketsQuery) ? (
+              <Failed />
+            ) : attention === null ? (
+              <PanelSkeleton label="กำลังโหลดดีลตามพนักงาน" />
+            ) : repRows.length === 0 ? (
+              <p className="m-0 text-sm text-text-muted">ยังไม่มีดีลที่ต้องดูแล</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {repRows.map((rep) => (
+                  <div key={rep.name} data-testid="attention-rep" className="grid gap-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="min-w-0 truncate text-sm font-bold text-text">{rep.name}</span>
+                      <span className="shrink-0 text-sm tabular-nums text-text-muted">{rep.total} ดีล</span>
+                    </div>
+                    {/* Sized against the top rep, never a quota (none exists). */}
+                    <div className="flex h-2 overflow-hidden rounded-full bg-surface-subtle" style={{ width: `${(rep.total / repMax) * 100}%` }}>
+                      {REASONS.map((r) => (rep[r.key] ? <div key={r.key} className={r.bar} style={{ flex: rep[r.key] }} /> : null))}
+                    </div>
+                  </div>
+                ))}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                  {REASONS.map((r) => (
+                    <span key={r.key} className="inline-flex items-center gap-1.5">
+                      <span aria-hidden="true" className={`size-2 rounded-full ${r.bar}`} />
+                      {r.short}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="อัตราปิดงาน">
+            {failed(ticketsQuery) ? (
+              <Failed />
+            ) : tickets === null ? (
+              <Skeleton height={28} />
+            ) : (
+              <p className="m-0 flex flex-wrap items-baseline gap-x-3 text-sm text-text-muted">
+                <strong className="text-2xl font-extrabold tabular-nums text-text">{closeRate == null ? '—' : `${closeRate.toFixed(0)}%`}</strong>
+                {closeRate == null ? null : <span>ปิดสำเร็จ {wonCount} · เสีย {lostCount}</span>}
+              </p>
+            )}
+          </Panel>
+        </div>
+      </div>
     </PageStack>
   );
 }

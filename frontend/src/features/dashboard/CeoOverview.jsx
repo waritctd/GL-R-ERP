@@ -44,7 +44,7 @@ function commissionKindLabel(kind) {
   return COMMISSION_KIND_LABELS[kind] ?? 'ค่าคอม';
 }
 
-function moneySum(items, pick) {
+export function moneySum(items, pick) {
   return items.reduce((sum, item) => sum + (Number(pick(item)) || 0), 0);
 }
 
@@ -169,7 +169,7 @@ const WorklistGroup = memo(function WorklistGroup({ groupKey, rows, count, faile
 
 // One figure of the money band: <div><dt/><dd/><small/></div> (the shared test helper finds it
 // via `dl > div`). Stacked cell on desktop, a label-left / value-right row on a phone.
-function Figure({ label, value, caption, lead = false, danger = false }) {
+export function Figure({ label, value, caption, lead = false, danger = false }) {
   return (
     <div className="grid min-w-0 gap-0.5 mobile:grid-cols-[1fr_auto] mobile:items-baseline mobile:gap-x-3">
       <dt className="!m-0 !text-xs !font-bold !text-text-muted">{label}</dt>
@@ -182,6 +182,10 @@ function Figure({ label, value, caption, lead = false, danger = false }) {
     </div>
   );
 }
+
+// Failed only while there is nothing to show: a background refetch that errors keeps the last
+// data (React Query holds it alongside the error), so the page keeps showing it.
+export const failed = (query) => query.isError && query.data === undefined;
 
 export function CeoOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
@@ -369,11 +373,11 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   );
 
   const groups = [
-    ['price', priceGroup, priceGroup?.length ?? 0, pricingQueueQuery.isError],
-    ['close', closeGroup, closeGroup?.length ?? 0, ticketsQuery.isError],
-    ['commission', commissionGroup, commissionRows?.length ?? 0, commissionsQuery.isError],
-    ['ot', otGroup, otGroup?.length ?? 0, otManagerApprovedQuery.isError || otSubmittedQuery.isError],
-    ['leave', leaveGroup, leaveGroup?.length ?? 0, leaveSubmittedQuery.isError],
+    ['price', priceGroup, priceGroup?.length ?? 0, failed(pricingQueueQuery)],
+    ['close', closeGroup, closeGroup?.length ?? 0, failed(ticketsQuery)],
+    ['commission', commissionGroup, commissionRows?.length ?? 0, failed(commissionsQuery)],
+    ['ot', otGroup, otGroup?.length ?? 0, failed(otManagerApprovedQuery) || failed(otSubmittedQuery)],
+    ['leave', leaveGroup, leaveGroup?.length ?? 0, failed(leaveSubmittedQuery)],
   ];
   const total = groups.reduce((sum, [, , count]) => sum + count, 0);
   // A source is settled once it has rows or has failed; the total badge waits for all of them,
@@ -400,7 +404,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
           <Figure
             danger
             label="เกินกำหนดชำระ"
-            value={ticketsQuery.isError ? '—' : overdueReceivables == null ? <Skeleton width={96} height={22} className="mobile:ml-auto" /> : formatMoney(overdueReceivables)}
+            value={failed(ticketsQuery) ? '—' : overdueReceivables == null ? <Skeleton width={96} height={22} className="mobile:ml-auto" /> : formatMoney(overdueReceivables)}
             caption="ดีลที่เลยกำหนดชำระ"
           />
           <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
