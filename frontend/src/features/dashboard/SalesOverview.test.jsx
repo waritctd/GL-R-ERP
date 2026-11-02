@@ -237,7 +237,7 @@ describe('SalesOverview', () => {
       expect(groupNames('quiet')).toEqual(['บริษัท เอฟ จำกัด']);
       expect(screen.getByTestId('sales-group-follow').textContent).toContain('2 ดีล');
       expect(screen.getByTestId('worklist-total').textContent).toBe('8');
-      expect(screen.getByTestId('worklist-total').getAttribute('aria-label')).toBe('รวม 8 ดีล');
+      expect(screen.getByText('รวม 8 ดีล').className).toContain('sr-only');
     });
 
     it('puts the follow-up date on the row: เลยนัด for overdue, นัดวันนี้ for today', async () => {

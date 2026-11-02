@@ -238,6 +238,13 @@ public class DashboardRepository {
             + TicketRepository.accountScopePredicate() + " AND " + ACCOUNT_HAS_TODO, params, java.math.BigDecimal.class);
     }
 
+    /** เกินกำหนดชำระ: unpaid balance of every deal the ticket list flags {@code overdue} (same predicate, no page cap). */
+    public java.math.BigDecimal overdueOutstanding() {
+        return jdbc.queryForObject("SELECT COALESCE(SUM(GREATEST((" + TicketRepository.payableAmountSelect("t.ticket_id")
+            + ") - (" + TicketRepository.paidAmountSelect("t.ticket_id") + "), 0)), 0) FROM sales.ticket t WHERE "
+            + TicketRepository.paymentOverduePredicate("t.ticket_id"), new MapSqlParameterSource(), java.math.BigDecimal.class);
+    }
+
     /** ยอดคาดการณ์: payable of live deals that have not reached ORDER_RECEIVED. */
     public java.math.BigDecimal forecastValue() {
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("beforeOrder",

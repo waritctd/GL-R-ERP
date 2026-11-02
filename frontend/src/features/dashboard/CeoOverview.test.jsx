@@ -24,13 +24,14 @@ vi.mock('../../api/index.js', () => ({
   api: {
     tickets: { list: vi.fn() },
     pricingRequests: { queue: vi.fn() },
-    commissions: { list: vi.fn() },
+    commissions: { list: vi.fn(), pendingApproval: vi.fn() },
     overtime: { list: vi.fn() },
     leave: { list: vi.fn() },
   },
 }));
 
 const monthStart = bangkokMonthStartIso();
+const THIS_MONTH = monthStart.slice(0, 7);
 
 const ceoUser = { id: 1, employeeId: 999, name: 'ผู้บริหาร ทดสอบ', role: 'ceo' };
 const ceoEmployee = { nameTh: 'สมศักดิ์ ผู้บริหาร', nickName: 'บอส' };
@@ -87,12 +88,21 @@ function mockAllData() {
       },
     ],
   });
+  // The CEO's queue is what the approval page shows: SALE records from pending-approval (any month)
+  // plus this round's manual entries (inserted MANAGER_APPROVED) from the month's list.
+  api.commissions.pendingApproval.mockResolvedValue({
+    commissions: [{ commission: { id: 301, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'SALE' }, ticketCode: 'TK-301' }],
+  });
   api.commissions.list.mockResolvedValue({
     commissions: [
-      { id: 301, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'SALE' },
       { id: 303, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'ADJUSTMENT' },
       { id: 304, status: 'MANAGER_APPROVED', salesRepName: 'สมหญิง ขายเก่ง', kind: 'STOCK_BONUS' },
+      // Already in pending-approval: never counted twice.
+      { id: 301, status: 'MANAGER_APPROVED', salesRepName: 'สมชาย ขายดี', kind: 'SALE' },
       { id: 302, status: 'SUBMITTED', salesRepName: 'ยังไม่ถึง CEO', kind: 'SALE' },
+      // Manual entries already decided (or rejected) are not waiting on the CEO.
+      { id: 305, status: 'APPROVED', salesRepName: 'อนุมัติแล้ว', kind: 'INCENTIVE' },
+      { id: 306, status: 'REJECTED', salesRepName: 'ถูกปฏิเสธ', kind: 'ADJUSTMENT' },
     ],
   });
   api.overtime.list.mockImplementation((params = {}) => {
@@ -187,7 +197,10 @@ describe('CeoOverview', () => {
 
     expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
     expect(api.tickets.list).toHaveBeenCalledWith({});
+    // Only the CEO's own queue, never the whole commission history.
+    expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
     expect(api.commissions.list).toHaveBeenCalledTimes(1);
+    expect(api.commissions.list).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
     expect(api.overtime.list).toHaveBeenCalledWith({ status: 'MANAGER_APPROVED' });
     expect(api.overtime.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
     expect(api.leave.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
@@ -195,7 +208,7 @@ describe('CeoOverview', () => {
 
   describe('loading (progressive, never all-or-nothing)', () => {
     it('shows the money band from the dashboard summary while every worklist query is still loading', () => {
-      [api.tickets.list, api.pricingRequests.queue, api.commissions.list, api.overtime.list, api.leave.list]
+      [api.tickets.list, api.pricingRequests.queue, api.commissions.list, api.commissions.pendingApproval, api.overtime.list, api.leave.list]
         .forEach((fn) => fn.mockImplementation(never));
       renderOverview();
 
@@ -203,6 +216,7 @@ describe('CeoOverview', () => {
       expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
       expectFigure('ค้างรับ', EXPECTED.outstanding);
       expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
       expect(screen.getByText('ทีมงานวันนี้')).not.toBeNull();
     });
 
@@ -213,9 +227,9 @@ describe('CeoOverview', () => {
       const price = await findGroup('price');
       expect(within(price).getByTestId('worklist-row-price-501')).not.toBeNull();
       expect((await findGroup('leave')).textContent).toContain('พนักงานลา 401');
-      // Only the deal-list-backed parts wait: the ปิดงาน group and the overdue figure.
+      // Only the deal-list-backed ปิดงาน group waits; every figure is a server total.
       expect(group('close').getAttribute('aria-busy')).toBe('true');
-      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿');
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
       // The total would be a partial sum here, so it waits for every source.
       expect(screen.queryByTestId('worklist-total')).toBeNull();
     });
@@ -232,7 +246,6 @@ describe('CeoOverview', () => {
       expect(lastClient.getQueryCache().findAll().some((q) => q.state.status === 'error')).toBe(true);
 
       expect(screen.getByTestId('worklist-row-close-701')).not.toBeNull();
-      expectFigure('เกินกำหนดชำระ', '฿15,000.00');
       expect(screen.queryByText('โหลดไม่สำเร็จ')).toBeNull();
     });
 
@@ -243,7 +256,7 @@ describe('CeoOverview', () => {
       await findGroup('price');
       const close = await screen.findByText('โหลดไม่สำเร็จ');
       expect(close.closest('[data-testid="worklist-group-close"]').getAttribute('aria-busy')).toBeNull();
-      expectFigure('เกินกำหนดชำระ', '—');
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
       expect(screen.getByTestId('worklist-row-leave-401')).not.toBeNull();
     });
   });
@@ -257,18 +270,21 @@ describe('CeoOverview', () => {
       expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
     });
 
-    it('shows overdue receivables from the overdue deals only', async () => {
+    it('shows the server\'s overdue total, never a sum of the 500-row deal list', async () => {
       renderOverview();
       await findGroup('close');
 
-      expectFigure('เกินกำหนดชำระ', '฿15,000.00');
+      // The one overdue deal in the list owes 15,000; the server total covers every deal.
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
+      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿15,000.00');
     });
 
     it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', () => {
-      renderOverview({ ...dashboardSummary, financeOutstanding: undefined, forecastValue: undefined });
+      renderOverview({ ...dashboardSummary, financeOutstanding: undefined, forecastValue: undefined, overdueOutstanding: undefined });
 
       expectFigure('ค้างรับ', '—');
       expectFigure('ยอดคาดการณ์', '—');
+      expectFigure('เกินกำหนดชำระ', '—');
     });
 
     it('drops the four count tiles and the old closed-sales / pipeline figures', async () => {
@@ -296,9 +312,9 @@ describe('CeoOverview', () => {
       expect(group('commission').textContent).toContain('3 รายการ');
       expect(group('ot').textContent).toContain('2 รายการ');
       expect(group('leave').textContent).toContain('2 รายการ');
-      const total = screen.getByTestId('worklist-total');
-      expect(total.textContent).toBe('10');
-      expect(total.getAttribute('aria-label')).toBe('รวม 10 รายการ');
+      expect(screen.getByTestId('worklist-total').textContent).toBe('10');
+      // Screen readers get words, not a bare number (aria-label on a plain span is ignored).
+      expect(screen.getByText('รวม 10 รายการ').className).toContain('sr-only');
     });
 
     it('keeps only the rows the CEO can act on', async () => {
@@ -351,6 +367,7 @@ describe('CeoOverview', () => {
       // Each rep once, however many of their records wait; the SUBMITTED one is the manager's, not here.
       expect(row.textContent).toContain('สมชาย ขายดี, สมหญิง ขายเก่ง');
       expect(row.textContent).not.toContain('ยังไม่ถึง CEO');
+      expect(row.textContent).not.toMatch(/อนุมัติแล้ว|ถูกปฏิเสธ|Incentive/);
       expect(row.textContent).toContain('ค่าคอมขาย');
       expect(row.textContent).toContain('ปรับปรุง/รับช่วงงาน');
       expect(row.textContent).toContain('โบนัสขายสต็อก');
@@ -362,10 +379,23 @@ describe('CeoOverview', () => {
       expect(probeText()).toBe('/commissions?view=pending');
     });
 
+    it.each([
+      ['pending-approval', () => api.commissions.pendingApproval],
+      ['this month\'s list', () => api.commissions.list],
+    ])('marks the commission group failed when %s fails, and the rest still render', async (_, source) => {
+      source().mockRejectedValue(new Error('offline'));
+      renderOverview();
+
+      const commission = await findGroup('commission');
+      expect(await within(commission).findByText('โหลดไม่สำเร็จ')).not.toBeNull();
+      expect(screen.getByTestId('worklist-row-price-501')).not.toBeNull();
+    });
+
     it('says so when nothing waits on the CEO', async () => {
       api.pricingRequests.queue.mockResolvedValue({ items: [] });
       api.tickets.list.mockResolvedValue({ tickets: [] });
       api.commissions.list.mockResolvedValue({ commissions: [] });
+      api.commissions.pendingApproval.mockResolvedValue({ commissions: [] });
       api.overtime.list.mockResolvedValue({ requests: [] });
       api.leave.list.mockResolvedValue({ requests: [] });
       renderOverview();

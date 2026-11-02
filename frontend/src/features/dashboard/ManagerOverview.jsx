@@ -11,14 +11,7 @@ import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
-import { Figure, failed, moneySum } from './CeoOverview.jsx';
-
-// No server-side status filter exists on GET /api/commissions (mirrors
-// CommissionController#list — payrollMonth is the only query param it
-// reads); `status: 'SUBMITTED'` is passed anyway so a future backend filter
-// works for free, and the result is still filtered client-side below,
-// exactly like CommissionPage's own `totals.submitted` does.
-const TEAM_COMMISSIONS_QUERY_KEY = ['commissions', 'list', 'submitted'];
+import { Figure, failed, moneySum } from './dashboardParts.jsx';
 
 // A deal is "won" once it reaches the terminal pipeline stage, "lost" once
 // its lifecycle/legacy status marks it lost or cancelled, else "open" —
@@ -54,10 +47,12 @@ function isDealOpen(ticket) {
  * real TicketRepository.appendRoleScope narrows sales_manager to their team,
  * this component needs no change. No authorization is loosened or tightened.
  *
- * เงินรับแล้ว / ค้างรับ / ยอดคาดการณ์ come from `dashboardSummary` (server totals;
- * rows are capped, so they are never summed here). Only เกินกำหนดชำระ is derived
- * from the ticket list. The summary's `pendingApprovals.commissions` is not used:
- * it also counts MANAGER_APPROVED records only the CEO can act on. There is no
+ * All four money figures come from `dashboardSummary` (server totals; rows are capped,
+ * so they are never summed here). The commission queue is GET /commissions/pending-approval,
+ * the same list /commissions?view=pending shows the manager: SALE records only (manual
+ * kinds are inserted MANAGER_APPROVED, see ApprovalBoard), each entry carrying its deal code.
+ * The summary's `pendingApprovals.commissions` is not used: it also counts MANAGER_APPROVED
+ * records only the CEO can act on. There is no
  * sales-target/quota field anywhere in the data model, so nothing here shows
  * progress against a target.
  */
@@ -106,10 +101,11 @@ function Empty({ children }) {
   );
 }
 
-function CountPill({ count }) {
+function CountPill({ count, unit = 'รายการ' }) {
   return (
-    <span aria-label={`${count} รายการ`} className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
-      {count}
+    <span className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">{count} {unit}</span>
     </span>
   );
 }
@@ -123,26 +119,18 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
     queryFn: () => api.tickets.list({}).then((r) => r.tickets ?? []),
   });
   const commissionsQuery = useQuery({
-    queryKey: TEAM_COMMISSIONS_QUERY_KEY,
-    queryFn: () => api.commissions.list({ status: 'SUBMITTED' }).then((r) => r.commissions ?? []),
+    queryKey: queryKeys.commissionsPendingApproval(),
+    queryFn: () => api.commissions.pendingApproval().then((r) => r.commissions ?? []),
   });
 
   // null while loading: each panel shows its own skeleton, the rest of the page is already up.
   const tickets = ticketsQuery.data ?? null;
-  // Defensive client-side filter — see the TEAM_COMMISSIONS_QUERY_KEY comment above.
-  const pendingCommissions = useMemo(
-    () => commissionsQuery.data?.filter((record) => record.status === 'SUBMITTED') ?? null,
-    [commissionsQuery.data],
-  );
-  const ticketsById = useMemo(() => new Map((tickets ?? []).map((t) => [t.id, t])), [tickets]);
+  const pendingCommissions = commissionsQuery.data ?? null;
 
   const outstanding = dashboardSummary?.financeOutstanding;
   const forecast = dashboardSummary?.forecastValue;
   const cashReceived = dashboardSummary?.cashReceivedThisMonth;
-  const overdueReceivables = useMemo(
-    () => (tickets ? moneySum(tickets.filter((t) => t.overdue), (t) => t.amountOutstanding) : null),
-    [tickets],
-  );
+  const overdue = dashboardSummary?.overdueOutstanding;
 
   // "ดีลที่ต้องดูแล": open deals with a reason, grouped overdue -> follow-up due -> stale,
   // longest-untouched first inside each group.
@@ -204,7 +192,7 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
           <Figure
             danger
             label="เกินกำหนดชำระ"
-            value={failed(ticketsQuery) ? '—' : overdueReceivables == null ? <Skeleton width={96} height={22} className="mobile:ml-auto" /> : formatMoney(overdueReceivables)}
+            value={money(overdue)}
             caption="ดีลทีมที่เลยกำหนดชำระ"
           />
           <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
@@ -222,8 +210,8 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
               <Empty>ไม่มีค่าคอมรออนุมัติตอนนี้</Empty>
             ) : (
               <>
-                {commissionsShown.map((record) => {
-                  const ref = [record.invoiceDetails?.invoiceNumber, ticketsById.get(record.sourceTicketId)?.code].filter(Boolean).join(' · ');
+                {commissionsShown.map(({ commission: record, ticketCode }) => {
+                  const ref = [record.invoiceDetails?.invoiceNumber, ticketCode].filter(Boolean).join(' · ');
                   return (
                     <div key={record.id} data-testid={`commission-row-${record.id}`} className={`flex items-center justify-between gap-3 border-t border-border first:border-t-0 ${PANEL_ROW}`}>
                       <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -243,7 +231,7 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
                 <div className={`flex flex-wrap items-center justify-between gap-3 border-t border-border ${PANEL_ROW}`}>
                   <span className="text-sm text-text-muted">
                     {pendingCommissions.length > MAX_COMMISSIONS ? `อีก ${pendingCommissions.length - MAX_COMMISSIONS} รายการ · ` : ''}
-                    รวมฐาน <strong className="tabular-nums text-text">{formatMoney(moneySum(pendingCommissions, (c) => c.commissionableBase))}</strong>
+                    รวมฐาน <strong className="tabular-nums text-text">{formatMoney(moneySum(pendingCommissions, (e) => e.commission.commissionableBase))}</strong>
                   </span>
                   <Button type="button" variant="success" onClick={() => navigate('/commissions?view=pending')} className="mobile:min-h-[44px]">
                     เปิดหน้าอนุมัติ
@@ -253,7 +241,7 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
             )}
           </Panel>
 
-          <Panel flush title="ดีลที่ต้องดูแล" actions={attention ? <CountPill count={attention.length} /> : null}>
+          <Panel flush title="ดีลที่ต้องดูแล" actions={attention ? <CountPill count={attention.length} unit="ดีล" /> : null}>
             {failed(ticketsQuery) ? (
               <Failed />
             ) : attention === null ? (
@@ -290,7 +278,7 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <strong className="min-w-0 truncate text-sm font-extrabold text-text">{ticket.customerName || ticket.title}</strong>
-                          <StatusBadge tone={meta.tone}>{reason === 'overdue' ? `${meta.label} ${formatMoney(ticket.amountOutstanding)}` : meta.label}</StatusBadge>
+                          <StatusBadge tone={meta.tone}>{meta.label}</StatusBadge>
                         </div>
                         <code className="block text-2xs text-text-muted">{ticket.code} · {ticket.createdByName || '-'}</code>
                       </div>

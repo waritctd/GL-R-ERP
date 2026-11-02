@@ -246,11 +246,13 @@ class DashboardServiceTest {
     void financeOutstandingAndForecastAreServerTotalsForTheMoneyRoles(String role) {
         when(repository.financeOutstanding()).thenReturn(new BigDecimal("293545.25"));
         when(repository.forecastValue()).thenReturn(new BigDecimal("80000.25"));
+        when(repository.overdueOutstanding()).thenReturn(new BigDecimal("15000.50"));
 
         DashboardSummaryDto summary = service.summary(user(role, 43L, null, false));
 
         assertThat(summary.financeOutstanding()).isEqualByComparingTo("293545.25");
         assertThat(summary.forecastValue()).isEqualByComparingTo("80000.25");
+        assertThat(summary.overdueOutstanding()).isEqualByComparingTo("15000.50");
     }
 
     @ParameterizedTest
@@ -258,13 +260,16 @@ class DashboardServiceTest {
     void financeOutstandingAndForecastAreNullForOtherRolesAndNeverQueried(String role) {
         when(repository.financeOutstanding()).thenReturn(new BigDecimal("1.00"));
         when(repository.forecastValue()).thenReturn(new BigDecimal("1.00"));
+        when(repository.overdueOutstanding()).thenReturn(new BigDecimal("1.00"));
 
         DashboardSummaryDto summary = service.summary(user(role, 44L, null, false));
 
         assertThat(summary.financeOutstanding()).isNull();
         assertThat(summary.forecastValue()).isNull();
+        assertThat(summary.overdueOutstanding()).isNull();
         verify(repository, never()).financeOutstanding();
         verify(repository, never()).forecastValue();
+        verify(repository, never()).overdueOutstanding();
     }
 
     private UserPrincipal user(String role, Long employeeId, Long divisionId, boolean manager) {

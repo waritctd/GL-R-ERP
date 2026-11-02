@@ -8,7 +8,9 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { bangkokMonthStartIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { isManualKind } from '../commissions/commissionRecord.js';
+import { Figure, failed } from './dashboardParts.jsx';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
@@ -42,10 +44,6 @@ const COMMISSION_KIND_LABELS = {
 
 function commissionKindLabel(kind) {
   return COMMISSION_KIND_LABELS[kind] ?? 'ค่าคอม';
-}
-
-export function moneySum(items, pick) {
-  return items.reduce((sum, item) => sum + (Number(pick(item)) || 0), 0);
 }
 
 function formatWorkDate(value) {
@@ -167,26 +165,6 @@ const WorklistGroup = memo(function WorklistGroup({ groupKey, rows, count, faile
   );
 });
 
-// One figure of the money band: <div><dt/><dd/><small/></div> (the shared test helper finds it
-// via `dl > div`). Stacked cell on desktop, a label-left / value-right row on a phone.
-export function Figure({ label, value, caption, lead = false, danger = false }) {
-  return (
-    <div className="grid min-w-0 gap-0.5 mobile:grid-cols-[1fr_auto] mobile:items-baseline mobile:gap-x-3">
-      <dt className="!m-0 !text-xs !font-bold !text-text-muted">{label}</dt>
-      <dd
-        className={`m-0 font-extrabold tabular-nums mobile:text-right ${lead ? 'text-[26px] mobile:text-xl' : 'text-xl'} ${danger ? '!text-danger' : '!text-text'}`}
-      >
-        {value}
-      </dd>
-      <small className="text-xs text-text-muted mobile:col-span-2">{caption}</small>
-    </div>
-  );
-}
-
-// Failed only while there is nothing to show: a background refetch that errors keeps the last
-// data (React Query holds it alongside the error), so the page keeps showing it.
-export const failed = (query) => query.isError && query.data === undefined;
-
 export function CeoOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
   const onOpen = useCallback((to) => navigate(to), [navigate]);
@@ -203,12 +181,20 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
     queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
     queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r.items ?? []),
   });
-  // CommissionController#list only supports payrollMonth (no status param —
-  // see CommissionPage.jsx), so this fetches everything and filters
-  // client-side for MANAGER_APPROVED (the CEO's own review step).
-  const commissionsQuery = useQuery({
-    queryKey: queryKeys.commissionsList(),
-    queryFn: () => api.commissions.list({}).then((r) => r.commissions ?? []),
+  // The CEO's commission queue is what the approval page shows (ApprovalBoard): SALE records from
+  // pending-approval (MANAGER_APPROVED, any month) plus this round's manual entries, which are
+  // inserted MANAGER_APPROVED and so never appear in pending-approval.
+  const pendingCommissionsQuery = useQuery({
+    queryKey: queryKeys.commissionsPendingApproval(),
+    // Cached as the endpoint returns it ({commission, ticketCode, …} entries), the same shape the
+    // sales-manager landing stores under this key; the CEO's view of it is derived below.
+    queryFn: () => api.commissions.pendingApproval().then((r) => r.commissions ?? []),
+  });
+  const thisMonth = bangkokMonthStartIso().slice(0, 7);
+  const manualCommissionsQuery = useQuery({
+    queryKey: queryKeys.commissionsList(thisMonth),
+    // The month's records as returned (this key is "every record for the month"); filtered below.
+    queryFn: () => api.commissions.list({ payrollMonth: thisMonth }).then((r) => r.commissions ?? []),
   });
   // Two bounded, status-filtered fetches (both params are real/optional on
   // OvertimeController) instead of one unbounded all-history fetch.
@@ -229,7 +215,13 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   // of the page is already on screen (no all-or-nothing gate).
   const tickets = ticketsQuery.data ?? null;
   const pricingQueue = pricingQueueQuery.data ?? null;
-  const commissions = commissionsQuery.data ?? null;
+  const commissions = useMemo(() => {
+    if (!pendingCommissionsQuery.data || !manualCommissionsQuery.data) return null;
+    const sale = pendingCommissionsQuery.data.map((entry) => entry.commission);
+    const manual = manualCommissionsQuery.data.filter((c) => isManualKind(c.kind) && c.status === 'MANAGER_APPROVED');
+    const seen = new Set();
+    return [...sale, ...manual].filter((c) => !seen.has(c.id) && seen.add(c.id));
+  }, [pendingCommissionsQuery.data, manualCommissionsQuery.data]);
   const otManagerApproved = otManagerApprovedQuery.data ?? null;
   const otSubmitted = otSubmittedQuery.data ?? null;
   const leaveSubmitted = leaveSubmittedQuery.data ?? null;
@@ -247,7 +239,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   );
 
   // ── ค่าคอม: MANAGER_APPROVED, awaiting the CEO's own final step ───────────
-  const commissionRows = useMemo(() => commissions?.filter((c) => c.status === 'MANAGER_APPROVED'), [commissions]);
+  const commissionRows = commissions;
 
   // ── OT: MANAGER_APPROVED (normal 2-step chain) PLUS SUBMITTED requests with
   // no manager stage at all — the employee's ฝ่าย has no ผู้จัดการ, or they are
@@ -275,22 +267,11 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   const leaveRows = leaveSubmitted;
 
   // ── ผลบริษัทเดือนนี้: เงินรับแล้ว / ค้างรับ / ยอดคาดการณ์ come from /api/dashboard/summary (server
-  // totals, the same figures /finance shows). Only เกินกำหนดชำระ is derived from the scoped
-  // tickets.list() — amountOutstanding/overdue are the computed fields TicketDetailPage's money
-  // views already trust (derivePaymentFields). ────
+  // totals; เกินกำหนดชำระ is the sum of the deal list's overdue flags, counted on the server). ────
   const outstanding = dashboardSummary?.financeOutstanding;
   const forecast = dashboardSummary?.forecastValue;
   const cashReceived = dashboardSummary?.cashReceivedThisMonth;
-  const overdueReceivables = useMemo(
-    () =>
-      tickets
-        ? moneySum(
-            tickets.filter((t) => t.overdue),
-            (t) => t.amountOutstanding,
-          )
-        : null,
-    [tickets],
-  );
+  const overdue = dashboardSummary?.overdueOutstanding;
   const headcountActive = dashboardSummary?.headcount?.active ?? null;
   const lateToday = dashboardSummary?.attendance?.lateToday ?? null;
 
@@ -375,7 +356,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   const groups = [
     ['price', priceGroup, priceGroup?.length ?? 0, failed(pricingQueueQuery)],
     ['close', closeGroup, closeGroup?.length ?? 0, failed(ticketsQuery)],
-    ['commission', commissionGroup, commissionRows?.length ?? 0, failed(commissionsQuery)],
+    ['commission', commissionGroup, commissionRows?.length ?? 0, failed(pendingCommissionsQuery) || failed(manualCommissionsQuery)],
     ['ot', otGroup, otGroup?.length ?? 0, failed(otManagerApprovedQuery) || failed(otSubmittedQuery)],
     ['leave', leaveGroup, leaveGroup?.length ?? 0, failed(leaveSubmittedQuery)],
   ];
@@ -404,7 +385,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
           <Figure
             danger
             label="เกินกำหนดชำระ"
-            value={failed(ticketsQuery) ? '—' : overdueReceivables == null ? <Skeleton width={96} height={22} className="mobile:ml-auto" /> : formatMoney(overdueReceivables)}
+            value={money(overdue)}
             caption="ดีลที่เลยกำหนดชำระ"
           />
           <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
@@ -417,12 +398,9 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
           title="รอคุณตัดสินใจ"
           actions={
             allLoaded ? (
-              <span
-                data-testid="worklist-total"
-                aria-label={`รวม ${total} รายการ`}
-                className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface"
-              >
-                {total}
+              <span className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
+                <span data-testid="worklist-total" aria-hidden="true">{total}</span>
+                <span className="sr-only">รวม {total} รายการ</span>
               </span>
             ) : null
           }

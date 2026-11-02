@@ -13,7 +13,7 @@ import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, gre
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, useStageCatalog } from '../tickets/stageCatalog.js';
-import { Figure, failed } from './CeoOverview.jsx';
+import { Figure, failed } from './dashboardParts.jsx';
 
 // useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
 // stable while the data is unchanged, and the worklist memo below holds.
@@ -202,7 +202,10 @@ export function SalesOverview({ user, employee }) {
         flush
         title="สิ่งที่ต้องทำ"
         actions={!loading && !dealsFailed ? (
-          <span data-testid="worklist-total" aria-label={`รวม ${worklist.length} ดีล`} className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">{worklist.length}</span>
+          <span className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
+            <span data-testid="worklist-total" aria-hidden="true">{worklist.length}</span>
+            <span className="sr-only">รวม {worklist.length} ดีล</span>
+          </span>
         ) : null}
       >
         {dealsFailed ? (

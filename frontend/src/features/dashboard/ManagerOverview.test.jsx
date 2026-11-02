@@ -17,7 +17,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       tickets: { list: vi.fn() },
-      commissions: { list: vi.fn() },
+      commissions: { list: vi.fn(), pendingApproval: vi.fn() },
     },
   };
 });
@@ -62,8 +62,9 @@ function commission(id, base, extra = {}) {
   };
 }
 const SUBMITTED = [1000, 2000, 3000, 4000, 5000, 6000].map((base, i) => commission(301 + i, base));
-// MANAGER_APPROVED is the CEO's step — never on the manager's queue.
-const managerApproved = commission(399, 99999, { status: 'MANAGER_APPROVED' });
+// GET /api/commissions/pending-approval: the manager's own queue (SUBMITTED SALE records, any month),
+// exactly what /commissions?view=pending lists. The deal code comes with each entry.
+const pendingOf = (records) => ({ commissions: records.map((c) => ({ commission: c, ticketCode: `DL-${c.id}` })) });
 
 function LocationProbe() {
   const location = useLocation();
@@ -101,27 +102,28 @@ describe('ManagerOverview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.tickets.list.mockResolvedValue({ tickets: TICKETS });
-    api.commissions.list.mockResolvedValue({ commissions: [...SUBMITTED, managerApproved] });
+    api.commissions.pendingApproval.mockResolvedValue(pendingOf(SUBMITTED));
   });
 
-  it('fetches the same two sources with the same params as before', async () => {
+  it('reads the deal list and the manager\'s own approval queue, never the whole commission history', async () => {
     renderOverview();
     await screen.findByTestId('deal-row-208');
 
     expect(api.tickets.list).toHaveBeenCalledWith({});
-    expect(api.commissions.list).toHaveBeenCalledWith({ status: 'SUBMITTED' });
+    expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
+    expect(api.commissions.list).not.toHaveBeenCalled();
   });
 
   describe('loading (progressive)', () => {
     it('shows the money band from the summary while both queries are still loading', () => {
       api.tickets.list.mockImplementation(never);
-      api.commissions.list.mockImplementation(never);
+      api.commissions.pendingApproval.mockImplementation(never);
       renderOverview();
 
       expectFigure('เงินรับแล้ว (เดือนนี้)', EXPECTED.cash);
       expectFigure('ค้างรับ', EXPECTED.outstanding);
       expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
-      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('฿');
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
     });
 
     it('renders the commission queue while the deal list is still loading', async () => {
@@ -136,7 +138,7 @@ describe('ManagerOverview', () => {
       renderOverview();
       await screen.findByTestId('deal-row-208');
       api.tickets.list.mockRejectedValue(new Error('offline'));
-      api.commissions.list.mockRejectedValue(new Error('offline'));
+      api.commissions.pendingApproval.mockRejectedValue(new Error('offline'));
       await act(async () => {
         await lastClient.refetchQueries();
         await new Promise((resolve) => { setTimeout(resolve, 20); }); // let the error notification render
@@ -146,7 +148,6 @@ describe('ManagerOverview', () => {
 
       expect(screen.getByTestId('deal-row-208')).not.toBeNull();
       expect(screen.getByTestId('commission-row-301')).not.toBeNull();
-      expectFigure('เกินกำหนดชำระ', '฿15,000.00');
       expect(screen.queryByText('โหลดไม่สำเร็จ')).toBeNull();
     });
 
@@ -155,7 +156,8 @@ describe('ManagerOverview', () => {
       renderOverview();
 
       expect(await within(panelOf('ดีลที่ต้องดูแล')).findByText('โหลดไม่สำเร็จ')).not.toBeNull();
-      expectFigure('เกินกำหนดชำระ', '—');
+      // The overdue figure is a server total: a failed deal list does not touch it.
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
       expect(screen.getByTestId('commission-row-301')).not.toBeNull();
     });
   });
@@ -169,11 +171,13 @@ describe('ManagerOverview', () => {
       expectFigure('ยอดคาดการณ์', EXPECTED.forecast);
     });
 
-    it('shows the team\'s overdue receivables from the overdue deals only', async () => {
+    it('shows the server\'s overdue total, never a sum of the 500-row deal list', async () => {
       renderOverview();
       await screen.findByTestId('deal-row-208');
 
-      expectFigure('เกินกำหนดชำระ', '฿15,000.00');
+      expectFigure('เกินกำหนดชำระ', EXPECTED.overdue);
+      // A deal-row badge reads exactly "เกินกำหนดชำระ" too; the helper reads only the money band.
+      expect(within(screen.getByTestId('deal-row-208')).getByText('เกินกำหนดชำระ')).not.toBeNull();
     });
 
     it('shows an em dash for ค้างรับ and ยอดคาดการณ์ when the summary has no totals, never a sum of rows', () => {
@@ -181,6 +185,7 @@ describe('ManagerOverview', () => {
 
       expectFigure('ค้างรับ', '—');
       expectFigure('ยอดคาดการณ์', '—');
+      expectFigure('เกินกำหนดชำระ', '—');
     });
 
     it('drops the stat tiles, the team ranking and the old team-sales / pipeline figures', async () => {
@@ -194,13 +199,13 @@ describe('ManagerOverview', () => {
   });
 
   describe('ค่าคอมรอคุณตรวจ', () => {
-    it('lists SUBMITTED records only, at most five, with the total base of all of them', async () => {
+    it('lists the queue, at most five, with the deal code and the total base of all of them', async () => {
       renderOverview();
       const panel = (await screen.findByTestId('commission-row-301')).closest('section');
 
       expect(panel.querySelectorAll('[data-testid^="commission-row-"]')).toHaveLength(5);
-      expect(within(panel).queryByTestId('commission-row-399')).toBeNull();
-      expect(within(panel).getByTestId('commission-row-301').textContent).toContain('INV-301');
+      expect(within(panel).getByTestId('commission-row-301').textContent).toContain('INV-301 · DL-301');
+      expect(screen.getByText('6 รายการ').className).toContain('sr-only');
       expect(within(panel).getByTestId('commission-row-301').textContent).toContain('฿1,000.00');
       expect(panel.textContent).toContain('อีก 1 รายการ');
       // 1,000 + … + 6,000: every SUBMITTED record, not just the five shown.
@@ -217,7 +222,7 @@ describe('ManagerOverview', () => {
     });
 
     it('says so when nothing waits', async () => {
-      api.commissions.list.mockResolvedValue({ commissions: [managerApproved] });
+      api.commissions.pendingApproval.mockResolvedValue(pendingOf([]));
       renderOverview();
 
       expect(await screen.findByText('ไม่มีค่าคอมรออนุมัติตอนนี้')).not.toBeNull();

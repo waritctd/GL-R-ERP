@@ -3897,6 +3897,14 @@ function mockForecastValue() {
     .reduce((sum, t) => sum + Number(derivePaymentFields(t).amountPayable ?? 0), 0));
 }
 
+// Mirrors DashboardRepository#overdueOutstanding: unpaid balance of the deals the list flags `overdue`.
+function mockOverdueOutstanding() {
+  return moneyValue(db.tickets
+    .map((t) => derivePaymentFields(t))
+    .filter((f) => f.overdue)
+    .reduce((sum, f) => sum + Number(f.amountOutstanding ?? 0), 0));
+}
+
 function mockReceiptsThisMonth() {
   const bangkokMonth = (d) => new Date(d).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 7);
   const thisMonth = bangkokMonth(new Date());
@@ -12294,6 +12302,7 @@ export const api = {
           cashReceivedByRep: cashByRep,
           financeOutstanding: cashByRep ? mockFinanceOutstanding() : null,
           forecastValue: cashByRep ? mockForecastValue() : null,
+          overdueOutstanding: cashByRep ? mockOverdueOutstanding() : null,
         },
       });
     },
