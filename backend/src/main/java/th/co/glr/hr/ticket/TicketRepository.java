@@ -268,6 +268,33 @@ public class TicketRepository {
     }
 
     /**
+     * READ-ONLY widening of {@link #isInImportScope} (owner ruling 2026-11-04): a lost or cancelled deal that still
+     * has an ISSUED ใบขอซื้อ (IR) is outside import's list scope, but import must be able to OPEN it (the link in the
+     * "deal lost/cancelled" notice). Callers OR this with {@link #isInImportScope} for DETAIL reads only -- never for
+     * the list, a count or a write, which keep the strict predicate.
+     */
+    public boolean isDeadDealWithIssuedImportRequest(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (
+              SELECT 1 FROM sales.ticket t
+               WHERE t.ticket_id = :id
+                 AND (t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')
+                 AND EXISTS (SELECT 1 FROM sales.import_request ir WHERE ir.ticket_id = t.ticket_id AND ir.status = 'ISSUED'))
+            """, Map.of("id", ticketId), Boolean.class));
+    }
+
+    /** Account's counterpart of {@link #isDeadDealWithIssuedImportRequest}: a lost/cancelled deal with an ISSUED deposit notice. */
+    public boolean isDeadDealWithIssuedDepositNotice(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (
+              SELECT 1 FROM sales.ticket t
+               WHERE t.ticket_id = :id
+                 AND (t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')
+                 AND EXISTS (SELECT 1 FROM sales.deposit_notice d WHERE d.ticket_id = t.ticket_id AND d.status = 'ISSUED'))
+            """, Map.of("id", ticketId), Boolean.class));
+    }
+
+    /**
      * Lean accessor for the commission-submission gate (Step 9): resolves just the deal's current
      * pipeline stage without pulling a full ticket-detail load. Empty means the ticket does not
      * exist; {@code sales_stage} itself is {@code NOT NULL} (V50), so a present row always yields a
@@ -1929,6 +1956,13 @@ public class TicketRepository {
         "COALESCE(SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END), 0)";
 
     public record DepositNoticePaymentInfo(long id, BigDecimal depositAmount, BigDecimal totalPayable) {}
+
+    /** True when the deal has at least one ISSUED ใบขอซื้อ (IR) row: import has work in flight on it. */
+    public boolean hasIssuedImportRequest(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.import_request WHERE ticket_id = :id AND status = 'ISSUED')",
+            Map.of("id", ticketId), Boolean.class));
+    }
 
     public Optional<DepositNoticePaymentInfo> latestIssuedDepositNotice(long ticketId) {
         List<DepositNoticePaymentInfo> rows = jdbc.query("""

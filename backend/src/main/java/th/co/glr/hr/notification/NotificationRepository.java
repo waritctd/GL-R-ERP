@@ -1,5 +1,6 @@
 package th.co.glr.hr.notification;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -139,7 +140,7 @@ public class NotificationRepository {
         // TicketEventKind.SUBMITTED) so a pricing-request notification is no
         // longer indistinguishable from a ticket-submitted one.
         Map.entry("PRICING_REQUEST_SUBMITTED", "มีคำขอราคาใหม่"),
-        Map.entry("PRICING_REQUEST_REVISED", "คำขอราคามี revision ใหม่"),
+        Map.entry("PRICING_REQUEST_REVISED", "คำขอราคามีรอบแก้ไขใหม่"),
         Map.entry("PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"),
         Map.entry("FACTORY_EMAIL_READY", "ร่างอีเมลโรงงานพร้อมตรวจ"),
         Map.entry("FACTORY_EMAIL_SENT", "ส่งคำขอโรงงานแล้ว"),
@@ -215,7 +216,21 @@ public class NotificationRepository {
         Map.entry("DELIVERY_COMPLETED", "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ"),
         Map.entry("REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ"),
         Map.entry("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ"),
-        Map.entry("ORDER_CONFIRMED_NO_DEPOSIT", "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ")
+        Map.entry("ORDER_CONFIRMED_NO_DEPOSIT", "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ"),
+        // P2 notifications (see TicketEventKind).
+        Map.entry("PAYMENT_RECEIVED", "ฝ่ายบัญชีรับชำระเงินเพิ่มแล้ว"),
+        Map.entry("PAYMENT_FULLY_PAID", "ลูกค้าชำระเงินครบแล้ว"),
+        Map.entry("DEAL_CLOSED", "ดีลปิดเรียบร้อยแล้ว"),
+        Map.entry("CLOSE_CONFIRMATION_REVOKED", "ถอนการยืนยันพร้อมปิดดีลแล้ว"),
+        Map.entry("DEAL_LOST", "ดีลเสียงาน"),
+        Map.entry("DEAL_CANCELLED", "ดีลถูกยกเลิก"),
+        Map.entry("DEAL_ON_HOLD", "ดีลถูกพักไว้ชั่วคราว"),
+        Map.entry("DEAL_DORMANT", "ดีลถูกพักไว้ระยะยาว"),
+        Map.entry("DEAL_RESUMED", "ดีลกลับมาดำเนินการต่อแล้ว"),
+        Map.entry("DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง"),
+        Map.entry("DEAL_QUOTATION_CANCELLED", "ใบเสนอราคาถูกยกเลิก — ไม่ต้องอนุมัติแล้ว"),
+        Map.entry("DEAL_QUOTATION_DECIDED", "มีผู้พิจารณาใบเสนอราคาแล้ว — ไม่ต้องดำเนินการ"),
+        Map.entry("PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {
@@ -246,6 +261,16 @@ public class NotificationRepository {
     }
 
     /**
+     * {@link #notifyByRoleAtLink(String, String, String, String)} that skips every id in {@code excludeEmployeeIds}:
+     * the person who did the thing (and anyone who already hears about it another way) is not notified again. The
+     * role mailbox is only mailed when somebody else received a row.
+     */
+    public void notifyByRoleAtLink(String role, String type, String message, String link, long... excludeEmployeeIds) {
+        notifyByRoleInternal(role, type, message, link, true,
+            Arrays.stream(excludeEmployeeIds).boxed().toList());
+    }
+
+    /**
      * CR-1 (GLA-167): in-app row only, NO email -- the lead-time change flow is deliberately
      * bell-only (owner decision). Same INSERT as {@link #notifyEmployeeForPricingRequest}, minus the mailer.
      */
@@ -260,7 +285,8 @@ public class NotificationRepository {
      */
     public void notifyByRoleForPricingRequestExcluding(String role, long pricingRequestId, String type,
                                                        String message, long excludeEmployeeId) {
-        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, true, excludeEmployeeId);
+        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, true,
+            List.of(excludeEmployeeId));
     }
 
     /** In-app-only counterpart of {@link #notifyByRoleForPricingRequest}; see above. */
@@ -350,11 +376,11 @@ public class NotificationRepository {
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link, boolean email) {
-        notifyByRoleInternal(role, type, message, link, email, null);
+        notifyByRoleInternal(role, type, message, link, email, List.of());
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link, boolean email,
-                                      Long excludeEmployeeId) {
+                                      List<Long> excludeEmployeeIds) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
@@ -413,7 +439,7 @@ public class NotificationRepository {
               LEFT JOIN hr.division d ON d.division_id = e.division_id
               LEFT JOIN hr.position p ON p.position_id = e.position_id
              WHERE (%s) AND e.is_active = TRUE
-               AND (CAST(:excludeEmployeeId AS BIGINT) IS NULL OR e.employee_id <> :excludeEmployeeId)
+               AND e.employee_id NOT IN (:excludeEmployeeIds)
             RETURNING employee_id
             """.formatted(divisionFilter),
             new MapSqlParameterSource()
@@ -421,10 +447,11 @@ public class NotificationRepository {
                 .addValue("title", title)
                 .addValue("message", message)
                 .addValue("link", link)
-                .addValue("excludeEmployeeId", excludeEmployeeId),
+                // NOT IN needs a non-empty list; -1 is never an employee id.
+                .addValue("excludeEmployeeIds", excludeEmployeeIds.isEmpty() ? List.of(-1L) : excludeEmployeeIds),
             Long.class);
         // With an exclusion the role mailbox is only worth mailing when somebody ELSE was notified.
-        if (email && (excludeEmployeeId == null || !notified.isEmpty())) {
+        if (email && (excludeEmployeeIds.isEmpty() || !notified.isEmpty())) {
             salesMailer.emailForRole(role, notified, title, message, link);
         }
     }

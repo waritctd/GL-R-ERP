@@ -325,6 +325,19 @@ describe('FinanceDealPage', () => {
     });
   });
 
+  describe('a lost/cancelled deal opened read-only', () => {
+    it('shows the accepted quotation without a download button when the server withholds the link', async () => {
+      const deal = makeFinanceDeal();
+      deal.documents.acceptedQuotation.downloadPath = null;
+      api.finance.getDeal.mockResolvedValue({ deal });
+      renderPage();
+      await screen.findByRole('heading', { level: 1, name: /PR-2026-0501/ });
+      const s1 = section(/^1 ได้รับคำสั่งซื้อ/);
+      expect(within(s1).getByText('QT-2026-0031')).not.toBeNull();
+      expect(within(s1).queryByRole('button', { name: /ดาวน์โหลด.*QT-2026-0031/ })).toBeNull();
+    });
+  });
+
   describe('primary action and overflow', () => {
     it('the primary button is the highest-priority available action; the rest sit in the overflow menu', async () => {
       const deal = makeFinanceDeal({

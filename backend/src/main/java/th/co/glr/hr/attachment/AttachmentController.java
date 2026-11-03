@@ -144,8 +144,10 @@ public class AttachmentController {
         // never matters for a participant (short-circuited inside the policy anyway). All four
         // AttachType values stay readable in scope -- there are no others, so no type filter.
         boolean inRoleScope = switch (String.valueOf(actor.role())) {
-            case "import" -> tickets.isInImportScope(ticketId);
-            case "account" -> tickets.isInAccountScope(ticketId);
+            // Reading only: the deal's documents open wherever the deal page does, which includes a lost/cancelled
+            // deal that still has an issued IR / deposit notice (owner ruling 2026-11-04).
+            case "import" -> tickets.isInImportScope(ticketId) || tickets.isDeadDealWithIssuedImportRequest(ticketId);
+            case "account" -> tickets.isInAccountScope(ticketId) || tickets.isDeadDealWithIssuedDepositNotice(ticketId);
             default -> false;
         };
         if (!TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope)) {

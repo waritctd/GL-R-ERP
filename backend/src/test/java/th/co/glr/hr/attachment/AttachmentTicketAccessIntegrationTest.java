@@ -251,6 +251,94 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertForbidden(() -> controller.delete(attachmentId, sessionFor(importUser)));
     }
 
+    // ── dead deals (owner ruling 2026-11-04): import / account may READ the documents of a lost or cancelled deal
+    // that still has THEIR issued document (IR / deposit notice) -- the link in the lost/cancelled notice -- and
+    // nothing else is widened: not the other role's document, not hr, not a non-owner rep, not any write ──────
+
+    private void markDead() {
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+    }
+
+    private void seedIssuedDepositNotice() {
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 100000.00, 30000.00, 0.07, 2100.00, 32100.00)
+            """, Map.of("id", ticketId));
+    }
+
+    private void seedIssuedImportRequest() {
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('Factory Attach Dead', 'IT', 'EUR') RETURNING factory_id
+            """, Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, 'Factory Attach Dead', 'Brand', 1, 'ISSUED', 'IR-ATT-1', CURRENT_DATE,
+                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
+            """, Map.of("t", ticketId, "f", factoryId));
+    }
+
+    private void assertCanRead(UserPrincipal who) {
+        assertThatCode(() -> controller.list(ticketId, sessionFor(who))).as("list, %s", who.role()).doesNotThrowAnyException();
+        assertThatCode(() -> controller.download(attachmentId, sessionFor(who))).as("download, %s", who.role()).doesNotThrowAnyException();
+    }
+
+    private void assertCannotRead(UserPrincipal who) {
+        assertForbidden(() -> controller.list(ticketId, sessionFor(who)));
+        assertForbidden(() -> controller.download(attachmentId, sessionFor(who)));
+    }
+
+    @Test
+    void accountCanReadTheDocumentsOfADeadDeal_thatHasAnIssuedDepositNotice_butNotWriteThem() {
+        markDead();
+        seedIssuedDepositNotice();
+
+        assertCanRead(account);
+        assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(account)));
+        assertForbidden(() -> controller.delete(attachmentId, sessionFor(account)));
+    }
+
+    @Test
+    void importCanReadTheDocumentsOfADeadDeal_thatHasAnIssuedImportRequest_butNotWriteThem() {
+        markDead();
+        seedIssuedImportRequest();
+
+        assertCanRead(importUser);
+        assertForbidden(() -> controller.upload(ticketId, pdfFile(), "OTHER", null, sessionFor(importUser)));
+        assertForbidden(() -> controller.delete(attachmentId, sessionFor(importUser)));
+    }
+
+    /** Each role is widened by ITS OWN document only, and a dead deal with neither document stays closed to both. */
+    @Test
+    void aDeadDeal_isOpenOnlyThroughTheCallersOwnIssuedDocument() {
+        markDead();
+        assertCannotRead(account);
+        assertCannotRead(importUser);
+
+        seedIssuedDepositNotice();
+        assertCanRead(account);
+        assertCannotRead(importUser); // a deposit notice is not import's document
+
+        seedIssuedImportRequest();
+        assertCanRead(importUser);
+    }
+
+    /** hr and a rep who does not own the deal stay out even when BOTH issued documents exist. */
+    @Test
+    void hrAndANonOwningRepStayRefused_onADeadDealWithBothIssuedDocuments() {
+        markDead();
+        seedIssuedDepositNotice();
+        seedIssuedImportRequest();
+
+        assertCannotRead(hr);
+        assertCannotRead(salesOther);
+        assertCannotRead(employee);
+    }
+
     @Test
     void theUploaderKeepsAccessToTheirOwnFileRegardlessOfTheDealGate() {
         FileStorageService.StoredFile own = storeFile("own-" + UUID.randomUUID() + ".pdf");

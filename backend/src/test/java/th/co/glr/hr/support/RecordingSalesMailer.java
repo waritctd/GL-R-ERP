@@ -55,7 +55,8 @@ public final class RecordingSalesMailer implements SalesNotificationMailer {
     /**
      * Inserts ONE active employee that {@code NotificationRepository#notifyByRoleAtLink(role, …)}
      * fans out to: {@code import} = division PCIM, {@code account} = division AC (exact match, as
-     * the production predicate), {@code ceo} = a กรรมการผู้จัดการ position. Returns its employee id.
+     * the production predicate), {@code sales_manager} = division SA + a ผู้จัดการ position,
+     * {@code ceo} = a กรรมการผู้จัดการ position. Returns its employee id.
      */
     public long seedRoleEmployee(String role) {
         seeded++;
@@ -70,6 +71,17 @@ public final class RecordingSalesMailer implements SalesNotificationMailer {
                     RETURNING position_id
                     """, Map.of("code", "RSM" + seeded), Long.class)
                 : existing.get(0);
+        } else if ("sales_manager".equals(role)) {
+            // Mirrors the production predicate: ฝ่ายขาย division + a position naming a ผู้จัดการ.
+            divisionId = jdbc.queryForObject("""
+                INSERT INTO hr.division (source_code, name_th) VALUES ('SA', 'SA division')
+                ON CONFLICT (source_code) DO UPDATE SET name_th = hr.division.name_th
+                RETURNING division_id
+                """, Map.of(), Long.class);
+            positionId = jdbc.queryForObject("""
+                INSERT INTO hr.position (source_code, name_th, is_active) VALUES (:code, 'ผู้จัดการฝ่ายขาย', TRUE)
+                RETURNING position_id
+                """, Map.of("code", "RSMSM" + seeded), Long.class);
         } else {
             String code = "import".equals(role) ? "PCIM" : "AC";
             divisionId = jdbc.queryForObject("""
@@ -143,6 +155,36 @@ public final class RecordingSalesMailer implements SalesNotificationMailer {
         assertThat(mail.employeeId()).as("email recipient").isEqualTo(employeeId);
         assertThat(mail.message()).as("email message").isEqualTo(message);
         assertThat(mail.link()).as("email link").isEqualTo(link);
+    }
+
+    /**
+     * For a type that several recipients (rep + role, or two roles) share: exactly ONE bell row of
+     * {@code type} for {@code employeeId} with these fields, and exactly one email with the same
+     * title/message/link that reached that employee (an employee mail to them, or a role mail whose
+     * notified ids include them). Says nothing about OTHER recipients — pair it with
+     * {@link #assertBellRecipients}.
+     */
+    public void assertNoticeFor(long employeeId, String type, String title, String message, String link) {
+        List<Map<String, Object>> rows = bellRows(type).stream()
+            .filter(r -> ((Number) r.get("employee_id")).longValue() == employeeId).toList();
+        assertThat(rows).as("bell rows of type %s for employee %d", type, employeeId).hasSize(1);
+        Map<String, Object> row = rows.get(0);
+        assertThat(row.get("title")).as("bell title").isEqualTo(title);
+        assertThat(row.get("message")).as("bell message").isEqualTo(message);
+        assertThat(row.get("link")).as("bell link").isEqualTo(link);
+        List<Mail> sent = mails.stream()
+            .filter(m -> title.equals(m.title()) && message.equals(m.message()) && link.equals(m.link()))
+            .filter(m -> (m.employeeId() != null && m.employeeId() == employeeId)
+                || m.notifiedEmployeeIds().contains(employeeId))
+            .toList();
+        assertThat(sent).as("emails titled '%s' reaching employee %d", title, employeeId).hasSize(1);
+    }
+
+    /** The bell rows of {@code type} went to EXACTLY these employees, one row each (no extra, no duplicate). */
+    public void assertBellRecipients(String type, long... employeeIds) {
+        List<Long> actual = bellRows(type).stream().map(r -> ((Number) r.get("employee_id")).longValue()).sorted().toList();
+        assertThat(actual).as("bell recipients of %s", type)
+            .containsExactlyElementsOf(LongStream.of(employeeIds).boxed().sorted().toList());
     }
 
     /** Neither a bell row of {@code type} nor an email titled {@code title} exists. */

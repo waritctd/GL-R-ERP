@@ -23,6 +23,7 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
@@ -624,6 +625,9 @@ public class PricingRequestService {
             "ยกเลิกรอบแก้ไขแล้ว — กลับมาใช้ใบเสนอราคาเดิม", "{}"));
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
             "คำขอราคา " + summary.requestCode() + " ถูกยกเลิก");
+        notifyAssignedImport(summary, actor, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
+            actor.name() + " ยกเลิกคำขอราคา " + summary.requestCode() + " — เหตุผล: " + request.reason(),
+            STOP_REQUEST_LINE);
         return detail(id);
     }
 
@@ -739,7 +743,11 @@ public class PricingRequestService {
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT,
             request.revisionReason(), toRevisionMetadataJson(parent.id()));
         notifyCeo(parent, PricingRequestEventKind.PRICING_REQUEST_REVISED,
-            "คำขอราคา " + parent.requestCode() + " มี customer-change revision ใหม่");
+            "คำขอราคา " + parent.requestCode() + " มีรอบแก้ไขใหม่ตามที่ลูกค้าขอ");
+        notifyAssignedImport(parent, actor, PricingRequestEventKind.PRICING_REQUEST_REVISED,
+            actor.name() + " เปลี่ยนแปลงคำขอราคา " + parent.requestCode()
+                + " ตามที่ลูกค้าขอ และสร้างรอบแก้ไขใหม่ — เหตุผล: " + request.revisionReason(),
+            "สิ่งที่ต้องทำต่อ: หยุดดำเนินการตามคำขอเดิม แล้วรอรอบแก้ไขใหม่ส่งเข้ามา");
         return detail(newId);
     }
 
@@ -909,7 +917,8 @@ public class PricingRequestService {
      *         be settled, so the caller's own deal-terminal transaction still commits.
      */
     @Transactional
-    public CancelOpenForTicketResult cancelOpenForTicket(long ticketId, String reason, UserPrincipal actor) {
+    public CancelOpenForTicketResult cancelOpenForTicket(long ticketId, String reason, DeadDealCause cause,
+                                                         UserPrincipal actor) {
         // Deliberately NO requireTicket/requireActive here: this method exists
         // BECAUSE the deal just left ACTIVE (see the class Javadoc above) — a
         // lifecycle gate would make the one caller that needs this cascade fail
@@ -955,6 +964,14 @@ public class PricingRequestService {
                         PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
                         reason, metadataJson);
                     cancelledCount++;
+                    // Only a request Import was still working (decided on the status BEFORE the cascade): a
+                    // superseded parent was already told "รอบแก้ไขใหม่", a quotation-issued one is finished.
+                    if (IMPORT_LIVE_STATUSES.contains(summary.status())) {
+                        notifyAssignedImport(summary, actor, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
+                            (cause == DeadDealCause.LOST ? "ดีลถูกบันทึกว่าเสียงาน" : "ดีลถูกยกเลิก")
+                                + " — คำขอราคา " + summary.requestCode() + " จึงถูกยกเลิกอัตโนมัติ",
+                            STOP_REQUEST_LINE);
+                    }
                     settled = true;
                     break;
                 }
@@ -1062,6 +1079,32 @@ public class PricingRequestService {
         return summary.ticketCreatedById() == actor.id()
             || "ceo".equals(actor.role())
             || "sales_manager".equals(actor.role());
+    }
+
+    /** Why a deal's open requests are being cascade-cancelled: it was marked lost, or cancelled. */
+    public enum DeadDealCause { LOST, CANCELLED }
+
+    /** Statuses in which Import (or the CEO, on Import's factory work) still has a live request. */
+    private static final Set<String> IMPORT_LIVE_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CEO_REVIEWING,
+        PricingRequestStatus.APPROVED_FOR_QUOTATION);
+
+    private static final String STOP_REQUEST_LINE =
+        "สิ่งที่ต้องทำต่อ: หยุดดำเนินการกับคำขอนี้ — หากติดต่อโรงงานไปแล้ว กรุณาแจ้งโรงงาน";
+
+    /**
+     * P2 B4: tell the import staffer holding this request (nobody if unassigned, nobody if they are the actor).
+     * Three lines: what happened, the deal, what to do.
+     */
+    private void notifyAssignedImport(PricingRequestSummaryDto summary, UserPrincipal actor, String type,
+                                      String line1, String line3) {
+        Long assigned = summary.assignedImportId();
+        if (assigned == null || assigned == actor.id()) {
+            return;
+        }
+        notifications.notifyEmployeeForPricingRequest(assigned, summary.id(), type,
+            line1 + "\n" + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName()) + "\n" + line3);
     }
 
     private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {

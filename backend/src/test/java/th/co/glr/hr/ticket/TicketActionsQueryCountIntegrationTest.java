@@ -109,7 +109,7 @@ class TicketActionsQueryCountIntegrationTest extends AbstractPostgresIntegration
 
         tickets = new TicketRepository(counted);
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         // Every collaborator that owns SQL is wired on the counted template, so a future gate that
         // reaches for a different repository is counted too rather than silently invisible.

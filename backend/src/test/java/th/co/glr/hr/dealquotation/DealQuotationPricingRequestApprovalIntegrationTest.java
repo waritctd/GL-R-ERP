@@ -48,7 +48,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
@@ -69,6 +68,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -102,6 +102,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     private TicketRepository tickets;
     private TicketService ticketService;
 
+    private RecordingSalesMailer salesMailer;
     private long salesRepId;
     private long ceoUserId;
     private long salesManagerId;
@@ -126,7 +127,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        salesMailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, salesMailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -254,10 +256,36 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     @Test
     void approve_byCeo_whenUnchanged_issues() {
+        long smRole = salesMailer.seedRoleEmployee("sales_manager");
         DealQuotationDto submitted = submittedQuotation();
         DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), ceoActor);
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
         assertThat(issued.approvedById()).isEqualTo(ceoUserId);
+        // P2 B8: the CEO decided, so the OTHER approver (sales manager) hears it, FYI.
+        salesMailer.assertNoticeFor(smRole, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(ceoActor, "CEO", "อนุมัติใบเสนอราคา " + issued.number() + " แล้ว"),
+            "/quotations/" + issued.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", smRole);
+    }
+
+    /** The CEO already gets "ใบเสนอราคา … ถูกออกแล้ว" when the sales manager issues, so no second "decided" notice on top. */
+    @Test
+    void approve_bySalesManager_doesNotAlsoSendTheCeoADecidedNotice() {
+        salesMailer.seedRoleEmployee("ceo");
+        DealQuotationDto submitted = submittedQuotation();
+
+        quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        salesMailer.assertNoNotice("DEAL_QUOTATION_DECIDED", DECIDED_TITLE);
+    }
+
+    private static final String DECIDED_TITLE = "มีผู้พิจารณาใบเสนอราคาแล้ว — ไม่ต้องดำเนินการ";
+
+    /** P2 B8 wording: who decided (with their role), what they decided, the deal, FYI. */
+    private String decidedMessage(UserPrincipal decider, String roleLabel, String decision) {
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        return decider.name() + " (" + roleLabel + ") " + decision + "\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+            + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
     }
 
     @Test
@@ -381,16 +409,41 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     @Test
     void reject_bySalesManager_returnsToDraftWithReason() {
         DealQuotationDto submitted = submittedQuotation();
+        long ceoRole = salesMailer.seedRoleEmployee("ceo");
         DealQuotationDto rejected = quotationService.reject(submitted.id(), new RejectRequest("ราคาไม่เหมาะสม"), salesManagerActor);
         assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(rejected.approvalNote()).isEqualTo("ราคาไม่เหมาะสม");
+        // P2 B8: the sales manager rejected, so the CEO (the other approver) hears it, FYI, with the reason.
+        salesMailer.assertNoticeFor(ceoRole, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(salesManagerActor, "ผู้จัดการฝ่ายขาย",
+                "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": ราคาไม่เหมาะสม"),
+            "/quotations/" + rejected.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", ceoRole);
     }
 
     @Test
     void reject_byCeo_returnsToDraftWithReason() {
         DealQuotationDto submitted = submittedQuotation();
+        long smRole = salesMailer.seedRoleEmployee("sales_manager");
         DealQuotationDto rejected = quotationService.reject(submitted.id(), new RejectRequest("ขอทบทวนราคาใหม่"), ceoActor);
         assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        salesMailer.assertNoticeFor(smRole, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(ceoActor, "CEO", "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": ขอทบทวนราคาใหม่"),
+            "/quotations/" + rejected.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", smRole);
+    }
+
+    /** A rejection that is refused (409, already decided) tells the other approver nothing new. */
+    @Test
+    void reject_whenAlreadyDecided_sendsNoSecondDecidedNotice() {
+        long smRole = salesMailer.seedRoleEmployee("sales_manager");
+        DealQuotationDto submitted = submittedQuotation();
+        quotationService.reject(submitted.id(), new RejectRequest("รอบแรก"), ceoActor);
+
+        assertThatThrownBy(() -> quotationService.reject(submitted.id(), new RejectRequest("รอบสอง"), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", smRole); // exactly the one from round one
     }
 
     @Test
@@ -499,12 +552,22 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
 
+        long ceoRole = salesMailer.seedRoleEmployee("ceo");
         jdbc.update("UPDATE sales.quotation SET validity_date = CURRENT_DATE - 1 WHERE quotation_id = :id",
             java.util.Map.of("id", issued.id()));
 
         int expiredCount = quotationService.expireOverdueQuotations();
         assertThat(expiredCount).isEqualTo(1);
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
+        // P2 B6: the rep who owns the deal is told to chase the customer or re-quote; the CEO's existing FYI is unchanged.
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        salesMailer.assertNoticeFor(salesRepId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issued.number() + " หมดอายุแล้ว\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+                + "\nสิ่งที่ต้องทำต่อ: ติดตามลูกค้า หรือออกใบเสนอราคาใหม่",
+            "/tickets/" + ticketId);
+        salesMailer.assertNoticeFor(ceoRole, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issued.number() + " หมดอายุ", "/pricing-requests/" + issued.pricingRequestId());
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", salesRepId, ceoRole);
     }
 
     @Test
@@ -522,6 +585,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         quotationService.expireOverdueQuotations();
         assertThat(quotationService.get(approvedDirect.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.APPROVED);
+        salesMailer.assertNoNotice("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ"); // nothing expired, nobody told
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

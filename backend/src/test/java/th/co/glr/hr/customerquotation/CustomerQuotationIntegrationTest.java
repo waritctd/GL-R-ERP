@@ -46,7 +46,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemReq
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
@@ -68,6 +67,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -98,6 +98,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private CustomerQuotationService quotationService;
     private TicketService ticketService;
 
+    private RecordingSalesMailer salesMailer;
     private long salesRepId;
     private long otherSalesId;
     private long importUserId;
@@ -119,7 +120,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        salesMailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, salesMailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -980,9 +982,16 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             SELECT COUNT(*) FROM sales.pricing_request_event
              WHERE pricing_request_id = :id AND event_kind = 'CUSTOMER_QUOTATION_EXPIRED'
             """, Map.of("id", prPast), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE type = 'CUSTOMER_QUOTATION_EXPIRED'
-            """, Map.of(), Long.class)).isEqualTo(1L);
+        // The CEO's FYI (unchanged) plus, P2 B6, the rep who owns the deal -- one row each, nobody else
+        // (the unexpired and the accepted quotations told nobody).
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        salesMailer.assertNoticeFor(salesRepId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issuedPast.number() + " หมดอายุแล้ว\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+                + "\nสิ่งที่ต้องทำต่อ: ติดตามลูกค้า หรือออกใบเสนอราคาใหม่",
+            "/tickets/" + ticketId);
+        salesMailer.assertNoticeFor(ceoUserId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคาลูกค้า " + issuedPast.number() + " หมดอายุ", "/pricing-requests/" + prPast);
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", salesRepId, ceoUserId);
 
         // Idempotent: a second sweep with nothing new to expire touches nothing further.
         assertThat(quotationService.expireOverdueQuotations()).isEqualTo(0);

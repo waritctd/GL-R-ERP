@@ -30,6 +30,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemReq
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.StartNegotiationRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.UpdateFactoryQuoteDraftRequest;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
@@ -623,6 +624,13 @@ public class FactoryQuoteService {
             request.reason());
         notifyCeo(summary, PricingRequestEventKind.FACTORY_NOT_AVAILABLE,
             "คำขอราคา " + summary.requestCode() + " โรงงานไม่สามารถเสนอราคาได้: " + quote.factoryName());
+        // P2 B3: the rep who asked for the price learns the factory cannot quote (CEO already told above).
+        notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
+            PricingRequestEventKind.FACTORY_NOT_AVAILABLE,
+            "ฝ่ายนำเข้า (" + actor.name() + ") แจ้งว่าโรงงาน " + quote.factoryName()
+                + " ไม่สามารถเสนอราคาได้ — เหตุผล: " + request.reason() + "\nคำขอราคา " + summary.requestCode() + " · "
+                + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName())
+                + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ");
         return requireQuote(quoteId);
     }
 

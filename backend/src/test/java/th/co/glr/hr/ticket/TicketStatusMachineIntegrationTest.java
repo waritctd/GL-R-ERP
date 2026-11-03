@@ -86,7 +86,7 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         // return value is irrelevant here but whose Mockito default (null) would NPE inside
         // cancel().
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
@@ -308,6 +308,330 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             });
 
         mailer.assertNoNotice("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ");
+    }
+
+    // ── P2 B2: close (CEO verifies) and revoking the account's close confirmation ──────────────
+
+    private static final String DEAL_CLOSED_TITLE = "ดีลปิดเรียบร้อยแล้ว";
+    private static final String REVOKED_TITLE = "ถอนการยืนยันพร้อมปิดดีลแล้ว";
+    private static final String FYI = "แจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+
+    private String label(long ticketId) {
+        TicketSummaryDto s = tickets.findById(ticketId).orElseThrow().summary();
+        return "ดีล " + s.code() + " · ลูกค้า " + s.customerName();
+    }
+
+    /** A deal account has confirmed ready-to-close (the legacy document_issued route), waiting on the CEO. */
+    private long dealAwaitingCeoVerification() {
+        long ticketId = createTicket();
+        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id", Map.of("id", ticketId));
+        ticketService.confirmCloseReady(ticketId, accountActor);
+        return ticketId;
+    }
+
+    /** The CEO's verification closes the deal: the rep and account hear it (FYI); the CEO who did it does not. */
+    @Test
+    void verifyClose_notifiesTheRepAndAccount_notTheCeoWhoClosedIt() {
+        long accountId = mailer.seedRoleEmployee("account");
+        long ceoId = mailer.seedRoleEmployee("ceo");
+        long ticketId = dealAwaitingCeoVerification();
+
+        ticketService.verifyClose(ticketId, ceo);
+
+        String message = "CEO (" + ceo.name() + ") ตรวจสอบและปิดดีลเรียบร้อยแล้ว\n" + label(ticketId) + "\n" + FYI;
+        mailer.assertNoticeFor(salesRepId, "DEAL_CLOSED", DEAL_CLOSED_TITLE, message, "/tickets/" + ticketId);
+        mailer.assertNoticeFor(accountId, "DEAL_CLOSED", DEAL_CLOSED_TITLE, message, "/finance/deals/" + ticketId);
+        mailer.assertBellRecipients("DEAL_CLOSED", salesRepId, accountId); // not ceoId
+        assertThat(ceoId).as("fixture: a CEO exists to be wrongly notified").isNotEqualTo(salesRepId);
+    }
+
+    /** verifyClose refused (account never confirmed) closes nothing and tells nobody. */
+    @Test
+    void verifyClose_refusedWithoutTheAccountConfirmation_notifiesNobody() {
+        mailer.seedRoleEmployee("account");
+        long ticketId = createTicket();
+        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
+
+        assertThatThrownBy(() -> ticketService.verifyClose(ticketId, ceo))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+
+        mailer.assertNoNotice("DEAL_CLOSED", DEAL_CLOSED_TITLE);
+    }
+
+    /** Account withdraws its confirmation: the CEO's "รอ CEO ตรวจสอบ" bell is stale, so the CEO (only) is told, with the reason. */
+    @Test
+    void financeRevokeCloseConfirmation_byAccount_tellsTheCeoWithTheReason_notAccount() {
+        long ceoId = mailer.seedRoleEmployee("ceo");
+        mailer.seedRoleEmployee("account");
+        long ticketId = dealAwaitingCeoVerification();
+
+        ticketService.financeRevokeCloseConfirmation(ticketId, "ยอดเงินไม่ตรง", accountActor);
+
+        mailer.assertRoleNotice("ceo", "CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE,
+            "ฝ่ายบัญชี (" + accountActor.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว — ยอดเงินไม่ตรง\n" + label(ticketId)
+                + "\nแจ้งเพื่อทราบ ยังไม่ต้องตรวจสอบปิดดีล — รอฝ่ายบัญชียืนยันใหม่",
+            "/tickets/" + ticketId, ceoId);
+    }
+
+    /** The CEO withdraws it (finance entrypoint, no note): account is told to re-confirm when ready. */
+    @Test
+    void financeRevokeCloseConfirmation_byCeo_tellsAccountToReconfirm_notTheCeo() {
+        long accountId = mailer.seedRoleEmployee("account");
+        mailer.seedRoleEmployee("ceo");
+        long ticketId = dealAwaitingCeoVerification();
+
+        ticketService.financeRevokeCloseConfirmation(ticketId, null, ceo);
+
+        mailer.assertRoleNotice("account", "CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE,
+            "CEO (" + ceo.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว\n" + label(ticketId)
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบเหตุผล แล้วยืนยันพร้อมปิดดีลใหม่เมื่อพร้อม",
+            "/finance/deals/" + ticketId, accountId);
+    }
+
+    /** The /api/tickets entrypoint (ceo only) revokes through the same logic: same notice to account, reason included. */
+    @Test
+    void revokeCloseConfirmation_ceoEntrypoint_tellsAccount() {
+        long accountId = mailer.seedRoleEmployee("account");
+        long ticketId = dealAwaitingCeoVerification();
+
+        ticketService.revokeCloseConfirmation(ticketId, "รอใบกำกับภาษีฉบับใหม่", ceo);
+
+        mailer.assertRoleNotice("account", "CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE,
+            "CEO (" + ceo.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว — รอใบกำกับภาษีฉบับใหม่\n" + label(ticketId)
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบเหตุผล แล้วยืนยันพร้อมปิดดีลใหม่เมื่อพร้อม",
+            "/finance/deals/" + ticketId, accountId);
+    }
+
+    /** Nothing was confirmed, so there is nothing to revoke (409): nobody is told. */
+    @Test
+    void revokeCloseConfirmation_whenNothingWasConfirmed_notifiesNobody() {
+        mailer.seedRoleEmployee("account");
+        mailer.seedRoleEmployee("ceo");
+        long ticketId = createTicket();
+        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
+
+        assertThatThrownBy(() -> ticketService.revokeCloseConfirmation(ticketId, null, ceo))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+
+        mailer.assertNoNotice("CLOSE_CONFIRMATION_REVOKED", REVOKED_TITLE);
+    }
+
+    // ── P2 B5: lost / cancelled / on hold / dormant / resumed / reopened ──────────────────────────
+
+    private static final String IMPORT_STOP = "สิ่งที่ต้องทำต่อ: หากสั่งซื้อกับโรงงานไปแล้ว กรุณาแจ้งโรงงานให้หยุดหรือยกเลิกคำสั่งซื้อ";
+    private static final String ACCOUNT_REFUND = "สิ่งที่ต้องทำต่อ: ตรวจสอบเงินมัดจำที่รับไว้ และแจ้งผู้เกี่ยวข้องหากต้องคืนเงินลูกค้า";
+    private static final String IMPORT_PAUSE = "สิ่งที่ต้องทำต่อ: หากสั่งซื้อกับโรงงานไปแล้ว กรุณาแจ้งโรงงานว่าดีลถูกพักไว้";
+    private static final String ACCOUNT_WAIT = "สิ่งที่ต้องทำต่อ: ตรวจสอบเงินมัดจำที่รับไว้ แล้วรอจนกว่าดีลจะกลับมาดำเนินการ";
+
+    private record LifecycleRoles(long sm, long ceo, long importId, long account) {}
+
+    private LifecycleRoles seedLifecycleRoles() {
+        return new LifecycleRoles(mailer.seedRoleEmployee("sales_manager"), mailer.seedRoleEmployee("ceo"),
+            mailer.seedRoleEmployee("import"), mailer.seedRoleEmployee("account"));
+    }
+
+    /** An ISSUED ใบขอซื้อ (IR) row for the deal — the "import has work in flight" signal. */
+    private void seedIssuedImportRequest(long ticketId) {
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('Factory Lifecycle', 'IT', 'EUR') RETURNING factory_id
+            """, Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, 'Factory Lifecycle', 'Brand', 1, 'ISSUED', 'IR-LIFE-1', CURRENT_DATE,
+                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("f", factoryId));
+    }
+
+    /** An ISSUED ใบแจ้งยอดเงินรับมัดจำ for the deal — the "account has a deposit to look after" signal. */
+    private void seedIssuedDepositNotice(long ticketId) {
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:id, 1, 'ISSUED', 'x', 0.3, 100000.00, 30000.00, 0.07, 2100.00, 32100.00)
+            """, Map.of("id", ticketId));
+    }
+
+    /**
+     * SM and CEO always hear it (FYI, /tickets/{id}); import only with an IR (its own deal page + a
+     * "tell the factory" line); account only with a deposit notice (its finance page). Nobody else.
+     */
+    private void assertLifecycleNotices(long ticketId, String type, String title, String line1,
+                                        LifecycleRoles r, String importLine3, String accountLine3,
+                                        boolean toImport, boolean toAccount) {
+        String head = line1 + "\n" + label(ticketId) + "\n";
+        mailer.assertNoticeFor(r.sm(), type, title, head + FYI, "/tickets/" + ticketId);
+        mailer.assertNoticeFor(r.ceo(), type, title, head + FYI, "/tickets/" + ticketId);
+        java.util.List<Long> expected = new java.util.ArrayList<>(java.util.List.of(r.sm(), r.ceo()));
+        if (toImport) {
+            mailer.assertNoticeFor(r.importId(), type, title, head + importLine3, "/import/deals/" + ticketId);
+            expected.add(r.importId());
+        }
+        if (toAccount) {
+            mailer.assertNoticeFor(r.account(), type, title, head + accountLine3, "/finance/deals/" + ticketId);
+            expected.add(r.account());
+        }
+        mailer.assertBellRecipients(type, expected.stream().mapToLong(Long::longValue).toArray());
+    }
+
+    /** Plain deal, no IR, no deposit notice: only the sales manager and the CEO are told; the rep who did it is not. */
+    @Test
+    void markLost_withNoIrAndNoDepositNotice_tellsOnlySalesManagerAndCeo() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, "แพ้ราคาคู่แข่ง", salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_LOST", "ดีลเสียงาน",
+            salesRep.name() + " บันทึกว่าดีลเสียงาน (ราคา) — แพ้ราคาคู่แข่ง", r, IMPORT_STOP, ACCOUNT_REFUND, false, false);
+    }
+
+    /** A sales manager who marks a deal lost is not told about it themselves; the OTHER sales manager and the CEO are. */
+    @Test
+    void markLost_bySalesManager_doesNotNotifyThatSalesManager() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long otherSm = mailer.seedRoleEmployee("sales_manager");
+        UserPrincipal smActor = principal(r.sm(), "sales_manager");
+        long ticketId = createTicket();
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, smActor);
+
+        String head = smActor.name() + " บันทึกว่าดีลเสียงาน (ราคา)\n" + label(ticketId) + "\n" + FYI;
+        mailer.assertNoticeFor(otherSm, "DEAL_LOST", "ดีลเสียงาน", head, "/tickets/" + ticketId);
+        mailer.assertNoticeFor(r.ceo(), "DEAL_LOST", "ดีลเสียงาน", head, "/tickets/" + ticketId);
+        // R2: somebody other than the deal's rep did it, so the rep hears it too (once, as an employee notice).
+        mailer.assertNoticeFor(salesRepId, "DEAL_LOST", "ดีลเสียงาน", head, "/tickets/" + ticketId);
+        mailer.assertBellRecipients("DEAL_LOST", otherSm, r.ceo(), salesRepId); // not r.sm()
+    }
+
+    /** R2 for every lifecycle change a non-rep can make: the rep is told each time, same type, FYI, link /tickets/{id}. */
+    @Test
+    void lifecycleChangesByAnotherUser_tellTheRepOfEachOne() {
+        seedLifecycleRoles();
+        long ticketId = createTicket();
+        String link = "/tickets/" + ticketId;
+        String tail = "\n" + label(ticketId) + "\n" + FYI;
+
+        ticketService.placeOnHold(ticketId, null, ceo);
+        mailer.assertNoticeFor(salesRepId, "DEAL_ON_HOLD", "ดีลถูกพักไว้ชั่วคราว", ceo.name() + " พักดีลไว้ชั่วคราว" + tail, link);
+        ticketService.resume(ticketId, null, ceo);
+        mailer.assertNoticeFor(salesRepId, "DEAL_RESUMED", "ดีลกลับมาดำเนินการต่อแล้ว", ceo.name() + " ให้ดีลกลับมาดำเนินการต่อ" + tail, link);
+        ticketService.markDormant(ticketId, null, ceo);
+        mailer.assertNoticeFor(salesRepId, "DEAL_DORMANT", "ดีลถูกพักไว้ระยะยาว", ceo.name() + " พักดีลไว้ระยะยาว (dormant)" + tail, link);
+        ticketService.resume(ticketId, null, ceo);
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, ceo);
+        mailer.assertNoticeFor(salesRepId, "DEAL_LOST", "ดีลเสียงาน", ceo.name() + " บันทึกว่าดีลเสียงาน (ราคา)" + tail, link);
+        ticketService.reopenDeal(ticketId, null, ceo);
+        mailer.assertNoticeFor(salesRepId, "DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง", ceo.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง" + tail, link);
+    }
+
+    /** An ISSUED IR puts import in the loop (to stop the factory order) but not account. */
+    @Test
+    void markLost_withAnIssuedImportRequest_alsoTellsImport_notAccount() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedImportRequest(ticketId);
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_LOST", "ดีลเสียงาน",
+            salesRep.name() + " บันทึกว่าดีลเสียงาน (ราคา)", r, IMPORT_STOP, ACCOUNT_REFUND, true, false);
+    }
+
+    /** An ISSUED deposit notice puts account in the loop (deposit/refund check) but not import. */
+    @Test
+    void markLost_withAnIssuedDepositNotice_alsoTellsAccount_notImport() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedDepositNotice(ticketId);
+
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_LOST", "ดีลเสียงาน",
+            salesRep.name() + " บันทึกว่าดีลเสียงาน (ราคา)", r, IMPORT_STOP, ACCOUNT_REFUND, false, true);
+    }
+
+    @Test
+    void cancel_withAnIrAndADepositNotice_tellsSalesManagerCeoImportAndAccount() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedImportRequest(ticketId);
+        seedIssuedDepositNotice(ticketId);
+
+        ticketService.cancel(ticketId, DealCancelReason.OWNER_CANCELLED, null, salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_CANCELLED", "ดีลถูกยกเลิก",
+            salesRep.name() + " ยกเลิกดีล (เจ้าของยกเลิกโครงการ)", r, IMPORT_STOP, ACCOUNT_REFUND, true, true);
+    }
+
+    @Test
+    void placeOnHold_withAnIrAndADepositNotice_tellsEveryoneWithAPause_andTheReason() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedImportRequest(ticketId);
+        seedIssuedDepositNotice(ticketId);
+
+        ticketService.placeOnHold(ticketId, "รอเจ้าของโครงการ", salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_ON_HOLD", "ดีลถูกพักไว้ชั่วคราว",
+            salesRep.name() + " พักดีลไว้ชั่วคราว — รอเจ้าของโครงการ", r, IMPORT_PAUSE, ACCOUNT_WAIT, true, true);
+    }
+
+    @Test
+    void markDormant_withAnIrAndADepositNotice_tellsEveryoneWithAPause() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedImportRequest(ticketId);
+        seedIssuedDepositNotice(ticketId);
+
+        ticketService.markDormant(ticketId, null, salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_DORMANT", "ดีลถูกพักไว้ระยะยาว",
+            salesRep.name() + " พักดีลไว้ระยะยาว (dormant)", r, IMPORT_PAUSE, ACCOUNT_WAIT, true, true);
+    }
+
+    /** Resuming is good news for everyone who was told to pause: FYI to all, no action. */
+    @Test
+    void resume_withAnIrAndADepositNotice_tellsEveryoneFyi() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedImportRequest(ticketId);
+        seedIssuedDepositNotice(ticketId);
+        ticketService.placeOnHold(ticketId, null, salesRep);
+
+        ticketService.resume(ticketId, null, salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_RESUMED", "ดีลกลับมาดำเนินการต่อแล้ว",
+            salesRep.name() + " ให้ดีลกลับมาดำเนินการต่อ", r, FYI, FYI, true, true);
+    }
+
+    @Test
+    void reopenDeal_withAnIrAndADepositNotice_tellsEveryoneFyi() {
+        LifecycleRoles r = seedLifecycleRoles();
+        long ticketId = createTicket();
+        seedIssuedImportRequest(ticketId);
+        seedIssuedDepositNotice(ticketId);
+        ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
+
+        ticketService.reopenDeal(ticketId, "ลูกค้ากลับมาคุย", salesRep);
+
+        assertLifecycleNotices(ticketId, "DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง",
+            salesRep.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง — ลูกค้ากลับมาคุย", r, FYI, FYI, true, true);
+    }
+
+    /** A refused lifecycle action (reopening a deal that was never lost, 409) tells nobody. */
+    @Test
+    void reopenDeal_onADealThatWasNeverLost_notifiesNobody() {
+        seedLifecycleRoles();
+        long ticketId = createTicket();
+
+        assertThatThrownBy(() -> ticketService.reopenDeal(ticketId, null, salesRep))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+
+        mailer.assertNoNotice("DEAL_REOPENED", "ดีลที่เสียงานถูกเปิดกลับมาอีกครั้ง");
     }
 
     /** Site 8 — {@code cancel}, reachable from every non-terminal status. */

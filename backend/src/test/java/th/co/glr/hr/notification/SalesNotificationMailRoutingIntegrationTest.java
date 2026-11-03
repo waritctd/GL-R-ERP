@@ -370,8 +370,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
 
     /**
      * The other half of the enum-leak trap. {@code TICKET_EVENT_TITLES} does not cover every event
-     * kind the pipeline raises — {@code PRICING_REQUEST_CANCELLED}, {@code PRICING_REQUEST_PICKED_UP}
-     * and {@code FACTORY_PO_CREATED} all fall through today — so the subject line of those emails is
+     * kind the pipeline raises — {@code PRICING_REQUEST_PICKED_UP} and {@code FACTORY_PO_CREATED}
+     * both fall through today — so the subject line of those emails is
      * whatever {@code ticketEventTitle}'s default produces. It must be the Thai generic, because the
      * alternative is mailing {@code FACTORY_PO_CREATED} at a person.
      */
