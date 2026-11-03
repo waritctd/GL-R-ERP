@@ -2928,8 +2928,9 @@ public class TicketService {
         // The rep hears it as an employee notice when somebody else did it, so the role fan-outs skip the rep too
         // (a rep who is also in a role would otherwise get it twice).
         long rep = s.createdById();
-        notifications.notifyByRoleAtLink("sales_manager", type, head + DealNoticeText.FYI, link, actor.id(), rep);
-        notifications.notifyByRoleAtLink("ceo", type, head + DealNoticeText.FYI, link, actor.id(), rep);
+        for (String role : List.of("sales_manager", "ceo")) {
+            notifications.notifyByRoleAtLink(role, type, head + DealNoticeText.FYI, link, actor.id(), rep);
+        }
         if (tickets.hasIssuedImportRequest(s.id())) {
             notifications.notifyByRoleAtLink("import", type, head + importLine3, "/import/deals/" + s.id(), actor.id(), rep);
         }

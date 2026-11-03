@@ -2216,8 +2216,9 @@ public class DealQuotationService {
                     + " ที่รออนุมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
                     + DealNoticeText.dealLabel(locked.code(), locked.customerName()) + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
                 String link = "/quotations/" + cancelled.id();
-                notifications.notifyByRoleAtLink("sales_manager", TicketEventKind.DEAL_QUOTATION_CANCELLED, message, link, actor.id());
-                notifications.notifyByRoleAtLink("ceo", TicketEventKind.DEAL_QUOTATION_CANCELLED, message, link, actor.id());
+                for (String role : List.of("sales_manager", "ceo")) {
+                    notifications.notifyByRoleAtLink(role, TicketEventKind.DEAL_QUOTATION_CANCELLED, message, link, actor.id());
+                }
             }
         }
         // The quotation is the agreed order, so it REPLACES whatever preliminary lines the deal
