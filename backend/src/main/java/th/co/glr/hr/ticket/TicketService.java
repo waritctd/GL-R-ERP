@@ -35,6 +35,7 @@ import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
+import th.co.glr.hr.pricingrequest.PricingRequestService.DeadDealCause;
 import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
@@ -2592,7 +2593,7 @@ public class TicketService {
         // forever. See PricingRequestService.cancelOpenForTicket's Javadoc for why
         // this has no role check of its own. placeOnHold/markDormant deliberately do
         // NOT do this — see those methods.
-        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, PricingRequestService.DeadDealCause.LOST, actor);
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, DeadDealCause.LOST, actor);
         if (cancelResult.hasAbandoned()) {
             // cancelOpenForTicket already logged the per-row detail; this ties the
             // abandonment back to the deal action that triggered it, for whoever is
@@ -3033,7 +3034,7 @@ public class TicketService {
         // Terminal deal state: same cascade as markLost above — a cancelled deal
         // can never receive Import's pricing, so any pricing request still open on
         // it is cancelled too.
-        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, PricingRequestService.DeadDealCause.CANCELLED, actor);
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, DeadDealCause.CANCELLED, actor);
         if (cancelResult.hasAbandoned()) {
             log.warn("cancel: ticket {} left {} pricing request(s) still open after the cascade: {}",
                 ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());
