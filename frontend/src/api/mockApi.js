@@ -7043,7 +7043,7 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     const echoTail = boxRoundingChangedCount || hasWastage
       ? (en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`)
       : '';
-    const boxCount = hasBox ? Math.floor(piecesFinal / piecesPerBox) : 0;
+    const boxCount = hasBox ? piecesFinal / piecesPerBox : 0;
     // Mirrors DealQuotationLines: a one-piece box's count only repeats the piece count.
     const boxCountTail = hasBox && piecesPerBox > 1 && piecesFinal % piecesPerBox === 0
       ? (en ? ` = ${boxCount} ${pl(boxCount, 'box', 'boxes')}` : ` = ${boxCount} กล่อง`)

@@ -7,10 +7,7 @@ import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import { cn } from '../../utils/cn.js';
 import { thaiMonthsLong } from '../../utils/format.js';
 
-// A day-date field that SHOWS and ACCEPTS Buddhist-era years. A native <input type="date"> renders
-// ค.ศ. in every locale, so a rep typing 2570 stored CE 2570 and the PDF (which adds 543) printed
-// 3113. The value contract stays the native one -- '' or ISO 'YYYY-MM-DD' (ค.ศ.) -- so call sites
-// keep their state and payloads; only what the user sees and types is พ.ศ.
+// Day-date field that shows/accepts พ.ศ. dd/mm/yyyy; value stays native '' | ISO 'YYYY-MM-DD' (ค.ศ.).
 
 const BE_OFFSET = 543;
 const MIN_BE_YEAR = 2400; // below this a slash date is almost certainly a ค.ศ. year typed by mistake
@@ -262,9 +259,7 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
-  // Tabbing/clicking focus out of the calendar to somewhere else closes it.
-  // Also on the wrapper (React blur bubbles, portal included): leaving the text field or the button for anywhere outside
-  // both the field and the calendar closes it, so the Escape listener never outlives the focus.
+  // Focus leaving both the field and the calendar closes it (React blur bubbles through the portal).
   function handleFocusLeave(event) {
     const next = event.relatedTarget;
     if (next && !popRef.current?.contains(next) && !wrapRef.current?.contains(next)) setOpen(false);

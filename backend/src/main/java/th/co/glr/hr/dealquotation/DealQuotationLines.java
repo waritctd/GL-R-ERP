@@ -511,11 +511,7 @@ public final class DealQuotationLines {
         //
         // "Changed" is asked directly of the box arithmetic itself -- piecesAfterWastage % ppb != 0
         // -- rather than by comparing against piecesFinal: ceilToMultiple is a no-op EXACTLY when
-        // its input is already a multiple, so this is the more direct question, and (unlike a
-        // piecesFinal comparison) it stays correct even if a caller's piecesFinal ever disagreed
-        // with what ceilToMultiple(piecesAfterWastage, ppb) would produce -- it can never derive a
-        // box count that does not evenly divide piecesFinal in the branch below. (The tail's own
-        // piecesFinal % ppb == 0 guard enforces that now that rounded lines print it too.)
+        // its input is already a multiple, so this is the more direct question.
         boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
 
         // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
