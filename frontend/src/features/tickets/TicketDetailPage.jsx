@@ -81,6 +81,7 @@ import {
 } from './ticketItemFields.jsx';
 import { manualMoveLabel } from './stageMeta.js';
 import { resolveWorkState, secondaryWorkActions } from './workState.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Ticket-detail IA rebuild Phase 1 (see
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -2753,7 +2754,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </label>
               <label className="grid gap-1.5 text-sm font-semibold">
                 วันที่รับเงิน
-                <input type="date" value={paymentDraft.receivedAt}
+                <ThaiDateInput value={paymentDraft.receivedAt}
                   onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receivedAt: e.target.value }))} />
               </label>
             </div>

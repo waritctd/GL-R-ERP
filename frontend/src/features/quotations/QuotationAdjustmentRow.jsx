@@ -2,6 +2,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { formatQuotationMoney } from './quotationMeta.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const KIND_OPTIONS = [
   { code: 'PERCENT', label: 'เป็น %' },
@@ -78,8 +79,8 @@ export function QuotationAdjustmentRow({
           </FormField>
         )}
         <FormField label="สั่งซื้อภายในวันที่" htmlFor={`adj-deadline-${index}`} hint="ไม่บังคับ · ตั้งต้นเป็นวันสิ้นสุดยืนราคา">
-          <input
-            id={`adj-deadline-${index}`} type="date" disabled={readOnly}
+          <ThaiDateInput
+            id={`adj-deadline-${index}`} disabled={readOnly}
             value={adjustment.adjustmentDeadline ?? ''}
             onChange={(e) => onChange({ adjustmentDeadline: e.target.value })}
           />

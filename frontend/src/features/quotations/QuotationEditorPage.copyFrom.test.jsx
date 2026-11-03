@@ -375,7 +375,7 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
     expect(byId('model-1').value).toBe('Urbanature');
     expect(byId('plain-desc-2').value).toBe('ค่าขนส่ง');
     expect(byId('adj-pct-3').value).toBe('3');
-    expect(byId('adj-deadline-3').value).toBe('2026-11-30');
+    expect(byId('adj-deadline-3').value).toBe('30/11/2569');
     // Each row in the price mode it was typed in, with the price it was typed with.
     expect(pressed(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ผสมหลายวิธี' }))).toBe(true);
     expect(byId('price-mode-0').value).toBe('NET');
@@ -386,7 +386,7 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
     expect(pressed(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }))).toBe(true);
     expect(byId('depositPercent').value).toBe('45');
     expect(byId('creditDays').value).toBe('30');
-    expect(byId('validityUntil').value).toBe('2026-11-30');
+    expect(byId('validityUntil').value).toBe('30/11/2569');
     expect(byId('customerNotes').value).toBe('ส่งของภายใน 30 วันหลังยืนยัน');
     expect(byId('hideProjectNameInline').checked).toBe(true);
     expect(byId('inline-quotation-designer-picker').value).toContain('A001');
@@ -452,7 +452,7 @@ describe('/quotations/new?copyFrom= — the draft it opens', () => {
   // says nothing about ยืนราคา when the date did come along.
   it('says so when the source\'s ยืนราคา date had passed — and only then', async () => {
     const stillAhead = await openCopy(); // the control: the same source, its date still ahead
-    expect(byId('validityUntil').value).toBe('2026-11-30');
+    expect(byId('validityUntil').value).toBe('30/11/2569');
     expect(screen.getByTestId('copy-notice').textContent).not.toContain('ยืนราคา');
     stillAhead.unmount();
 

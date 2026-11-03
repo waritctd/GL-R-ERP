@@ -32,7 +32,7 @@ export function formatThaiMonthYearFromMonthInputValue(value) {
   return monthYearFrom(value, thaiMonths);
 }
 
-const thaiMonthsLong = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+export const thaiMonthsLong = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
 // Full month name + BE year for a "YYYY-MM" value ("พฤศจิกายน 2569"); '-' when it is not one.
 export function formatThaiMonthYearLongFromMonthInputValue(value) {

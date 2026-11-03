@@ -21,6 +21,7 @@ import {
   overtimeStatusLabel as statusInfo,
   pendingApproverText,
 } from '../../utils/format.js';
+import { ThaiDateController, ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Five columns since the เวลาจริง / จ่ายได้ column was dropped (owner: not necessary —
 // it read "0 นาที / จ่ายได้ 0 นาที" on every row that is not yet approved, and the
@@ -470,6 +471,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   // of nowhere.
   function handleWorkDateChange(event) {
     const value = event.target.value;
+    if (!value) return; // cleared or mid-typing
     const currentEndDate = getValues('endDate');
     if (currentEndDate < value || currentEndDate > addDaysToIso(value, 1)) {
       setValue('endDate', value, { shouldDirty: true, shouldValidate: true });
@@ -607,10 +609,10 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
 
       <SafeForm className={FILTER_BAR_CLASS} onSubmit={submitFilters}>
         <FilterField label="จากวันที่">
-          <input type="date" value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
+          <ThaiDateInput value={filters.from} onChange={(event) => updateFilter('from', event.target.value)} />
         </FilterField>
         <FilterField label="ถึงวันที่">
-          <input type="date" value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
+          <ThaiDateInput value={filters.to} onChange={(event) => updateFilter('to', event.target.value)} />
         </FilterField>
         <FilterField label="สถานะ">
           <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
@@ -717,11 +719,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             hint={isBackdated ? 'คำขอย้อนหลัง — โปรดระบุเหตุผลให้ชัดเจน' : undefined}
             required
           >
-            <input
+            <ThaiDateController
               id="ot-work-date"
-              type="date"
+              control={control}
+              name="workDate"
               min={addDaysIso(-OT_RETROACTIVE_WINDOW_DAYS)}
-              {...register('workDate', { onChange: handleWorkDateChange })}
+              onChange={handleWorkDateChange}
               aria-invalid={Boolean(errors.workDate)}
               required
             />
@@ -828,16 +831,16 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
             error={errors.endDate?.message}
             required
           >
-            <input
+            <ThaiDateController
               id="ot-end-date"
-              type="date"
+              control={control}
+              name="endDate"
               min={selectedWorkDate}
-              // Mirrors the zod ≤24h check above in the native picker itself. Guarded: before the
+              // Mirrors the zod ≤24h check above in the calendar itself. Guarded: before the
               // form settles (or if it's ever cleared) selectedWorkDate is '', and addDaysToIso('')
               // would split into NaN/undefined date parts -- undefined here just means "no cap yet",
               // never a broken one.
               max={selectedWorkDate ? addDaysToIso(selectedWorkDate, 1) : undefined}
-              {...register('endDate')}
               aria-invalid={Boolean(errors.endDate)}
               aria-describedby={errors.endDate ? fieldErrorId('ot-end-date') : undefined}
               required

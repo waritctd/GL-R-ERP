@@ -713,7 +713,10 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     // The days select is gone from the DOM while DATE mode shows, but its VALUE (30, from the
     // draft) must still be sent on save — see #buildUpsertPayload's own comment.
     expect(screen.queryByLabelText('validityDays')).toBeNull();
-    fireEvent.change(dateInput, { target: { value: '2026-12-31' } });
+    // The rep types the date in พ.ศ.; the API still receives ค.ศ. ISO (PDF adds 543 itself) —
+    // the 31/01/2570 → "31/01/3113" bug was a พ.ศ. year landing in a ค.ศ. field.
+    fireEvent.change(dateInput, { target: { value: '31/12/2569' } });
+    expect(dateInput.value).toBe('31/12/2569');
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
@@ -875,15 +878,15 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
     api.dealQuotations.calculateLine.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
     renderEditor('/quotations/5');
     await screen.findByTestId('checklist-warnings');
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('2026-12-31');
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('31/12/2569');
 
     fireEvent.change(byId('price-0'), { target: { value: '1900' } });
     await waitFor(() => expect(api.dealQuotations.calculateLine).toHaveBeenCalled(), { timeout: 1000 });
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('2026-12-31');
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('31/12/2569');
 
     answer({ item: { unitPrice: 1277.49, netUnitPrice: 531.16, lineAmount: 30276.12, calculationLine: '(server calc)' } });
     await waitFor(() => expect(screen.getByTestId('list-per-piece-0').textContent).toBe('= ฿1,277.49/แผ่น (ก่อน VAT)'));
-    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('2026-12-31');
+    expect(screen.getByLabelText('ยืนราคาถึงวันที่').value).toBe('31/12/2569');
   });
 
   it('switching the document to English clears the per-ตร.ม. price and goes back to a per-piece box', async () => {

@@ -4581,7 +4581,8 @@ describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, 
     fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
     const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
     const date = within(dialog).getByLabelText('วันที่ติดต่อ');
-    expect(date.value).toBe(bangkokDay());
+    const [y, m, d] = bangkokDay().split('-');
+    expect(date.value).toBe(`${d}/${m}/${Number(y) + 543}`);
     expect(date.max).toBe(bangkokDay());
     expect(within(dialog).getByLabelText(/หมายเหตุ/)).not.toBeNull();
   });

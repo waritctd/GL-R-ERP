@@ -4,6 +4,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * Create/edit modal for one hr.holiday row. In edit mode the date is read-only (PUT is keyed on the
@@ -84,9 +85,8 @@ export function HolidayFormModal({
         ) : null}
 
         <FormField label="วันที่" htmlFor="holiday-date" error={dateError} required>
-          <input
+          <ThaiDateInput
             id="holiday-date"
-            type="date"
             value={holidayDate}
             onChange={(event) => setHolidayDate(event.target.value)}
             disabled={isEdit}

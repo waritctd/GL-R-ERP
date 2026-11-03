@@ -6,6 +6,7 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Tabs } from '../../components/common/Tabs.jsx';
 import { actionLabel, actionTone } from './actionLabels.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * Admin-only view of what everyone has been doing in the portal.
@@ -92,7 +93,12 @@ export function ActivityLogPage() {
   const [from, setFrom] = useState(todayInBangkok);
   const [to, setTo] = useState(todayInBangkok);
 
-  const range = useMemo(() => ({ from, to }), [from, to]);
+  // A date field reports '' while it is cleared or only partly typed. Queries follow the last
+  // COMPLETE range, so a keystroke never fires an unbounded fetch. (A deliberately cleared field is
+  // indistinguishable from a partial one, so it also keeps the previous range rather than
+  // widening to the server's default.)
+  const [range, setRange] = useState(() => ({ from, to }));
+  if (from && to && (range.from !== from || range.to !== to)) setRange({ from, to });
 
   const summaryQuery = useQuery({
     queryKey: ['activityLog', 'summary', range],
@@ -231,8 +237,7 @@ export function ActivityLogPage() {
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-text-muted">ตั้งแต่วันที่</span>
-          <input
-            type="date"
+          <ThaiDateInput
             value={from}
             max={to}
             onChange={(event) => setFrom(event.target.value)}
@@ -241,8 +246,7 @@ export function ActivityLogPage() {
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-text-muted">ถึงวันที่</span>
-          <input
-            type="date"
+          <ThaiDateInput
             value={to}
             min={from}
             onChange={(event) => setTo(event.target.value)}

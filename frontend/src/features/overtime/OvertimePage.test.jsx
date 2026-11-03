@@ -138,7 +138,8 @@ describe('OvertimePage form validation', () => {
     renderOvertimePage();
     const today = isoDaysFromToday(0);
 
-    expect((await screen.findByLabelText(/วันที่ทำ OT/)).value).toBe(today);
+    const [y, m, d] = today.split('-');
+    expect((await screen.findByLabelText(/วันที่ทำ OT/)).value).toBe(`${d}/${m}/${Number(y) + 543}`);
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 

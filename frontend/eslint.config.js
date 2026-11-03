@@ -109,6 +109,8 @@ export default [
       // fetch-on-mount pattern (calling a setState-bearing function from useEffect)
       // used throughout this codebase, which is not a bug here.
       'react-hooks/set-state-in-effect': 'off',
+      // ThaiDateInput renders the <input> itself, so a <label> wrapping it does have a control.
+      'jsx-a11y/label-has-associated-control': ['error', { controlComponents: ['ThaiDateInput', 'ThaiDateController'] }],
       // #safe-form-primitive (RAW_FORM_RULE, declared above): a raw <form> is how implicit submission -- Enter in a lone
       // text field, when the form has no submit button anywhere in the DOM, submits the form
       // directly with no button ever clicked -- shipped to production TWICE: a real tax

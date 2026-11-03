@@ -7,6 +7,7 @@ import { formatThaiDate } from '../../utils/format.js';
 import {
   hasActivitySince, isReadyToAdvance, lastStageChangeAt,
 } from './dealTrackingMeta.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * "การติดตามดีล" (Slice B2, handoff 103) — the weekly-report replacement: win%
@@ -103,8 +104,8 @@ export function DealTrackingPanel({
               </label>
               <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
                 วันติดตามครั้งถัดไป
-                <input
-                  type="date" className="text-base"
+                <ThaiDateInput
+                  className="text-base"
                   value={draft.nextFollowUpAt}
                   onChange={(e) => setDraft((d) => ({ ...d, nextFollowUpAt: e.target.value }))}
                 />

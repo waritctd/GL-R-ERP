@@ -28,6 +28,7 @@ import {
 import { downloadBlob } from '../../utils/download.js';
 import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCorrectionPanel.jsx';
 import { AttendanceCorrectionRequestModal } from '../attendanceCorrection/AttendanceCorrectionRequestModal.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
@@ -97,6 +98,8 @@ export function AttendancePage({ user, showToast }) {
   // Employees read their own month at a glance; everyone else answers "who is late today", so
   // they get a single day plus a stepper.
   const [selectedDate, setSelectedDate] = useState(today);
+  // The date field may be empty while the user retypes it; every use below falls back to today.
+  const activeDate = selectedDate || today;
   const [employeeId, setEmployeeId] = useState('');
   // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering
   // them this control would imply a reach they don't have.
@@ -128,7 +131,7 @@ export function AttendancePage({ user, showToast }) {
   // current month, matching both the copy below ("...ในเดือนนี้") and the API's hard cap.
   const range = isSelfView
     ? { from: bangkokMonthStartIso(), to: today }
-    : { from: selectedDate, to: selectedDate };
+    : { from: activeDate, to: activeDate };
 
   // Issue #422 B2: onto react-query so this screen participates in the shared cache (an OT
   // approval or a same-day recalculation elsewhere can now reach it via invalidation, and it gets
@@ -278,7 +281,7 @@ export function AttendancePage({ user, showToast }) {
     // reads the UTC calendar day off a Bangkok-midnight instant, which is always one day behind
     // the Bangkok date intended (Bangkok midnight is 17:00 UTC the previous day), netting a 2-day
     // back-step and a stuck forward-step. See addDaysIso's comment in utils/format.js.
-    const iso = addDaysIso(selectedDate, deltaDays);
+    const iso = addDaysIso(activeDate, deltaDays);
     // Clamp to the browsable window in both directions — see monthBounds().
     if (iso < monthStart || iso > today) return;
     setSelectedDate(iso);
@@ -679,7 +682,7 @@ export function AttendancePage({ user, showToast }) {
       {markPresentOpen ? (
         <MarkPresentModal
           employees={employeeOptions}
-          defaultDate={selectedDate}
+          defaultDate={activeDate}
           minDate={monthStart}
           maxDate={today}
           submitting={markingPresent}
@@ -751,7 +754,7 @@ export function AttendancePage({ user, showToast }) {
               <Button
                 variant="secondary"
                 onClick={() => stepDay(-1)}
-                disabled={loading || selectedDate <= monthStart}
+                disabled={loading || activeDate <= monthStart}
                 aria-label="วันก่อนหน้า"
                 // Square, and at the mobile touch floor. These were 36px wide
                 // against a 44px-tall input — under WCAG 2.2 SC 2.5.8's 24px
@@ -762,23 +765,21 @@ export function AttendancePage({ user, showToast }) {
               >
                 <Icon name="chevronLeft" />
               </Button>
-              <input
+              <ThaiDateInput
                 id="attendance-selected-date"
-                type="date"
                 // `min-w-0` for the same reason FilterField carries it: this is
-                // itself a flex item, and the native date control's intrinsic
-                // width is what would otherwise push the [next] button out of
-                // the bar on iOS.
-                className="min-w-0 flex-1"
+                // itself a flex item, and must be able to shrink so it never pushes
+                // the [next] button out of the bar on a phone.
+                wrapperClassName="min-w-0 flex-1"
                 value={selectedDate}
                 min={monthStart}
                 max={today}
-                onChange={(event) => setSelectedDate(event.target.value || today)}
+                onChange={(event) => setSelectedDate(event.target.value)}
               />
               <Button
                 variant="secondary"
                 onClick={() => stepDay(1)}
-                disabled={loading || selectedDate >= today}
+                disabled={loading || activeDate >= today}
                 aria-label="วันถัดไป"
                 className="h-11 w-11 shrink-0 px-0"
               >
@@ -936,7 +937,7 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
           <Button
             type="button"
             variant="primary"
-            disabled={submitting}
+            disabled={submitting || !date}
             onClick={() => onSubmit({ date, employeeIds: [...selected], notes: notes.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : `บันทึก (${selected.size} คน)`}
@@ -946,12 +947,11 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
     >
       <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
         วันที่
-        <input
-          type="date"
+        <ThaiDateInput
           value={date}
           min={minDate}
           max={maxDate}
-          onChange={(event) => changeDate(event.target.value || defaultDate)}
+          onChange={(event) => changeDate(event.target.value)}
         />
       </label>
 

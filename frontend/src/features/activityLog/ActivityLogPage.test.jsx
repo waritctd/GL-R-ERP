@@ -114,6 +114,24 @@ describe('ActivityLogPage', () => {
     await waitFor(() => expect(api.activityLog[method]).toHaveBeenCalled());
   });
 
+  // The date fields emit '' while a date is only partly typed; that must not fire a query with an
+  // empty (unbounded) range — the last complete range stays in force until a full date is typed.
+  it('a partly typed from-date does not fetch with an empty range; a complete one does', async () => {
+    renderPage();
+    await waitFor(() => expect(api.activityLog.summary).toHaveBeenCalledTimes(1));
+    const initial = api.activityLog.summary.mock.calls[0][0];
+
+    fireEvent.change(screen.getByLabelText('ตั้งแต่วันที่'), { target: { value: '01/0' } });
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    for (const [range] of api.activityLog.summary.mock.calls) {
+      expect(range.from).toBeTruthy();
+      expect(range.to).toBeTruthy();
+    }
+
+    fireEvent.change(screen.getByLabelText('ตั้งแต่วันที่'), { target: { value: '01/01/2569' } });
+    await waitFor(() => expect(api.activityLog.summary).toHaveBeenLastCalledWith({ from: '2026-01-01', to: initial.to }));
+  });
+
   it('renders a summary row with valid data without crashing', async () => {
     api.activityLog.summary.mockResolvedValue([
       { employeeId: 1, name: 'ทดสอบ', employeeCode: 'EMP-1', requestCount: 3, firstSeen: '2026-09-15T09:00:00+07:00', lastSeen: '2026-09-15T10:00:00+07:00' },

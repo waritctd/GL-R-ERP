@@ -558,7 +558,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     // Partial-day span (V166): endDate is NO LONGER forced to startDate when timed -- it was
     // already handleStartDateChange's own sync (endDate === startDate here only because the user
     // never touched endDate after setting startDate, same as before this feature).
-    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe(futureDate);
+    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('31/12/2642'); // the field shows พ.ศ.
     fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
     fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
 
@@ -612,8 +612,8 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   it('deep link (?type=&start=&end=) lands directly on step 2 with the type/dates prefilled', async () => {
     renderComposer(['/leave/new?type=SICK&start=2099-06-01&end=2099-06-02']);
     await screen.findByText(/ขั้นตอนที่ 2\/3/);
-    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe('2099-06-01');
-    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('2099-06-02');
+    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe('01/06/2642');
+    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('02/06/2642');
   });
 
   it('step 3: a blocking verdict renders role="alert" and disables submit', async () => {

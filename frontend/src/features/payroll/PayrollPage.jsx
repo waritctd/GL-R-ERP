@@ -20,6 +20,7 @@ import { useDialogFocus } from '../../hooks/useDialogFocus.js';
 import { useIsMobile, useMediaQuery } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
 import { bangkokMonthStartIso, formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
 // element (semantic landmark) — Layout.jsx's Panel always renders a <section>
@@ -1780,12 +1781,12 @@ export function PayrollPage({ user, showToast }) {
                 make the UI contradict the backend contract. */}
             <label className="m-0 inline-flex items-center gap-2 text-sm font-extrabold">
               วันที่เอกสาร
-              <input
-                type="date"
+              <ThaiDateInput
                 value={payDate}
                 onChange={(event) => setPayDate(event.target.value)}
                 disabled={saving || !(period?.lineCount > 0)}
-                className="w-[9.5rem] mobile:min-h-[44px]"
+                wrapperClassName="w-[9.5rem] shrink-0"
+                className="mobile:min-h-[44px]"
               />
               <small className="font-normal text-text-muted">({formatShortDate(payDate)})</small>
             </label>
