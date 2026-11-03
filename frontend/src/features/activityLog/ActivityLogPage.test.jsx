@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityLogPage, TABS, formatDateTime, formatTime } from './ActivityLogPage.jsx';
 import { api } from '../../api/index.js';
+import { gridTrackCount } from '../../test/gridTracks.js';
 
 // Tab id -> the api.activityLog method it drives (ActivityLogPage.jsx's QUERIES map). Kept
 // separate from TABS itself so this table still catches TABS drifting out of sync with QUERIES,
@@ -112,6 +113,18 @@ describe('ActivityLogPage', () => {
     expect(tab.getAttribute('aria-selected')).toBe('true');
     const method = METHOD_BY_TAB_ID[tabItem.id];
     await waitFor(() => expect(api.activityLog[method]).toHaveBeenCalled());
+  });
+
+  // Every tab has its own column set; a template with the wrong track count wraps cells onto a
+  // second grid row.
+  it.each(TABS)('the $label tab lays its header out with one grid track per column', async (tabItem) => {
+    for (const fn of Object.values(api.activityLog)) fn.mockResolvedValue([{ id: 1, employeeId: 1, at: '2026-08-01T03:00:00Z' }]);
+    const { container } = renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: new RegExp(tabItem.label) }));
+    await waitFor(() => expect(api.activityLog[METHOD_BY_TAB_ID[tabItem.id]]).toHaveBeenCalled());
+    await waitFor(() => expect(container.querySelector('tbody tr.data-row')).not.toBeNull());
+    const head = container.querySelector('tr.table-head');
+    expect(gridTrackCount(head.className)).toBe(head.querySelectorAll('th').length);
   });
 
   // Date fields commit on blur: a partly typed date reverts and never reaches the query; a
