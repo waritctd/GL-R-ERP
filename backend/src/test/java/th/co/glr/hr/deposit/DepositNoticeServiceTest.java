@@ -1317,7 +1317,7 @@ class DepositNoticeServiceTest {
         when(storedMock.findById(7L)).thenReturn(Optional.of(doc));
         when(remainingRenderer.toXls(any())).thenReturn(new byte[] {1});
 
-        new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer).file(7L, owner);
+        new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer, notifications).file(7L, owner);
 
         org.mockito.ArgumentCaptor<RemainingInvoiceRenderModel> model =
             org.mockito.ArgumentCaptor.forClass(RemainingInvoiceRenderModel.class);

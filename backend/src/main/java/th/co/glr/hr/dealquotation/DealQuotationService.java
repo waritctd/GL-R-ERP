@@ -27,6 +27,7 @@ import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.catalog.CatalogRepository.CatalogSqmBasis;
 import th.co.glr.hr.commission.CommissionRepOptionDto;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
@@ -44,6 +45,7 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.EmailRecipient;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
@@ -2191,8 +2193,16 @@ public class DealQuotationService {
         // or stock reservation exists — both key on quotation_issued or later), and the only other
         // reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE SET NULL.
         tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
-        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(),
-            DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent()), actor);
+        int depositPercent = DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent());
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), depositPercent, actor);
+        // P1 hand-off: FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
+        notifications.notifyByRoleAtLink("ceo", PricingRequestEventKind.ORDER_CONFIRMED,
+            actor.name() + " ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
+                + DealNoticeText.dealLabel(locked.code(), locked.customerName())
+                + " · ยอดรวม " + ThaiText.money(fresh.grandTotal()) + " บาท · "
+                + (depositPercent == 0 ? "ไม่เก็บมัดจำ" : "มัดจำ " + depositPercent + "%")
+                + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ",
+            "/tickets/" + ticketId);
         return promotionResult(ticketId, quotationId);
     }
 

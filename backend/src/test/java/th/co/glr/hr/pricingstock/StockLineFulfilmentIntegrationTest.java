@@ -77,7 +77,7 @@ class StockLineFulfilmentIntegrationTest extends AbstractStockLineIntegrationTes
         // percent is never read and the 0% path could not be exercised.
         orderConfirmation.wireDealQuotationRepository(new DealQuotationRepository(jdbc, new CatalogRepository(jdbc)));
         importRequests = new ImportRequestService(new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
-            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService);
+            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
         commissionRepository = new CommissionRepository(jdbc);
         jdbc.update("DELETE FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId));
     }

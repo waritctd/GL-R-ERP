@@ -65,7 +65,7 @@ class PayslipDistributionServiceTest {
 
         verify(emailService).sendWithAttachment(
             eq("employee@glr.co.th"),
-            eq("[GL&R HR] Payslip 2026-06-01"),
+            eq("[GL&R Portal] Payslip 2026-06-01"),
             any(String.class),
             eq("glr-payslip-2026-06-01-GLR-77.pdf"),
             eq("%PDF".getBytes()));

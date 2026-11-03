@@ -54,7 +54,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationService;
@@ -81,6 +80,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 
 /**
@@ -109,6 +109,7 @@ import th.co.glr.hr.pricingcosting.LandedCostCalculator;
  */
 class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
+    private RecordingSalesMailer mailer;
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
@@ -134,7 +135,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireStepsServicesAndCreateFactory() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         customersRepo = new CustomerRepository(jdbc);
         projectsRepo = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -605,6 +607,48 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
         DepositNoticeDto reread = depositNoticeRepository.findById(docId).orElseThrow();
         assertThat(reread.status()).isEqualTo("DRAFT");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // P1 hand-off notification (A7b): a no-deposit order tells account there will be no deposit
+    // notice. Fires on the FIRST confirmation only, on any confirm path (here: the PCR path).
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    private static final String NO_DEPOSIT_TITLE = "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ";
+
+    @Test
+    void confirmOrder_onANoDepositDeal_notifiesAccount_andAReConfirmSendsNothingMore() {
+        long accountId = mailer.seedRoleEmployee("account");
+        Deal deal = buildDealToQuotationAccepted("nodeposit-notice");
+        ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบแจ้งบัญชี", salesActor);
+
+        orderConfirmation.confirmOrder(
+            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        TicketSummaryDto s = tickets.findById(deal.ticketId()).orElseThrow().summary();
+        String message = "ลูกค้ายืนยันคำสั่งซื้อแล้ว และดีลนี้ไม่เก็บเงินมัดจำ จึงจะไม่มีใบแจ้งรับมัดจำ\n"
+            + "ดีล " + s.code() + " · ลูกค้า " + s.customerName()
+            + "\nแจ้งเพื่อทราบ ยอดเต็มจะเรียกเก็บด้วยใบแจ้งหนี้เมื่อสินค้าพร้อมส่ง";
+        mailer.assertRoleNotice("account", "ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE, message,
+            "/finance/deals/" + deal.ticketId(), accountId);
+
+        // idempotent re-confirm (already CUSTOMER_CONFIRMED): no second row, no second email.
+        ticketService.confirmCustomer(deal.ticketId(), salesActor);
+        mailer.assertRoleNotice("account", "ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE, message,
+            "/finance/deals/" + deal.ticketId(), accountId);
+    }
+
+    @Test
+    void confirmOrder_onADealWithADeposit_doesNotNotifyAccountOfNoDeposit() {
+        mailer.seedRoleEmployee("account");
+        Deal deal = buildDealToQuotationAccepted("with-deposit-notice");
+
+        orderConfirmation.confirmOrder(
+            deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+
+        assertThat(depositPolicyOf(deal.ticketId())).as("fixture: a deposit is required")
+            .isEqualTo(DepositPolicy.REQUIRED);
+        mailer.assertNoNotice("ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════

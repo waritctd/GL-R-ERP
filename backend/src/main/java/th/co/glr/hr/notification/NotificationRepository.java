@@ -171,7 +171,7 @@ public class NotificationRepository {
         Map.entry("DISCOUNT_APPROVED", "CEO อนุมัติส่วนลดแล้ว"),
         Map.entry("DISCOUNT_REJECTED", "CEO ปฏิเสธส่วนลด"),
         // Step 6: Deposit, Payment, and Order Confirmation.
-        Map.entry("ORDER_CONFIRMED", "ยืนยันคำสั่งซื้อแล้ว"),
+        Map.entry("ORDER_CONFIRMED", "ลูกค้ายืนยันคำสั่งซื้อแล้ว"),
         Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว"),
         // GLA-32 (2026-09-19): DepositNoticeService.issue notifies the account role — this is the
         // first notify* call to use TicketEventKind.DEPOSIT_NOTICE_ISSUED as a notification `type`
@@ -205,7 +205,17 @@ public class NotificationRepository {
         Map.entry("DEAL_QUOTATION_APPROVED", "ใบเสนอราคาได้รับอนุมัติแล้ว"),
         Map.entry("DEAL_QUOTATION_REJECTED", "ใบเสนอราคาไม่ได้รับอนุมัติ"),
         // Owner request (2026-09-16) -- see TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED.
-        Map.entry("DEAL_QUOTATION_REVISION_SUBMITTED", "ใบเสนอราคาฉบับแก้ไขรออนุมัติ")
+        Map.entry("DEAL_QUOTATION_REVISION_SUBMITTED", "ใบเสนอราคาฉบับแก้ไขรออนุมัติ"),
+        // P1 hand-off notifications (see TicketEventKind): who must act next on each pipeline hand-off.
+        Map.entry("IMPORT_REQUEST_ISSUED", "ใบขอซื้อ (IR) ใหม่ — รอสั่งซื้อกับโรงงาน"),
+        Map.entry("IMPORT_REQUEST_REVISED", "ใบขอซื้อ (IR) ฉบับแก้ไข — กรุณาตรวจสอบ"),
+        Map.entry("DEPOSIT_PAYMENT_CONFIRMED", "ฝ่ายบัญชียืนยันรับเงินมัดจำแล้ว"),
+        Map.entry("IMPORT_STARTED", "เริ่มสั่งซื้อกับโรงงานแล้ว"),
+        Map.entry("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า"),
+        Map.entry("DELIVERY_COMPLETED", "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ"),
+        Map.entry("REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ"),
+        Map.entry("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ"),
+        Map.entry("ORDER_CONFIRMED_NO_DEPOSIT", "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ")
     );
 
     public void notifyEmployee(long employeeId, long ticketId, String type, String message) {

@@ -109,7 +109,7 @@ public class PayslipDistributionService {
     }
 
     private String subject(PayrollPeriodDto period) {
-        return "[GL&R HR] Payslip " + period.payrollMonth();
+        return "[GL&R Portal] Payslip " + period.payrollMonth();
     }
 
     private String body(PayrollLineDto line, PayrollPeriodDto period) {
@@ -119,7 +119,7 @@ public class PayslipDistributionService {
             แนบสลิปเงินเดือนรอบ %s สำหรับตรวจสอบ
 
             ขอแสดงความนับถือ
-            ระบบบริหารงานบุคคล GL&R (GL&R HR Portal)
+            GL&R Portal
             """.formatted(line.employeeName(), period.payrollMonth());
     }
 

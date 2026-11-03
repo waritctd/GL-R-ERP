@@ -47,12 +47,12 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealActivityKind;
 import th.co.glr.hr.ticket.DealActivityRequest;
@@ -100,6 +100,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     private static final String V193 = "db/migration/V193__ticket_quotation_only.sql";
 
     private TicketRepository tickets;
+    private RecordingSalesMailer mailer;
     private TicketService ticketService;
     private DealQuotationService quotationService;
     private DealQuotationService confirmer; // quotationService behind a real @Transactional proxy
@@ -123,7 +124,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     void wireServices() {
         tickets = new TicketRepository(jdbc);
         ObjectMapper objectMapper = new ObjectMapper();
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -353,6 +355,84 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(replay.ticket().status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
         assertThat(eventCount(ghost)).isEqualTo(eventsBefore);
         assertThat(itemCount(ghost)).isEqualTo(itemsBefore);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // P1 hand-off notifications: confirm-order from a direct quotation tells the CEO (A7a), and
+    // account too when the order carries no deposit (A7b). Bell row AND email path are pinned.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static final String ORDER_CONFIRMED_TITLE = "ลูกค้ายืนยันคำสั่งซื้อแล้ว";
+    private static final String NO_DEPOSIT_TITLE = "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ";
+
+    private String ceoOrderMessage(long deal, DealQuotationDto approved, String depositText) {
+        TicketSummaryDto s = summary(deal);
+        return salesActor.name() + " ยืนยันคำสั่งซื้อจากใบเสนอราคา " + approved.number() + " แล้ว\n"
+            + "ดีล " + s.code() + " · ลูกค้า " + s.customerName() + " · ยอดรวม "
+            + th.co.glr.hr.common.ThaiText.money(approved.grandTotal()) + " บาท · " + depositText
+            + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+    }
+
+    private String accountNoDepositMessage(long deal) {
+        TicketSummaryDto s = summary(deal);
+        return "ลูกค้ายืนยันคำสั่งซื้อแล้ว และดีลนี้ไม่เก็บเงินมัดจำ จึงจะไม่มีใบแจ้งรับมัดจำ\n"
+            + "ดีล " + s.code() + " · ลูกค้า " + s.customerName()
+            + "\nแจ้งเพื่อทราบ ยอดเต็มจะเรียกเก็บด้วยใบแจ้งหนี้เมื่อสินค้าพร้อมส่ง";
+    }
+
+    private DealQuotationDto approvedZeroDepositQuotation(long deal) {
+        DealQuotationDto created = quotationService.create(deal, zeroDepositDirectDraft(), salesActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
+        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approved.depositPercent()).isZero();
+        return approved;
+    }
+
+    /** Deposit order: CEO is told (with the retitled ORDER_CONFIRMED title); account is NOT told "no deposit". */
+    @Test
+    void confirmOrderFromDirectQuotation_withADeposit_notifiesTheCeoOnly() {
+        mailer.seedRoleEmployee("account");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        assertThat(approved.depositPercent()).as("fixture: a 50% deposit").isEqualTo(50);
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        mailer.assertRoleNotice("ceo", "ORDER_CONFIRMED", ORDER_CONFIRMED_TITLE,
+            ceoOrderMessage(deal, approved, "มัดจำ 50%"), "/tickets/" + deal, ceoActor.id());
+        mailer.assertNoNotice("ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE);
+    }
+
+    /** 0% quotation: the CEO notice says ไม่เก็บมัดจำ, and account gets the no-deposit notice (links to ITS page). */
+    @Test
+    void confirmOrderFromDirectQuotation_zeroDeposit_notifiesCeoAndAccountOfTheNoDepositOrder() {
+        long accountId = mailer.seedRoleEmployee("account");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedZeroDepositQuotation(deal);
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        mailer.assertRoleNotice("ceo", "ORDER_CONFIRMED", ORDER_CONFIRMED_TITLE,
+            ceoOrderMessage(deal, approved, "ไม่เก็บมัดจำ"), "/tickets/" + deal, ceoActor.id());
+        mailer.assertRoleNotice("account", "ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE,
+            accountNoDepositMessage(deal), "/finance/deals/" + deal, accountId);
+    }
+
+    /** The idempotent replay (a second confirm of the same order) writes nothing and notifies nobody again. */
+    @Test
+    void confirmOrderFromDirectQuotation_replay_sendsNothingNew() {
+        long accountId = mailer.seedRoleEmployee("account");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedZeroDepositQuotation(deal);
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        // exactly-once asserts: a duplicate bell row or email would fail the size checks.
+        mailer.assertRoleNotice("ceo", "ORDER_CONFIRMED", ORDER_CONFIRMED_TITLE,
+            ceoOrderMessage(deal, approved, "ไม่เก็บมัดจำ"), "/tickets/" + deal, ceoActor.id());
+        mailer.assertRoleNotice("account", "ORDER_CONFIRMED_NO_DEPOSIT", NO_DEPOSIT_TITLE,
+            accountNoDepositMessage(deal), "/finance/deals/" + deal, accountId);
     }
 
     /**
@@ -895,7 +975,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
                 new th.co.glr.hr.importrequest.ImportRequestQueryRepository(jdbc),
                 new th.co.glr.hr.importrequest.ImportRequestRenderer(),
                 new th.co.glr.hr.importrequest.ImportRequestRepository(jdbc),
-                new th.co.glr.hr.factory.FactoryConfigRepository(jdbc), tickets, ticketService);
+                new th.co.glr.hr.factory.FactoryConfigRepository(jdbc), tickets, ticketService,
+                new NotificationRepository(jdbc, mailer));
 
         List<th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto> drafts =
             importRequests.createDrafts(ticketId, null, salesActor);

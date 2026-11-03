@@ -111,7 +111,7 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         importRequestService = new ImportRequestService(
             new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
-            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService);
+            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
         service = new ImportDealService(tickets, importRequestService);
 
         ownerId = insertEmployee("IMPDEAL-OWN");

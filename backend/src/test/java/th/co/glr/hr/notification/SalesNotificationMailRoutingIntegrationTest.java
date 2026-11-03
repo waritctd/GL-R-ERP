@@ -364,7 +364,7 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         notifications.notifyEmployeeForPricingRequest(rep, 42L, "PRICING_DECISION_APPROVED",
             "คำขอราคา PCR-2026-0001 ได้รับอนุมัติราคาขายแล้ว");
 
-        assertThat(mailer.last().subject()).isEqualTo("[GL&R HR] ราคาขายได้รับการอนุมัติแล้ว");
+        assertThat(mailer.last().subject()).isEqualTo("[GL&R Portal] ราคาขายได้รับการอนุมัติแล้ว");
         assertThat(mailer.last().subject()).doesNotContain("PRICING_DECISION_APPROVED");
     }
 
@@ -383,7 +383,7 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         notifications.notifyEmployeeForPricingRequest(rep, 42L, "FACTORY_PO_CREATED",
             "สร้างใบสั่งซื้อโรงงาน 1 ฉบับสำหรับคำขอราคา PCR-2026-0001");
 
-        assertThat(mailer.last().subject()).isEqualTo("[GL&R HR] อัปเดตสถานะคำขอราคา");
+        assertThat(mailer.last().subject()).isEqualTo("[GL&R Portal] อัปเดตสถานะคำขอราคา");
         assertThat(mailer.last().subject()).doesNotContain("FACTORY_PO_CREATED");
     }
 
