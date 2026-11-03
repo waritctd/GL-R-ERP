@@ -13,6 +13,7 @@ import { formatShortDate } from '../../utils/format.js';
 import { AssignmentFormModal } from './AssignmentFormModal.jsx';
 import { todayIso } from './dateHelpers.js';
 import { SCOPE_TYPES, scopeTypeLabel } from './scopeTypes.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.8fr)] nav-drawer:min-w-[760px] reflow-cards';
 
@@ -228,9 +229,8 @@ export function AssignmentsTab({ showToast }) {
               ที่เริ่มมีผลตั้งแต่ {formatShortDate(endTarget.effectiveFrom)}
             </p>
             <FormField label="วันที่มีผลสิ้นสุด (รวมวันนี้ — inclusive)" htmlFor="end-assignment-date">
-              <input
+              <ThaiDateInput
                 id="end-assignment-date"
-                type="date"
                 min={todayIso()}
                 value={endDate}
                 onChange={(event) => setEndDate(event.target.value)}

@@ -47,7 +47,8 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
     renderModal();
 
     const dateInput = await screen.findByLabelText(/วันที่ที่ต้องการแก้ไข/);
-    expect(dateInput.value).toBe(todayIso());
+    const [y, m, d] = todayIso().split('-');
+    expect(dateInput.value).toBe(`${d}/${m}/${Number(y) + 543}`);
     expect(screen.getByLabelText(/เวลาเข้างานที่ถูกต้อง/)).not.toBeNull();
     expect(screen.queryByLabelText(/เวลาออกงานที่ถูกต้อง/)).toBeNull();
   });

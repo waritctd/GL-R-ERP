@@ -69,6 +69,7 @@ describe('HolidaysTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'เพิ่มวันหยุด' }));
 
     fireEvent.change(screen.getByLabelText(/^วันที่/), { target: { value: `${CURRENT_YEAR}-12-05` } });
+    fireEvent.blur(screen.getByLabelText(/^วันที่/));
     fireEvent.change(screen.getByLabelText(/^ชื่อวันหยุด/), { target: { value: 'วันพ่อ' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 
@@ -90,6 +91,7 @@ describe('HolidaysTab', () => {
     await screen.findByText('วันขึ้นปีใหม่');
     fireEvent.click(screen.getByRole('button', { name: 'เพิ่มวันหยุด' }));
     fireEvent.change(screen.getByLabelText(/^วันที่/), { target: { value: `${CURRENT_YEAR}-01-01` } });
+    fireEvent.blur(screen.getByLabelText(/^วันที่/));
     fireEvent.change(screen.getByLabelText(/^ชื่อวันหยุด/), { target: { value: 'ปีใหม่ (ซ้ำ)' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
 

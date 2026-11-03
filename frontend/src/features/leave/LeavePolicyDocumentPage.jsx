@@ -11,6 +11,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { POLICY_PDF_HREF } from './LeavePolicyBar.jsx';
 import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * HR/CEO upload surface for the §5 announcement PDF (POST /api/leave/policy-document, issue #744).
@@ -302,9 +303,8 @@ export function LeavePolicyDocumentPage({ showToast }) {
             hint="ถ้าตั้งเป็นวันที่ในอนาคต ระบบจะเก็บไฟล์ไว้ก่อน และจะเริ่มใช้ฉบับนี้เมื่อถึงวันดังกล่าว"
             required
           >
-            <input
+            <ThaiDateInput
               id="leave-policy-effective-from"
-              type="date"
               value={effectiveFrom}
               onChange={(event) => { setEffectiveFrom(event.target.value); setDateError(''); }}
             />

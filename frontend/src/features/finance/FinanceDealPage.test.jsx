@@ -408,6 +408,7 @@ describe('FinanceDealPage', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'บันทึกใบกำกับ' }));
       fireEvent.change(await screen.findByLabelText(/เลขที่ใบกำกับ/), { target: { value: 'INV-0501' } });
       fireEvent.change(screen.getByLabelText(/วันที่ใบกำกับ/), { target: { value: '2026-09-20' } });
+      fireEvent.blur(screen.getByLabelText(/วันที่ใบกำกับ/));
       const file = pdf();
       fireEvent.change(screen.getByLabelText(/ไฟล์ใบกำกับภาษี/), { target: { files: [file] } });
       fireEvent.change(screen.getByLabelText(/ค่าธรรมเนียมธนาคาร/), { target: { value: '50' } });
@@ -735,6 +736,7 @@ describe('FinanceDealPage', () => {
       const dialog = await openPaymentDialog(payDeal());
       api.finance.recordPayment.mockResolvedValue({ deal: makeFinanceDeal() });
       fireEvent.change(within(dialog).getByLabelText(/วันที่รับเงิน/), { target: { value: '2026-09-20' } });
+      fireEvent.blur(within(dialog).getByLabelText(/วันที่รับเงิน/));
       fireEvent.change(within(dialog).getByLabelText('จำนวนเงิน'), { target: { value: '100' } });
       fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกรับชำระ' }));
       await waitFor(() => expect(api.finance.recordPayment).toHaveBeenCalledTimes(1));

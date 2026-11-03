@@ -147,6 +147,12 @@ async function selectType(value) {
   return radio;
 }
 
+// Date fields commit typed text on blur, as a user leaving the field does.
+function typeDate(el, value) {
+  fireEvent.change(el, { target: { value } });
+  fireEvent.blur(el);
+}
+
 describe('SpecialMoneyPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -194,8 +200,8 @@ describe('SpecialMoneyPanel', () => {
     await selectType('TRAVEL_PER_DIEM');
     const startInput = await screen.findByLabelText(/วันที่เริ่มเดินทาง/);
     const endInput = screen.getByLabelText(/วันที่สิ้นสุด/);
-    fireEvent.change(startInput, { target: { value: '2026-07-10' } });
-    fireEvent.change(endInput, { target: { value: '2026-07-12' } });
+    typeDate(startInput, '2026-07-10');
+    typeDate(endInput, '2026-07-12');
     fireEvent.change(screen.getByLabelText(/^บทบาท/), { target: { value: 'driver' } });
 
     await waitFor(() => {
@@ -233,7 +239,7 @@ describe('SpecialMoneyPanel', () => {
     renderPanel();
 
     await selectType('AID_WEDDING');
-    fireEvent.change(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), { target: { value: '2026-07-01' } });
+    typeDate(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), '2026-07-01');
     fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
@@ -291,7 +297,7 @@ describe('SpecialMoneyPanel', () => {
       renderPanel();
 
       await selectType('AID_WEDDING');
-      fireEvent.change(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), { target: { value: '2026-07-01' } });
+      typeDate(await screen.findByLabelText(/วันที่เกิดเหตุการณ์/), '2026-07-01');
       fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
       fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
@@ -308,8 +314,8 @@ describe('SpecialMoneyPanel', () => {
       renderPanel();
 
       await selectType('TRAVEL_PER_DIEM');
-      fireEvent.change(await screen.findByLabelText(/วันที่เริ่มเดินทาง/), { target: { value: '2026-07-10' } });
-      fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: '2026-07-10' } });
+      typeDate(await screen.findByLabelText(/วันที่เริ่มเดินทาง/), '2026-07-10');
+      typeDate(screen.getByLabelText(/วันที่สิ้นสุด/), '2026-07-10');
       fireEvent.change(screen.getByLabelText(/^บทบาท/), { target: { value: 'driver' } });
       fireEvent.change(await screen.findByLabelText(/จังหวัดปลายทาง/), { target: { value: 'ชลบุรี' } });
       fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ไปส่งของ' } });
@@ -325,8 +331,8 @@ describe('SpecialMoneyPanel', () => {
       renderPanel();
 
       await selectType('UNIFORM_ANNUAL');
-      fireEvent.change(await screen.findByLabelText(/วันที่เบิก/), { target: { value: '2026-06-05' } });
-      fireEvent.change(screen.getByLabelText(/วันที่ใบเสร็จ/), { target: { value: '2026-05-20' } });
+      typeDate(await screen.findByLabelText(/วันที่เบิก/), '2026-06-05');
+      typeDate(screen.getByLabelText(/วันที่ใบเสร็จ/), '2026-05-20');
       fireEvent.change(screen.getByLabelText(/จำนวนเสื้อ/), { target: { value: '2' } });
       fireEvent.change(screen.getByLabelText(/จำนวนกางเกง/), { target: { value: '1' } });
       fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'เบิกชุดฟอร์ม' } });

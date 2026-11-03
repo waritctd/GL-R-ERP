@@ -9,6 +9,7 @@ import { QuotationItemRow, newItemClientId } from '../quotations/QuotationItemRo
 import { QuotationContactPicker } from '../quotations/QuotationContactPicker.jsx';
 import { focusQuotationField } from '../quotations/QuotationChecklist.jsx';
 import { ceilPieces, defaultLeadTimeForOrigin, originCountryFromCode, piecesPerSqmFromSqmPerPiece, recipientForEntryChannel, validateQuotationItem } from '../quotations/quotationMeta.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
 // change them afterwards. The currency list is the trade currencies this business quotes in (the
@@ -1034,7 +1035,7 @@ export function PricingRequestCreateModal({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
             วันที่ต้องการราคา
-            <input type="date" value={requiredDate} onChange={(e) => setRequiredDate(e.target.value)} />
+            <ThaiDateInput value={requiredDate} onChange={(e) => setRequiredDate(e.target.value)} />
           </label>
           <div className="flex gap-2">
             <label className="flex flex-1 flex-col gap-1.5 text-sm font-bold text-text-secondary">

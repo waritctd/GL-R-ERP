@@ -10,6 +10,7 @@ import { formGridSpan2 } from '../../components/common/Layout.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
+import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
 // FormGrid (Layout.jsx) renders a <div>; this submit form needs native submit semantics
 // (Enter-to-submit, and a modal-FOOTER button linked in via form="<id>" -- see SafeForm.jsx's
@@ -132,6 +133,7 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
 
   function handleWorkDateChange(event) {
     const value = event.target.value;
+    if (!value) return; // cleared: keep the times the user already picked
     const checkInTime = getValues('requestedCheckIn').slice(11) || '08:30';
     const checkOutTime = getValues('requestedCheckOut').slice(11) || '17:30';
     setValue('requestedCheckIn', `${value}T${checkInTime}`, { shouldDirty: true, shouldValidate: true });
@@ -178,11 +180,12 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
     >
       <SafeForm id="attendance-correction-form" className={FORM_GRID_CLASS} onSubmit={handleSubmit(submitCorrection)} noValidate>
         <FormField label="วันที่ที่ต้องการแก้ไข" htmlFor="ac-work-date" error={errors.workDate?.message} required>
-          <input
+          <ThaiDateController
             id="ac-work-date"
-            type="date"
+            control={control}
+            name="workDate"
             max={todayIso()}
-            {...register('workDate', { onChange: handleWorkDateChange })}
+            onChange={handleWorkDateChange}
             aria-invalid={Boolean(errors.workDate)}
             required
           />

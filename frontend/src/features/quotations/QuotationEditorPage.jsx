@@ -55,6 +55,7 @@ import { QuotationAdjustmentRow } from './QuotationAdjustmentRow.jsx';
 import {
   pushRecentCatalogPick, readQuotationDefaults, readRecentCatalogPicks, writeQuotationDefaults,
 } from './quotationPrefs.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // #M3: Bangkok LOCAL calendar date, not `new Date().toISOString().slice(0, 10)` -- that reads
 // the UTC calendar day off a UTC instant, which is one day BEHIND the Bangkok date for any
@@ -3030,7 +3031,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 htmlFor="offerDate"
                 hint="พิมพ์ในหมายเหตุข้อ 1: จำนวนที่เสนอข้างต้นเป็นจำนวนที่ได้รับมาเมื่อวันที่ …"
               >
-                <input id="offerDate" type="date" value={terms.offerDate} onChange={(e) => { setTerms((t) => ({ ...t, offerDate: e.target.value })); setDirty(true); }} />
+                <ThaiDateInput id="offerDate" value={terms.offerDate} onChange={(e) => { setTerms((t) => ({ ...t, offerDate: e.target.value })); setDirty(true); }} />
               </FormField>
               {/* Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): 0% is no longer a percentage
                   a rep types — the custom input below REJECTS it (see depositZeroError) — so a
@@ -3175,10 +3176,9 @@ export function QuotationEditorPage({ user, showToast }) {
                     </button>
                   ))}
                   {terms.validityMode === 'DATE' ? (
-                    <input
+                    <ThaiDateInput
                       id="validityUntil"
                       aria-label="ยืนราคาถึงวันที่"
-                      type="date"
                       value={terms.validityUntil}
                       onChange={(e) => { setTerms((t) => ({ ...t, validityUntil: e.target.value })); setDirty(true); }}
                     />

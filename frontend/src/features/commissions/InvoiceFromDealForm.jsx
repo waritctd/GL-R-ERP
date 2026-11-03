@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { cn } from '../../utils/cn.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const DEDUCTIONS = [
   ['bankFees', 'ค่าธรรมเนียมธนาคาร'],
@@ -92,7 +93,7 @@ export function InvoiceFromDealForm({
               </label>
               <label>
                 วันที่ใบกำกับ *
-                <input type="date" {...field('invoiceDate')} required />
+                <ThaiDateInput {...field('invoiceDate')} required />
                 {errorFor('invoiceDate')}
               </label>
               <div className={cn('grid gap-[7px]', formGridSpan2)}>

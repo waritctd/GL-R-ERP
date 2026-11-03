@@ -24,6 +24,7 @@ import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 import { LeaveRulePanel, LeaveRuleWarningList } from './LeaveRulePanel.jsx';
 import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
 import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js';
+import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
 // Leave-request composer, Phase A2 (#485). The owner's own framing of the problem this closes:
 // "employee if rejected, or when requesting, the rules should also be restated to them so they
@@ -934,20 +935,21 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
               <div className="grid grid-cols-2 gap-4 mobile:grid-cols-1">
                 <FormField label="วันที่เริ่ม" htmlFor="leave-start-date" error={startDateError} required>
-                  <input
+                  <ThaiDateController
                     id="leave-start-date"
-                    type="date"
-                    {...register('startDate', { onChange: handleStartDateChange })}
+                    control={control}
+                    name="startDate"
+                    onChange={handleStartDateChange}
                     aria-invalid={Boolean(startDateError)}
                     aria-describedby={startDateError ? fieldErrorId('leave-start-date') : undefined}
                     required
                   />
                 </FormField>
                 <FormField label="วันที่สิ้นสุด" htmlFor="leave-end-date" error={errors.endDate?.message} required>
-                  <input
+                  <ThaiDateController
                     id="leave-end-date"
-                    type="date"
-                    {...register('endDate')}
+                    control={control}
+                    name="endDate"
                     min={startDate}
                     aria-invalid={Boolean(errors.endDate)}
                     aria-describedby={errors.endDate ? fieldErrorId('leave-end-date') : undefined}

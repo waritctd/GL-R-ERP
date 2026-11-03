@@ -8,6 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกเลขแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
 const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
@@ -488,7 +489,7 @@ export function ImportRequestFactoryCard({
               </label>
               <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
                 วันที่ตรวจสอบ
-                <input type="date" value={footerDraft.checkedDate ?? ''}
+                <ThaiDateInput value={footerDraft.checkedDate ?? ''}
                   onChange={(e) => setFooterDraft((d) => ({ ...d, checkedDate: e.target.value }))} />
               </label>
             </div>
@@ -500,7 +501,7 @@ export function ImportRequestFactoryCard({
               </label>
               <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
                 วันที่อนุมัติ
-                <input type="date" value={footerDraft.approvedDate ?? ''}
+                <ThaiDateInput value={footerDraft.approvedDate ?? ''}
                   onChange={(e) => setFooterDraft((d) => ({ ...d, approvedDate: e.target.value }))} />
               </label>
             </div>

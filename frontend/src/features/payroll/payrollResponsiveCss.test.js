@@ -306,7 +306,8 @@ describe('payroll phone editability and touch targets (Phase B regression guard)
 
   it('raises phone touch targets with Tailwind utilities at the call sites', () => {
     expect(payrollPageJsx).toContain('className="mobile:min-h-[44px]"');
-    expect(payrollPageJsx).toContain('className="w-[9.5rem] mobile:min-h-[44px]"');
+    // The document-date field is a ThaiDateInput: its width sits on the wrapper, the touch floor on the input.
+    expect(payrollPageJsx).toContain('wrapperClassName="w-[9.5rem] shrink-0"');
     expect(rawDataTableJsx).toContain('className="mobile:min-h-[44px]"');
     expect(payrollPageJsx).toContain('mobile:[&_input:not([type=checkbox])]:min-h-[44px]');
     expect(payrollPageJsx).toContain('mobile:[&_select]:min-h-[44px]');

@@ -237,7 +237,7 @@ describe('AttendancePage date stepper', () => {
       renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
 
       const dateInput = await screen.findByLabelText('วันที่');
-      await waitFor(() => expect(dateInput.value).toBe('2026-08-15'));
+      await waitFor(() => expect(dateInput.value).toBe('15/08/2569'));
 
       const prevButton = screen.getByRole('button', { name: 'วันก่อนหน้า' });
       const nextButton = screen.getByRole('button', { name: 'วันถัดไป' });
@@ -248,11 +248,36 @@ describe('AttendancePage date stepper', () => {
       await waitFor(() => expect(prevButton.disabled).toBe(false));
 
       fireEvent.click(prevButton);
-      await waitFor(() => expect(dateInput.value).toBe('2026-08-14'));
+      await waitFor(() => expect(dateInput.value).toBe('14/08/2569'));
       await waitFor(() => expect(nextButton.disabled).toBe(false));
 
       fireEvent.click(nextButton);
-      await waitFor(() => expect(dateInput.value).toBe('2026-08-15'));
+      await waitFor(() => expect(dateInput.value).toBe('15/08/2569'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Typing never reaches the page until blur, so clearing the field to retype leaves it empty
+  // instead of being refilled with today under the cursor.
+  it('clearing the date field leaves it empty while typing, and a newly typed พ.ศ. date is what sticks', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-08-15T05:00:00Z'));
+      renderWithClient(<AttendancePage user={hrUser} showToast={vi.fn()} />);
+      const dateInput = await screen.findByLabelText('วันที่');
+      await waitFor(() => expect(dateInput.value).toBe('15/08/2569'));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'วันก่อนหน้า' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'วันก่อนหน้า' }));
+      await waitFor(() => expect(dateInput.value).toBe('14/08/2569'));
+
+      fireEvent.change(dateInput, { target: { value: '' } });
+      expect(dateInput.value).toBe('');
+      fireEvent.change(dateInput, { target: { value: '10/08/2569' } });
+      fireEvent.blur(dateInput);
+      await waitFor(() => expect(dateInput.value).toBe('10/08/2569'));
+      await waitFor(() => expect(api.attendance.daily).toHaveBeenLastCalledWith(expect.objectContaining({ from: '2026-08-10', to: '2026-08-10' })));
     } finally {
       vi.useRealTimers();
     }

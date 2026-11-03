@@ -8,6 +8,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { downloadBlob } from '../../utils/download.js';
 import { formatMoney } from '../../utils/format.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
 
@@ -356,7 +357,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
 
       <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-issue-date">
         วันที่ (H7)
-        <input id="remaining-invoice-issue-date" type="date" value={docDate ?? ''}
+        <ThaiDateInput id="remaining-invoice-issue-date" value={docDate ?? ''}
           onChange={(e) => setDocDate(e.target.value)} />
       </label>
 
@@ -568,7 +569,7 @@ function CreateForm({ ticketId, onCreated }) {
 
           <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-issue-date">
             วันที่ (H7)
-            <input id="remaining-invoice-issue-date" type="date" value={issueDate}
+            <ThaiDateInput id="remaining-invoice-issue-date" value={issueDate}
               onChange={(e) => setIssueDate(e.target.value)} />
           </label>
 

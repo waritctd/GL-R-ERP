@@ -114,6 +114,26 @@ describe('ActivityLogPage', () => {
     await waitFor(() => expect(api.activityLog[method]).toHaveBeenCalled());
   });
 
+  // Date fields commit on blur: a partly typed date reverts and never reaches the query; a
+  // complete one does.
+  it('a partly typed from-date does not refetch; a complete one does', async () => {
+    renderPage();
+    await waitFor(() => expect(api.activityLog.summary).toHaveBeenCalledTimes(1));
+    const initial = api.activityLog.summary.mock.calls[0][0];
+
+    fireEvent.change(screen.getByLabelText(/ตั้งแต่วันที่/), { target: { value: '01/0' } });
+    fireEvent.blur(screen.getByLabelText(/ตั้งแต่วันที่/));
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    for (const [range] of api.activityLog.summary.mock.calls) {
+      expect(range.from).toBeTruthy();
+      expect(range.to).toBeTruthy();
+    }
+
+    fireEvent.change(screen.getByLabelText(/ตั้งแต่วันที่/), { target: { value: '01/01/2569' } });
+    fireEvent.blur(screen.getByLabelText(/ตั้งแต่วันที่/));
+    await waitFor(() => expect(api.activityLog.summary).toHaveBeenLastCalledWith({ from: '2026-01-01', to: initial.to }));
+  });
+
   it('renders a summary row with valid data without crashing', async () => {
     api.activityLog.summary.mockResolvedValue([
       { employeeId: 1, name: 'ทดสอบ', employeeCode: 'EMP-1', requestCount: 3, firstSeen: '2026-09-15T09:00:00+07:00', lastSeen: '2026-09-15T10:00:00+07:00' },

@@ -7033,10 +7033,9 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     // rounding phrase and its "= N" echo print ONLY when box rounding actually changed the count
     // (piecesAfterWastage was not already a whole multiple of piecesPerBox) — 21 real production
     // items printed the misleading "rounded up" wording on a row that never rounded anything.
-    // When it did NOT change, the box COUNT prints instead (new information the old line never
-    // gave), computed the same way DealQuotationLines does (piecesFinal / piecesPerBox — exact
-    // whenever this branch is reached, since piecesFinal is only ever piecesAfterWastage itself, or
-    // Math.ceil()'d to the next box multiple).
+    // The box COUNT tail prints either way (owner ruling 2026-11-03), computed like
+    // DealQuotationLines does (piecesFinal / piecesPerBox) and only when piecesFinal is a whole
+    // number of boxes.
     const boxRoundingChangedCount = hasBox && (piecesAfterWastage % piecesPerBox !== 0);
     const roundingPart = boxRoundingChangedCount
       ? (en ? ', rounded up to full boxes' : ' และปัดขึ้นเต็มกล่อง')
@@ -7044,9 +7043,9 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     const echoTail = boxRoundingChangedCount || hasWastage
       ? (en ? ` = ${piecesFinal} ${pl(piecesFinal, 'pc', 'pcs')}` : ` = ${piecesFinal} แผ่น`)
       : '';
-    const boxCount = hasBox ? Math.floor(piecesFinal / piecesPerBox) : 0;
+    const boxCount = hasBox ? piecesFinal / piecesPerBox : 0;
     // Mirrors DealQuotationLines: a one-piece box's count only repeats the piece count.
-    const boxCountTail = hasBox && piecesPerBox > 1 && !boxRoundingChangedCount
+    const boxCountTail = hasBox && piecesPerBox > 1 && piecesFinal % piecesPerBox === 0
       ? (en ? ` = ${boxCount} ${pl(boxCount, 'box', 'boxes')}` : ` = ${boxCount} กล่อง`)
       : '';
     qtyText = en

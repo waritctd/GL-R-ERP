@@ -4573,7 +4573,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
 });
 
 describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, R7)', () => {
-  it('opens a small dialog with the date defaulting to today (Bangkok), capped at today, and an optional note', async () => {
+  it('opens a small dialog with the date defaulting to today (Bangkok) and an optional note', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
@@ -4581,8 +4581,8 @@ describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, 
     fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
     const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
     const date = within(dialog).getByLabelText('วันที่ติดต่อ');
-    expect(date.value).toBe(bangkokDay());
-    expect(date.max).toBe(bangkokDay());
+    const [y, m, d] = bangkokDay().split('-');
+    expect(date.value).toBe(`${d}/${m}/${Number(y) + 543}`);
     expect(within(dialog).getByLabelText(/หมายเหตุ/)).not.toBeNull();
   });
 
@@ -4619,7 +4619,7 @@ describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, 
     ));
   });
 
-  it('refuses a future date: ยืนยัน is disabled and nothing is sent', async () => {
+  it('refuses a future date: the field reverts to today with an error and the future date is never sent', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
@@ -4627,10 +4627,15 @@ describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, 
     fireEvent.click(screen.getByRole('button', { name: 'ติดต่อโรงงานแล้ว' }));
     const dialog = await screen.findByRole('dialog', { name: 'ติดต่อโรงงานแล้ว' });
     fireEvent.change(within(dialog).getByLabelText('วันที่ติดต่อ'), { target: { value: bangkokDay(1) } });
-    const confirm = within(dialog).getByRole('button', { name: 'ยืนยัน' });
-    expect(confirm.disabled).toBe(true);
-    fireEvent.click(confirm);
-    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+    fireEvent.blur(within(dialog).getByLabelText('วันที่ติดต่อ'));
+    const date = within(dialog).getByLabelText(/วันที่ติดต่อ/);
+    const [y, m, d] = bangkokDay().split('-');
+    expect(date.value).toBe(`${d}/${m}/${Number(y) + 543}`);
+    expect(date.getAttribute('aria-invalid')).toBe('true');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+    await waitFor(() => expect(api.pricingRequests.markFactoryQuoteContacted).toHaveBeenCalledWith(
+      91, { contactedOn: bangkokDay() },
+    ));
   });
 
   it('cancelling the dialog changes nothing', async () => {

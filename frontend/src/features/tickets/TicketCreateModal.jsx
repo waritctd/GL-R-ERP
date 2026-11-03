@@ -28,6 +28,7 @@ import {
 import {
   MAX_DRAFTS, deleteDraft, hasMeaningfulDraftData, listDrafts, loadDraft, migrateLegacyDraft, saveDraft,
 } from './dealDrafts.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // ── REMOVED (owner ruling 2026-09-12, "แก้ด้วย — ใช้ catalog เหมือนกัน") ─────────────────────────
 // This file used to carry its own deriveSqmPerPiece(sizeRaw): a magnitude guess (both dimensions
@@ -1707,8 +1708,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
           วันติดตามครั้งถัดไป <span className="font-semibold text-text-muted">(ตั้งไว้ล่วงหน้า 14 วัน — แก้ไขได้)</span>
-          <input
-            type="date"
+          <ThaiDateInput
             value={nextFollowUpAt}
             onChange={(e) => setNextFollowUpAt(e.target.value)}
           />
