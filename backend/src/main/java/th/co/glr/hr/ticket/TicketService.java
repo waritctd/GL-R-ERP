@@ -2588,7 +2588,7 @@ public class TicketService {
             TicketEventKind.MARKED_LOST, s.salesStage(), s.salesStage(),
             "เสียงาน (" + reason + ")" + (note != null && !note.isBlank() ? " — " + note.trim() : ""));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_LOST,
-            actor.name() + " บันทึกว่าดีลเสียงาน (" + DealNoticeText.lostReason(reason) + ")" + noteSuffix(note),
+            actor.name() + " บันทึกว่าดีลเสียงาน (" + DealLostReason.label(reason) + ")" + noteSuffix(note),
             IMPORT_STOP, ACCOUNT_REFUND);
         // Terminal deal state: a lost deal can never receive Import's pricing, so
         // any pricing request still open on it (DRAFT/SUBMITTED/IMPORT_REVIEWING/
@@ -3032,7 +3032,7 @@ public class TicketService {
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
         notifyDealLifecycle(ticket.summary(), actor, TicketEventKind.DEAL_CANCELLED,
-            actor.name() + " ยกเลิกดีล (" + DealNoticeText.cancelReason(reason) + ")" + noteSuffix(note),
+            actor.name() + " ยกเลิกดีล (" + DealCancelReason.label(reason) + ")" + noteSuffix(note),
             IMPORT_STOP, ACCOUNT_REFUND);
         // Terminal deal state: same cascade as markLost above — a cancelled deal
         // can never receive Import's pricing, so any pricing request still open on
