@@ -832,8 +832,7 @@ public class TicketService {
             TicketEventKind.CLOSE_CONFIRM_REVOKED, s.status(), s.status(), blankToNull(note));
         // P2 B2: the confirmation is withdrawn, so whoever did NOT withdraw it must not be left with a stale
         // "รอ CEO ตรวจสอบ" / "พร้อมปิด" bell: the CEO if account revoked, account if the CEO revoked.
-        String reason = blankToNull(note);
-        String suffix = reason == null ? "" : " — " + reason.trim();
+        String suffix = noteSuffix(note);
         String label = DealNoticeText.dealLabel(s.code(), s.customerName());
         if ("ceo".equals(actor.role())) {
             notifications.notifyByRoleAtLink("account", TicketEventKind.CLOSE_CONFIRMATION_REVOKED,
@@ -2586,7 +2585,7 @@ public class TicketService {
         // Stage untouched by design: reopening resumes exactly where the deal was.
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.MARKED_LOST, s.salesStage(), s.salesStage(),
-            "เสียงาน (" + reason + ")" + (note != null && !note.isBlank() ? " — " + note.trim() : ""));
+            "เสียงาน (" + reason + ")" + noteSuffix(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_LOST,
             actor.name() + " บันทึกว่าดีลเสียงาน (" + DealLostReason.label(reason) + ")" + noteSuffix(note),
             IMPORT_STOP, ACCOUNT_REFUND);
