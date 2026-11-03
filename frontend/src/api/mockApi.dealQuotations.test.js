@@ -373,7 +373,7 @@ describe('mock dealQuotations -- item lines follow the document language (owner 
     });
     const [tile, adjustment] = quotation.items;
     expect(tile.descriptionLine).toBe('Tile Model Trilogy Color Ash Finish Matt No.APGBBK15');
-    expect(tile.calculationLine).toMatch(/^\(Area 20 sqm @ .+ pcs\/sqm = .+ pcs, rounded up to full boxes = .+ pcs\) \(3 pcs\/box\)$/);
+    expect(tile.calculationLine).toMatch(/^\(Area 20 sqm @ .+ pcs\/sqm = .+ pcs, rounded up to full boxes = .+ pcs = \d+ boxes\) \(3 pcs\/box\)$/);
     expect(tile.unit).toBe('PCS');
     expect(adjustment.descriptionLine).toBe('Special discount 3% for orders placed by July 31, 2026');
     for (const text of [tile.descriptionLine, tile.sizeLine, tile.calculationLine, tile.unit, adjustment.descriptionLine]) {

@@ -506,15 +506,16 @@ public final class DealQuotationLines {
         // passed in: stored on a read, freshly computed on a write) was ALREADY a whole number of boxes, so "และปัดขึ้นเต็มกล่อง = 20 แผ่น" on a row
         // that never rounded anything was actively misleading (21 real production items print this
         // shape). Only when box rounding genuinely moved the count does the old wording/echo stay;
-        // otherwise the line ends with the box count instead -- new, genuine information the old
-        // line never stated at all.
+        // otherwise only the rounding phrase and echo are dropped. The box COUNT tail below prints
+        // either way (owner ruling 2026-11-03: a rounded-up line also states its box count).
         //
         // "Changed" is asked directly of the box arithmetic itself -- piecesAfterWastage % ppb != 0
         // -- rather than by comparing against piecesFinal: ceilToMultiple is a no-op EXACTLY when
         // its input is already a multiple, so this is the more direct question, and (unlike a
         // piecesFinal comparison) it stays correct even if a caller's piecesFinal ever disagreed
         // with what ceilToMultiple(piecesAfterWastage, ppb) would produce -- it can never derive a
-        // box count that does not evenly divide piecesFinal in the branch below.
+        // box count that does not evenly divide piecesFinal in the branch below. (The tail's own
+        // piecesFinal % ppb == 0 guard enforces that now that rounded lines print it too.)
         boolean boxRoundingChangedCount = hasBox && piecesAfterWastage % piecesPerBox != 0;
 
         // Owner decision (2026-09-16): was "และปัดลงกล่อง" ("rounded DOWN") -- the arithmetic
@@ -528,16 +529,16 @@ public final class DealQuotationLines {
         // quantityPart already states. Without a แผ่น/กล่อง and without wastage, piecesFinal
         // always equals piecesBeforeWastage -- printing "= N แผ่น" then is a pure echo, e.g. the
         // production bug "(จำนวน 32 แผ่น = 32 แผ่น)". Wording-scan fix 1 narrows this further:
-        // box rounding only "still justifies the clause" when it actually CHANGED the count --
-        // when it did not, the box COUNT below is the new information instead, not another echo of
-        // the same piece count quantityPart already gave.
+        // box rounding only "still justifies the clause" when it actually CHANGED the count.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
         if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" แผ่น");
         }
         // A box of ONE piece makes "= N กล่อง" the same number as the piece count in another
-        // unit -- another echo, not information (2 real items carry แผ่น/กล่อง = 1).
-        if (hasBox && piecesPerBox > 1 && !boxRoundingChangedCount) {
+        // unit -- another echo, not information (2 real items carry แผ่น/กล่อง = 1). Owner ruling
+        // (2026-11-03): printed whether or not rounding changed the count, but only when piecesFinal
+        // is a whole number of boxes -- never print a box count that does not divide evenly.
+        if (hasBox && piecesPerBox > 1 && piecesFinal % piecesPerBox == 0) {
             sb.append(" = ").append(format(piecesFinal / piecesPerBox)).append(" กล่อง");
         }
         sb.append(")");
@@ -652,14 +653,13 @@ public final class DealQuotationLines {
         // "(Area 1,000 sqm @ 2.78 pcs/sqm = 2,780 pcs = 2,780 pcs)" -- AREA mode's own "= 2,780
         // pcs" clause (baked into quantityPart, converting sqm to pieces) is genuine information
         // and stays untouched; only this SECOND, redundant echo is dropped. Wording-scan fix 1
-        // narrows this further: when box rounding did not change anything, the box COUNT below is
-        // the new information instead of yet another echo of the same piece count.
+        // narrows this further: the echo is dropped when box rounding changed nothing.
         StringBuilder sb = new StringBuilder("(").append(quantityPart).append(wastagePart).append(roundingPart);
         if (boxRoundingChangedCount || hasWastage) {
             sb.append(" = ").append(format(piecesFinal)).append(" ").append(pluralPcs(piecesFinal));
         }
-        // Same one-piece-box rule as the Thai line above.
-        if (hasBox && piecesPerBox > 1 && !boxRoundingChangedCount) {
+        // Same one-piece-box and whole-box rules as the Thai line above (owner ruling 2026-11-03).
+        if (hasBox && piecesPerBox > 1 && piecesFinal % piecesPerBox == 0) {
             int boxCount = piecesFinal / piecesPerBox;
             sb.append(" = ").append(format(boxCount)).append(" ").append(pluralBoxes(boxCount));
         }
