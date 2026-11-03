@@ -85,7 +85,6 @@ public final class TicketEventKind {
     public static final String DEPOSIT_PAYMENT_CONFIRMED = "DEPOSIT_PAYMENT_CONFIRMED";
     public static final String IMPORT_STARTED = "IMPORT_STARTED";
     public static final String IMPORT_GOODS_RECEIVED_ALL = "IMPORT_GOODS_RECEIVED_ALL";
-    public static final String IMPORT_GOODS_RECEIVED_PARTIAL = "IMPORT_GOODS_RECEIVED_PARTIAL";
     public static final String REMAINING_INVOICE_ISSUED = "REMAINING_INVOICE_ISSUED";
     public static final String CLOSE_READY_FOR_CEO = "CLOSE_READY_FOR_CEO";
     public static final String ORDER_CONFIRMED_NO_DEPOSIT = "ORDER_CONFIRMED_NO_DEPOSIT";

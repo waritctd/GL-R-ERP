@@ -756,7 +756,7 @@ public class ImportRequestService {
             message, "/import/deals/" + draft.ticketId());
     }
 
-    /** P1 hand-off: tell the deal's rep how the import is going (first move off CONTACTED, goods received). */
+    /** P1 hand-off: tell the deal's rep how the import is going — once per deal: at the start (first IR off CONTACTED) and when all goods are received. */
     private void notifyRepOfImportProgress(TicketSummaryDto deal, String type, String firstLine, String lastLine) {
         notifications.notifyEmployeeAtLink(deal.createdById(), type,
             firstLine + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName()) + "\n" + lastLine,
@@ -1162,21 +1162,16 @@ public class ImportRequestService {
             th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
 
         String ir = "ใบขอซื้อ (IR) " + existing.docNumber();
-        if (ImportRequestStep.RECEIVED.equals(target)) {
-            boolean all = allFactoriesReceived(existing.ticketId());
-            if (all) {
-                ticketService.applyImportRequestRollup(existing.ticketId(), actor);
-            }
-            String received = "สินค้าตาม" + ir + " จากโรงงาน " + existing.factoryName() + " เข้าคลังแล้ว";
-            TicketSummaryDto deal = requireTicketSummary(existing.ticketId());
-            if (all) {
-                notifyRepOfImportProgress(deal, TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
-                    received + " และครบทุกใบขอซื้อของดีลนี้", "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
-            } else {
-                notifyRepOfImportProgress(deal, TicketEventKind.IMPORT_GOODS_RECEIVED_PARTIAL,
-                    received + " แต่ยังมีสินค้าของดีลนี้ที่ยังไม่เข้าคลัง", "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าครบ");
-            }
-        } else if (ImportRequestStep.CONTACTED.equals(existing.importStep())) {
+        boolean all = ImportRequestStep.RECEIVED.equals(target) && allFactoriesReceived(existing.ticketId());
+        if (all) {
+            ticketService.applyImportRequestRollup(existing.ticketId(), actor);
+            notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+                "สินค้าตาม" + ir + " จากโรงงาน " + existing.factoryName() + " เข้าคลังแล้ว และครบทุกใบขอซื้อของดีลนี้",
+                "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
+        } else if (ImportRequestStep.CONTACTED.equals(existing.importStep())
+            && stored.findIssuedByTicket(existing.ticketId()).stream()
+                .noneMatch(o -> o.id() != id && !ImportRequestStep.CONTACTED.equals(o.importStep()))) {
+            // Once per deal: only the first IR to leave CONTACTED tells the rep the import has started.
             notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_STARTED,
                 actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + existing.factoryName()
                     + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(target),

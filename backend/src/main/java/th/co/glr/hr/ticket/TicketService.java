@@ -1029,6 +1029,8 @@ public class TicketService {
         // ACCOUNT_ROLES (which would still let the CEO through).
         requireRole(actor, DEPOSIT_CONFIRM_ROLES);
         requireAccountScope(ticketId, actor);
+        // Lock before the DEPOSIT_NOTICE_ISSUED check: two concurrent confirms must not both pass it and record two receipts.
+        tickets.lockTicketForUpdate(ticketId);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1794,6 +1796,8 @@ public class TicketService {
         if (request == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุข้อมูลรับชำระเงิน");
         }
+        // Serializes concurrent payments so only one sees the deposit go unsettled→settled (one rep notice).
+        tickets.lockTicketForUpdate(ticketId);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         requireActive(s);
@@ -1841,14 +1845,16 @@ public class TicketService {
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
         reconcilePaymentStatus(ticketId, actor);
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
-        if (depositSettled(requireTicket(ticketId).summary())) {
+        boolean settledNow = depositSettled(requireTicket(ticketId).summary());
+        if (settledNow) {
             routeAllStockDealToDelivery(ticketId, actor);
-            // P1 hand-off: only the payment that takes the deposit from unsettled to settled tells the rep.
-            if (!depositWasSettled) {
-                notifyRepOfDepositConfirmed(requireTicket(ticketId).summary(), amount);
-            }
         }
-        return requireTicket(ticketId);
+        TicketDto result = requireTicket(ticketId); // post-route: the notice's next step reads fulfillmentStatus
+        // P1 hand-off: only the payment that takes the deposit from unsettled to settled tells the rep.
+        if (settledNow && !depositWasSettled) {
+            notifyRepOfDepositConfirmed(result.summary(), amount);
+        }
+        return result;
     }
 
     /** What the rep does next: nothing to import (all stock), create the IR, or check the IRs already issued. */

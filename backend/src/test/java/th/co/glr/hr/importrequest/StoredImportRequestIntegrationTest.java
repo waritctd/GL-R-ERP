@@ -607,11 +607,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             + "\nแจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง";
     }
 
-    private String receivedMessage(ImportRequestDto ir, boolean all) {
+    private String receivedMessage(ImportRequestDto ir) {
         return "สินค้าตามใบขอซื้อ (IR) " + ir.docNumber() + " จากโรงงาน " + ir.factoryName() + " เข้าคลังแล้ว"
-            + (all ? " และครบทุกใบขอซื้อของดีลนี้\n" + DEAL_LABEL + "\nสิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า"
-                   : " แต่ยังมีสินค้าของดีลนี้ที่ยังไม่เข้าคลัง\n" + DEAL_LABEL
-                     + "\nแจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าครบ");
+            + " และครบทุกใบขอซื้อของดีลนี้\n" + DEAL_LABEL + "\nสิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า";
     }
 
     private void advance(long id, String step) {
@@ -672,53 +670,60 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             "/import/deals/" + ticketId, importId);
     }
 
-    /** START once at the first move off CONTACTED, silence on intermediate steps, END (partial: LEA still open) at RECEIVED. */
+    /**
+     * Ruling 11-03 (start + end only), per DEAL: START once when the deal's first IR leaves CONTACTED,
+     * silence on intermediate steps, on a factory received while another is still open, and on the
+     * second factory's own start; END once, when the last factory is received.
+     */
     @Test
-    void advanceStep_notifiesRepOnStartAndOnReceived_notOnIntermediateSteps() {
-        List<ImportRequestDto> irs = service.createDrafts(ticketId, null, owner);
-        ImportRequestDto padana = byFactory(irs, padanaFactoryId);
-        String startTitle = "เริ่มสั่งซื้อกับโรงงานแล้ว";
-
-        advance(padana.id(), ImportRequestStep.ORDERED);
-
-        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle,
-            stepMessage(padana, ImportRequestStep.thaiLabel(ImportRequestStep.ORDERED)), "/tickets/" + ticketId);
-
-        for (String step : List.of(ImportRequestStep.PICKED_UP, ImportRequestStep.IN_TRANSIT,
-                ImportRequestStep.AWAITING_CUSTOMS)) {
-            advance(padana.id(), step);
-        }
-        // still exactly the one START notice; nothing from the intermediate steps, and no END yet.
-        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle,
-            stepMessage(padana, ImportRequestStep.thaiLabel(ImportRequestStep.ORDERED)), "/tickets/" + ticketId);
-        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว");
-        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า");
-
-        advance(padana.id(), ImportRequestStep.RECEIVED);
-
-        mailer.assertEmployeeNotice(ownerId, "IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว",
-            receivedMessage(padana, false), "/tickets/" + ticketId);
-        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า");
-    }
-
-    /** CONTACTED -> RECEIVED in one jump sends END only (no START); the LAST factory's END is the ALL variant. */
-    @Test
-    void advanceStep_jumpFromContactedToReceived_sendsEndOnly_partialThenAllOnTheLastFactory() {
+    void advanceStep_notifiesRepOnceWhenTheDealStarts_andOnceWhenEveryFactoryIsReceived() {
         List<ImportRequestDto> irs = service.createDrafts(ticketId, null, owner);
         ImportRequestDto padana = byFactory(irs, padanaFactoryId);
         ImportRequestDto lea = byFactory(irs, leaFactoryId);
+        String startTitle = "เริ่มสั่งซื้อกับโรงงานแล้ว";
+        String allTitle = "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า";
+        String padanaStart = stepMessage(padana, ImportRequestStep.thaiLabel(ImportRequestStep.ORDERED));
+
+        advance(padana.id(), ImportRequestStep.ORDERED);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+
+        for (String step : List.of(ImportRequestStep.PICKED_UP, ImportRequestStep.IN_TRANSIT,
+                ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
+            advance(padana.id(), step);
+        }
+        advance(lea.id(), ImportRequestStep.ORDERED);
+        // padana fully received and LEA started: still exactly the one START, no partial, no END yet.
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว");
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_ALL", allTitle);
+
+        advance(lea.id(), ImportRequestStep.RECEIVED);
+
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_GOODS_RECEIVED_ALL", allTitle,
+            receivedMessage(lea), "/tickets/" + ticketId);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+    }
+
+    /** The deal's first move jumping CONTACTED -> RECEIVED (another factory open) is still the START; the last factory's jump is END only. */
+    @Test
+    void advanceStep_jumpFromContactedToReceived_firstIsTheStart_lastIsTheEnd() {
+        List<ImportRequestDto> irs = service.createDrafts(ticketId, null, owner);
+        ImportRequestDto padana = byFactory(irs, padanaFactoryId);
+        ImportRequestDto lea = byFactory(irs, leaFactoryId);
+        String startTitle = "เริ่มสั่งซื้อกับโรงงานแล้ว";
+        String padanaStart = stepMessage(padana, ImportRequestStep.thaiLabel(ImportRequestStep.RECEIVED));
 
         advance(padana.id(), ImportRequestStep.RECEIVED);
 
-        mailer.assertEmployeeNotice(ownerId, "IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว",
-            receivedMessage(padana, false), "/tickets/" + ticketId);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว");
         mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า");
 
         advance(lea.id(), ImportRequestStep.RECEIVED);
 
         mailer.assertEmployeeNotice(ownerId, "IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า",
-            receivedMessage(lea, true), "/tickets/" + ticketId);
-        mailer.assertNoNotice("IMPORT_STARTED", "เริ่มสั่งซื้อกับโรงงานแล้ว");
+            receivedMessage(lea), "/tickets/" + ticketId);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
     }
 
     // ── authorisation (owner decision 1), asked the wrong way round ─────────────────────────────
