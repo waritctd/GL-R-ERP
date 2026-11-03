@@ -27,6 +27,9 @@ const CHIPS = [
   { key: 'APPROVED', label: 'อนุมัติแล้ว' },
   { key: 'REJECTED', label: 'ไม่อนุมัติ' },
 ];
+// Whole literal (Tailwind JIT): expand, invoice, rep, base, status, approved-by, actions.
+// Fixed tracks fit the 44px icon buttons (two side by side in actions) and the mismatch badge.
+const ALL_RECORDS_GRID = 'grid-cols-[2.875rem_minmax(0,2.4fr)_minmax(0,1.1fr)_minmax(9.75rem,1fr)_minmax(0,0.9fr)_minmax(0,1.3fr)_6.25rem] nav-drawer:min-w-[960px]';
 const COUNTED = STAGES.map((stage) => stage.status);
 
 function shiftMonth(yearMonth, delta) {
@@ -144,7 +147,7 @@ function ExpandToggle({ record, open, onToggle, withLabel = false }) {
     <Button
       type="button"
       variant="icon"
-      className={withLabel ? 'mobile:min-h-11 mobile:w-full mobile:gap-1.5 mobile:text-sm mobile:font-bold' : undefined}
+      className={withLabel ? 'mobile:min-h-11 mobile:w-full mobile:gap-1.5 mobile:whitespace-nowrap mobile:px-3 mobile:text-sm mobile:font-bold' : undefined}
       aria-expanded={open}
       aria-label={`ดูรายละเอียด ${label}`}
       title="ดูรายละเอียดการคำนวณ"
@@ -362,7 +365,7 @@ export function ApprovalBoard({
       render: (record) => (isManualKind(record.kind) ? (
         <span>
           <span className="flex items-center gap-1.5"><strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong><StatusBadge tone="info">Manual</StatusBadge></span>
-          <small className="block text-text-muted">{record.manualReason}</small>
+          <small className="line-clamp-2 text-text-muted" title={record.manualReason}>{record.manualReason}</small>
         </span>
       ) : (
         <span>
@@ -386,11 +389,11 @@ export function ApprovalBoard({
       sortable: true,
       sortAccessor: (record) => baseOf(record),
       render: (record) => {
-        if (isManualKind(record.kind)) return <code className={Number(record.manualAmount || 0) < 0 ? 'text-danger' : undefined}>{formatMoney(record.manualAmount)}</code>;
+        if (isManualKind(record.kind)) return <span className={cn('tabular-nums font-extrabold', Number(record.manualAmount || 0) < 0 && 'text-danger')}>{formatMoney(record.manualAmount)}</span>;
         const badge = describeCommissionWeight(record);
         return (
           <span>
-            <code>{formatMoney(baseOf(record))}</code>
+            <span className="tabular-nums font-extrabold">{formatMoney(baseOf(record))}</span>
             {badge ? <span className="mt-1 block"><StatusBadge tone="info">{badge.label}</StatusBadge></span> : null}
             {record.dealAmountMismatch ? <span className="mt-1 block"><StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge></span> : null}
           </span>
@@ -439,6 +442,57 @@ export function ApprovalBoard({
       ),
     },
   ];
+
+  const mobileCard = (record) => {
+    const manual = isManualKind(record.kind);
+    const amount = manual ? Number(record.manualAmount || 0) : baseOf(record);
+    const status = statusInfo(record.status);
+    const ticketCode = pendingById.get(record.id)?.ticketCode;
+    const badge = manual ? null : describeCommissionWeight(record);
+    const busy = saving || savingIds.has(record.id);
+    return (
+      <div className="grid gap-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <b className="min-w-0 font-extrabold [overflow-wrap:anywhere]">{record.salesRepName || record.salesRepId}</b>
+          <b className={cn('shrink-0 tabular-nums font-extrabold', manual && amount < 0 && 'text-danger')}>{formatMoney(amount)}</b>
+        </div>
+        {manual ? (
+          <div className="grid gap-1">
+            <span className="flex flex-wrap items-center gap-1.5"><strong>{MANUAL_KIND_LABELS[record.kind] || record.kind}</strong><StatusBadge tone="info">Manual</StatusBadge></span>
+            <span className="line-clamp-2 text-sm text-text-muted" title={record.manualReason}>{record.manualReason}</span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5 text-sm text-text-muted">
+            <span>{[record.invoiceDetails.invoiceNumber, ticketCode].filter(Boolean).join(' · ')}</span>
+            {badge ? <StatusBadge tone="info">{badge.label}</StatusBadge> : null}
+            {record.dealAmountMismatch ? <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ</StatusBadge> : null}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-3">
+          <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+          {/* shrink-to-fit wrapper: ExpandToggle's mobile w-full would otherwise stretch across the card */}
+          <span className="flex shrink-0 gap-2">
+            {record.kind === 'SALE' && record.status === 'APPROVED' ? (
+              <Button type="button" variant="secondary" className="min-h-11 whitespace-nowrap" aria-label="บันทึกหักคืน" disabled={saving} onClick={() => onClawback(record.id)}>
+                หักคืน
+              </Button>
+            ) : null}
+            <ExpandToggle record={record} open={tableOpen === record.id} onToggle={() => setTableOpen((cur) => (cur === record.id ? null : record.id))} withLabel />
+          </span>
+        </div>
+        {canReview(record) ? (
+          <div className="flex gap-2">
+            <Button type="button" variant="secondary" className="min-h-11 flex-1 border-success text-success hover:bg-success-bg" aria-label={`${stageWho}อนุมัติ`} disabled={busy} onClick={() => onApprove(record.id)}>
+              อนุมัติ
+            </Button>
+            <Button type="button" variant="secondary" className="min-h-11 flex-1 border-danger text-danger hover:bg-danger-bg" aria-label={`${stageWho}ปฏิเสธ`} disabled={busy} onClick={() => onReject(record.id)}>
+              ปฏิเสธ
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -507,6 +561,8 @@ export function ApprovalBoard({
           columns={columns}
           rows={rows}
           getRowKey={(record) => record.id}
+          gridClassName={ALL_RECORDS_GRID}
+          mobileCard={mobileCard}
           renderExpanded={(record) => panelFor(record, tableOpen === record.id)}
           pageSize={20}
           searchable

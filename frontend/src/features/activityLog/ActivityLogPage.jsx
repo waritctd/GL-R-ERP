@@ -210,6 +210,13 @@ export function ActivityLogPage() {
   // and a missing branch would have silently rendered the wrong tab's columns.
   const QUERIES = { summary: summaryQuery, actions: auditQuery, requests: requestsQuery, system: systemQuery };
   const COLUMNS = { summary: summaryColumns, actions: auditColumns, requests: requestColumns, system: systemColumns };
+  // Whole literal strings so Tailwind's scanner sees them; one template per tab's column count.
+  const GRID = {
+    summary: 'grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] nav-drawer:min-w-[640px] reflow-cards',
+    actions: 'grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,2fr)] nav-drawer:min-w-[720px] reflow-cards',
+    requests: 'grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_4.5rem_minmax(0,3fr)_4rem] nav-drawer:min-w-[760px] reflow-cards',
+    system: 'grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_4.5rem_minmax(0,1.4fr)_minmax(0,3fr)_5.5rem] nav-drawer:min-w-[900px] reflow-cards',
+  };
   const EMPTY = {
     summary: 'ไม่มีการใช้งานในช่วงเวลานี้',
     actions: 'ไม่มีการดำเนินการในช่วงเวลานี้',
@@ -256,6 +263,7 @@ export function ActivityLogPage() {
         columns={columns}
         rows={rows}
         getRowKey={(row) => row.id ?? `emp-${row.employeeId}`}
+        gridClassName={GRID[tab]}
         loading={active.isLoading}
         error={active.isError}
         onRetry={active.refetch}

@@ -323,6 +323,12 @@ export function DataTable({
   // steal focus from the user's current toolbar/control.
   focusRowOnSelectClick = false,
 }) {
+  // `.data-row` is `display: grid`; with no template every cell stacks full-width in one column.
+  if (!gridClassName) {
+    const message = 'DataTable requires gridClassName (a grid-template-columns class) or every cell stacks in one column.';
+    if (import.meta.env.DEV) throw new Error(message);
+    console.error(message);
+  }
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
   // that instead of the column cells. Search/sort/pagination act on data, not

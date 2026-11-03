@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
+import { commissionStatusLabel } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -1099,6 +1100,89 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     fireEvent.click(within(row).getByRole('button', { name: 'อนุมัติ' }));
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'อนุมัติ' }));
     await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(801));
+  });
+
+  // ── all-records table on a phone (≤720px) ─────────────────────────────────────────────────
+  // #1222 dropped this table's mobileCard, so a phone got the desktop grid. One compact card per
+  // record: rep + amount on top, what it is (invoice, or kind + Manual + reason), status, a
+  // details toggle, and approve / reject only where the viewer can act.
+  describe('on a phone', () => {
+    const realMatchMedia = window.matchMedia;
+    beforeEach(() => {
+      window.matchMedia = (query) => ({
+        matches: query === '(max-width: 720px)',
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      });
+    });
+    afterEach(() => {
+      window.matchMedia = realMatchMedia;
+    });
+
+    const allRecords = () => screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    const cardFor = async (text) => {
+      const cards = within(await allRecords()).getAllByRole('listitem');
+      const card = cards.find((li) => li.textContent.includes(text));
+      expect(card, `no card containing ${text}`).toBeDefined();
+      return card;
+    };
+
+    it('renders one card per record, no table header', async () => {
+      stub(managerPending);
+      withManual();
+      renderAt(salesManagerUser);
+      const region = await allRecords();
+      await waitFor(() => expect(within(region).getAllByRole('listitem')).toHaveLength(6)); // 701-705 + manual 801
+      expect(within(region).queryAllByRole('columnheader')).toHaveLength(0);
+    });
+
+    it('a manual entry card shows rep, amount, kind + Manual badge, reason and status', async () => {
+      stub(managerPending);
+      withManual();
+      renderAt(salesManagerUser);
+      const card = await cardFor('หักค่าเสียหาย');
+      expect(card.textContent).toContain('สมชาย ใจดี');
+      expect(card.textContent).toMatch(/2,500\.00/);
+      expect(card.textContent).toContain('ปรับปรุง/รับช่วงงาน');
+      expect(within(card).getByText('Manual')).not.toBeNull();
+      expect(card.textContent).toContain(commissionStatusLabel('MANAGER_APPROVED').label);
+      expect(card.querySelector('.text-danger')).not.toBeNull(); // negative amount is red
+    });
+
+    it('a SUBMITTED card at the manager\'s stage has approve / reject; approving goes through the confirm dialog', async () => {
+      stub(managerPending);
+      api.commissions.approve.mockResolvedValue({});
+      renderAt(salesManagerUser);
+      const card = await cardFor('INV-PEND-0701');
+      expect(card.textContent).toContain('สมชาย ใจดี');
+      expect(within(card).getByRole('button', { name: 'ผู้จัดการปฏิเสธ' })).not.toBeNull();
+      fireEvent.click(within(card).getByRole('button', { name: 'ผู้จัดการอนุมัติ' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'อนุมัติ' }));
+      await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(701));
+    });
+
+    it('CANNOT REACH: a card past the viewer\'s stage has no approve / reject', async () => {
+      stub(managerPending);
+      renderAt(salesManagerUser);
+      const card = await cardFor('INV-MA-0703'); // MANAGER_APPROVED: the CEO's stage, not the manager's
+      expect(within(card).queryByRole('button', { name: /อนุมัติ$|ปฏิเสธ$/ })).toBeNull();
+    });
+
+    it('clawback shows on an APPROVED sale card only', async () => {
+      stub(managerPending);
+      renderAt(salesManagerUser);
+      expect(within(await cardFor('INV-OK-0704')).getByRole('button', { name: 'บันทึกหักคืน' })).not.toBeNull();
+      expect(within(await cardFor('INV-PEND-0701')).queryByRole('button', { name: 'บันทึกหักคืน' })).toBeNull();
+    });
+
+    it('the details toggle on a card opens that record\'s detail panel', async () => {
+      stub(managerPending);
+      renderAt(salesManagerUser);
+      const card = await cardFor('INV-PEND-0702');
+      fireEvent.click(within(card).getByRole('button', { name: /^ดูรายละเอียด/ }));
+      expect(await screen.findByTestId('detail-panel-702')).not.toBeNull();
+    });
   });
 
   it('CANNOT REACH: the sales_manager does not get the manager-approved manual entry in her queue', async () => {
