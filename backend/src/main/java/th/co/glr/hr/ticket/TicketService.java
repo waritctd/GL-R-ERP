@@ -1880,6 +1880,11 @@ public class TicketService {
         // P1 hand-off: only the payment that takes the deposit from unsettled to settled tells the rep.
         if (settledNow && !depositWasSettled) {
             notifyRepOfDepositConfirmed(result.summary(), amount);
+            // The deposit notice carries the next step, but a payment that also clears the deal must say so too
+            // (a later confirmFinalPayment is a no-op).
+            if (!wasFullyPaid && PaymentTrack.FULLY_PAID.equals(result.summary().paymentStatus())) {
+                notifyRepOfFullyPaid(result.summary(), payable, actor);
+            }
         } else if (depositWasSettled && !"ADJUSTMENT".equals(kind)) {
             // P2 B1: a later payment -- ONE notice per payment action, fully-paid wins over received.
             boolean nowFullyPaid = PaymentTrack.FULLY_PAID.equals(result.summary().paymentStatus());

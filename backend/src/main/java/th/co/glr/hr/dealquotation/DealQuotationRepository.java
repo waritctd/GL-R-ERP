@@ -1430,7 +1430,8 @@ public class DealQuotationRepository {
             WITH prior AS (
                 SELECT quotation_id, doc_status FROM sales.quotation
                  WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
-                   AND doc_status IN ('DRAFT', 'PENDING_APPROVAL'))
+                   AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
+                 FOR UPDATE) -- lock first, so a concurrent DRAFT -> PENDING_APPROVAL is read as PENDING (B7 notice)
             UPDATE sales.quotation q SET doc_status = 'CANCELLED', updated_at = now()
               FROM prior p
              WHERE q.quotation_id = p.quotation_id

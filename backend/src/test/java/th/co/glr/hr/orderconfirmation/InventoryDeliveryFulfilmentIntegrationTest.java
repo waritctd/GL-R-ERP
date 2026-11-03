@@ -695,7 +695,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "/tickets/" + deal.ticketId);
     }
 
-    /** A single payment big enough to walk straight to FULLY_PAID settles the deposit on the way: one notice, for THAT payment's amount. */
+    /** A single payment big enough to walk straight to FULLY_PAID settles the deposit on the way: the rep gets the deposit notice (for THAT amount) AND the fully-paid notice, once each. */
     @Test
     void recordPayment_thatJumpsStraightToFullyPaid_notifiesRepOnceWithThatAmount() {
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
@@ -710,8 +710,10 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(payable) + " บาท แล้ว\n"
                 + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
             "/tickets/" + deal.ticketId);
-        // P2 B1: ONE notice per payment action -- the deposit-settling one wins, no fully-paid/received on top.
-        mailer.assertNoNotice("PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE);
+        // Review fix: the deposit notice carries the next step, but the rep must ALSO hear the deal is fully paid
+        // (a later confirmFinalPayment is a no-op, so this is the only chance). Never a "received" notice.
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE,
+            fullyPaidMessage(deal.ticketId), "/tickets/" + deal.ticketId);
         mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
     }
 

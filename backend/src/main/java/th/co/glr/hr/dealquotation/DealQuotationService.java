@@ -2339,11 +2339,13 @@ public class DealQuotationService {
                     "ใบเสนอราคา " + row.number() + " หมดอายุ", null);
                 notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
                     PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, "ใบเสนอราคา " + row.number() + " หมดอายุ");
-                // P2 B6: the rep who owns the deal chases the customer or re-quotes.
-                notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
-                    PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
-                    DealNoticeText.quotationExpired(row.number(), summary.ticketCode(), summary.customerName()),
-                    "/tickets/" + summary.ticketId());
+                // P2 B6: the rep who owns the deal chases the customer or re-quotes -- unless the deal is lost/cancelled.
+                if (!tickets.isDeadDeal(summary.ticketId())) {
+                    notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
+                        PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
+                        DealNoticeText.quotationExpired(row.number(), summary.ticketCode(), summary.customerName()),
+                        "/tickets/" + summary.ticketId());
+                }
             });
         }
         return expired.size();

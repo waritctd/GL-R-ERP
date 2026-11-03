@@ -450,10 +450,22 @@ public class NotificationRepository {
                 // NOT IN needs a non-empty list; -1 is never an employee id.
                 .addValue("excludeEmployeeIds", excludeEmployeeIds.isEmpty() ? List.of(-1L) : excludeEmployeeIds),
             Long.class);
-        // With an exclusion the role mailbox is only worth mailing when somebody ELSE was notified.
-        if (email && (excludeEmployeeIds.isEmpty() || !notified.isEmpty())) {
+        // The mailbox is skipped only when the exclusion is what emptied the fan-out: an excluded id is an active
+        // member of the role. An exclusion matching nobody leaves the mailbox mailed, like the no-exclusion path.
+        if (email && (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
+                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds))) {
             salesMailer.emailForRole(role, notified, title, message, link);
         }
+    }
+
+    private boolean excludedIdIsActiveRoleMember(String divisionFilter, List<Long> excludeEmployeeIds) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (
+              SELECT 1 FROM hr.employee e
+                LEFT JOIN hr.division d ON d.division_id = e.division_id
+                LEFT JOIN hr.position p ON p.position_id = e.position_id
+               WHERE (%s) AND e.is_active = TRUE AND e.employee_id IN (:ids))
+            """.formatted(divisionFilter), Map.of("ids", excludeEmployeeIds), Boolean.class));
     }
 
     private String ticketEventTitle(String type) {

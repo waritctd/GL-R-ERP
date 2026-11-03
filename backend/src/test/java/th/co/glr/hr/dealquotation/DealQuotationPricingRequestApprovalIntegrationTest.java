@@ -570,6 +570,22 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", salesRepId, ceoRole);
     }
 
+    /** Review fix: a lost/cancelled deal's rep is not told to chase the customer; the CEO FYI stays. */
+    @Test
+    void expireOverdueQuotations_onALostDeal_doesNotTellTheRep_butStillTellsTheCeo() {
+        DealQuotationDto issued = quotationService.approve(submittedQuotation().id(), new ApproveRequest(null), salesManagerActor);
+        long ceoRole = salesMailer.seedRoleEmployee("ceo");
+        jdbc.update("UPDATE sales.quotation SET validity_date = CURRENT_DATE - 1 WHERE quotation_id = :id",
+            java.util.Map.of("id", issued.id()));
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", java.util.Map.of("id", ticketId));
+
+        assertThat(quotationService.expireOverdueQuotations()).isEqualTo(1);
+
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", ceoRole);
+        salesMailer.assertNoticeFor(ceoRole, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issued.number() + " หมดอายุ", "/pricing-requests/" + issued.pricingRequestId());
+    }
+
     @Test
     void expireOverdueQuotations_neverTouchesADealDirectQuotation() {
         DealQuotationDto created = quotationService.create(ticketId, directDraft(), salesActor);

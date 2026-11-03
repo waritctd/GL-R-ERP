@@ -948,6 +948,22 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    /** Review fix: a lost/cancelled deal's rep is not told to chase the customer; the CEO FYI stays. */
+    @Test
+    void expireOverdueQuotations_onALostDeal_doesNotTellTheRep_butStillTellsTheCeo() {
+        long pr = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pr, new CreateCustomerQuotationRequest(
+            null, null, null, LocalDate.now().minusDays(1), null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", ticketId));
+
+        assertThat(quotationService.expireOverdueQuotations()).isEqualTo(1);
+
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", ceoUserId);
+        salesMailer.assertNoticeFor(ceoUserId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคาลูกค้า " + issued.number() + " หมดอายุ", "/pricing-requests/" + pr);
+    }
+
     @Test
     void expireOverdueQuotations_sweep_pastValidityFlips_futureValidityAndAcceptedUntouched() {
         long prPast = approvedPricingRequest();

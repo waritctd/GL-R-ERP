@@ -267,6 +267,15 @@ public class TicketRepository {
         return n != null && n > 0;
     }
 
+    /** A lost or cancelled deal; the one predicate every "dead deal" check shares. */
+    private static final String DEAD_DEAL_SQL = "(t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')";
+
+    public boolean isDeadDeal(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.ticket t WHERE t.ticket_id = :id AND " + DEAD_DEAL_SQL + ")",
+            Map.of("id", ticketId), Boolean.class));
+    }
+
     /**
      * READ-ONLY widening of {@link #isInImportScope} (owner ruling 2026-11-04): a lost or cancelled deal that still
      * has an ISSUED ใบขอซื้อ (IR) is outside import's list scope, but import must be able to OPEN it (the link in the
@@ -278,9 +287,9 @@ public class TicketRepository {
             SELECT EXISTS (
               SELECT 1 FROM sales.ticket t
                WHERE t.ticket_id = :id
-                 AND (t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')
+                 AND %s
                  AND EXISTS (SELECT 1 FROM sales.import_request ir WHERE ir.ticket_id = t.ticket_id AND ir.status = 'ISSUED'))
-            """, Map.of("id", ticketId), Boolean.class));
+            """.formatted(DEAD_DEAL_SQL), Map.of("id", ticketId), Boolean.class));
     }
 
     /** Account's counterpart of {@link #isDeadDealWithIssuedImportRequest}: a lost/cancelled deal with an ISSUED deposit notice. */
@@ -289,9 +298,9 @@ public class TicketRepository {
             SELECT EXISTS (
               SELECT 1 FROM sales.ticket t
                WHERE t.ticket_id = :id
-                 AND (t.lifecycle IN ('CLOSED_LOST', 'CANCELLED') OR t.status = 'cancelled')
+                 AND %s
                  AND EXISTS (SELECT 1 FROM sales.deposit_notice d WHERE d.ticket_id = t.ticket_id AND d.status = 'ISSUED'))
-            """, Map.of("id", ticketId), Boolean.class));
+            """.formatted(DEAD_DEAL_SQL), Map.of("id", ticketId), Boolean.class));
     }
 
     /**
