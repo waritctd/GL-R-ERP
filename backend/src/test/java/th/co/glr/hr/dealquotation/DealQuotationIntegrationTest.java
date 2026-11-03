@@ -318,7 +318,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             "sales-manager-dq@glr.co.th", "rarm@glr.co.th", "sales-dq@glr.co.th");
         // The subject is the fixed TICKET_EVENT_TITLES entry for DEAL_QUOTATION_SUBMITTED
         // ("ใบเสนอราคารออนุมัติ"), the same for all three recipients regardless of each call's own
-        // message text -- NotificationRepository#ticketEventTitle, prefixed "[GL&R HR] " by
+        // message text -- NotificationRepository#ticketEventTitle, prefixed "[GL&R Portal] " by
         // NotificationEmailService#send.
         assertThat(mailer.htmlSent).allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคารออนุมัติ"));
     }

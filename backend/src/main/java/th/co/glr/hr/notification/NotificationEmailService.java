@@ -100,7 +100,7 @@ public class NotificationEmailService {
                 employeeId);
             return;
         }
-        String finalSubject = "[GL&R HR] " + subject + subjectSuffix;
+        String finalSubject = "[GL&R Portal] " + subject + subjectSuffix;
         String htmlBody = htmlBody(recipientName, body, link);
         String textBody = textBody(recipientName, body, link);
         try {
@@ -119,7 +119,7 @@ public class NotificationEmailService {
      * manager. {@code letterBody} is the formal Thai leave letter, supplied as plain text and rendered
      * into both the plain-text alternative and the branded HTML shell here (so escaping and the shell
      * stay in one place, exactly as {@link #send} does for a notification body). {@code subject} is
-     * used as given - NOT prefixed with {@code [GL&R HR] }, because the requested subject already
+     * used as given - NOT prefixed with {@code [GL&R Portal] }, because the requested subject already
      * leads with the employee code/nickname - but the {@code app.mail.subject-suffix} UAT marker is
      * still appended. Best-effort: a transport failure is logged, never thrown, so a mail outage never
      * fails a leave submission that already committed.
@@ -184,7 +184,7 @@ public class NotificationEmailService {
                 .append("\n\n");
         }
         message.append("ขอแสดงความนับถือ\n")
-            .append("ระบบบริหารงานบุคคล GL&R (GL&R HR Portal)\n")
+            .append("GL&R Portal\n")
             .append("— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ");
         return message.toString();
     }
@@ -218,7 +218,7 @@ public class NotificationEmailService {
         if (!cleanLink.isBlank()) {
             message.append("ดูรายละเอียดในระบบ: ").append(appBaseUrl).append(normalizeLink(cleanLink)).append("\n\n");
         }
-        message.append("ระบบบริหารงานบุคคล GL&R (GL&R HR Portal)\n")
+        message.append("GL&R Portal\n")
             .append("— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ");
         return message.toString();
     }
@@ -273,7 +273,7 @@ public class NotificationEmailService {
                         <tr>
                           <td style="padding:0 32px 32px 32px;">
                             <hr style="border:none;border-top:1px solid #e5e7eb;margin:8px 0 16px 0;" />
-                            <p style="margin:0 0 4px 0;font-family:%s;font-size:12px;color:#6b7280;">ระบบบริหารงานบุคคล GL&amp;R (GL&amp;R HR Portal)</p>
+                            <p style="margin:0 0 4px 0;font-family:%s;font-size:12px;color:#6b7280;">GL&amp;R Portal</p>
                             <p style="margin:0;font-family:%s;font-size:12px;color:#9ca3af;">— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ</p>
                           </td>
                         </tr>
