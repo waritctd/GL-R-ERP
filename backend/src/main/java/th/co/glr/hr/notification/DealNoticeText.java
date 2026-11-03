@@ -14,7 +14,7 @@ public final class DealNoticeText {
         return "ดีล " + ticketCode + " · ลูกค้า " + customer;
     }
 
-    private static final Map<String, String> LOST_REASONS = java.util.Map.of(
+    private static final Map<String, String> LOST_REASONS = Map.of(
         "PRODUCT_FIT", "ไม่มีสินค้าที่ลูกค้าต้องการ",
         "PRICE", "ราคา",
         "LEAD_TIME", "ระยะเวลาส่งมอบ (leadtime)",
@@ -24,7 +24,7 @@ public final class DealNoticeText {
         "PROJECT_CANCELLED", "โครงการหยุดก่อสร้างถาวร",
         "ALREADY_PURCHASED", "ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว");
 
-    private static final Map<String, String> CANCEL_REASONS = java.util.Map.of(
+    private static final Map<String, String> CANCEL_REASONS = Map.of(
         "OWNER_CANCELLED", "เจ้าของยกเลิกโครงการ",
         "PROJECT_SUSPENDED", "โครงการถูกระงับไม่มีกำหนด",
         "BUDGET_CANCELLED", "งบประมาณถูกยกเลิก",
