@@ -927,6 +927,8 @@ public class PricingRequestService {
         String metadataJson = toDeadDealMetadataJson(reason);
         int cancelledCount = 0;
         List<Long> abandonedIds = new ArrayList<>();
+        // A deal with an ISSUED IR already tells import via DEAL_LOST / DEAL_CANCELLED: one notice, not two (Ploy 11-03).
+        boolean importToldByDealNotice = tickets.hasIssuedImportRequest(ticketId);
         for (Long id : openIds) {
             boolean settled = false;
             for (int attempt = 1; attempt <= CANCEL_MAX_ATTEMPTS; attempt++) {
@@ -966,7 +968,7 @@ public class PricingRequestService {
                     cancelledCount++;
                     // Only a request Import was still working (decided on the status BEFORE the cascade): a
                     // superseded parent was already told "รอบแก้ไขใหม่", a quotation-issued one is finished.
-                    if (IMPORT_LIVE_STATUSES.contains(summary.status())) {
+                    if (IMPORT_LIVE_STATUSES.contains(summary.status()) && !importToldByDealNotice) {
                         notifyAssignedImport(summary, actor, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
                             (cause == DeadDealCause.LOST ? "ดีลถูกบันทึกว่าเสียงาน" : "ดีลถูกยกเลิก")
                                 + " — คำขอราคา " + summary.requestCode() + " จึงถูกยกเลิกอัตโนมัติ",

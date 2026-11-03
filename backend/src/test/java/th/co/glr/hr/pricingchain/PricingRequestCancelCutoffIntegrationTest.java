@@ -581,6 +581,30 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             "/pricing-requests/" + child);
     }
 
+    /**
+     * Ploy 11-03: a deal with an ISSUED ใบขอซื้อ (IR) already tells import via DEAL_LOST / DEAL_CANCELLED, so the
+     * cascade sends the assigned staffer no second PRICING_REQUEST_CANCELLED for the same action.
+     */
+    @Test
+    void cascadeFromADeadDealWithAnIssuedIr_sendsTheStafferNoSecondNotice() {
+        pickedUpRequest();
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('Factory Cascade', 'IT', 'EUR') RETURNING factory_id
+            """, Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, 'Factory Cascade', 'Brand', 1, 'ISSUED', 'IR-CASCADE-1', CURRENT_DATE,
+                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
+            """, Map.of("t", ticketId, "f", factoryId));
+
+        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
+
+        mailer.assertNoNotice("PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก");
+    }
+
     /** The cascade names the real cause: a cancelled deal (cancel reason) reads "ดีลถูกยกเลิก", not "เสียงาน". */
     @Test
     void cascadeFromACancelledDeal_namesTheCancellationAsTheCause() {
