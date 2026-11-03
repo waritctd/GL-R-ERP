@@ -171,7 +171,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         RemainingInvoiceRepository remainingInvoiceRepository = new RemainingInvoiceRepository(jdbc);
         remainingInvoiceService = new RemainingInvoiceService(
-            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(), notifications);
 
         billingNoteRepository = new BillingNoteRepository(jdbc);
         billingNoteService = transactional(new BillingNoteService(

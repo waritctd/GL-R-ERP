@@ -36,6 +36,8 @@ import th.co.glr.hr.importrequest.ImportRequestRequests.NewFactoryCountryInput;
 import th.co.glr.hr.importrequest.ImportRequestRequests.SetLeadTimeRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.SetRequiredByNoteRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.UpdateImportRequestRequest;
+import th.co.glr.hr.notification.DealNoticeText;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
@@ -114,19 +116,22 @@ public class ImportRequestService {
     private final FactoryConfigRepository factories;
     private final TicketRepository tickets;
     private final TicketService ticketService;
+    private final NotificationRepository notifications;
 
     public ImportRequestService(ImportRequestQueryRepository repository,
                                 ImportRequestRenderer renderer,
                                 ImportRequestRepository stored,
                                 FactoryConfigRepository factories,
                                 TicketRepository tickets,
-                                TicketService ticketService) {
+                                TicketService ticketService,
+                                NotificationRepository notifications) {
         this.repository = repository;
         this.renderer = renderer;
         this.stored = stored;
         this.factories = factories;
         this.tickets = tickets;
         this.ticketService = ticketService;
+        this.notifications = notifications;
     }
 
     // ── PREVIEW (per-brand, unchanged by V184) ───────────────────────────────────────────────────
@@ -732,7 +737,30 @@ public class ImportRequestService {
             stored.updateFooter(id, vesselEtaNote, null, null, null, null);
         }
         ticketService.recordFirstImportRequestIssued(draft.ticketId(), id, actor);
+        notifyImportOfIssuedIr(draft, docNumber, dealSnapshot, actor, predecessor.isPresent());
         return withPageCount(requireStored(id));
+    }
+
+    /** P1 hand-off: tell import a new IR is waiting (or that an issued one was revised). */
+    private void notifyImportOfIssuedIr(ImportRequestDto draft, String docNumber, TicketSnapshot deal,
+                                        UserPrincipal actor, boolean revision) {
+        String message = revision
+            ? actor.name() + " ออกใบขอซื้อ (IR) ฉบับแก้ไข " + docNumber + " สำหรับโรงงาน " + draft.factoryName()
+                + " แทนฉบับเดิม\n" + DealNoticeText.dealLabel(deal.ticketCode(), deal.customerName())
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจรายการในฉบับแก้ไข หากสั่งซื้อจากฉบับเดิมไปแล้ว กรุณาแจ้งโรงงานให้แก้ไขตาม"
+            : actor.name() + " ออกใบขอซื้อ (IR) " + docNumber + " สำหรับโรงงาน " + draft.factoryName() + " แล้ว\n"
+                + DealNoticeText.dealLabel(deal.ticketCode(), deal.customerName())
+                + "\nสิ่งที่ต้องทำต่อ: ส่งอีเมลสั่งซื้อถึงโรงงาน แล้วอัปเดตขั้นตอนในใบขอซื้อ";
+        notifications.notifyByRoleAtLink("import",
+            revision ? TicketEventKind.IMPORT_REQUEST_REVISED : TicketEventKind.IMPORT_REQUEST_ISSUED,
+            message, "/import/deals/" + draft.ticketId());
+    }
+
+    /** P1 hand-off: tell the deal's rep how the import is going (first move off CONTACTED, goods received). */
+    private void notifyRepOfImportProgress(TicketSummaryDto deal, String type, String firstLine, String lastLine) {
+        notifications.notifyEmployeeAtLink(deal.createdById(), type,
+            firstLine + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName()) + "\n" + lastLine,
+            "/tickets/" + deal.id());
     }
 
     /**
@@ -1133,10 +1161,26 @@ public class ImportRequestService {
                 + " → " + ImportRequestStep.thaiLabel(target) + noteSuffix,
             th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
 
+        String ir = "ใบขอซื้อ (IR) " + existing.docNumber();
         if (ImportRequestStep.RECEIVED.equals(target)) {
-            if (allFactoriesReceived(existing.ticketId())) {
+            boolean all = allFactoriesReceived(existing.ticketId());
+            if (all) {
                 ticketService.applyImportRequestRollup(existing.ticketId(), actor);
             }
+            String received = "สินค้าตาม" + ir + " จากโรงงาน " + existing.factoryName() + " เข้าคลังแล้ว";
+            TicketSummaryDto deal = requireTicketSummary(existing.ticketId());
+            if (all) {
+                notifyRepOfImportProgress(deal, TicketEventKind.IMPORT_GOODS_RECEIVED_ALL,
+                    received + " และครบทุกใบขอซื้อของดีลนี้", "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
+            } else {
+                notifyRepOfImportProgress(deal, TicketEventKind.IMPORT_GOODS_RECEIVED_PARTIAL,
+                    received + " แต่ยังมีสินค้าของดีลนี้ที่ยังไม่เข้าคลัง", "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าครบ");
+            }
+        } else if (ImportRequestStep.CONTACTED.equals(existing.importStep())) {
+            notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_STARTED,
+                actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + existing.factoryName()
+                    + " แล้ว ขั้นตอนล่าสุด: " + ImportRequestStep.thaiLabel(target),
+                "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง");
         }
         return withPageCount(requireStored(id));
     }

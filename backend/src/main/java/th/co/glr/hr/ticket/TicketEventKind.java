@@ -77,6 +77,19 @@ public final class TicketEventKind {
     // see NotificationRepository.TICKET_EVENT_TITLES and DealQuotationService#notifySubmitted.
     public static final String DEAL_QUOTATION_REVISION_SUBMITTED = "DEAL_QUOTATION_REVISION_SUBMITTED";
 
+    // P1 hand-off notifications: NOTIFICATION `type` values only (hr.notification.type), NOT
+    // ticket_event kinds -- never pass these into TicketRepository#addEvent* (chk_event_kind). Thai
+    // titles live in NotificationRepository.TICKET_EVENT_TITLES. DELIVERY_COMPLETED above is reused.
+    public static final String IMPORT_REQUEST_ISSUED = "IMPORT_REQUEST_ISSUED";
+    public static final String IMPORT_REQUEST_REVISED = "IMPORT_REQUEST_REVISED";
+    public static final String DEPOSIT_PAYMENT_CONFIRMED = "DEPOSIT_PAYMENT_CONFIRMED";
+    public static final String IMPORT_STARTED = "IMPORT_STARTED";
+    public static final String IMPORT_GOODS_RECEIVED_ALL = "IMPORT_GOODS_RECEIVED_ALL";
+    public static final String IMPORT_GOODS_RECEIVED_PARTIAL = "IMPORT_GOODS_RECEIVED_PARTIAL";
+    public static final String REMAINING_INVOICE_ISSUED = "REMAINING_INVOICE_ISSUED";
+    public static final String CLOSE_READY_FOR_CEO = "CLOSE_READY_FOR_CEO";
+    public static final String ORDER_CONFIRMED_NO_DEPOSIT = "ORDER_CONFIRMED_NO_DEPOSIT";
+
     // Per-factory ใบขอซื้อ progress (V184, GLA-100): one event kind for every step advance, with
     // the actual step (th.co.glr.hr.importrequest.ImportRequestStep) named in the free-text
     // message/note rather than as a distinct kind per step -- see that class's own Javadoc for why

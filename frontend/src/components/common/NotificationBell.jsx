@@ -229,7 +229,7 @@ export function NotificationBell({
                     <Icon name={icon.name} size={15} style={{ color: icon.color }} />
                   </span>
                   <span className="flex-1 min-w-0">
-                    <span className="!text-sm block leading-[1.45] !text-text">
+                    <span className="!text-sm block leading-[1.45] !text-text whitespace-pre-line">
                       {item.message}
                     </span>
                     <span className="!text-2xs !text-text-muted mt-[3px] block">

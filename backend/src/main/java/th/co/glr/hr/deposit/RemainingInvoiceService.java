@@ -12,6 +12,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
+import th.co.glr.hr.notification.DealNoticeText;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -48,13 +51,15 @@ public class RemainingInvoiceService {
     private final DepositNoticeService depositNoticeService;
     private final TicketRepository tickets;
     private final RemainingInvoicePdfRenderer renderer;
+    private final NotificationRepository notifications;
 
     public RemainingInvoiceService(RemainingInvoiceRepository stored, DepositNoticeService depositNoticeService,
-            TicketRepository tickets, RemainingInvoicePdfRenderer renderer) {
+            TicketRepository tickets, RemainingInvoicePdfRenderer renderer, NotificationRepository notifications) {
         this.stored = stored;
         this.depositNoticeService = depositNoticeService;
         this.tickets = tickets;
         this.renderer = renderer;
+        this.notifications = notifications;
     }
 
     // ── Reads (viewer gate) ──────────────────────────────────────────────────────────────────
@@ -319,7 +324,16 @@ public class RemainingInvoiceService {
         tickets.addEvent(draft.ticketId(), actor.id(), actor.name(), TicketEventKind.DOCUMENT_ISSUED,
             s.status(), s.status(), "ใบแจ้งหนี้ส่วนที่เหลือ " + docNumber + " ออกแล้ว");
 
-        return requireStored(id);
+        RemainingInvoiceDocumentDto issued = requireStored(id);
+        // P1 hand-off: account collects the balance against this invoice; an EN invoice has no VAT to mention.
+        boolean noVat = issued.vatAmount() != null && issued.vatAmount().signum() == 0;
+        notifications.notifyByRoleAtLink("account", TicketEventKind.REMAINING_INVOICE_ISSUED,
+            actor.name() + " ออกใบแจ้งหนี้ " + docNumber + (version > 1 ? " (ฉบับแก้ไข)" : "") + " แล้ว\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดชำระรวม "
+                + (noVat ? "" : "VAT ") + ThaiText.money(issued.grandTotal()) + " บาท"
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจรับเงินโอนจากลูกค้า แล้วบันทึกรับชำระในระบบ",
+            "/finance/deals/" + draft.ticketId());
+        return issued;
     }
 
     /** Prepares a correction: a new DRAFT copying the ISSUED document's own body/items VERBATIM

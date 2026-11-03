@@ -66,6 +66,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -91,6 +92,7 @@ import th.co.glr.hr.ticket.TicketService;
  */
 class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
+    private RecordingSalesMailer mailer;
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
     private PricingDecisionService decisionService;
@@ -116,7 +118,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     void wireStepsServices() {
         tickets = new TicketRepository(jdbc);
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -157,7 +160,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         remainingInvoiceRepository = new RemainingInvoiceRepository(jdbc);
         remainingInvoiceService = new RemainingInvoiceService(
-            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(), notifications);
 
         salesRepId = createEmployee(employees, "พนักงานขาย RI", "sales-ri1@glr.co.th", "SALES", "แผนกขาย");
         otherSalesRepId = createEmployee(employees, "พนักงานขาย RI2", "sales-ri2@glr.co.th", "SALES", "แผนกขาย");
@@ -208,6 +211,55 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         var after = tickets.findSummaryById(ticketId).orElseThrow();
         assertThat(after.paymentStatus()).isEqualTo("FULLY_PAID");
         assertThat(after.amountOutstanding()).isEqualByComparingTo("0");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // P1 hand-off notification (A5): issuing the remaining invoice tells account to collect it.
+    // Pins the bell row AND the email path for the same recipient.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static final String RI_ISSUED_TITLE = "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ";
+
+    private String invoiceIssuedMessage(long ticketId, UserPrincipal issuer, RemainingInvoiceDocumentDto doc,
+                                        boolean revision) {
+        var s = tickets.findById(ticketId).orElseThrow().summary();
+        return issuer.name() + " ออกใบแจ้งหนี้ " + doc.docNumber() + (revision ? " (ฉบับแก้ไข)" : "") + " แล้ว\n"
+            + "ดีล " + s.code() + " · ลูกค้า " + s.customerName() + " · ยอดชำระรวม VAT "
+            + th.co.glr.hr.common.ThaiText.money(doc.grandTotal()) + " บาท"
+            + "\nสิ่งที่ต้องทำต่อ: ตรวจรับเงินโอนจากลูกค้า แล้วบันทึกรับชำระในระบบ";
+    }
+
+    @Test
+    void issue_firstVersion_notifiesAccountWithTheVatInclusiveTotal() {
+        long accountId = mailer.seedRoleEmployee("account");
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NotifyIssue");
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        mailer.assertNoNotice("REMAINING_INVOICE_ISSUED", RI_ISSUED_TITLE); // a draft notifies nobody
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        mailer.assertRoleNotice("account", "REMAINING_INVOICE_ISSUED", RI_ISSUED_TITLE,
+            invoiceIssuedMessage(fixture.ticketId(), salesActor, issued, false),
+            "/finance/deals/" + fixture.ticketId(), accountId);
+    }
+
+    /** Every issue notifies: v1 as a plain invoice, the revision (version > 1) with the (ฉบับแก้ไข) marker. */
+    @Test
+    void issue_revision_notifiesAccountAgainWithTheRevisedMarker() {
+        long accountId = mailer.seedRoleEmployee("account");
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NotifyRevise");
+        RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        RemainingInvoiceDocumentDto revisionDraft = remainingInvoiceService.revise(v1.id(), salesActor);
+
+        RemainingInvoiceDocumentDto v2 = remainingInvoiceService.issue(revisionDraft.id(), salesActor);
+
+        assertThat(v2.version()).isEqualTo(2);
+        mailer.assertRoleNotices("account", "REMAINING_INVOICE_ISSUED", RI_ISSUED_TITLE,
+            "/finance/deals/" + fixture.ticketId(),
+            List.of(invoiceIssuedMessage(fixture.ticketId(), salesActor, v1, false),
+                invoiceIssuedMessage(fixture.ticketId(), salesActor, v2, true)),
+            accountId);
     }
 
     @Test
@@ -558,7 +610,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
         RemainingInvoiceService racingService =
-            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(),
+                new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
 
         assertThatThrownBy(() -> racingService.createDraft(fixture.ticketId(), null, salesActor))
             .as("a DB-level unique-violation race must surface as 409, never an unmapped 500")
@@ -871,7 +924,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
         RemainingInvoiceService racingService =
-            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(),
+                new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
 
         assertThatThrownBy(() -> racingService.revise(issued.id(), salesActor))
             .as("a DB-level unique-violation race must surface as 409, never an unmapped 500")

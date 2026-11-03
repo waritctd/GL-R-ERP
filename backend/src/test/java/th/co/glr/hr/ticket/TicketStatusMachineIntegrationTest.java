@@ -31,9 +31,9 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 
 /**
  * Real-Postgres proof for the {@code sales.ticket.status} state machine:
@@ -64,6 +64,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
+    private RecordingSalesMailer mailer;
     private TicketService ticketService;
     private DepositNoticeService depositNoticeService;
 
@@ -76,7 +77,8 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
     @BeforeEach
     void wireRealCollaborators() {
         tickets = new TicketRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
         // Mocked exactly as DealTrackingAndActivityIntegrationTest mocks it, and for the same
@@ -256,6 +258,56 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(ticketService.verifyClose(ticketId, ceo).summary().status()).isEqualTo(TicketStatus.CLOSED);
         assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.CLOSED);
         assertThat(closedAt(ticketId)).isNotNull();
+    }
+
+    /**
+     * P1 hand-off notification (A6): account's close-ready confirmation tells the CEO to verify.
+     * Pins the bell row AND the email path. The fixture owes 2,140 (2 x 1,000 + 7% VAT) and has been
+     * paid in full, so {@code requireClosePrerequisites} passes with a real, non-zero payable.
+     */
+    @Test
+    void confirmCloseReady_notifiesTheCeoWithTheDealTotal() {
+        long ceoId = mailer.seedRoleEmployee("ceo");
+        long ticketId = createTicket();
+        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id", Map.of("id", ticketId));
+        jdbc.update("""
+            INSERT INTO sales.ticket_item (ticket_id, brand, model, qty, unit, sort_order, approved_price)
+            VALUES (:t, 'Brand', 'Model', 2, 'pcs', 0, 1000)
+            """, Map.of("t", ticketId));
+        tickets.insertPaymentReceipt(ticketId, "BALANCE", new BigDecimal("2140.00"), salesRepId, null, null, null, null);
+        TicketSummaryDto before = tickets.findById(ticketId).orElseThrow().summary();
+        assertThat(before.amountPayable()).as("fixture payable").isEqualByComparingTo("2140.00");
+        mailer.assertNoNotice("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ");
+
+        ticketService.confirmCloseReady(ticketId, accountActor);
+
+        mailer.assertRoleNotice("ceo", "CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ",
+            "ฝ่ายบัญชี (" + accountActor.name() + ") ยืนยันว่าดีลนี้รับเงินครบและพร้อมปิดแล้ว\n"
+                + "ดีล " + before.code() + " · ลูกค้า " + before.customerName() + " · ยอดรวม 2,140 บาท"
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบและยืนยันปิดดีล",
+            "/tickets/" + ticketId, ceoId);
+    }
+
+    /** A confirmation refused for an unmet prerequisite (balance still owed, 409) tells the CEO nothing. */
+    @Test
+    void confirmCloseReady_refusedWhileTheBalanceIsOwed_notifiesNobody() {
+        mailer.seedRoleEmployee("ceo");
+        long ticketId = createTicket();
+        seedStatus(ticketId, TicketStatus.DOCUMENT_ISSUED);
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id", Map.of("id", ticketId));
+        jdbc.update("""
+            INSERT INTO sales.ticket_item (ticket_id, brand, model, qty, unit, sort_order, approved_price)
+            VALUES (:t, 'Brand', 'Model', 2, 'pcs', 0, 1000)
+            """, Map.of("t", ticketId)); // owed, nothing paid
+
+        assertThatThrownBy(() -> ticketService.confirmCloseReady(ticketId, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus().value()).isEqualTo(409);
+                assertThat(e.getMessage()).contains("ยังมียอดค้างชำระ");
+            });
+
+        mailer.assertNoNotice("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ");
     }
 
     /** Site 8 — {@code cancel}, reachable from every non-terminal status. */

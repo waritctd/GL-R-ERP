@@ -51,7 +51,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkFactoryContactedRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationDtos.OrderConfirmationResultDto;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.ConfirmOrderRequest;
 import th.co.glr.hr.orderconfirmation.OrderConfirmationRequests.CreateDepositNoticeFromQuotationRequest;
@@ -76,6 +75,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
+import th.co.glr.hr.ticket.TicketSummaryDto;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.ticket.CompleteDeliveryRequest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
@@ -83,6 +85,7 @@ import th.co.glr.hr.ticket.FulfilmentStatus;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.RecordDeliveryRequest;
+import th.co.glr.hr.ticket.RecordPaymentRequest;
 import th.co.glr.hr.ticket.StockReservationRequest;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
@@ -105,6 +108,7 @@ import th.co.glr.hr.ticket.TicketService;
  */
 class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
+    private RecordingSalesMailer mailer;
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
@@ -131,7 +135,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     void wireEveryStepsServiceAndCreateFactory() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -574,6 +579,205 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         // before anything is written, so there is nothing half-applied to clean up.
         assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("5");
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // P1 hand-off notifications: deposit confirmed -> rep (A2), delivery finished -> account (A4).
+    // Each case pins the bell row AND the email path for the same recipient.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static final String DEPOSIT_CONFIRMED_TITLE = "ฝ่ายบัญชียืนยันรับเงินมัดจำแล้ว";
+    private static final String DELIVERY_COMPLETED_TITLE = "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ";
+
+    private String dealLabel(long ticketId) {
+        TicketSummaryDto s = tickets.findById(ticketId).orElseThrow().summary();
+        return "ดีล " + s.code() + " · ลูกค้า " + s.customerName();
+    }
+
+    /** confirmOrder -> issued deposit notice, stopping just before account confirms the deposit. */
+    private DepositNoticeDto confirmOrderAndIssueDepositNotice(Deal deal) {
+        orderConfirmation.confirmOrder(deal.pricingRequestId,
+            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        DepositNoticeDto draft = orderConfirmation.createDepositNoticeFromQuotation(deal.pricingRequestId,
+            new CreateDepositNoticeFromQuotationRequest(null), salesActor);
+        return depositNoticeService.issue(draft.id(), salesActor);
+    }
+
+    /** An all-stock deal, deposit confirmed, ready to deliver {@code qty} units from stock. */
+    private Deal allStockDealWithDepositPaid(String qty) {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal(qty));
+        confirmOrderAndIssueDepositNotice(deal);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
+        ticketService.reserveStock(deal.ticketId,
+            new StockReservationRequest(List.of(
+                new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal(qty), null))),
+            salesActor);
+        return deal;
+    }
+
+    private RecordDeliveryRequest stockDelivery(Deal deal, String qty) {
+        return new RecordDeliveryRequest("STOCK", null,
+            List.of(new RecordDeliveryRequest.Line(deal.ticketItemId, new BigDecimal(qty))), null);
+    }
+
+    private String deliveryDoneMessage(Deal deal, String secondLine) {
+        return salesActor.name() + " บันทึกส่งสินค้าครบทุกรายการแล้ว\n" + dealLabel(deal.ticketId) + " · " + secondLine;
+    }
+
+    /** Import still needed after the deposit: the rep is told to raise the IR. */
+    @Test
+    void confirmDepositPaid_importStillNeeded_notifiesRepToCreateTheIr() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
+
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .as("fixture reaches the import branch").isNotEqualTo(FulfilmentStatus.FROM_STOCK);
+        mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(notice.totalPayable()) + " บาท แล้ว\n"
+                + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
+            "/tickets/" + deal.ticketId);
+    }
+
+    /** All lines already covered from stock: confirmDepositPaid routes the deal to FROM_STOCK, and the rep is told to book delivery. */
+    @Test
+    void confirmDepositPaid_allStockDeal_notifiesRepToScheduleDeliveryInsteadOfAnIr() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE ticket_id = :t", Map.of("t", deal.ticketId));
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .as("not routed yet: the deposit is what releases stock").isNull();
+
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .as("fixture reaches the all-stock branch").isEqualTo(FulfilmentStatus.FROM_STOCK);
+        mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(notice.totalPayable()) + " บาท แล้ว\n"
+                + dealLabel(deal.ticketId)
+                + "\nสิ่งที่ต้องทำต่อ: สินค้ามาจากสต็อกทั้งหมด นัดวันส่งสินค้ากับลูกค้าได้เลย",
+            "/tickets/" + deal.ticketId);
+    }
+
+    /** The deposit can be settled through the generic record-payment action too: the rep is told exactly as for confirmDepositPaid. */
+    @Test
+    void recordPayment_depositKind_settlingTheDeposit_notifiesRepOnce() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
+        mailer.assertNoNotice("DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE);
+
+        ticketService.recordPayment(deal.ticketId, new RecordPaymentRequest(
+            "DEPOSIT", notice.totalPayable(), null, "รับมัดจำ", notice.id(), null, false), accountActor);
+
+        mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(notice.totalPayable()) + " บาท แล้ว\n"
+                + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
+            "/tickets/" + deal.ticketId);
+    }
+
+    /** A single payment big enough to walk straight to FULLY_PAID settles the deposit on the way: one notice, for THAT payment's amount. */
+    @Test
+    void recordPayment_thatJumpsStraightToFullyPaid_notifiesRepOnceWithThatAmount() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        confirmOrderAndIssueDepositNotice(deal);
+        BigDecimal payable = tickets.payableAmount(deal.ticketId);
+
+        ticketService.recordPayment(deal.ticketId, new RecordPaymentRequest(
+            "BALANCE", payable, null, "จ่ายเต็มจำนวน", null, null, false), accountActor);
+
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().paymentStatus()).isEqualTo("FULLY_PAID");
+        mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(payable) + " บาท แล้ว\n"
+                + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
+            "/tickets/" + deal.ticketId);
+    }
+
+    /** Only the payment that settles the deposit notifies: the later balance payment adds no second DEPOSIT_PAYMENT_CONFIRMED. */
+    @Test
+    void confirmFinalPayment_afterTheDeposit_doesNotNotifyTheRepAgain() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+
+        ticketService.confirmFinalPayment(deal.ticketId, accountActor);
+
+        mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(notice.totalPayable()) + " บาท แล้ว\n"
+                + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
+            "/tickets/" + deal.ticketId);
+    }
+
+    /** An IR already issued while the notice was out: do not tell the rep to create one, ask them to check every factory has its IR. */
+    @Test
+    void confirmDepositPaid_whenIrsAreAlreadyIssued_notifiesRepToCheckEveryFactoryHasOne() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
+        ticketService.recordFirstImportRequestIssued(deal.ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .as("fixture: an IR is already issued before the deposit is confirmed").isEqualTo(FulfilmentStatus.IR_ISSUED);
+
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+
+        mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(notice.totalPayable()) + " บาท แล้ว\n"
+                + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: ตรวจว่าออกใบขอซื้อ (IR) ครบทุกโรงงานแล้ว",
+            "/tickets/" + deal.ticketId);
+    }
+
+    /** A delivery that leaves units open notifies nobody; the one that finishes the deal notifies account (balance still owed). */
+    @Test
+    void completeDelivery_afterAPartialOne_notifiesAccountOnlyWhenTheDealIsFullyDelivered_withTheOutstandingBalance() {
+        long accountId = mailer.seedRoleEmployee("account");
+        Deal deal = allStockDealWithDepositPaid("4");
+
+        ticketService.recordPartialDelivery(deal.ticketId, stockDelivery(deal, "1"), salesActor);
+
+        mailer.assertNoNotice("DELIVERY_COMPLETED", DELIVERY_COMPLETED_TITLE);
+
+        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
+
+        BigDecimal outstanding = tickets.payableAmount(deal.ticketId).subtract(tickets.sumPaid(deal.ticketId));
+        assertThat(outstanding.signum()).as("fixture: only the deposit is paid").isPositive();
+        mailer.assertRoleNotice("account", "DELIVERY_COMPLETED", DELIVERY_COMPLETED_TITLE,
+            deliveryDoneMessage(deal, "ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท")
+                + "\nสิ่งที่ต้องทำต่อ: ติดตามรับชำระยอดที่เหลือ แล้วยืนยันพร้อมปิดดีล",
+            "/finance/deals/" + deal.ticketId, accountId);
+    }
+
+    /** A partial delivery that happens to cover everything remaining finishes the deal too, and notifies the same way. */
+    @Test
+    void recordPartialDelivery_thatCoversEverythingRemaining_notifiesAccountToo() {
+        long accountId = mailer.seedRoleEmployee("account");
+        Deal deal = allStockDealWithDepositPaid("4");
+
+        ticketService.recordPartialDelivery(deal.ticketId, stockDelivery(deal, "4"), salesActor);
+
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
+            .isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
+        BigDecimal outstanding = tickets.payableAmount(deal.ticketId).subtract(tickets.sumPaid(deal.ticketId));
+        mailer.assertRoleNotice("account", "DELIVERY_COMPLETED", DELIVERY_COMPLETED_TITLE,
+            deliveryDoneMessage(deal, "ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท")
+                + "\nสิ่งที่ต้องทำต่อ: ติดตามรับชำระยอดที่เหลือ แล้วยืนยันพร้อมปิดดีล",
+            "/finance/deals/" + deal.ticketId, accountId);
+    }
+
+    /** Nothing left to collect when the delivery finishes: the other wording, asking account to confirm close-ready. */
+    @Test
+    void completeDelivery_onAnAlreadyPaidInFullDeal_notifiesAccountToConfirmCloseReady() {
+        long accountId = mailer.seedRoleEmployee("account");
+        Deal deal = allStockDealWithDepositPaid("4");
+        ticketService.confirmFinalPayment(deal.ticketId, accountActor);
+        assertThat(tickets.payableAmount(deal.ticketId).subtract(tickets.sumPaid(deal.ticketId)).signum())
+            .as("fixture: nothing outstanding").isZero();
+
+        ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
+
+        mailer.assertRoleNotice("account", "DELIVERY_COMPLETED", DELIVERY_COMPLETED_TITLE,
+            deliveryDoneMessage(deal, "ลูกค้าชำระเงินครบแล้ว")
+                + "\nสิ่งที่ต้องทำต่อ: ยืนยันพร้อมปิดดีลเพื่อส่งให้ CEO ตรวจสอบ",
+            "/finance/deals/" + deal.ticketId, accountId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

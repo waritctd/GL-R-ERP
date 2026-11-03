@@ -22,6 +22,7 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.Page;
 import th.co.glr.hr.common.PageRequest;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.customer.ContactDto;
@@ -30,6 +31,7 @@ import th.co.glr.hr.customer.ProjectDto;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.dealquotation.DealQuotationRepository.CustomerSnapshot;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
@@ -788,6 +790,13 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSE_CONFIRMED, s.status(), s.status(),
             "ฝ่ายบัญชียืนยันพร้อมปิดงาน — รอ CEO ตรวจสอบ");
+        // P1 hand-off: the CEO's verification is the next (and last) step.
+        notifications.notifyByRoleAtLink("ceo", TicketEventKind.CLOSE_READY_FOR_CEO,
+            "ฝ่ายบัญชี (" + actor.name() + ") ยืนยันว่าดีลนี้รับเงินครบและพร้อมปิดแล้ว\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName())
+                + (s.amountPayable() == null ? "" : " · ยอดรวม " + ThaiText.money(s.amountPayable()) + " บาท")
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบและยืนยันปิดดีล",
+            "/tickets/" + ticketId);
         return requireTicket(ticketId);
     }
 
@@ -919,7 +928,8 @@ public class TicketService {
         // legal revision loop), so re-confirming must skip the write and the event entirely
         // rather than attempt an edge the machine does not recognise. This preserves the prior
         // observable behaviour (a harmless re-click) without adding a new edge to the machine.
-        if (!"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
+        boolean firstConfirmation = !"CUSTOMER_CONFIRMED".equals(s.paymentStatus());
+        if (firstConfirmation) {
             int rows = tickets.advancePaymentStatus(
                 ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.CUSTOMER_CONFIRMED);
             requirePaymentAdvanced(rows);
@@ -931,7 +941,16 @@ public class TicketService {
         autoAdvanceStage(s, DealStage.ORDER_RECEIVED, actor);
         // No deposit to wait for (0% quotation, or a policy already waived): an all-stock deal goes
         // straight to delivery. `s` is stale here (the policy may have just changed), so re-read.
-        if (DepositPolicy.bypassesDepositNotice(requireTicket(ticketId).summary().depositPolicy())) {
+        TicketSummaryDto confirmed = requireTicket(ticketId).summary();
+        if (DepositPolicy.bypassesDepositNotice(confirmed.depositPolicy())) {
+            // P1 hand-off: no deposit notice will ever reach account for this order, so say so once.
+            if (firstConfirmation) {
+                notifications.notifyByRoleAtLink("account", TicketEventKind.ORDER_CONFIRMED_NO_DEPOSIT,
+                    "ลูกค้ายืนยันคำสั่งซื้อแล้ว และดีลนี้ไม่เก็บเงินมัดจำ จึงจะไม่มีใบแจ้งรับมัดจำ\n"
+                        + DealNoticeText.dealLabel(confirmed.code(), confirmed.customerName())
+                        + "\nแจ้งเพื่อทราบ ยอดเต็มจะเรียกเก็บด้วยใบแจ้งหนี้เมื่อสินค้าพร้อมส่ง",
+                    "/finance/deals/" + ticketId);
+            }
             routeAllStockDealToDelivery(ticketId, actor);
         }
         return requireTicket(ticketId);
@@ -1691,6 +1710,17 @@ public class TicketService {
             // just-written FULLY_DELIVERED).
             TicketSummaryDto afterDelivery = requireTicket(s.id()).summary();
             maybeAdvanceClosedPaid(afterDelivery, "FULLY_PAID".equals(afterDelivery.paymentStatus()), actor);
+            // P1 hand-off: account collects any balance, then confirms the deal is close-ready.
+            BigDecimal outstanding = afterDelivery.amountOutstanding();
+            boolean owed = outstanding != null && outstanding.signum() > 0;
+            notifications.notifyByRoleAtLink("account", TicketEventKind.DELIVERY_COMPLETED,
+                actor.name() + " บันทึกส่งสินค้าครบทุกรายการแล้ว\n"
+                    + DealNoticeText.dealLabel(afterDelivery.code(), afterDelivery.customerName()) + " · "
+                    + (owed ? "ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท" : "ลูกค้าชำระเงินครบแล้ว")
+                    + "\nสิ่งที่ต้องทำต่อ: "
+                    + (owed ? "ติดตามรับชำระยอดที่เหลือ แล้วยืนยันพร้อมปิดดีล"
+                            : "ยืนยันพร้อมปิดดีลเพื่อส่งให้ CEO ตรวจสอบ"),
+                "/finance/deals/" + s.id());
         } else {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.PARTIALLY_DELIVERED);
         }
@@ -1792,6 +1822,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "การรับชำระเกินยอดต้องระบุเหตุผล");
         }
+        boolean depositWasSettled = depositSettled(s);
         String receiptRef = blankToNull(request.receiptRef());
         long receiptId;
         try {
@@ -1812,8 +1843,25 @@ public class TicketService {
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
         if (depositSettled(requireTicket(ticketId).summary())) {
             routeAllStockDealToDelivery(ticketId, actor);
+            // P1 hand-off: only the payment that takes the deposit from unsettled to settled tells the rep.
+            if (!depositWasSettled) {
+                notifyRepOfDepositConfirmed(requireTicket(ticketId).summary(), amount);
+            }
         }
         return requireTicket(ticketId);
+    }
+
+    /** What the rep does next: nothing to import (all stock), create the IR, or check the IRs already issued. */
+    private void notifyRepOfDepositConfirmed(TicketSummaryDto s, BigDecimal amount) {
+        String next = FulfilmentStatus.FROM_STOCK.equals(s.fulfillmentStatus())
+            ? "สินค้ามาจากสต็อกทั้งหมด นัดวันส่งสินค้ากับลูกค้าได้เลย"
+            : s.fulfillmentStatus() == null
+                ? "สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า"
+                : "ตรวจว่าออกใบขอซื้อ (IR) ครบทุกโรงงานแล้ว";
+        notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.DEPOSIT_PAYMENT_CONFIRMED,
+            "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(amount) + " บาท แล้ว\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\nสิ่งที่ต้องทำต่อ: " + next,
+            "/tickets/" + s.id());
     }
 
     private void reconcilePaymentStatus(long ticketId, UserPrincipal actor) {

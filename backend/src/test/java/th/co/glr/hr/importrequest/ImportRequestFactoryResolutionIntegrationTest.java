@@ -76,7 +76,7 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
-            tickets, ticketService);
+            tickets, ticketService, notifications);
 
         ownerId = insertEmployee("RESOLV-OWN");
         owner = principal(ownerId, "sales");
