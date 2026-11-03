@@ -692,9 +692,7 @@ public class CustomerQuotationService {
                 // P2 B6: the rep who owns the deal chases the customer or re-quotes.
                 notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
                     PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
-                    "ใบเสนอราคา " + row.number() + " หมดอายุแล้ว\n"
-                        + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName())
-                        + "\nสิ่งที่ต้องทำต่อ: ติดตามลูกค้า หรือออกใบเสนอราคาใหม่",
+                    DealNoticeText.quotationExpired(row.number(), summary.ticketCode(), summary.customerName()),
                     "/tickets/" + summary.ticketId());
             });
         }
