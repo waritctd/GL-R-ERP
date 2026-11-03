@@ -630,7 +630,7 @@ public class FactoryQuoteService {
             "ฝ่ายนำเข้า (" + actor.name() + ") แจ้งว่าโรงงาน " + quote.factoryName()
                 + " ไม่สามารถเสนอราคาได้ — เหตุผล: " + request.reason() + "\nคำขอราคา " + summary.requestCode() + " · "
                 + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName())
-                + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ");
+                + "\n" + DealNoticeText.FYI);
         return requireQuote(quoteId);
     }
 

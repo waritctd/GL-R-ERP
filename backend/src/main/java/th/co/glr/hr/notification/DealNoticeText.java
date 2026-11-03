@@ -6,6 +6,9 @@ public final class DealNoticeText {
     private DealNoticeText() {
     }
 
+    /** Third line of every "for your information" notice. */
+    public static final String FYI = "แจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+
     /** {@code ดีล <code> · ลูกค้า <customer>}; a blank customer reads "ไม่ระบุลูกค้า" (same fallback as DepositNoticeService). */
     public static String dealLabel(String ticketCode, String customerName) {
         String customer = customerName == null || customerName.isBlank() ? "ไม่ระบุลูกค้า" : customerName.trim();

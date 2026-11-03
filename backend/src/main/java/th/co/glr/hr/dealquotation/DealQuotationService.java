@@ -1740,7 +1740,7 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
         notifications.notifyByRoleAtLink(byCeo ? "sales_manager" : "ceo", TicketEventKind.DEAL_QUOTATION_DECIDED,
             actor.name() + " (" + (byCeo ? "CEO" : "ผู้จัดการฝ่ายขาย") + ") " + decision + "\n"
-                + DealNoticeText.dealLabel(ticket.code(), ticket.customerName()) + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ",
+                + DealNoticeText.dealLabel(ticket.code(), ticket.customerName()) + "\n" + DealNoticeText.FYI,
             "/quotations/" + quotation.id(),
             // The creator and the rep already hear the decision as APPROVED/REJECTED (#notifyRepAndCreator).
             actor.id(), quotation.createdById(), quotation.salesRepId());

@@ -114,9 +114,6 @@ public class TicketService {
     private static final Set<String> PAYMENT_RECEIPT_KINDS = Set.of("DEPOSIT", "BALANCE", "ADJUSTMENT");
     private static final Set<String> DELIVERY_SOURCES = Set.of("WAREHOUSE", "STOCK");
 
-    /** Third line of every "for your information" notice. */
-    private static final String FYI = "แจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
-
     private final TicketRepository tickets;
     private final NotificationRepository notifications;
     private final ObjectMapper objectMapper;
@@ -874,7 +871,7 @@ public class TicketService {
         // P2 B2: FYI to the rep and account that the CEO closed it. (Commission is keyed to the CLOSED_PAID
         // stage, not to this close, so the message makes no commission claim.)
         String closed = "CEO (" + actor.name() + ") ตรวจสอบและปิดดีลเรียบร้อยแล้ว\n"
-            + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\n" + FYI;
+            + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\n" + DealNoticeText.FYI;
         if (s.createdById() != actor.id()) {
             notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.DEAL_CLOSED, closed, "/tickets/" + ticketId);
         }
@@ -1900,7 +1897,7 @@ public class TicketService {
         notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.PAYMENT_RECEIVED,
             "ฝ่ายบัญชี (" + actor.name() + ") บันทึกรับชำระเงิน " + ThaiText.money(received) + " บาท แล้ว\n"
                 + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดค้างชำระ "
-                + ThaiText.money(outstanding) + " บาท\n" + FYI,
+                + ThaiText.money(outstanding) + " บาท\n" + DealNoticeText.FYI,
             "/tickets/" + s.id());
     }
 
@@ -1908,7 +1905,7 @@ public class TicketService {
         notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.PAYMENT_FULLY_PAID,
             "ฝ่ายบัญชี (" + actor.name() + ") ยืนยันว่าลูกค้าชำระเงินครบแล้ว\n"
                 + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดรวม "
-                + ThaiText.money(payable) + " บาท\n" + FYI,
+                + ThaiText.money(payable) + " บาท\n" + DealNoticeText.FYI,
             "/tickets/" + s.id());
     }
 
@@ -2618,7 +2615,7 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REOPENED, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_REOPENED,
-            actor.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง" + noteSuffix(note), FYI, FYI);
+            actor.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง" + noteSuffix(note), DealNoticeText.FYI, DealNoticeText.FYI);
         return requireTicket(ticketId);
     }
 
@@ -2795,7 +2792,7 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_RESUMED,
-            actor.name() + " ให้ดีลกลับมาดำเนินการต่อ" + noteSuffix(note), FYI, FYI);
+            actor.name() + " ให้ดีลกลับมาดำเนินการต่อ" + noteSuffix(note), DealNoticeText.FYI, DealNoticeText.FYI);
         return requireTicket(ticketId);
     }
 
@@ -2930,8 +2927,8 @@ public class TicketService {
         // The rep hears it as an employee notice when somebody else did it, so the role fan-outs skip the rep too
         // (a rep who is also in a role would otherwise get it twice).
         long rep = s.createdById();
-        notifications.notifyByRoleAtLink("sales_manager", type, head + FYI, link, actor.id(), rep);
-        notifications.notifyByRoleAtLink("ceo", type, head + FYI, link, actor.id(), rep);
+        notifications.notifyByRoleAtLink("sales_manager", type, head + DealNoticeText.FYI, link, actor.id(), rep);
+        notifications.notifyByRoleAtLink("ceo", type, head + DealNoticeText.FYI, link, actor.id(), rep);
         if (tickets.hasIssuedImportRequest(s.id())) {
             notifications.notifyByRoleAtLink("import", type, head + importLine3, "/import/deals/" + s.id(), actor.id(), rep);
         }
@@ -2939,7 +2936,7 @@ public class TicketService {
             notifications.notifyByRoleAtLink("account", type, head + accountLine3, "/finance/deals/" + s.id(), actor.id(), rep);
         }
         if (rep != actor.id()) {
-            notifications.notifyEmployeeAtLink(rep, type, head + FYI, link);
+            notifications.notifyEmployeeAtLink(rep, type, head + DealNoticeText.FYI, link);
         }
     }
 
