@@ -89,6 +89,24 @@ public final class TicketEventKind {
     public static final String CLOSE_READY_FOR_CEO = "CLOSE_READY_FOR_CEO";
     public static final String ORDER_CONFIRMED_NO_DEPOSIT = "ORDER_CONFIRMED_NO_DEPOSIT";
 
+    // P2 notifications: NOTIFICATION `type` values only, like the P1 block above -- never ticket_event
+    // kinds. Titles in NotificationRepository.TICKET_EVENT_TITLES. FACTORY_NOT_AVAILABLE,
+    // CUSTOMER_QUOTATION_EXPIRED, PRICING_REQUEST_CANCELLED and PRICING_REQUEST_REVISED (PricingRequestEventKind)
+    // are reused as types too: PRICING_REQUEST_CANCELLED gained a title, PRICING_REQUEST_REVISED's was reworded,
+    // the other two keep theirs.
+    public static final String PAYMENT_RECEIVED = "PAYMENT_RECEIVED";
+    public static final String PAYMENT_FULLY_PAID = "PAYMENT_FULLY_PAID";
+    public static final String DEAL_CLOSED = "DEAL_CLOSED";
+    public static final String CLOSE_CONFIRMATION_REVOKED = "CLOSE_CONFIRMATION_REVOKED";
+    public static final String DEAL_LOST = "DEAL_LOST";
+    public static final String DEAL_CANCELLED = "DEAL_CANCELLED";
+    public static final String DEAL_ON_HOLD = "DEAL_ON_HOLD";
+    public static final String DEAL_DORMANT = "DEAL_DORMANT";
+    public static final String DEAL_RESUMED = "DEAL_RESUMED";
+    public static final String DEAL_REOPENED = "DEAL_REOPENED";
+    public static final String DEAL_QUOTATION_CANCELLED = "DEAL_QUOTATION_CANCELLED";
+    public static final String DEAL_QUOTATION_DECIDED = "DEAL_QUOTATION_DECIDED";
+
     // Per-factory ใบขอซื้อ progress (V184, GLA-100): one event kind for every step advance, with
     // the actual step (th.co.glr.hr.importrequest.ImportRequestStep) named in the free-text
     // message/note rather than as a distinct kind per step -- see that class's own Javadoc for why

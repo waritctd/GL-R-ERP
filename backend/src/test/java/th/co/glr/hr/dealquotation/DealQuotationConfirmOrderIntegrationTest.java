@@ -576,6 +576,72 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(quotationService.get(pending.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :k",
             Map.of("id", deal, "k", TicketEventKind.CANCELLED), Integer.class)).isEqualTo(2);
+        // P2 B7: only the quotation that was WAITING on approval had told the SM and CEO "รออนุมัติ", so only that
+        // cancellation un-tells them (FYI); the DRAFT clone never reached them. Link = the cancelled document.
+        TicketSummaryDto d = summary(deal);
+        String message = salesActor.name() + " ยกเลิกใบเสนอราคา " + pending.number()
+            + " ที่รออนุมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + v1.number() + " แล้ว\nดีล " + d.code() + " · ลูกค้า "
+            + d.customerName() + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
+        String title = "ใบเสนอราคาถูกยกเลิก — ไม่ต้องอนุมัติแล้ว";
+        mailer.assertNoticeFor(salesManagerActor.id(), "DEAL_QUOTATION_CANCELLED", title, message, "/quotations/" + pending.id());
+        mailer.assertNoticeFor(ceoActor.id(), "DEAL_QUOTATION_CANCELLED", title, message, "/quotations/" + pending.id());
+        mailer.assertBellRecipients("DEAL_QUOTATION_CANCELLED", salesManagerActor.id(), ceoActor.id());
+    }
+
+    /**
+     * Review fix: a quotation another transaction moves DRAFT -> PENDING_APPROVAL while the confirmation is in flight
+     * must still be reported as pending (so SM + CEO get the B7 notice). tx1 holds the row lock with the flip
+     * uncommitted; the confirmation blocks on it; once tx1 commits, the cancel must see the PENDING row.
+     */
+    @Test
+    void confirmOrder_aQuotationSubmittedConcurrently_isStillReportedAsPending_andNotifiesApprovers() throws Exception {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto racing = quotationService.createReorder(v1.id(), salesActor); // DRAFT
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<?> confirm = transactionTemplate.execute(status -> {
+                jdbc.queryForList("SELECT 1 FROM sales.quotation WHERE quotation_id = :id FOR UPDATE",
+                    Map.of("id", racing.id()));
+                jdbc.update("UPDATE sales.quotation SET doc_status = 'PENDING_APPROVAL' WHERE quotation_id = :id",
+                    Map.of("id", racing.id()));
+                java.util.concurrent.Future<?> f = pool.submit(
+                    () -> confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor));
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(20);
+                while (jdbc.queryForObject("SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database()"
+                        + " AND wait_event_type = 'Lock'", Map.of(), Integer.class) == 0) {
+                    assertThat(System.nanoTime()).as("confirmation never blocked on the row lock").isLessThan(deadline);
+                    assertThat(f.isDone()).as("confirmation finished without blocking").isFalse();
+                    try { Thread.sleep(50); } catch (InterruptedException e) { throw new IllegalStateException(e); }
+                }
+                return f;
+            });
+            confirm.get(20, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(quotationService.get(racing.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+        TicketSummaryDto d = summary(deal);
+        String message = salesActor.name() + " ยกเลิกใบเสนอราคา " + racing.number()
+            + " ที่รออนุมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + v1.number() + " แล้ว\nดีล " + d.code() + " · ลูกค้า "
+            + d.customerName() + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
+        String title = "ใบเสนอราคาถูกยกเลิก — ไม่ต้องอนุมัติแล้ว";
+        mailer.assertNoticeFor(salesManagerActor.id(), "DEAL_QUOTATION_CANCELLED", title, message, "/quotations/" + racing.id());
+        mailer.assertNoticeFor(ceoActor.id(), "DEAL_QUOTATION_CANCELLED", title, message, "/quotations/" + racing.id());
+    }
+
+    /** Nothing was waiting on approval (only a DRAFT clone is cancelled): the approvers are told nothing. */
+    @Test
+    void confirmOrder_cancellingOnlyADraftSibling_notifiesNoApprover() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto v1 = approvedDirectQuotation(deal, salesActor);
+        DealQuotationDto clone = quotationService.createReorder(v1.id(), salesActor);
+
+        confirmer.confirmOrderFromDirectQuotation(v1.id(), salesActor);
+
+        assertThat(quotationService.get(clone.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
+        mailer.assertNoNotice("DEAL_QUOTATION_CANCELLED", "ใบเสนอราคาถูกยกเลิก — ไม่ต้องอนุมัติแล้ว");
     }
 
     /** ...and before the order is confirmed the same revision still works. */

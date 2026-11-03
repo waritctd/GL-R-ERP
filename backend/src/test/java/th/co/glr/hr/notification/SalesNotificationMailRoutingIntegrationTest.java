@@ -370,8 +370,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
 
     /**
      * The other half of the enum-leak trap. {@code TICKET_EVENT_TITLES} does not cover every event
-     * kind the pipeline raises — {@code PRICING_REQUEST_CANCELLED}, {@code PRICING_REQUEST_PICKED_UP}
-     * and {@code FACTORY_PO_CREATED} all fall through today — so the subject line of those emails is
+     * kind the pipeline raises — {@code PRICING_REQUEST_PICKED_UP} and {@code FACTORY_PO_CREATED}
+     * both fall through today — so the subject line of those emails is
      * whatever {@code ticketEventTitle}'s default produces. It must be the Thai generic, because the
      * alternative is mailing {@code FACTORY_PO_CREATED} at a person.
      */
@@ -421,6 +421,28 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
     @Test
     void anUnroutableRoleWritesNothingAndMailsNothing() {
         notifications.notifyByRole("warehouse", 55L, "APPROVED", "ignored");
+
+        assertThat(countNotificationRows()).isZero();
+        assertThat(mailer.sent()).isEmpty();
+    }
+
+    /** Review fix: an exclusion that matches nobody in the role did not empty the fan-out, so the shared box is still mailed. */
+    @Test
+    void roleFanOutWithAnExclusionNobodyInTheRoleMatches_stillMailsTheSharedBox() {
+        long outsider = insertEmployee("OUT-1", insertDivision("SA", "ฝ่ายขาย"), "outsider@glr.co.th");
+
+        notifications.notifyByRoleAtLink("import", "PRICING_COSTING_SUBMITTED", "ข้อความ", "/tickets/1", outsider);
+
+        assertThat(countNotificationRows()).isZero();
+        assertThat(mailer.recipients()).containsExactly("import@glr.co.th");
+    }
+
+    /** The exclusion IS what emptied the fan-out (the only member did the thing themselves): no bell, no mail. */
+    @Test
+    void roleFanOutWhoseOnlyMemberIsTheExcludedActor_mailsNothing() {
+        long onlyImporter = insertEmployee("IMP-9", insertDivision("PCIM", "จัดซื้อต่างประเทศ"), "only.importer@glr.co.th");
+
+        notifications.notifyByRoleAtLink("import", "PRICING_COSTING_SUBMITTED", "ข้อความ", "/tickets/1", onlyImporter);
 
         assertThat(countNotificationRows()).isZero();
         assertThat(mailer.sent()).isEmpty();

@@ -1727,7 +1727,23 @@ public class DealQuotationService {
         // call is the actual fix, not a reason to also cascade a constructor-signature change
         // through every test file in the same pass.
         notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message);
+        notifyOtherApprover(approved, actor, "อนุมัติใบเสนอราคา " + approved.number() + " แล้ว");
         return approved;
+    }
+
+    /**
+     * P2 B8: submit told BOTH approver roles "รออนุมัติ"; once one of them decides, the OTHER hears who decided
+     * (FYI) so their bell is not left waiting. A CEO decision tells the sales manager; anyone else's tells the CEO.
+     */
+    private void notifyOtherApprover(DealQuotationDto quotation, UserPrincipal actor, String decision) {
+        boolean byCeo = "ceo".equals(actor.role());
+        TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
+        notifications.notifyByRoleAtLink(byCeo ? "sales_manager" : "ceo", TicketEventKind.DEAL_QUOTATION_DECIDED,
+            actor.name() + " (" + (byCeo ? "CEO" : "ผู้จัดการฝ่ายขาย") + ") " + decision + "\n"
+                + DealNoticeText.dealLabel(ticket.code(), ticket.customerName()) + "\n" + DealNoticeText.FYI,
+            "/quotations/" + quotation.id(),
+            // The creator and the rep already hear the decision as APPROVED/REJECTED (#notifyRepAndCreator).
+            actor.id(), quotation.createdById(), quotation.salesRepId());
     }
 
     @Transactional
@@ -1752,6 +1768,7 @@ public class DealQuotationService {
             "ไม่อนุมัติใบเสนอราคา " + rejected.number() + " — " + request.reason());
         notifyRepAndCreator(rejected, TicketEventKind.DEAL_QUOTATION_REJECTED,
             "ใบเสนอราคา " + rejected.number() + " ไม่ได้รับอนุมัติ: " + request.reason());
+        notifyOtherApprover(rejected, actor, "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": " + request.reason());
         return rejected;
     }
 
@@ -1869,6 +1886,11 @@ public class DealQuotationService {
             PricingRequestEventKind.CUSTOMER_QUOTATION_ISSUED, "ใบเสนอราคา " + issued.number() + " ถูกออกแล้ว");
         notifyRepAndCreator(issued, TicketEventKind.DEAL_QUOTATION_APPROVED,
             "ใบเสนอราคา " + issued.number() + " ได้รับอนุมัติและออกใบแล้ว");
+        if ("ceo".equals(actor.role())) {
+            // P2 B8: only the CEO's decision needs telling -- when the sales manager issues, the CEO already got
+            // "ถูกออกแล้ว" just above.
+            notifyOtherApprover(issued, actor, "อนุมัติใบเสนอราคา " + issued.number() + " แล้ว");
+        }
         return issued;
     }
 
@@ -2184,9 +2206,20 @@ public class DealQuotationService {
             "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
         // The agreed order is this quotation: the deal's other open direct quotations can never be submitted or
         // approved now (see requireNoOtherDirectQuotationAfterConfirm), so cancel them rather than strand them.
-        for (String number : quotations.cancelOtherOpenDirectQuotations(ticketId, quotationId)) {
+        for (DealQuotationRepository.CancelledQuotation cancelled
+                : quotations.cancelOtherOpenDirectQuotations(ticketId, quotationId)) {
             tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.CANCELLED, null, null,
-                "ยกเลิกใบเสนอราคา " + number + " อัตโนมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number());
+                "ยกเลิกใบเสนอราคา " + cancelled.number() + " อัตโนมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number());
+            if (cancelled.wasPending()) {
+                // P2 B7: only a quotation that was WAITING on approval had told SM and CEO "รออนุมัติ" -- a DRAFT never did.
+                String message = actor.name() + " ยกเลิกใบเสนอราคา " + cancelled.number()
+                    + " ที่รออนุมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
+                    + DealNoticeText.dealLabel(locked.code(), locked.customerName()) + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
+                String link = "/quotations/" + cancelled.id();
+                for (String role : List.of("sales_manager", "ceo")) {
+                    notifications.notifyByRoleAtLink(role, TicketEventKind.DEAL_QUOTATION_CANCELLED, message, link, actor.id());
+                }
+            }
         }
         // The quotation is the agreed order, so it REPLACES whatever preliminary lines the deal
         // carried. Safe at this point: the deal is still pre-order (status was draft, so no delivery
@@ -2306,6 +2339,13 @@ public class DealQuotationService {
                     "ใบเสนอราคา " + row.number() + " หมดอายุ", null);
                 notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
                     PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, "ใบเสนอราคา " + row.number() + " หมดอายุ");
+                // P2 B6: the rep who owns the deal chases the customer or re-quotes -- unless the deal is lost/cancelled.
+                if (!tickets.isDeadDeal(summary.ticketId())) {
+                    notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
+                        PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
+                        DealNoticeText.quotationExpired(row.number(), summary.ticketCode(), summary.customerName()),
+                        "/tickets/" + summary.ticketId());
+                }
             });
         }
         return expired.size();

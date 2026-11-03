@@ -56,6 +56,45 @@ class FinanceDealServiceTest {
         assertThat(dto.availableActions()).isEmpty();
     }
 
+    /**
+     * Reading a dead deal that has an issued deposit notice is allowed, WRITING to it is not -- and that split lives
+     * in FinanceDealService itself, so it is pinned here with TicketService mocked to say yes to everything (the
+     * TicketService-level scope check would otherwise mask a money route that used the read variant). Each route
+     * must 403 and must never reach TicketService; a route wired to the read gate would call it and fail this.
+     */
+    @Test
+    void everyMoneyRoute_refusesADeadDealWithAnIssuedDepositNotice_andNeverReachesTicketService() {
+        when(tickets.findSummaryById(anyLong())).thenReturn(Optional.of(summary()));
+        when(tickets.isInAccountScope(anyLong())).thenReturn(false);
+        when(tickets.isDeadDealWithIssuedDepositNotice(anyLong())).thenReturn(true);
+
+        List<org.assertj.core.api.ThrowableAssert.ThrowingCallable> routes = List.of(
+            () -> service.addComment(10L, new th.co.glr.hr.ticket.CommentRequest("x"), account),
+            () -> service.confirmDepositPaid(10L, account),
+            () -> service.confirmFinalPayment(10L, account),
+            () -> service.recordPayment(10L, null, account),
+            () -> service.confirmCloseReady(10L, account),
+            () -> service.revokeCloseConfirmation(10L, "x", account),
+            () -> service.updateStage(10L, DealStage.CLOSED_PAID, null, account));
+        for (var route : routes) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(route).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+        org.mockito.Mockito.verifyNoInteractions(ticketService);
+    }
+
+    /** ...while the READ of that same deal is admitted. */
+    @Test
+    void get_admitsADeadDealWithAnIssuedDepositNotice() {
+        when(tickets.findSummaryById(anyLong())).thenReturn(Optional.of(summary()));
+        when(tickets.isInAccountScope(anyLong())).thenReturn(false);
+        when(tickets.isDeadDealWithIssuedDepositNotice(anyLong())).thenReturn(true);
+        when(ticketService.financeActionsAlreadyScoped(anyLong(), any()))
+            .thenReturn(new TicketActionsResponse(null, List.of(), List.of()));
+
+        assertThat(service.get(10L, account)).isNotNull();
+    }
+
     // ── QA-19 (owner ruling 2026-10-29): a manual money-stage move is only ever FORWARD ──────────
 
     /** S20 CLOSED_PAID, account has confirmed close, waiting on the CEO: "move to S11" is a step backwards. */

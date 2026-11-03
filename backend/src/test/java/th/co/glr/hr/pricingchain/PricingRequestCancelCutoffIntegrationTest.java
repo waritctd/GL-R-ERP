@@ -47,7 +47,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
@@ -69,7 +68,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealLostReason;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
@@ -129,6 +130,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
     private FactoryQuoteService factoryQuoteService;
     private PricingDecisionService decisionService;
     private CustomerQuotationService quotationService;
+    private RecordingSalesMailer mailer;
 
     private UserPrincipal salesActor;
     private UserPrincipal otherSalesActor;
@@ -142,7 +144,8 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
     void wireChainAndCreateDeal() {
         TicketRepository tickets = new TicketRepository(jdbc);
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -441,6 +444,203 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         assertThat(quotationService.get(draft.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // P2 notifications. B3: factory cannot quote -> the requesting rep (CEO already told).
+    // B4: request cancelled / superseded / cascade-cancelled -> the import staffer assigned to it.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static final String STOP_LINE =
+        "สิ่งที่ต้องทำต่อ: หยุดดำเนินการกับคำขอนี้ — หากติดต่อโรงงานไปแล้ว กรุณาแจ้งโรงงาน";
+
+    private PricingRequestRequests.CreatePricingRequestRequest draftRequest(BigDecimal quantity) {
+        return new PricingRequestRequests.CreatePricingRequestRequest(
+            PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+            new BigDecimal("5000.00"), "THB", "p2 notification walk", UUID.randomUUID().toString(),
+            List.of(pricingItem(quantity)));
+    }
+
+    /** A request Sales has submitted but nobody in Import has picked up: no assigned import staffer yet. */
+    private long submittedRequest() {
+        long id = pricingRequestService.createDraft(ticketId, draftRequest(new BigDecimal("10")), salesActor).summary().id();
+        pricingRequestService.submit(id, salesActor);
+        return id;
+    }
+
+    /** Picked up by {@link #importActor}, so {@code assigned_import_id} is set. */
+    private long pickedUpRequest() {
+        long id = submittedRequest();
+        pricingRequestService.pickup(id, importActor);
+        return id;
+    }
+
+    private String dealLine(long pricingRequestId) {
+        var s = pricingRequestService.get(pricingRequestId, importActor).summary();
+        return "ดีล " + s.ticketCode() + " · ลูกค้า " + s.customerName();
+    }
+
+    private String codeOf(long pricingRequestId) {
+        return pricingRequestService.get(pricingRequestId, importActor).summary().requestCode();
+    }
+
+    @Test
+    void cancel_ofAPickedUpRequest_tellsTheAssignedImportStafferToStop() {
+        long id = pickedUpRequest();
+
+        pricingRequestService.cancel(id, cancelRequest(), salesActor);
+
+        mailer.assertNoticeFor(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
+            salesActor.name() + " ยกเลิกคำขอราคา " + codeOf(id) + " — เหตุผล: ลูกค้ายกเลิกโครงการ\n"
+                + dealLine(id) + "\n" + STOP_LINE,
+            "/pricing-requests/" + id);
+        mailer.assertBellRecipients("PRICING_REQUEST_CANCELLED", importActor.id());
+    }
+
+    /** Nobody picked it up yet, so there is nobody in Import to tell. */
+    @Test
+    void cancel_ofARequestNobodyHasPickedUp_notifiesNoImportStaffer() {
+        long id = submittedRequest();
+
+        pricingRequestService.cancel(id, cancelRequest(), salesActor);
+
+        // No bell row at all (so no per-employee email either): not the picked-up one, and not the whole import
+        // division either -- importActor IS in PCIM, so a role-wide fan-out would show up here.
+        mailer.assertBellRecipients("PRICING_REQUEST_CANCELLED");
+    }
+
+    /** A refused cancel (409, past the cutoff) tells nobody. */
+    @Test
+    void cancel_refusedPastTheCutoff_notifiesNoImportStaffer() {
+        long id = approvedPricingRequest(new BigDecimal("10"));
+        issueQuotation(id);
+
+        assertThatThrownBy(() -> pricingRequestService.cancel(id, cancelRequest(), salesActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        mailer.assertBellRecipients("PRICING_REQUEST_CANCELLED");
+    }
+
+    @Test
+    void customerChangeRevision_ofAPickedUpRequest_tellsTheAssignedImportStafferToWaitForTheNewRound() {
+        long ceoRoleId = mailer.seedRoleEmployee("ceo");
+        long id = pickedUpRequest();
+
+        pricingRequestService.createCustomerChangeRevision(id, new PricingRequestRequests.CustomerChangeRevisionRequest(
+            "ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
+            "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB", "revision",
+            List.of(pricingItem(new BigDecimal("12")))), salesActor);
+
+        String title = "คำขอราคามีรอบแก้ไขใหม่";
+        mailer.assertNoticeFor(importActor.id(), "PRICING_REQUEST_REVISED", title,
+            salesActor.name() + " เปลี่ยนแปลงคำขอราคา " + codeOf(id)
+                + " ตามที่ลูกค้าขอ และสร้างรอบแก้ไขใหม่ — เหตุผล: ลูกค้าขอเปลี่ยนจำนวน\n" + dealLine(id)
+                + "\nสิ่งที่ต้องทำต่อ: หยุดดำเนินการตามคำขอเดิม แล้วรอรอบแก้ไขใหม่ส่งเข้ามา",
+            "/pricing-requests/" + id);
+        // The CEO's existing notice, reworded (no English "revision").
+        mailer.assertNoticeFor(ceoRoleId, "PRICING_REQUEST_REVISED", title,
+            "คำขอราคา " + codeOf(id) + " มีรอบแก้ไขใหม่ตามที่ลูกค้าขอ", "/pricing-requests/" + id);
+        mailer.assertBellRecipients("PRICING_REQUEST_REVISED", importActor.id(), ceoRoleId);
+    }
+
+    /** A dead deal cancels every open request; Import hears about the one it holds, not the one nobody picked up. */
+    @Test
+    void cascadeFromADeadDeal_tellsTheAssignedImportStafferPerRequest_notForUnassignedOnes() {
+        long assigned = pickedUpRequest();
+        submittedRequest(); // a second open request nobody has picked up
+
+        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
+
+        mailer.assertEmployeeNotice(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
+            "ดีลถูกบันทึกว่าเสียงาน — คำขอราคา " + codeOf(assigned) + " จึงถูกยกเลิกอัตโนมัติ\n"
+                + dealLine(assigned) + "\n" + STOP_LINE,
+            "/pricing-requests/" + assigned);
+    }
+
+    /**
+     * A deal with a SUPERSEDED parent (already told "รอบแก้ไขใหม่" when the revision was made) and a live child
+     * round: the cascade tells the assigned staffer about the live child only, not the dead parent again.
+     */
+    @Test
+    void cascade_overASupersededParentAndALiveChild_tellsOnlyTheLiveChildsStaffer() {
+        long parent = pickedUpRequest();
+        long child = pricingRequestService.createCustomerChangeRevision(parent,
+            new PricingRequestRequests.CustomerChangeRevisionRequest(
+                "ลูกค้าขอเปลี่ยนจำนวน", UUID.randomUUID().toString(), PricingRequestRecipient.DESIGNER, null,
+                "Designer Co.", LocalDate.now().plusDays(14), new BigDecimal("5000.00"), "THB", "revision",
+                List.of(pricingItem(new BigDecimal("12")))), salesActor).summary().id();
+        pricingRequestService.submit(child, salesActor);
+        pricingRequestService.pickup(child, importActor);
+        assertThat(statusOf(parent)).isEqualTo(PricingRequestStatus.SUPERSEDED);
+
+        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
+
+        mailer.assertEmployeeNotice(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
+            "ดีลถูกบันทึกว่าเสียงาน — คำขอราคา " + codeOf(child) + " จึงถูกยกเลิกอัตโนมัติ\n"
+                + dealLine(child) + "\n" + STOP_LINE,
+            "/pricing-requests/" + child);
+    }
+
+    /**
+     * Ploy 11-03: a deal with an ISSUED ใบขอซื้อ (IR) already tells import via DEAL_LOST / DEAL_CANCELLED, so the
+     * cascade sends the assigned staffer no second PRICING_REQUEST_CANCELLED for the same action.
+     */
+    @Test
+    void cascadeFromADeadDealWithAnIssuedIr_sendsTheStafferNoSecondNotice() {
+        pickedUpRequest();
+        long factoryId = jdbc.queryForObject("""
+            INSERT INTO price_catalog.factories (name, country, default_currency)
+            VALUES ('Factory Cascade', 'IT', 'EUR') RETURNING factory_id
+            """, Map.of(), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.import_request
+                (ticket_id, factory_id, factory_name, brand, version, status, doc_number, issue_date,
+                 import_step, import_step_at, first_issued_date)
+            VALUES (:t, :f, 'Factory Cascade', 'Brand', 1, 'ISSUED', 'IR-CASCADE-1', CURRENT_DATE,
+                    'CONTACTED', CURRENT_DATE, CURRENT_DATE)
+            """, Map.of("t", ticketId, "f", factoryId));
+
+        pricingRequestService.cancelOpenForTicket(ticketId, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
+
+        mailer.assertNoNotice("PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก");
+    }
+
+    /** The cascade names the real cause: a cancelled deal (cancel reason) reads "ดีลถูกยกเลิก", not "เสียงาน". */
+    @Test
+    void cascadeFromACancelledDeal_namesTheCancellationAsTheCause() {
+        long assigned = pickedUpRequest();
+
+        pricingRequestService.cancelOpenForTicket(ticketId, "OWNER_CANCELLED", PricingRequestService.DeadDealCause.CANCELLED, salesActor);
+
+        mailer.assertEmployeeNotice(importActor.id(), "PRICING_REQUEST_CANCELLED", "คำขอราคาถูกยกเลิก",
+            "ดีลถูกยกเลิก — คำขอราคา " + codeOf(assigned) + " จึงถูกยกเลิกอัตโนมัติ\n"
+                + dealLine(assigned) + "\n" + STOP_LINE,
+            "/pricing-requests/" + assigned);
+    }
+
+    @Test
+    void markNotAvailable_tellsTheRequestingRepAsWellAsTheCeo_andOnlyOnce() {
+        long ceoRoleId = mailer.seedRoleEmployee("ceo");
+        long id = pickedUpRequest();
+        FactoryQuoteDto draft = factoryQuoteService.generateDrafts(id, importActor).get(0);
+        factoryQuoteService.markContacted(draft.id(), new MarkFactoryContactedRequest(
+            java.time.LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")), null), importActor);
+        var request = new th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest("โรงงานปิดสายการผลิต");
+
+        factoryQuoteService.markNotAvailable(draft.id(), request, importActor);
+        assertThatThrownBy(() -> factoryQuoteService.markNotAvailable(draft.id(), request, importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        String title = "โรงงานไม่สามารถเสนอราคาได้";
+        mailer.assertNoticeFor(salesActor.id(), "FACTORY_NOT_AVAILABLE", title,
+            "ฝ่ายนำเข้า (" + importActor.name() + ") แจ้งว่าโรงงาน " + draft.factoryName()
+                + " ไม่สามารถเสนอราคาได้ — เหตุผล: โรงงานปิดสายการผลิต\nคำขอราคา " + codeOf(id) + " · " + dealLine(id)
+                + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ",
+            "/pricing-requests/" + id);
+        mailer.assertNoticeFor(ceoRoleId, "FACTORY_NOT_AVAILABLE", title,
+            "คำขอราคา " + codeOf(id) + " โรงงานไม่สามารถเสนอราคาได้: " + draft.factoryName(),
+            "/pricing-requests/" + id);
+        mailer.assertBellRecipients("FACTORY_NOT_AVAILABLE", salesActor.id(), ceoRoleId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────

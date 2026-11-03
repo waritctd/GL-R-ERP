@@ -35,6 +35,7 @@ import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestService.CancelOpenForTicketResult;
+import th.co.glr.hr.pricingrequest.PricingRequestService.DeadDealCause;
 import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketResponses.TicketActionState;
@@ -827,6 +828,21 @@ public class TicketService {
         tickets.clearCloseConfirmation(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSE_CONFIRM_REVOKED, s.status(), s.status(), blankToNull(note));
+        // P2 B2: the confirmation is withdrawn, so whoever did NOT withdraw it must not be left with a stale
+        // "รอ CEO ตรวจสอบ" / "พร้อมปิด" bell: the CEO if account revoked, account if the CEO revoked.
+        String suffix = noteSuffix(note);
+        String label = DealNoticeText.dealLabel(s.code(), s.customerName());
+        if ("ceo".equals(actor.role())) {
+            notifications.notifyByRoleAtLink("account", TicketEventKind.CLOSE_CONFIRMATION_REVOKED,
+                "CEO (" + actor.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว" + suffix + "\n" + label
+                    + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบเหตุผล แล้วยืนยันพร้อมปิดดีลใหม่เมื่อพร้อม",
+                "/finance/deals/" + ticketId, actor.id());
+        } else {
+            notifications.notifyByRoleAtLink("ceo", TicketEventKind.CLOSE_CONFIRMATION_REVOKED,
+                "ฝ่ายบัญชี (" + actor.name() + ") ถอนการยืนยันพร้อมปิดดีลแล้ว" + suffix + "\n" + label
+                    + "\nแจ้งเพื่อทราบ ยังไม่ต้องตรวจสอบปิดดีล — รอฝ่ายบัญชียืนยันใหม่",
+                "/tickets/" + ticketId, actor.id());
+        }
         return requireTicket(ticketId);
     }
 
@@ -853,6 +869,15 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSED, s.status(), TicketStatus.CLOSED, "CEO ตรวจสอบและปิดงาน");
         tickets.updateLifecycle(ticketId, DealLifecycle.COMPLETED);
+        // P2 B2: FYI to the rep and account that the CEO closed it. (Commission is keyed to the CLOSED_PAID
+        // stage, not to this close, so the message makes no commission claim.)
+        String closed = "CEO (" + actor.name() + ") ตรวจสอบและปิดดีลเรียบร้อยแล้ว\n"
+            + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\n" + DealNoticeText.FYI;
+        if (s.createdById() != actor.id()) {
+            notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.DEAL_CLOSED, closed, "/tickets/" + ticketId);
+        }
+        notifications.notifyByRoleAtLink("account", TicketEventKind.DEAL_CLOSED, closed,
+            "/finance/deals/" + ticketId, actor.id());
         return requireTicket(ticketId);
     }
 
@@ -1754,6 +1779,7 @@ public class TicketService {
                 tickets.addEvent(ticketId, actor.id(), actor.name(),
                     TicketEventKind.FULLY_PAID, s.status(), s.status(), null);
                 maybeAdvanceClosedPaid(s, true, actor);
+                notifyRepOfFullyPaid(s, payableAmount(ticket), actor);
             }
             return requireTicket(ticketId);
         }
@@ -1827,6 +1853,7 @@ public class TicketService {
                 "การรับชำระเกินยอดต้องระบุเหตุผล");
         }
         boolean depositWasSettled = depositSettled(s);
+        boolean wasFullyPaid = PaymentTrack.FULLY_PAID.equals(s.paymentStatus());
         String receiptRef = blankToNull(request.receiptRef());
         long receiptId;
         try {
@@ -1853,8 +1880,39 @@ public class TicketService {
         // P1 hand-off: only the payment that takes the deposit from unsettled to settled tells the rep.
         if (settledNow && !depositWasSettled) {
             notifyRepOfDepositConfirmed(result.summary(), amount);
+            // The deposit notice carries the next step, but a payment that also clears the deal must say so too
+            // (a later confirmFinalPayment is a no-op).
+            if (!wasFullyPaid && PaymentTrack.FULLY_PAID.equals(result.summary().paymentStatus())) {
+                notifyRepOfFullyPaid(result.summary(), payable, actor);
+            }
+        } else if (depositWasSettled && !"ADJUSTMENT".equals(kind)) {
+            // P2 B1: a later payment -- ONE notice per payment action, fully-paid wins over received.
+            boolean nowFullyPaid = PaymentTrack.FULLY_PAID.equals(result.summary().paymentStatus());
+            if (nowFullyPaid && !wasFullyPaid) {
+                notifyRepOfFullyPaid(result.summary(), payable, actor);
+            } else if (!nowFullyPaid) {
+                BigDecimal outstanding = payable.subtract(nullToZero(tickets.sumPaid(ticketId)));
+                notifyRepOfPaymentReceived(result.summary(), amount, outstanding, actor);
+            }
         }
         return result;
+    }
+
+    private void notifyRepOfPaymentReceived(TicketSummaryDto s, BigDecimal received, BigDecimal outstanding,
+                                            UserPrincipal actor) {
+        notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.PAYMENT_RECEIVED,
+            "ฝ่ายบัญชี (" + actor.name() + ") บันทึกรับชำระเงิน " + ThaiText.money(received) + " บาท แล้ว\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดค้างชำระ "
+                + ThaiText.money(outstanding) + " บาท\n" + DealNoticeText.FYI,
+            "/tickets/" + s.id());
+    }
+
+    private void notifyRepOfFullyPaid(TicketSummaryDto s, BigDecimal payable, UserPrincipal actor) {
+        notifications.notifyEmployeeAtLink(s.createdById(), TicketEventKind.PAYMENT_FULLY_PAID,
+            "ฝ่ายบัญชี (" + actor.name() + ") ยืนยันว่าลูกค้าชำระเงินครบแล้ว\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดรวม "
+                + ThaiText.money(payable) + " บาท\n" + DealNoticeText.FYI,
+            "/tickets/" + s.id());
     }
 
     /** What the rep does next: nothing to import (all stock), create the IR, or check the IRs already issued. */
@@ -2530,14 +2588,17 @@ public class TicketService {
         // Stage untouched by design: reopening resumes exactly where the deal was.
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.MARKED_LOST, s.salesStage(), s.salesStage(),
-            "เสียงาน (" + reason + ")" + (note != null && !note.isBlank() ? " — " + note.trim() : ""));
+            "เสียงาน (" + reason + ")" + noteSuffix(note));
+        notifyDealLifecycle(s, actor, TicketEventKind.DEAL_LOST,
+            actor.name() + " บันทึกว่าดีลเสียงาน (" + DealLostReason.label(reason) + ")" + noteSuffix(note),
+            IMPORT_STOP, ACCOUNT_REFUND);
         // Terminal deal state: a lost deal can never receive Import's pricing, so
         // any pricing request still open on it (DRAFT/SUBMITTED/IMPORT_REVIEWING/
         // MORE_INFO_REQUIRED) is cancelled here too rather than stranded in a queue
         // forever. See PricingRequestService.cancelOpenForTicket's Javadoc for why
         // this has no role check of its own. placeOnHold/markDormant deliberately do
         // NOT do this — see those methods.
-        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, DeadDealCause.LOST, actor);
         if (cancelResult.hasAbandoned()) {
             // cancelOpenForTicket already logged the per-row detail; this ties the
             // abandonment back to the deal action that triggered it, for whoever is
@@ -2559,6 +2620,8 @@ public class TicketService {
         tickets.clearDealLost(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.REOPENED, s.salesStage(), s.salesStage(), blankToNull(note));
+        notifyDealLifecycle(s, actor, TicketEventKind.DEAL_REOPENED,
+            actor.name() + " เปิดดีลที่เสียงานกลับมาอีกครั้ง" + noteSuffix(note), DealNoticeText.FYI, DealNoticeText.FYI);
         return requireTicket(ticketId);
     }
 
@@ -2694,6 +2757,8 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.ON_HOLD, s.salesStage(), s.salesStage(), blankToNull(note));
+        notifyDealLifecycle(s, actor, TicketEventKind.DEAL_ON_HOLD,
+            actor.name() + " พักดีลไว้ชั่วคราว" + noteSuffix(note), IMPORT_PAUSE, ACCOUNT_WAIT);
         // Deliberately does NOT call pricingRequests.cancelOpenForTicket, unlike
         // markLost/cancel. ON_HOLD is temporary — resume() brings the deal straight
         // back to ACTIVE — so cancelling in-progress pricing work here would destroy
@@ -2714,6 +2779,8 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.DORMANT, s.salesStage(), s.salesStage(), blankToNull(note));
+        notifyDealLifecycle(s, actor, TicketEventKind.DEAL_DORMANT,
+            actor.name() + " พักดีลไว้ระยะยาว (dormant)" + noteSuffix(note), IMPORT_PAUSE, ACCOUNT_WAIT);
         // Same deliberate asymmetry as placeOnHold: DORMANT is temporary (resume()
         // returns it to ACTIVE), so no pricingRequests.cancelOpenForTicket call here
         // either. Do not "fix" this into symmetry with markLost/cancel.
@@ -2730,6 +2797,8 @@ public class TicketService {
         tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));
+        notifyDealLifecycle(s, actor, TicketEventKind.DEAL_RESUMED,
+            actor.name() + " ให้ดีลกลับมาดำเนินการต่อ" + noteSuffix(note), DealNoticeText.FYI, DealNoticeText.FYI);
         return requireTicket(ticketId);
     }
 
@@ -2839,6 +2908,45 @@ public class TicketService {
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
+    private static final String IMPORT_STOP =
+        "สิ่งที่ต้องทำต่อ: หากสั่งซื้อกับโรงงานไปแล้ว กรุณาแจ้งโรงงานให้หยุดหรือยกเลิกคำสั่งซื้อ";
+    private static final String ACCOUNT_REFUND =
+        "สิ่งที่ต้องทำต่อ: ตรวจสอบเงินมัดจำที่รับไว้ และแจ้งผู้เกี่ยวข้องหากต้องคืนเงินลูกค้า";
+    private static final String IMPORT_PAUSE =
+        "สิ่งที่ต้องทำต่อ: หากสั่งซื้อกับโรงงานไปแล้ว กรุณาแจ้งโรงงานว่าดีลถูกพักไว้";
+    private static final String ACCOUNT_WAIT =
+        "สิ่งที่ต้องทำต่อ: ตรวจสอบเงินมัดจำที่รับไว้ แล้วรอจนกว่าดีลจะกลับมาดำเนินการ";
+
+    private static String noteSuffix(String note) {
+        return note == null || note.isBlank() ? "" : " — " + note.trim();
+    }
+
+    /**
+     * P2 B5: a deal lifecycle change (lost / cancelled / on hold / dormant / resumed / reopened). The sales
+     * manager and CEO always hear it; import only when the deal has an ISSUED ใบขอซื้อ (IR) in flight; account only
+     * when a deposit notice is ISSUED. The actor is never told about their own action.
+     */
+    private void notifyDealLifecycle(TicketSummaryDto s, UserPrincipal actor, String type, String line1,
+                                     String importLine3, String accountLine3) {
+        String head = line1 + "\n" + DealNoticeText.dealLabel(s.code(), s.customerName()) + "\n";
+        String link = "/tickets/" + s.id();
+        // The rep hears it as an employee notice when somebody else did it, so the role fan-outs skip the rep too
+        // (a rep who is also in a role would otherwise get it twice).
+        long rep = s.createdById();
+        for (String role : List.of("sales_manager", "ceo")) {
+            notifications.notifyByRoleAtLink(role, type, head + DealNoticeText.FYI, link, actor.id(), rep);
+        }
+        if (tickets.hasIssuedImportRequest(s.id())) {
+            notifications.notifyByRoleAtLink("import", type, head + importLine3, "/import/deals/" + s.id(), actor.id(), rep);
+        }
+        if (tickets.latestIssuedDepositNotice(s.id()).isPresent()) {
+            notifications.notifyByRoleAtLink("account", type, head + accountLine3, "/finance/deals/" + s.id(), actor.id(), rep);
+        }
+        if (rep != actor.id()) {
+            notifications.notifyEmployeeAtLink(rep, type, head + DealNoticeText.FYI, link);
+        }
+    }
+
     /** Lost/reopen belong to the sales side: deal owner, sales_manager, or ceo. */
     private void requireDealOwnership(TicketSummaryDto s, UserPrincipal actor) {
         String role = actor.role();
@@ -2926,10 +3034,13 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CANCELLED, currentStatus, TicketStatus.CANCELLED, message);
         tickets.updateLifecycle(ticketId, DealLifecycle.CANCELLED);
+        notifyDealLifecycle(ticket.summary(), actor, TicketEventKind.DEAL_CANCELLED,
+            actor.name() + " ยกเลิกดีล (" + DealCancelReason.label(reason) + ")" + noteSuffix(note),
+            IMPORT_STOP, ACCOUNT_REFUND);
         // Terminal deal state: same cascade as markLost above — a cancelled deal
         // can never receive Import's pricing, so any pricing request still open on
         // it is cancelled too.
-        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, actor);
+        CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, DeadDealCause.CANCELLED, actor);
         if (cancelResult.hasAbandoned()) {
             log.warn("cancel: ticket {} left {} pricing request(s) still open after the cascade: {}",
                 ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());

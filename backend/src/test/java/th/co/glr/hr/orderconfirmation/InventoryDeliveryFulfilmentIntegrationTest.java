@@ -588,6 +588,21 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     private static final String DEPOSIT_CONFIRMED_TITLE = "ฝ่ายบัญชียืนยันรับเงินมัดจำแล้ว";
     private static final String DELIVERY_COMPLETED_TITLE = "ส่งสินค้าครบแล้ว — รอฝ่ายบัญชีดำเนินการ";
+    private static final String PAYMENT_RECEIVED_TITLE = "ฝ่ายบัญชีรับชำระเงินเพิ่มแล้ว";
+    private static final String PAYMENT_FULLY_PAID_TITLE = "ลูกค้าชำระเงินครบแล้ว";
+
+    /** P2 B1: what the rep reads when a payment AFTER the deposit leaves a balance. */
+    private String paymentReceivedMessage(long ticketId, BigDecimal received, BigDecimal outstanding) {
+        return "ฝ่ายบัญชี (" + accountActor.name() + ") บันทึกรับชำระเงิน " + ThaiText.money(received) + " บาท แล้ว\n"
+            + dealLabel(ticketId) + " · ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+    }
+
+    /** P2 B1: what the rep reads when the deal reaches FULLY_PAID (by a payment, or by the no-outstanding walk). */
+    private String fullyPaidMessage(long ticketId) {
+        BigDecimal payable = tickets.payableAmount(ticketId);
+        return "ฝ่ายบัญชี (" + accountActor.name() + ") ยืนยันว่าลูกค้าชำระเงินครบแล้ว\n"
+            + dealLabel(ticketId) + " · ยอดรวม " + ThaiText.money(payable) + " บาท\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+    }
 
     private String dealLabel(long ticketId) {
         TicketSummaryDto s = tickets.findById(ticketId).orElseThrow().summary();
@@ -633,6 +648,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
 
+        // P2 B1: the payment that settles the deposit is DEPOSIT_PAYMENT_CONFIRMED only -- never also a "received" notice.
+        mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
+        mailer.assertNoNotice("PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE);
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
             .as("fixture reaches the import branch").isNotEqualTo(FulfilmentStatus.FROM_STOCK);
         mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
@@ -677,7 +695,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "/tickets/" + deal.ticketId);
     }
 
-    /** A single payment big enough to walk straight to FULLY_PAID settles the deposit on the way: one notice, for THAT payment's amount. */
+    /** A single payment big enough to walk straight to FULLY_PAID settles the deposit on the way: the rep gets the deposit notice (for THAT amount) AND the fully-paid notice, once each. */
     @Test
     void recordPayment_thatJumpsStraightToFullyPaid_notifiesRepOnceWithThatAmount() {
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
@@ -692,11 +710,19 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(payable) + " บาท แล้ว\n"
                 + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
             "/tickets/" + deal.ticketId);
+        // Review fix: the deposit notice carries the next step, but the rep must ALSO hear the deal is fully paid
+        // (a later confirmFinalPayment is a no-op, so this is the only chance). Never a "received" notice.
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE,
+            fullyPaidMessage(deal.ticketId), "/tickets/" + deal.ticketId);
+        mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
     }
 
-    /** Only the payment that settles the deposit notifies: the later balance payment adds no second DEPOSIT_PAYMENT_CONFIRMED. */
+    /**
+     * The later balance payment adds no second DEPOSIT_PAYMENT_CONFIRMED; it clears the whole balance, so the
+     * rep is told the deal is fully paid (P2 B1) -- exactly once, and not as a "received" notice.
+     */
     @Test
-    void confirmFinalPayment_afterTheDeposit_doesNotNotifyTheRepAgain() {
+    void confirmFinalPayment_afterTheDeposit_notifiesRepFullyPaid_andNotTheDepositAgain() {
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
         DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
@@ -707,6 +733,88 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "ฝ่ายบัญชียืนยันรับเงินมัดจำ " + ThaiText.money(notice.totalPayable()) + " บาท แล้ว\n"
                 + dealLabel(deal.ticketId) + "\nสิ่งที่ต้องทำต่อ: สร้างใบขอซื้อ (IR) ส่งให้ฝ่ายนำเข้าสั่งซื้อสินค้า",
             "/tickets/" + deal.ticketId);
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE,
+            fullyPaidMessage(deal.ticketId), "/tickets/" + deal.ticketId);
+        mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
+    }
+
+    /** A payment after the deposit that leaves a balance tells the rep the amount and what is still owed; the one that clears it says fully paid instead (never both). */
+    @Test
+    void recordPayment_afterTheDeposit_notifiesRepReceivedWithTheBalance_thenFullyPaidOnTheLastOne() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        confirmOrderAndIssueDepositNotice(deal);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+        BigDecimal owed = tickets.payableAmount(deal.ticketId).subtract(tickets.sumPaid(deal.ticketId));
+        BigDecimal part = owed.divide(new BigDecimal("2"), 2, java.math.RoundingMode.HALF_UP);
+        assertThat(part.signum()).as("fixture: a real balance to split").isPositive();
+
+        ticketService.recordPayment(deal.ticketId, new RecordPaymentRequest(
+            "BALANCE", part, null, "งวดแรก", null, null, false), accountActor);
+
+        String firstMessage = paymentReceivedMessage(deal.ticketId, part, owed.subtract(part));
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE,
+            firstMessage, "/tickets/" + deal.ticketId);
+        mailer.assertNoNotice("PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE);
+
+        ticketService.recordPayment(deal.ticketId, new RecordPaymentRequest(
+            "BALANCE", owed.subtract(part), null, "งวดสุดท้าย", null, null, false), accountActor);
+
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE,
+            fullyPaidMessage(deal.ticketId), "/tickets/" + deal.ticketId);
+        // Still exactly the FIRST received notice: the last payment added none.
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE,
+            firstMessage, "/tickets/" + deal.ticketId);
+    }
+
+    /** The no-outstanding walk (receipts already cover the payable, status still behind) also ends in FULLY_PAID: the rep is told once. */
+    @Test
+    void confirmFinalPayment_whenNothingIsOutstandingButStatusLags_walksToFullyPaidAndNotifiesRep() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        confirmOrderAndIssueDepositNotice(deal);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+        BigDecimal owed = tickets.payableAmount(deal.ticketId).subtract(tickets.sumPaid(deal.ticketId));
+        tickets.insertPaymentReceipt(deal.ticketId, "BALANCE", owed, accountActor.id(), null, null, null, null);
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().paymentStatus())
+            .as("fixture: receipts cover the payable but payment_status never advanced").isNotEqualTo("FULLY_PAID");
+
+        ticketService.confirmFinalPayment(deal.ticketId, accountActor);
+
+        assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().paymentStatus()).isEqualTo("FULLY_PAID");
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE,
+            fullyPaidMessage(deal.ticketId), "/tickets/" + deal.ticketId);
+        mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
+    }
+
+    /** A no-deposit (waived) deal never has a "deposit settled" moment, so its first partial payment is a plain "received". */
+    @Test
+    void recordPayment_onAWaivedDepositDeal_firstPartialPaymentNotifiesRepReceived() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        ticketService.waiveDeposit(deal.ticketId, th.co.glr.hr.ticket.DepositPolicy.WAIVED, "ลูกค้าไม่วางมัดจำ", salesActor);
+        orderConfirmation.confirmOrder(deal.pricingRequestId,
+            new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
+        BigDecimal payable = tickets.payableAmount(deal.ticketId);
+        BigDecimal part = payable.divide(new BigDecimal("2"), 2, java.math.RoundingMode.HALF_UP);
+
+        ticketService.recordPayment(deal.ticketId, new RecordPaymentRequest(
+            "BALANCE", part, null, "งวดแรก", null, null, false), accountActor);
+
+        mailer.assertEmployeeNotice(salesRepId, "PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE,
+            paymentReceivedMessage(deal.ticketId, part, payable.subtract(part)), "/tickets/" + deal.ticketId);
+        mailer.assertNoNotice("DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE);
+    }
+
+    /** An ADJUSTMENT takes money off the books, it is not money received: no notice. */
+    @Test
+    void recordPayment_adjustment_notifiesNobody() {
+        Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
+        confirmOrderAndIssueDepositNotice(deal);
+        ticketService.confirmDepositPaid(deal.ticketId, accountActor);
+
+        ticketService.recordPayment(deal.ticketId, new RecordPaymentRequest(
+            "ADJUSTMENT", new BigDecimal("10.00"), null, "แก้ยอด", null, null, false), accountActor);
+
+        mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
+        mailer.assertNoNotice("PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE);
     }
 
     /** An IR already issued while the notice was out: do not tell the rep to create one, ask them to check every factory has its IR. */

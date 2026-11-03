@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -55,6 +56,7 @@ import th.co.glr.hr.notification.SalesMailRecipientRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.notification.SalesNotificationMailRouter;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationRenderModel;
@@ -77,6 +79,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private ContactRepository contacts;
     private ProjectRepository projects;
     private NotificationRepository notifications;
+    private RecordingSalesMailer salesMailer;
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
     private EmployeeAuthRepository employeeAuth;
@@ -113,7 +116,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireServicesAndCreateDeals() {
         tickets = new TicketRepository(jdbc);
         ObjectMapper objectMapper = new ObjectMapper();
-        notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        salesMailer = new RecordingSalesMailer(jdbc);
+        notifications = new NotificationRepository(jdbc, salesMailer);
         customers = new CustomerRepository(jdbc);
         contacts = new ContactRepository(jdbc);
         projects = new ProjectRepository(jdbc);
@@ -1254,6 +1258,67 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rejected.approvalNote()).isEqualTo("ราคาผิดพลาด กรุณาแก้ไข");
         assertThat(notifications.findByEmployeeId(salesRepId))
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_REJECTED") && n.message().contains("ราคาผิดพลาด"));
+        // P2 B8: the sales manager decided, so the CEO (the other approver) hears it, FYI, with the reason.
+        salesMailer.assertNoticeFor(ceoId, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(salesManagerActor, "ผู้จัดการฝ่ายขาย",
+                "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": ราคาผิดพลาด กรุณาแก้ไข"),
+            "/quotations/" + rejected.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", ceoId);
+    }
+
+    private static final String DECIDED_TITLE = "มีผู้พิจารณาใบเสนอราคาแล้ว — ไม่ต้องดำเนินการ";
+
+    /** P2 B8 wording: who decided (with their role), what, the deal, FYI. */
+    private String decidedMessage(UserPrincipal decider, String roleLabel, String decision) {
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        return decider.name() + " (" + roleLabel + ") " + decision + "\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+            + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
+    }
+
+    /** The CEO rejects: the sales manager (the other approver) is told, and only them. */
+    @Test
+    void reject_byCeo_tellsTheSalesManagerFyi() {
+        DealQuotationDto submitted = quotationService.submit(quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
+
+        DealQuotationDto rejected = quotationService.reject(submitted.id(), new RejectRequest("ขอลดราคา"), ceoActor);
+
+        salesMailer.assertNoticeFor(salesManagerId, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(ceoActor, "CEO", "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": ขอลดราคา"),
+            "/quotations/" + rejected.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", salesManagerId);
+    }
+
+    /**
+     * A sales manager who CREATED the quotation already hears the CEO's decision as APPROVED; the "decided" FYI
+     * (meant for the other approver) must not land on them a second time.
+     */
+    @Test
+    void approve_byCeo_ofAQuotationTheSalesManagerCreated_tellsThatManagerOnlyOnce() {
+        DealQuotationDto created = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesManagerActor);
+        DealQuotationDto submitted = quotationService.submit(created.id(), salesManagerActor);
+
+        DealQuotationDto approved = quotationService.approve(submitted.id(), new ApproveRequest(null), ceoActor);
+
+        assertThat(approved.createdById()).as("fixture: the manager is the creator").isEqualTo(salesManagerId);
+        assertThat(jdbc.queryForObject("""
+            SELECT COUNT(*) FROM hr.notification
+             WHERE employee_id = :id AND type = 'DEAL_QUOTATION_APPROVED' AND link = :link
+            """, Map.of("id", salesManagerId, "link", "/quotations/" + approved.id()), Long.class)).isEqualTo(1L);
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED"); // nobody: the only other approver is the creator
+    }
+
+    /** Refused for a wrong status (409): no decision was made, so the other approver hears nothing. */
+    @Test
+    void reject_whenNotPendingApproval_notifiesNoApprover() {
+        DealQuotationDto draft = quotationService.create(ticketId,
+            upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
+
+        assertThatThrownBy(() -> quotationService.reject(draft.id(), new RejectRequest("x"), salesManagerActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+
+        salesMailer.assertNoNotice("DEAL_QUOTATION_DECIDED", DECIDED_TITLE);
     }
 
     // ── owner clarification (2026-09-15): resubmitting a ตีกลับ'd draft mints a NEW revision ──
@@ -3424,12 +3489,22 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             salesActor);
         DealQuotationDto approvedByManager = quotationService.approve(submitted1.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(approvedByManager.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        // P2 B8: the manager approved -> the CEO (other approver) is told, not the manager.
+        salesMailer.assertNoticeFor(ceoId, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(salesManagerActor, "ผู้จัดการฝ่ายขาย", "อนุมัติใบเสนอราคา " + approvedByManager.number() + " แล้ว"),
+            "/quotations/" + approvedByManager.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", ceoId);
 
         DealQuotationDto submitted2 = quotationService.submit(
             createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(),
             salesActor);
         DealQuotationDto approvedByCeo = quotationService.approve(submitted2.id(), new ApproveRequest(null), ceoActor);
         assertThat(approvedByCeo.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+        // ...and the CEO approving tells the manager, so each approver heard exactly the OTHER's decision.
+        salesMailer.assertNoticeFor(salesManagerId, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(ceoActor, "CEO", "อนุมัติใบเสนอราคา " + approvedByCeo.number() + " แล้ว"),
+            "/quotations/" + approvedByCeo.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", ceoId, salesManagerId);
     }
 
     @Test

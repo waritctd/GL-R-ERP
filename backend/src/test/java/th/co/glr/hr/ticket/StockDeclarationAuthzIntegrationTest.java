@@ -109,7 +109,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         // two things under test here — TicketService's gate and TicketRepository's UPDATE — are
         // both real.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),

@@ -1259,7 +1259,12 @@ public class DepositNoticeService {
         // H1 lockdown: account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
         // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
         // Every deposit-notice and remaining-invoice read funnels through this method.
-        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
+        // Read gate only (deposit-notice writes use requireTicketOwner): also a lost/cancelled deal that still has an
+        // issued deposit notice, so the finance page can show its documents (owner ruling 2026-11-04). This method is
+        // also reached on remaining-invoice writes via resolveRemainingInvoiceSnapshot; those are blocked for a dead
+        // deal by requireDepositNoticeIssueGate + requireActiveLifecycle, so the widening never lets one through.
+        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)
+                && !tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return t;

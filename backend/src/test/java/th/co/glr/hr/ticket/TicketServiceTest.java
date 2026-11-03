@@ -50,7 +50,7 @@ class TicketServiceTest {
         // answer for an unstubbed reference-typed method is null, and TicketService
         // calls .hasAbandoned() on the result unconditionally. Tests that DO care
         // about an abandoned row override this per-test.
-        when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new CancelOpenForTicketResult(0, List.of()));
         // Slice B1 gate default (handoff 103): the manual forward-updateStage gate needs
         // hasActivitySinceLastStageChange() to be true, or every stubDeal-backed forward
@@ -2052,14 +2052,14 @@ class TicketServiceTest {
     void markLost_cascadesCancelOpenPricingRequestsWithTheDealsOwnReason() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.NEGOTIATION, null);
         service.markLost(10L, DealLostReason.PRICE, "แพ้ราคาคู่แข่ง", salesActor);
-        verify(pricingRequestService).cancelOpenForTicket(10L, DealLostReason.PRICE, salesActor);
+        verify(pricingRequestService).cancelOpenForTicket(10L, DealLostReason.PRICE, PricingRequestService.DeadDealCause.LOST, salesActor);
     }
 
     @Test
     void cancel_cascadesCancelOpenPricingRequestsWithTheDealsOwnReason() {
         stubTicket(10L, 1L, TicketStatus.DRAFT);
         service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesActor);
-        verify(pricingRequestService).cancelOpenForTicket(10L, DealCancelReason.OWNER_CANCELLED, salesActor);
+        verify(pricingRequestService).cancelOpenForTicket(10L, DealCancelReason.OWNER_CANCELLED, PricingRequestService.DeadDealCause.CANCELLED, salesActor);
     }
 
     @Test
@@ -2072,7 +2072,7 @@ class TicketServiceTest {
         service.markDormant(11L, null, salesManagerActor);
 
         verify(pricingRequestService, never())
-            .cancelOpenForTicket(org.mockito.ArgumentMatchers.anyLong(), anyString(), any());
+            .cancelOpenForTicket(org.mockito.ArgumentMatchers.anyLong(), anyString(), any(), any());
     }
 
     @Test

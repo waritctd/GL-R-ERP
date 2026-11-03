@@ -1418,16 +1418,28 @@ public class DealQuotationRepository {
                 rs.getLong("ticket_id"), rs.getString("number")));
     }
 
+    /** A quotation cancelled by {@link #cancelOtherOpenDirectQuotations}; {@code wasPending} = it was PENDING_APPROVAL (not DRAFT). */
+    public record CancelledQuotation(long id, String number, boolean wasPending) {}
+
     /** Owner review 2026-10-28: confirming an order from {@code keepId} cancels the deal's OTHER open DEAL_DIRECT
-     * quotations (DRAFT / PENDING_APPROVAL), which could otherwise never be submitted or approved again. Returns the
-     * cancelled numbers so the caller can log them. PRICING_REQUEST-origin rows are never touched. */
-    public List<String> cancelOtherOpenDirectQuotations(long ticketId, long keepId) {
-        return jdbc.queryForList("""
-            UPDATE sales.quotation SET doc_status = 'CANCELLED', updated_at = now()
-             WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
-               AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
-            RETURNING number
-            """, Map.of("ticketId", ticketId, "keepId", keepId), String.class);
+     * quotations (DRAFT / PENDING_APPROVAL), which could otherwise never be submitted or approved again. Returns what
+     * was cancelled (with whether it was waiting on approval) so the caller can log and notify. PRICING_REQUEST-origin
+     * rows are never touched. */
+    public List<CancelledQuotation> cancelOtherOpenDirectQuotations(long ticketId, long keepId) {
+        return jdbc.query("""
+            WITH prior AS (
+                SELECT quotation_id, doc_status FROM sales.quotation
+                 WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
+                   AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
+                 FOR UPDATE) -- lock first, so a concurrent DRAFT -> PENDING_APPROVAL is read as PENDING (B7 notice)
+            UPDATE sales.quotation q SET doc_status = 'CANCELLED', updated_at = now()
+              FROM prior p
+             WHERE q.quotation_id = p.quotation_id
+               AND q.doc_status IN ('DRAFT', 'PENDING_APPROVAL') -- row-lock re-check against a concurrent approve
+            RETURNING q.quotation_id, q.number, p.doc_status
+            """, Map.of("ticketId", ticketId, "keepId", keepId),
+            (rs, n) -> new CancelledQuotation(rs.getLong("quotation_id"), rs.getString("number"),
+                "PENDING_APPROVAL".equals(rs.getString("doc_status"))));
     }
 
     /** Compare-and-set DRAFT -> CANCELLED. */

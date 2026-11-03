@@ -770,6 +770,58 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.file(issued.id(), salesManagerActor)).isNotEmpty();
     }
 
+    // ── dead deals (owner ruling 2026-11-04): DepositNoticeService#requireTicketViewer, the read gate shared by
+    // deposit-notice and remaining-invoice reads, lets ACCOUNT open a lost/cancelled deal that still has an ISSUED
+    // deposit notice; nobody else is widened, and without an issued notice nothing is ────────────────────────────
+
+    private RemainingInvoiceDocumentDto issuedRemainingInvoiceOnADeadDeal(String label) {
+        DealFixture fixture = buildAcceptedDeal(salesActor, label);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        jdbc.update("""
+            UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled', sales_stage = 'NEGOTIATION',
+                   payment_status = 'DEPOSIT_PAID'
+             WHERE ticket_id = :id
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", fixture.ticketId()));
+        assertThat(tickets.isInAccountScope(fixture.ticketId())).as("fixture: outside account's LIST scope").isFalse();
+        return issued;
+    }
+
+    @Test
+    void read_deadDealWithAnIssuedDepositNotice_accountCanRead_everyoneElseWhoWasRefusedStillIs() {
+        RemainingInvoiceDocumentDto issued = issuedRemainingInvoiceOnADeadDeal("DeadRead1");
+        long ticketId = issued.ticketId();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id AND status = 'ISSUED'",
+            java.util.Map.of("id", ticketId), Long.class)).as("fixture: an issued deposit notice").isPositive();
+
+        assertThat(remainingInvoiceService.get(issued.id(), accountActor).id()).isEqualTo(issued.id());
+        assertThat(remainingInvoiceService.list(ticketId, accountActor)).isNotEmpty();
+        assertThat(depositNoticeService.listByTicket(ticketId, accountActor)).isNotEmpty();
+
+        UserPrincipal hr = actor(987_654L, "hr");
+        for (UserPrincipal refused : List.of(importActor, otherSalesActor, hr)) {
+            assertThatThrownBy(() -> depositNoticeService.listByTicket(ticketId, refused))
+                .as("deposit notices, %s", refused.role())
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+            assertThatThrownBy(() -> remainingInvoiceService.get(issued.id(), refused))
+                .as("remaining invoice, %s", refused.role())
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+    }
+
+    @Test
+    void read_deadDealWithNoIssuedDepositNotice_isStillRefusedToAccount() {
+        RemainingInvoiceDocumentDto issued = issuedRemainingInvoiceOnADeadDeal("DeadRead2");
+        long ticketId = issued.ticketId();
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'DRAFT' WHERE ticket_id = :id",
+            java.util.Map.of("id", ticketId));
+
+        assertThatThrownBy(() -> depositNoticeService.listByTicket(ticketId, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> remainingInvoiceService.get(issued.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // R1 (Opus review, GLA-99 step 2 review-round-1, 2026-09-20): updateDraft ITs — lifecycle
     // (edits persist, re-snapshot) + refusals for CEO, account, sales_manager, non-owner sales,

@@ -40,5 +40,16 @@ public final class DealCancelReason {
         return reason != null && VALID.contains(reason);
     }
 
+    private static final java.util.Map<String, String> LABELS = java.util.Map.of(
+        OWNER_CANCELLED, "เจ้าของยกเลิกโครงการ",
+        PROJECT_SUSPENDED, "โครงการถูกระงับไม่มีกำหนด",
+        BUDGET_CANCELLED, "งบประมาณถูกยกเลิก",
+        OTHER, "อื่น ๆ");
+
+    /** Thai label of a code (same wording as frontend CANCEL_REASON_LABEL); an unknown code reads as itself. */
+    public static String label(String code) {
+        return LABELS.getOrDefault(code, String.valueOf(code));
+    }
+
     private DealCancelReason() {}
 }

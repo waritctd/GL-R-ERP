@@ -1292,7 +1292,7 @@ class PricingRequestServiceTest {
         when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, 4L)).thenReturn(1);
 
         PricingRequestService.CancelOpenForTicketResult result =
-            service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
+            service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(2);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1315,7 +1315,7 @@ class PricingRequestServiceTest {
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1335,7 +1335,7 @@ class PricingRequestServiceTest {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.CANCELLED);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(0);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1356,7 +1356,7 @@ class PricingRequestServiceTest {
         // the stub is a fixed answer) succeeds.
         when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L)).thenReturn(0, 1);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1379,7 +1379,7 @@ class PricingRequestServiceTest {
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).containsExactly(21L);

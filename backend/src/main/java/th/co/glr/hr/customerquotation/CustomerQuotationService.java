@@ -28,6 +28,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuo
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationItemRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
@@ -688,6 +689,13 @@ public class CustomerQuotationService {
                     "ใบเสนอราคาลูกค้า " + row.number() + " หมดอายุ", null);
                 notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
                     PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, "ใบเสนอราคาลูกค้า " + row.number() + " หมดอายุ");
+                // P2 B6: the rep who owns the deal chases the customer or re-quotes -- unless the deal is lost/cancelled.
+                if (!tickets.isDeadDeal(summary.ticketId())) {
+                    notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
+                        PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
+                        DealNoticeText.quotationExpired(row.number(), summary.ticketCode(), summary.customerName()),
+                        "/tickets/" + summary.ticketId());
+                }
             });
         }
         return expired.size();
