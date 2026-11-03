@@ -8,6 +8,7 @@ globalThis.React = React;
 
 // The value contract is the native one — '' or an ISO 'YYYY-MM-DD' (ค.ศ.), what the API stores —
 // so every call site keeps its state and payloads. Only what the user SEES and TYPES is พ.ศ.
+// Typed text is COMMITTED on blur (or Enter); keystrokes never report half-typed dates.
 function Controlled({ initial = '', onValue = () => {}, ...rest }) {
   const [value, setValue] = useState(initial);
   return (
@@ -22,6 +23,7 @@ function Controlled({ initial = '', onValue = () => {}, ...rest }) {
 }
 
 const field = () => screen.getByLabelText('วันที่');
+const type = (text) => fireEvent.change(field(), { target: { value: text } });
 
 describe('ThaiDateInput', () => {
   it('shows a stored ISO date as dd/mm/yyyy with a พ.ศ. year', () => {
@@ -29,81 +31,135 @@ describe('ThaiDateInput', () => {
     expect(field().value).toBe('31/01/2570');
   });
 
-  it('typing a พ.ศ. date reports the ค.ศ. ISO value (the 31/01/2570 → 3113 bug)', () => {
+  it('a typed พ.ศ. date is reported as the ค.ศ. ISO value on blur, not per keystroke (the 31/01/2570 → 3113 bug)', () => {
     const onValue = vi.fn();
     render(<Controlled onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '31/01/2570' } });
+    type('31/01/2570');
+    expect(onValue).not.toHaveBeenCalled();
+    fireEvent.blur(field());
     expect(onValue).toHaveBeenLastCalledWith('2027-01-31');
   });
 
-  // Review #1: an invalid edit must CLEAR the value, not leave the previous date in place — else
-  // required/zod pass and the old date is saved silently (e.g. วันที่ใบกำกับ defaulting to today).
-  it('rejects a ค.ศ. year typed over a valid date: value clears, typed text stays, error shows', () => {
+  // Review 2 #2: editing digit by digit passes through other valid dates (31 → 3 → 30); only the
+  // final one may reach the parent, or handlers like the overtime end-date reset fire on 3/01.
+  it('editing through an intermediate valid date reports only the final date', () => {
+    const onValue = vi.fn();
+    render(<Controlled initial="2027-01-31" onValue={onValue} />);
+    type('3/01/2570');
+    type('30/01/2570');
+    fireEvent.blur(field());
+    expect(onValue.mock.calls).toEqual([['2027-01-30']]);
+  });
+
+  // Review 2 #1: an invalid entry must neither clear the value (a blank hire date gets saved in a
+  // noValidate form) nor leave garbage on screen over the old value: it reverts, with the reason.
+  it('a ค.ศ. year typed over a valid date is never reported; on blur the field reverts and says why', () => {
     const onValue = vi.fn();
     render(<Controlled initial="2026-11-03" onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '31/01/2027' } });
-    expect(onValue).not.toHaveBeenCalledWith(expect.stringMatching(/^\d{4}-/));
-    expect(onValue).toHaveBeenLastCalledWith('');
-    expect(field().value).toBe('31/01/2027');
+    type('31/01/2027');
+    fireEvent.blur(field());
+    expect(onValue).not.toHaveBeenCalled();
+    expect(field().value).toBe('03/11/2569');
     expect(field().getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByText(/ปี พ\.ศ\./)).not.toBeNull();
   });
 
-  it('rejects an impossible day (31/02) and does not report a date', () => {
+  it('rejects an impossible day (31/02): nothing reported, field reverts to empty with an error', () => {
     const onValue = vi.fn();
     render(<Controlled onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '31/02/2570' } });
-    expect(onValue).not.toHaveBeenCalledWith(expect.stringMatching(/^\d{4}-/));
+    type('31/02/2570');
+    fireEvent.blur(field());
+    expect(onValue).not.toHaveBeenCalled();
+    expect(field().value).toBe('');
     expect(field().getAttribute('aria-invalid')).toBe('true');
   });
 
-  // Review #3: the ISO-paste path must not let a พ.ศ. year back in as ค.ศ. 2570 (→ PDF 3113).
   it('rejects an ISO-shaped date carrying a พ.ศ. year (2570-01-31)', () => {
     const onValue = vi.fn();
     render(<Controlled onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '2570-01-31' } });
-    expect(onValue).not.toHaveBeenCalledWith('2570-01-31');
-    expect(field().getAttribute('aria-invalid')).toBe('true');
+    type('2570-01-31');
+    fireEvent.blur(field());
+    expect(onValue).not.toHaveBeenCalled();
     expect(screen.getByText(/ปี พ\.ศ\./)).not.toBeNull();
   });
 
-  // Review #1: partial text clears the value too (Enter can submit without a blur), keeps the
-  // text on screen, and only complains once the user leaves the field.
-  it('a partly typed date clears the value, keeps the text, and errors only on blur', () => {
+  it('a partly typed date shows no error while typing; on blur it reverts with an error', () => {
     const onValue = vi.fn();
     render(<Controlled initial="2026-11-03" onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '31/01/25' } });
-    expect(onValue).toHaveBeenLastCalledWith('');
+    type('31/01/25');
     expect(field().value).toBe('31/01/25');
     expect(field().getAttribute('aria-invalid')).not.toBe('true');
     fireEvent.blur(field());
+    expect(onValue).not.toHaveBeenCalled();
+    expect(field().value).toBe('03/11/2569');
     expect(field().getAttribute('aria-invalid')).toBe('true');
-    expect(field().value).toBe('31/01/25');
   });
 
-  // Review #5: a parent reset back to its original date replaces leftover partial text.
-  it('a reset to the original date replaces partial text', () => {
-    render(<Controlled initial="2027-01-31" />);
-    fireEvent.change(field(), { target: { value: '5/1/25' } });
-    fireEvent.click(screen.getByRole('button', { name: 'reset' }));
-    expect(field().value).toBe('31/01/2570');
+  // Review 2 #8: min/max used to be inert on typing — only the calendar honoured them.
+  it('a typed date outside min/max is not reported; the field reverts with an error', () => {
+    const onValue = vi.fn();
+    render(<Controlled initial="2026-11-15" min="2026-11-10" max="2026-11-20" onValue={onValue} />);
+    type('21/11/2569');
+    fireEvent.blur(field());
+    expect(onValue).not.toHaveBeenCalled();
+    expect(field().value).toBe('15/11/2569');
+    expect(field().getAttribute('aria-invalid')).toBe('true');
+  });
+
+  // A stored value already outside a moved bound (effectiveTo after effectiveFrom changed) is not
+  // the user's edit: tabbing through must not flag it.
+  it('tabbing through an unchanged value that is outside min/max shows no error', () => {
+    render(<Controlled initial="2026-11-05" min="2026-11-10" />);
+    fireEvent.blur(field());
     expect(field().getAttribute('aria-invalid')).not.toBe('true');
   });
 
-  it('clearing the field reports an empty value', () => {
+  it('a value changed from outside replaces uncommitted text', () => {
+    const { rerender } = render(<ThaiDateInput aria-label="วันที่" value="2027-01-31" onChange={() => {}} />);
+    type('5/1/25');
+    rerender(<ThaiDateInput aria-label="วันที่" value="2026-07-02" onChange={() => {}} />);
+    expect(field().value).toBe('02/07/2569');
+  });
+
+  // Review 3: a parent that keeps its value (AttendancePage: `value || today`) must not leave the
+  // field blank while the value is still a date.
+  it('a parent that keeps its value after a commit leaves the field showing that value', () => {
+    function FallsBack() {
+      const [value, setValue] = useState('2026-08-15');
+      return <ThaiDateInput aria-label="วันที่" value={value} onChange={(e) => setValue(e.target.value || '2026-08-15')} />;
+    }
+    render(<FallsBack />);
+    type('');
+    fireEvent.blur(field());
+    expect(field().value).toBe('15/08/2569');
+  });
+
+  it('clearing the field reports an empty value on blur', () => {
     const onValue = vi.fn();
     render(<Controlled initial="2027-01-31" onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '' } });
+    type('');
+    fireEvent.blur(field());
     expect(onValue).toHaveBeenLastCalledWith('');
   });
 
   it('accepts a pasted ISO date and normalises the display to พ.ศ. on blur', () => {
     const onValue = vi.fn();
     render(<Controlled onValue={onValue} />);
-    fireEvent.change(field(), { target: { value: '2026-12-31' } });
-    expect(onValue).toHaveBeenLastCalledWith('2026-12-31');
+    type('2026-12-31');
     fireEvent.blur(field());
+    expect(onValue).toHaveBeenLastCalledWith('2026-12-31');
     expect(field().value).toBe('31/12/2569');
+  });
+
+  // Enter would submit the form with the old value still in the parent's state.
+  it('Enter on uncommitted text commits it and does not submit; Enter on committed text submits', () => {
+    const onValue = vi.fn();
+    render(<Controlled initial="2027-01-31" onValue={onValue} />);
+    type('01/02/2570');
+    const typed = fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(typed).toBe(false); // default prevented
+    expect(onValue).toHaveBeenLastCalledWith('2027-02-01');
+    expect(fireEvent.keyDown(field(), { key: 'Enter' })).toBe(true);
   });
 
   it('follows a value changed from outside (form reset / copy-from)', () => {
@@ -116,7 +172,8 @@ describe('ThaiDateInput', () => {
   it('passes the field name through on change (react-hook-form Controller / handlers keyed by name)', () => {
     const onChange = vi.fn();
     render(<ThaiDateInput aria-label="วันที่" name="startDate" value="" onChange={onChange} />);
-    fireEvent.change(field(), { target: { value: '01/11/2569' } });
+    type('01/11/2569');
+    fireEvent.blur(field());
     expect(onChange.mock.calls.at(-1)[0].target).toMatchObject({ name: 'startDate', value: '2026-11-01' });
   });
 
@@ -156,9 +213,8 @@ describe('ThaiDateInput', () => {
     expect(onValue).not.toHaveBeenCalled();
   });
 
-  // Review #2: inside a Modal, opening the calendar moves focus into it, and Escape — even when the
-  // browser left focus on <body> (Safari does not focus a clicked button) — closes ONLY the
-  // calendar, never the Modal underneath (that would throw the form away).
+  // Inside a Modal, opening the calendar moves focus into it, and Escape — even when the browser
+  // left focus on <body> (Safari does not focus a clicked button) — closes ONLY the calendar.
   it('inside a Modal: focus moves into the calendar and Escape closes only the calendar', () => {
     const onClose = vi.fn();
     render(<Modal title="ฟอร์ม" onClose={onClose}><Controlled initial="2027-01-15" /></Modal>);
@@ -171,7 +227,6 @@ describe('ThaiDateInput', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  // Review #6: tabbing out of the open calendar closes it (only a mousedown outside did).
   it('focus leaving the calendar closes it', () => {
     render(<><Controlled initial="2027-01-15" /><input aria-label="อื่น" /></>);
     fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
@@ -180,8 +235,7 @@ describe('ThaiDateInput', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  // Re-check #1: the open calendar must not pull focus back after the user returned to the text
-  // field — a phone keyboard opening fires resize, which re-ran the focus effect.
+  // A phone keyboard opening fires resize; the open calendar must not pull focus back.
   it('a resize while the calendar is open does not steal focus from the text field', () => {
     render(<Controlled initial="2027-01-15" />);
     fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
@@ -191,8 +245,6 @@ describe('ThaiDateInput', () => {
     expect(document.activeElement).toBe(field());
   });
 
-  // Re-check #2: focus leaving the WHOLE field (text input → next field) closes the calendar too,
-  // else the stale capture-phase Escape listener eats the next Escape meant for the Modal.
   it('focus moving from the text field to another field closes the open calendar', () => {
     render(<><Controlled initial="2027-01-15" /><input aria-label="อื่น" /></>);
     fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));

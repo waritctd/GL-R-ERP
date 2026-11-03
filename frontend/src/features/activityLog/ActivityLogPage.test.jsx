@@ -114,21 +114,23 @@ describe('ActivityLogPage', () => {
     await waitFor(() => expect(api.activityLog[method]).toHaveBeenCalled());
   });
 
-  // The date fields emit '' while a date is only partly typed; that must not fire a query with an
-  // empty (unbounded) range — the last complete range stays in force until a full date is typed.
-  it('a partly typed from-date does not fetch with an empty range; a complete one does', async () => {
+  // Date fields commit on blur: a partly typed date reverts and never reaches the query; a
+  // complete one does.
+  it('a partly typed from-date does not refetch; a complete one does', async () => {
     renderPage();
     await waitFor(() => expect(api.activityLog.summary).toHaveBeenCalledTimes(1));
     const initial = api.activityLog.summary.mock.calls[0][0];
 
-    fireEvent.change(screen.getByLabelText('ตั้งแต่วันที่'), { target: { value: '01/0' } });
+    fireEvent.change(screen.getByLabelText(/ตั้งแต่วันที่/), { target: { value: '01/0' } });
+    fireEvent.blur(screen.getByLabelText(/ตั้งแต่วันที่/));
     await new Promise((resolve) => { setTimeout(resolve, 50); });
     for (const [range] of api.activityLog.summary.mock.calls) {
       expect(range.from).toBeTruthy();
       expect(range.to).toBeTruthy();
     }
 
-    fireEvent.change(screen.getByLabelText('ตั้งแต่วันที่'), { target: { value: '01/01/2569' } });
+    fireEvent.change(screen.getByLabelText(/ตั้งแต่วันที่/), { target: { value: '01/01/2569' } });
+    fireEvent.blur(screen.getByLabelText(/ตั้งแต่วันที่/));
     await waitFor(() => expect(api.activityLog.summary).toHaveBeenLastCalledWith({ from: '2026-01-01', to: initial.to }));
   });
 

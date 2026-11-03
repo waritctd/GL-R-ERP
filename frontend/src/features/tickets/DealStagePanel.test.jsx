@@ -770,6 +770,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
       // Submit stays disabled until both gate inputs are present.
       expect(screen.getByTestId('guided-advance-submit').disabled).toBe(true);
       fireEvent.change(screen.getByTestId('guided-advance-followup'), { target: { value: '2026-10-05' } });
+      fireEvent.blur(screen.getByTestId('guided-advance-followup'));
       fireEvent.change(screen.getByTestId('guided-advance-note'), { target: { value: 'โทรติดตามลูกค้า' } });
       expect(screen.getByTestId('guided-advance-submit').disabled).toBe(false);
 

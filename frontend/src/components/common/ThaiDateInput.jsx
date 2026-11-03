@@ -1,18 +1,20 @@
-import React, { forwardRef, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import React, { forwardRef, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Controller } from 'react-hook-form';
 import CalendarDays from 'lucide-react/dist/esm/icons/calendar-days.mjs';
 import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left.mjs';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right.mjs';
 import { cn } from '../../utils/cn.js';
-import { thaiMonthsLong } from '../../utils/format.js';
+import { bangkokTodayIso, thaiMonthsLong } from '../../utils/format.js';
 
 // Day-date field that shows/accepts พ.ศ. dd/mm/yyyy; value stays native '' | ISO 'YYYY-MM-DD' (ค.ศ.).
+// Typed text is committed on blur/Enter, never per keystroke; a calendar pick commits at once.
 
 const BE_OFFSET = 543;
 const MIN_BE_YEAR = 2400; // below this a slash date is almost certainly a ค.ศ. year typed by mistake
 const ERR_FORMAT = 'กรอกวันที่เป็น วว/ดด/ปปปป (ปี พ.ศ.)';
 const ERR_YEAR = 'กรอกปี พ.ศ. เช่น 2570';
+const ERR_RANGE = 'วันที่อยู่นอกช่วงที่เลือกได้';
 const WEEKDAYS = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'];
 const POPOVER_W = 288;
 const POPOVER_H = 330;
@@ -30,8 +32,7 @@ function isoToBe(iso) {
   return match ? `${match[3]}/${match[2]}/${Number(match[1]) + BE_OFFSET}` : '';
 }
 
-// -> { status: 'empty' | 'valid' | 'partial' | 'invalid', iso?, error? }. `partial` is still being
-// typed (digits and separators only): no error is shown until blur.
+// -> { status: 'empty' | 'valid' | 'partial' | 'invalid', iso?, error? }.
 function parseText(raw) {
   const text = raw.trim();
   if (!text) return { status: 'empty', iso: '' };
@@ -50,10 +51,6 @@ function parseText(raw) {
       : { status: 'invalid', error: ERR_FORMAT };
   }
   return /^[\d/-]*$/.test(text) ? { status: 'partial' } : { status: 'invalid', error: ERR_FORMAT };
-}
-
-function todayBangkok() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 }
 
 function eventLike(name, value) {
@@ -122,6 +119,7 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
   value,
   onChange,
   onBlur,
+  onKeyDown,
   name,
   id,
   className,
@@ -146,50 +144,54 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
   const wrapRef = useRef(null);
   const popRef = useRef(null);
   const btnRef = useRef(null);
-  const inputRef = useRef(null);
-  const setInputRef = useCallback((node) => {
-    inputRef.current = node;
-    if (typeof ref === 'function') ref(node);
-    else if (ref) ref.current = node;
-  }, [ref]);
-  const parsedText = parseText(text);
-  // What the text means to the parent: a date, or '' for empty/partial/invalid text.
-  const textValue = parsedText.iso ?? '';
+  const outOfRange = (iso) => Boolean((min && iso < min) || (max && iso > max));
 
-  // Follow a value changed from outside (form reset, copy-from) -- unless the text already means
-  // that value, which is the echo of what the user just typed and must not be reformatted mid-edit.
+  // Follow a value changed from outside (form reset, copy-from, our own commit): the text is replaced.
   if (current !== synced) {
     setSynced(current);
-    if (textValue !== current) {
-      setText(isoToBe(current));
-      setError('');
-    }
+    setText(isoToBe(current));
+    setError('');
   }
 
   function handleChange(event) {
-    const next = event.target.value;
-    setText(next);
-    const parsed = parseText(next);
-    setError(parsed.status === 'invalid' ? parsed.error : '');
-    // Invalid/partial text clears the value (typed text stays), so required/zod cannot pass on the
-    // previous date while the field shows something else.
-    onChange?.(eventLike(name, parsed.iso ?? ''));
+    setText(event.target.value);
+    setError('');
+  }
+
+  // Valid in-range text (or empty) is reported once; anything else reverts to the current value.
+  function commit() {
+    const parsed = parseText(text);
+    if (parsed.status === 'empty' || (parsed.status === 'valid' && (parsed.iso === current || !outOfRange(parsed.iso)))) {
+      setText(isoToBe(parsed.iso));
+      if (parsed.iso !== current) {
+        onChange?.(eventLike(name, parsed.iso));
+        setSynced(undefined); // re-derive the text from whatever value the parent keeps (e.g. `|| today`)
+      }
+      return;
+    }
+    setText(isoToBe(current));
+    setError(parsed.status === 'valid' ? ERR_RANGE : parsed.error ?? ERR_FORMAT);
   }
 
   function handleBlur(event) {
-    const parsed = parseText(text);
-    if (parsed.status === 'valid') setText(isoToBe(parsed.iso));
-    else if (parsed.status === 'partial') setError(ERR_FORMAT);
+    commit();
     onBlur?.(event);
   }
 
-  const validityMessage = parsedText.status === 'invalid' ? parsedText.error : parsedText.status === 'partial' ? ERR_FORMAT : '';
-  useEffect(() => {
-    inputRef.current?.setCustomValidity?.(validityMessage);
-  }, [validityMessage]);
+  // Enter would submit the form while the parent still holds the old value: commit first.
+  function handleKeyDown(event) {
+    if (event.key === 'Enter') {
+      const parsed = parseText(text);
+      if ((parsed.status !== 'valid' && parsed.status !== 'empty') || parsed.iso !== current) {
+        event.preventDefault();
+        commit();
+      }
+    }
+    onKeyDown?.(event);
+  }
 
   function openCalendar() {
-    const base = textValue || todayBangkok();
+    const base = parseText(text).iso || bangkokTodayIso();
     setView({ y: Number(base.slice(0, 4)), m: Number(base.slice(5, 7)) - 1 });
     setOpen(true);
   }
@@ -271,7 +273,7 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
     <div ref={wrapRef} className={cn('relative w-full min-w-0', wrapperClassName)} onBlur={handleFocusLeave}>
       <input
         {...rest}
-        ref={setInputRef}
+        ref={ref}
         id={id}
         name={name}
         type="text"
@@ -279,12 +281,10 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
         autoComplete="off"
         placeholder={placeholder}
         disabled={disabled}
-        // Inert on a text input; kept as attributes so the bounds stay inspectable. The calendar enforces them.
-        min={min}
-        max={max}
         value={text}
         onChange={handleChange}
         onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
         aria-invalid={error ? true : ariaInvalid}
         aria-describedby={describedByAll}
         className={cn(className, 'pr-11')}
@@ -307,8 +307,8 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
           <Calendar
             view={view}
             setView={setView}
-            selected={textValue}
-            today={todayBangkok()}
+            selected={current}
+            today={bangkokTodayIso()}
             min={min}
             max={max}
             onPick={pick}

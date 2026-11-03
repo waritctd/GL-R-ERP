@@ -716,6 +716,7 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     // The rep types the date in พ.ศ.; the API still receives ค.ศ. ISO (PDF adds 543 itself) —
     // the 31/01/2570 → "31/01/3113" bug was a พ.ศ. year landing in a ค.ศ. field.
     fireEvent.change(dateInput, { target: { value: '31/12/2569' } });
+    fireEvent.blur(dateInput);
     expect(dateInput.value).toBe('31/12/2569');
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));

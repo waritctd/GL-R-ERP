@@ -227,6 +227,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await goToStep2ForVacation();
 
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
@@ -245,6 +246,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await screen.findByText(/ขั้นตอนที่ 2\/3/);
 
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ท้องเสีย + ปวดหัวไมเกรน' } });
     expect(screen.queryByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).toBeNull();
 
@@ -264,6 +266,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   it('step 2: switching ลาพักร้อน -> ลาป่วย clears the past-date error the old type raised', async () => {
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
@@ -289,6 +292,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await screen.findByText(/ขั้นตอนที่ 2\/3/);
 
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     // Anchored so this doesn't ALSO match PERSONAL's own "เหตุผลการลากิจ (ถ้ามี)" select, which
     // shares the same leading substring -- a plain /เหตุผลการลา/ is ambiguous only on this type.
     fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
@@ -319,6 +323,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await screen.findByText(/ขั้นตอนที่ 2\/3/);
 
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
     expect(await screen.findByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).not.toBeNull();
 
@@ -343,6 +348,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await screen.findByText(/ขั้นตอนที่ 2\/3/);
 
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
     fireEvent.click(screen.getByLabelText(/ลากิจฉุกเฉิน/));
     await waitFor(() => expect(screen.queryByText(/วันที่เริ่มลาต้องไม่ก่อนวันนี้/)).toBeNull());
@@ -373,7 +379,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   it('step 2: honestly surfaces coverageEvaluated=false under the debounced QUICK preview', async () => {
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: '2099-12-31' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่สิ้นสุด/));
 
     expect(screen.getByText(/ยังไม่ตรวจภาระงานของแผนก/)).not.toBeNull();
     await waitFor(() => expect(api.leave.preview).toHaveBeenCalledWith(
@@ -434,7 +442,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: start } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: end } });
+    fireEvent.blur(screen.getByLabelText(/วันที่สิ้นสุด/));
 
     await waitFor(() => {
       expect(screen.getByTestId('calendar-context-note').textContent).toMatch(LONG_NAME_1);
@@ -458,6 +468,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
 
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
@@ -501,6 +512,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
 
     const original = new File(['fake-jpeg-bytes'], 'sick-note.jpg', { type: 'image/jpeg' });
@@ -528,6 +540,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
 
     const pdf = new File(['fake-pdf-bytes'], 'sick-note.pdf', { type: 'application/pdf' });
@@ -551,6 +564,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
     // "ลาทั้งวัน" is TICKED by default (V166) -- unticking it reveals the time fields.
     fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
@@ -585,13 +599,15 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     const startDate = '2099-12-31';
     const endDate = '2100-01-01';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: startDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/วันที่สิ้นสุด/), { target: { value: endDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่สิ้นสุด/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ลาบ่ายต่อเนื่องถึงวันถัดไป' } });
     fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
 
     // Still both dates as chosen -- unticking "ลาทั้งวัน" must never collapse a multi-day span.
-    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe(startDate);
-    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe(endDate);
+    expect(screen.getByLabelText(/วันที่เริ่ม/).value).toBe('31/12/2642'); // the fields show พ.ศ.
+    expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('01/01/2643');
     fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '13:00' } });
     fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '17:30' } });
 
@@ -638,6 +654,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await goToStep2ForVacation();
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
 
@@ -662,6 +679,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await goToStep2ForVacation();
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
 
@@ -789,6 +807,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
       const futureDate = '2099-12-31';
       fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+      fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
       fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
       fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
       await screen.findByText(/ขั้นตอนที่ 3\/3/);
@@ -827,6 +846,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
       const futureDate = '2099-12-20';
       fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+      fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
       fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
       fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
       await screen.findByText(/ขั้นตอนที่ 3\/3/);
@@ -867,6 +887,7 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
 
       const futureDate = '2099-12-20';
       fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+      fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
       fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
       fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
       await screen.findByText(/ขั้นตอนที่ 3\/3/);
@@ -929,6 +950,7 @@ async function advanceToStep3WithFutureDate() {
   await goToStep2ForVacation();
   const futureDate = '2099-12-31';
   fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+  fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
   fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
   fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
   await screen.findByText(/ขั้นตอนที่ 3\/3/);
@@ -972,6 +994,7 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
 
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
 
     // The warning itself IS shown at step 2...
@@ -992,6 +1015,7 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
 
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบ' } });
 
     expect(await screen.findByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).not.toBeNull();
@@ -1142,6 +1166,7 @@ describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
   it('a real submit event on step 2 does not call create()', async () => {
     const { container } = await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2099-12-31' } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
 
     submitWithSubmitter(container.querySelector('form'));
@@ -1154,6 +1179,7 @@ describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
     const { container } = await goToStep2ForVacation();
     const futureDate = '2099-12-31';
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
     await screen.findByText(/ขั้นตอนที่ 3\/3/);

@@ -194,6 +194,12 @@ describe('EmployeeFormModal form validation', () => {
     expect(screen.getByLabelText(/ชื่อ-นามสกุล/).value).toBe('สมชาย ใจดี');
     expect(screen.getByLabelText(/อีเมล/).value).toBe('somchai@example.com');
 
+    // A mistyped hire date (ค.ศ. year) must never save as blank: the field keeps the saved date.
+    const hireDate = screen.getByLabelText(/วันที่เริ่มงาน/);
+    fireEvent.change(hireDate, { target: { value: '15/01/2099' } });
+    fireEvent.blur(hireDate);
+    expect(hireDate.value).toBe('15/01/2642');
+
     fireEvent.click(screen.getByRole('button', { name: /บันทึก/ }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));

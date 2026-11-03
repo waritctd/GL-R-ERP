@@ -471,7 +471,7 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
   // of nowhere.
   function handleWorkDateChange(event) {
     const value = event.target.value;
-    if (!value) return; // cleared or mid-typing
+    if (!value) return; // cleared
     const currentEndDate = getValues('endDate');
     if (currentEndDate < value || currentEndDate > addDaysToIso(value, 1)) {
       setValue('endDate', value, { shouldDirty: true, shouldValidate: true });

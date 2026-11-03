@@ -47,6 +47,7 @@ function renderPage({ showToast } = {}) {
 async function fillAndSubmit({ file = pdf(), date = '2026-09-01' } = {}) {
   fireEvent.change(document.getElementById('leave-policy-file'), { target: { files: [file] } });
   fireEvent.change(screen.getByLabelText(/วันที่มีผลบังคับใช้/), { target: { value: date } });
+  fireEvent.blur(screen.getByLabelText(/วันที่มีผลบังคับใช้/));
   fireEvent.click(screen.getByRole('button', { name: /อัปโหลดประกาศ/ }));
 }
 

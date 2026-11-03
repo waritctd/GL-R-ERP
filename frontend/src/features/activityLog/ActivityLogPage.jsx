@@ -93,12 +93,7 @@ export function ActivityLogPage() {
   const [from, setFrom] = useState(todayInBangkok);
   const [to, setTo] = useState(todayInBangkok);
 
-  // A date field reports '' while it is cleared or only partly typed. Queries follow the last
-  // COMPLETE range, so a keystroke never fires an unbounded fetch. (A deliberately cleared field is
-  // indistinguishable from a partial one, so it also keeps the previous range rather than
-  // widening to the server's default.)
-  const [range, setRange] = useState(() => ({ from, to }));
-  if (from && to && (range.from !== from || range.to !== to)) setRange({ from, to });
+  const range = useMemo(() => ({ from, to }), [from, to]);
 
   const summaryQuery = useQuery({
     queryKey: ['activityLog', 'summary', range],

@@ -98,8 +98,6 @@ export function AttendancePage({ user, showToast }) {
   // Employees read their own month at a glance; everyone else answers "who is late today", so
   // they get a single day plus a stepper.
   const [selectedDate, setSelectedDate] = useState(today);
-  // The date field may be empty while the user retypes it; every use below falls back to today.
-  const activeDate = selectedDate || today;
   const [employeeId, setEmployeeId] = useState('');
   // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering
   // them this control would imply a reach they don't have.
@@ -131,7 +129,7 @@ export function AttendancePage({ user, showToast }) {
   // current month, matching both the copy below ("...ในเดือนนี้") and the API's hard cap.
   const range = isSelfView
     ? { from: bangkokMonthStartIso(), to: today }
-    : { from: activeDate, to: activeDate };
+    : { from: selectedDate, to: selectedDate };
 
   // Issue #422 B2: onto react-query so this screen participates in the shared cache (an OT
   // approval or a same-day recalculation elsewhere can now reach it via invalidation, and it gets
@@ -281,7 +279,7 @@ export function AttendancePage({ user, showToast }) {
     // reads the UTC calendar day off a Bangkok-midnight instant, which is always one day behind
     // the Bangkok date intended (Bangkok midnight is 17:00 UTC the previous day), netting a 2-day
     // back-step and a stuck forward-step. See addDaysIso's comment in utils/format.js.
-    const iso = addDaysIso(activeDate, deltaDays);
+    const iso = addDaysIso(selectedDate, deltaDays);
     // Clamp to the browsable window in both directions — see monthBounds().
     if (iso < monthStart || iso > today) return;
     setSelectedDate(iso);
@@ -682,7 +680,7 @@ export function AttendancePage({ user, showToast }) {
       {markPresentOpen ? (
         <MarkPresentModal
           employees={employeeOptions}
-          defaultDate={activeDate}
+          defaultDate={selectedDate}
           minDate={monthStart}
           maxDate={today}
           submitting={markingPresent}
@@ -754,7 +752,7 @@ export function AttendancePage({ user, showToast }) {
               <Button
                 variant="secondary"
                 onClick={() => stepDay(-1)}
-                disabled={loading || activeDate <= monthStart}
+                disabled={loading || selectedDate <= monthStart}
                 aria-label="วันก่อนหน้า"
                 // Square, and at the mobile touch floor. These were 36px wide
                 // against a 44px-tall input — under WCAG 2.2 SC 2.5.8's 24px
@@ -774,12 +772,12 @@ export function AttendancePage({ user, showToast }) {
                 value={selectedDate}
                 min={monthStart}
                 max={today}
-                onChange={(event) => setSelectedDate(event.target.value)}
+                onChange={(event) => setSelectedDate(event.target.value || today)}
               />
               <Button
                 variant="secondary"
                 onClick={() => stepDay(1)}
-                disabled={loading || activeDate >= today}
+                disabled={loading || selectedDate >= today}
                 aria-label="วันถัดไป"
                 className="h-11 w-11 shrink-0 px-0"
               >
@@ -937,7 +935,7 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
           <Button
             type="button"
             variant="primary"
-            disabled={submitting || !date}
+            disabled={submitting}
             onClick={() => onSubmit({ date, employeeIds: [...selected], notes: notes.trim() || undefined })}
           >
             {submitting ? 'กำลังบันทึก…' : `บันทึก (${selected.size} คน)`}
@@ -951,7 +949,7 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
           value={date}
           min={minDate}
           max={maxDate}
-          onChange={(event) => changeDate(event.target.value)}
+          onChange={(event) => changeDate(event.target.value || defaultDate)}
         />
       </label>
 

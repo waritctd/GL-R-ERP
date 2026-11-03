@@ -133,7 +133,7 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
 
   function handleWorkDateChange(event) {
     const value = event.target.value;
-    if (!value) return; // cleared or mid-typing: keep the times the user already picked
+    if (!value) return; // cleared: keep the times the user already picked
     const checkInTime = getValues('requestedCheckIn').slice(11) || '08:30';
     const checkOutTime = getValues('requestedCheckOut').slice(11) || '17:30';
     setValue('requestedCheckIn', `${value}T${checkInTime}`, { shouldDirty: true, shouldValidate: true });
