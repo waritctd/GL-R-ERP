@@ -95,7 +95,7 @@ class NotificationEmailServiceTest {
     // assertion is the one part of the old test that is still this class's own behaviour.
     //
     // MUTATION-CHECK (verified live, not just by reasoning, pre-#782): temporarily changed send() back
-    // to `subjectSuffix + "[GL&R Portal] " + subject` (the old prefix order) -- exactly this one test went
+    // to `subjectSuffix + "[GL&R HR] " + subject` (the old prefix order) -- exactly this one test went
     // red, nothing else.
     @Test
     void passesRecipientThroughUnchangedAndAppliesSubjectSuffixEvenWithOverrideConfigured() {

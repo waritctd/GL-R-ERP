@@ -21,6 +21,7 @@ import th.co.glr.hr.attachment.FileStorageService;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.customer.CustomerDto;
@@ -76,8 +77,6 @@ import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.support.RecordingSalesMailer;
-import th.co.glr.hr.ticket.TicketSummaryDto;
-import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.ticket.CompleteDeliveryRequest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
@@ -91,6 +90,7 @@ import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
+import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
  * Step 8 (Receiving, Inventory Allocation, and Delivery) — real-DB acceptance coverage for the

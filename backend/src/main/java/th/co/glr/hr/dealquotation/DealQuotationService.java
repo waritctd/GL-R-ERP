@@ -2193,10 +2193,9 @@ public class DealQuotationService {
         // or stock reservation exists — both key on quotation_issued or later), and the only other
         // reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE SET NULL.
         tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
-        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(),
-            DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent()), actor);
-        // P1 hand-off: FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
         int depositPercent = DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent());
+        ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), depositPercent, actor);
+        // P1 hand-off: FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
         notifications.notifyByRoleAtLink("ceo", PricingRequestEventKind.ORDER_CONFIRMED,
             actor.name() + " ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
                 + DealNoticeText.dealLabel(locked.code(), locked.customerName())
