@@ -253,7 +253,7 @@ class DealQuotationEnglishFormTest {
                 .contains("Tile Model BIOARCH Color BARGE GRIGIA Finish ONDULATO No.APGBBK15")
                 .contains("Size 20 cm x 30.5 cm x 9 mm (approx.)")
                 .contains("Tile Model Reverso Cement Color Grigio Finish Matt Size 60x60 cm. No.BS66R13GP")
-                .contains("(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs) (20 pcs/box)")
+                .contains("(Area 300 sqm @ 16.39 pcs/sqm = 4,917 pcs + 5% allowance, rounded up to full boxes = 5,180 pcs = 259 boxes) (20 pcs/box)")
                 .contains("Special discount 3% for orders placed by July 31, 2026");
             assertThat(str(sheet, 9, 3)).isEqualTo("PCS");
             assertThat(str(sheet, 9, 6)).isEqualTo("Special");

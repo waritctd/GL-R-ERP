@@ -119,6 +119,7 @@ describe('OvertimePage form validation', () => {
     const workDate = isoDaysFromToday(3);
 
     fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่ทำ OT/));
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
@@ -138,7 +139,8 @@ describe('OvertimePage form validation', () => {
     renderOvertimePage();
     const today = isoDaysFromToday(0);
 
-    expect((await screen.findByLabelText(/วันที่ทำ OT/)).value).toBe(today);
+    const [y, m, d] = today.split('-');
+    expect((await screen.findByLabelText(/วันที่ทำ OT/)).value).toBe(`${d}/${m}/${Number(y) + 543}`);
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
@@ -151,6 +153,7 @@ describe('OvertimePage form validation', () => {
     const workDate = isoDaysFromToday(-3);
 
     fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่ทำ OT/));
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), {
       target: { value: 'ลูกค้าเร่งงานด่วน ทำ OT แล้วยื่นย้อนหลังหลังเลิกกะ' },
     });
@@ -164,6 +167,7 @@ describe('OvertimePage form validation', () => {
     renderOvertimePage();
 
     fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: isoDaysFromToday(-3) } });
+    fireEvent.blur(screen.getByLabelText(/วันที่ทำ OT/));
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'OT' } });
 
     expect(await screen.findByText(/อย่างน้อย 20 ตัวอักษร/)).not.toBeNull();
@@ -176,11 +180,13 @@ describe('OvertimePage form validation', () => {
     renderOvertimePage();
 
     fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: isoDaysFromToday(-120) } });
+    fireEvent.blur(screen.getByLabelText(/วันที่ทำ OT/));
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), {
       target: { value: 'พบว่ายังไม่ได้เบิก OT ของกะเก่า จึงยื่นย้อนหลัง' },
     });
 
-    expect(await screen.findByText(/ย้อนหลังได้ไม่เกิน 60 วัน/)).not.toBeNull();
+    // The field itself refuses the date (its min is the 60-day window): it reverts with a range error.
+    expect(await screen.findByText('วันที่อยู่นอกช่วงที่เลือกได้')).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     expect(api.overtime.create).not.toHaveBeenCalled();
@@ -197,10 +203,13 @@ describe('OvertimePage form validation', () => {
     const tooFarEndDate = isoDaysFromToday(5); // workDate + 2 days -- one day past the allowed cap.
 
     fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่ทำ OT/));
     fireEvent.change(screen.getByLabelText(/^วันที่สิ้นสุด/), { target: { value: tooFarEndDate } });
+    fireEvent.blur(screen.getByLabelText(/^วันที่สิ้นสุด/));
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
 
-    expect(await screen.findByText('วันที่สิ้นสุดต้องเป็นวันที่ทำ OT หรือวันถัดไปเท่านั้น')).not.toBeNull();
+    // The field itself refuses the date (its max is workDate + 1): it reverts with a range error.
+    expect(await screen.findByText('วันที่อยู่นอกช่วงที่เลือกได้')).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
     expect(api.overtime.create).not.toHaveBeenCalled();
@@ -215,7 +224,9 @@ describe('OvertimePage form validation', () => {
     const nextDay = isoDaysFromToday(4);
 
     fireEvent.change(await screen.findByLabelText(/วันที่ทำ OT/), { target: { value: workDate } });
+    fireEvent.blur(screen.getByLabelText(/วันที่ทำ OT/));
     fireEvent.change(screen.getByLabelText(/^วันที่สิ้นสุด/), { target: { value: nextDay } });
+    fireEvent.blur(screen.getByLabelText(/^วันที่สิ้นสุด/));
     fireEvent.change(screen.getByLabelText(/เหตุผลความจำเป็น/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 

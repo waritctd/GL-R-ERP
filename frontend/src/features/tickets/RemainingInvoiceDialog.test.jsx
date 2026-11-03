@@ -100,7 +100,7 @@ describe('RemainingInvoiceDialog — no live stored document (create flow)', () 
 
     const referenceInput = await screen.findByDisplayValue('QT-2026-0099');
     expect(referenceInput).not.toBeNull();
-    expect(screen.getByLabelText(/วันที่/).value).toBe('2026-09-01');
+    expect(screen.getByLabelText(/^วันที่/).value).toBe('01/09/2569'); // anchored: the calendar button is "เลือกวันที่"
     expect(screen.getByLabelText(/เลขอ้างอิงมัดจำ/).value).toBe('AI2600145');
     expect(screen.getByText('หมายเหตุ 1').closest('label').querySelector('input').checked).toBe(true);
     expect(screen.getByText('หมายเหตุ 2').closest('label').querySelector('input').checked).toBe(false);

@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
+import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
 function uniqueOptions(rows, valueKey, labelKey) {
   const options = new Map();
@@ -208,7 +209,7 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
             </select>
           </FormField>
           <FormField label="วันที่เริ่มงาน" htmlFor="employee-hireDate">
-            <input id="employee-hireDate" type="date" {...register('hireDate')} />
+            <ThaiDateController id="employee-hireDate" control={control} name="hireDate" />
           </FormField>
           <div className={formGridSpan2}>
             <FormField label="ที่อยู่ปัจจุบัน" htmlFor="employee-address">

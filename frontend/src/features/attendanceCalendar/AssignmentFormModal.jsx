@@ -5,6 +5,7 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { todayIso } from './dateHelpers.js';
 import { SCOPE_TYPES, scopeIdLabel } from './scopeTypes.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * Create modal for one hr.work_schedule_assignment row. `min={todayIso()}` on effectiveFrom is the
@@ -109,9 +110,8 @@ export function AssignmentFormModal({ schedules, busy, formError, onClose, onSub
         </FormField>
 
         <FormField label="วันที่เริ่มมีผล" htmlFor="assignment-from" error={fieldErrors.effectiveFrom} required>
-          <input
+          <ThaiDateInput
             id="assignment-from"
-            type="date"
             min={today}
             value={effectiveFrom}
             onChange={(event) => setEffectiveFrom(event.target.value)}
@@ -124,9 +124,8 @@ export function AssignmentFormModal({ schedules, busy, formError, onClose, onSub
           error={fieldErrors.effectiveTo}
           hint="เว้นว่างไว้หากยังไม่กำหนดวันสิ้นสุด — วันนี้ยังนับเป็นวันที่มีผล (inclusive)"
         >
-          <input
+          <ThaiDateInput
             id="assignment-to"
-            type="date"
             min={effectiveFrom || today}
             value={effectiveTo}
             onChange={(event) => setEffectiveTo(event.target.value)}

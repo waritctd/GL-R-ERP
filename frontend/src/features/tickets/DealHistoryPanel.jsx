@@ -8,6 +8,7 @@ import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Moved verbatim from TicketDetailPage.jsx (IA rebuild — see
 // docs/ui-repair/02-information-architecture/): this is the label table for
@@ -346,8 +347,8 @@ export function DealHistoryPanel({
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
               วันที่
-              <input
-                type="date" className="text-base"
+              <ThaiDateInput
+                className="text-base"
                 value={activityDraft.activityDate}
                 onChange={(e) => setActivityDraft((d) => ({ ...d, activityDate: e.target.value }))}
               />

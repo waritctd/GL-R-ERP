@@ -298,6 +298,7 @@ describe('"เปลี่ยนลูกค้า" on a saved DRAFT direct quot
     expect(screen.queryByText(contactName)).toBeNull();
 
     fireEvent.change(byId('offerDate'), { target: { value: '2026-09-19' } });
+    fireEvent.blur(byId('offerDate'));
     expect(isDirty()).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 

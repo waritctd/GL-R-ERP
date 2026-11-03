@@ -33,6 +33,7 @@ import {
   formatThaiMonthYear,
   payrollCutoffInfo,
 } from './specialMoneyRules.js';
+import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
 const TABLE_GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] nav-drawer:min-w-[820px] reflow-cards';
 
@@ -818,10 +819,10 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             {['TRAVEL_PER_DIEM', 'TRAVEL_LODGING'].includes(requestType) ? (
               <>
                 <FormField label="วันที่เริ่มเดินทาง" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                  <ThaiDateController id="smr-event-date" control={control} name="eventDate" required />
                 </FormField>
                 <FormField label="วันที่สิ้นสุด" htmlFor="smr-event-end-date" error={errors.eventEndDate?.message} required>
-                  <input id="smr-event-end-date" type="date" {...register('eventEndDate')} required />
+                  <ThaiDateController id="smr-event-end-date" control={control} name="eventEndDate" required />
                 </FormField>
                 <FormField
                   label="จังหวัดปลายทาง"
@@ -856,7 +857,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             {requestType === 'MEDICAL' ? (
               <>
                 <FormField label="วันที่ใบเสร็จ" htmlFor="smr-receipt-date" error={errors.receiptDate?.message} required>
-                  <input id="smr-receipt-date" type="date" {...register('receiptDate')} required />
+                  <ThaiDateController id="smr-receipt-date" control={control} name="receiptDate" required />
                 </FormField>
                 <FormField label="จำนวนเงินที่ขอเบิก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
                   <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />
@@ -867,7 +868,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             {AID_TYPES.includes(requestType) ? (
               <>
                 <FormField label="วันที่เกิดเหตุการณ์" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                  <ThaiDateController id="smr-event-date" control={control} name="eventDate" required />
                 </FormField>
                 {requestType === 'AID_FUNERAL' ? (
                   <FormField label="ความสัมพันธ์กับผู้เสียชีวิต" htmlFor="smr-relation" error={errors.relation?.message} required>
@@ -893,11 +894,11 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                   </FormField>
                 ) : null}
                 <FormField label="วันที่เบิก" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                  <ThaiDateController id="smr-event-date" control={control} name="eventDate" required />
                 </FormField>
                 {requestType === 'UNIFORM_ANNUAL' && watched.uniformMode !== 'TAILORED' ? (
                   <FormField label="วันที่ใบเสร็จ" htmlFor="smr-receipt-date" error={errors.receiptDate?.message} required>
-                    <input id="smr-receipt-date" type="date" {...register('receiptDate')} required />
+                    <ThaiDateController id="smr-receipt-date" control={control} name="receiptDate" required />
                   </FormField>
                 ) : null}
                 {/* Piece count applies in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual checks
@@ -939,7 +940,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
             {(requestType === 'TRAINING' || requestType === 'OTHER') ? (
               <>
                 <FormField label="วันที่" htmlFor="smr-event-date" error={errors.eventDate?.message} required>
-                  <input id="smr-event-date" type="date" {...register('eventDate')} required />
+                  <ThaiDateController id="smr-event-date" control={control} name="eventDate" required />
                 </FormField>
                 <FormField label="จำนวนเงินที่ขอเบิก" htmlFor="smr-amount" error={errors.requestedAmountInput?.message} required>
                   <input id="smr-amount" type="number" min="0" step="1" {...register('requestedAmountInput')} required />

@@ -28,6 +28,7 @@ import {
 import { downloadBlob } from '../../utils/download.js';
 import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCorrectionPanel.jsx';
 import { AttendanceCorrectionRequestModal } from '../attendanceCorrection/AttendanceCorrectionRequestModal.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
 // needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
@@ -762,14 +763,12 @@ export function AttendancePage({ user, showToast }) {
               >
                 <Icon name="chevronLeft" />
               </Button>
-              <input
+              <ThaiDateInput
                 id="attendance-selected-date"
-                type="date"
                 // `min-w-0` for the same reason FilterField carries it: this is
-                // itself a flex item, and the native date control's intrinsic
-                // width is what would otherwise push the [next] button out of
-                // the bar on iOS.
-                className="min-w-0 flex-1"
+                // itself a flex item, and must be able to shrink so it never pushes
+                // the [next] button out of the bar on a phone.
+                wrapperClassName="min-w-0 flex-1"
                 value={selectedDate}
                 min={monthStart}
                 max={today}
@@ -946,8 +945,7 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
     >
       <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
         วันที่
-        <input
-          type="date"
+        <ThaiDateInput
           value={date}
           min={minDate}
           max={maxDate}

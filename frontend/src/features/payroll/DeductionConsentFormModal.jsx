@@ -4,6 +4,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { CONSENT_APPLICABLE_DEDUCTION_KINDS, payrollDeductionKindLabel } from '../../utils/format.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * Record/edit one written-consent row (issue #376's write half, exposed for #744).
@@ -168,9 +169,8 @@ export function DeductionConsentFormModal({
         </FormField>
 
         <FormField label="วันที่ในหนังสือ" htmlFor="consent-date">
-          <input
+          <ThaiDateInput
             id="consent-date"
-            type="date"
             value={consentDate}
             onChange={(event) => setConsentDate(event.target.value)}
           />

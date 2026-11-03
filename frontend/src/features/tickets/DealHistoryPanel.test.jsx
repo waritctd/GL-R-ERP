@@ -78,8 +78,8 @@ describe('DealHistoryPanel', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
     try {
-      const { container } = render(<DealHistoryPanel canAddActivity />);
-      expect(container.querySelector('input[type="date"]').value).toBe('2026-10-31');
+      render(<DealHistoryPanel canAddActivity />);
+      expect(screen.getByLabelText('วันที่').value).toBe('31/10/2569');
     } finally {
       vi.useRealTimers();
     }

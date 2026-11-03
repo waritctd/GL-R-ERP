@@ -6,6 +6,7 @@ import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Tabs } from '../../components/common/Tabs.jsx';
 import { actionLabel, actionTone } from './actionLabels.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * Admin-only view of what everyone has been doing in the portal.
@@ -231,8 +232,7 @@ export function ActivityLogPage() {
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-text-muted">ตั้งแต่วันที่</span>
-          <input
-            type="date"
+          <ThaiDateInput
             value={from}
             max={to}
             onChange={(event) => setFrom(event.target.value)}
@@ -241,8 +241,7 @@ export function ActivityLogPage() {
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-text-muted">ถึงวันที่</span>
-          <input
-            type="date"
+          <ThaiDateInput
             value={to}
             min={from}
             onChange={(event) => setTo(event.target.value)}

@@ -3,6 +3,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Small money-action forms for the finance deal page. Each one owns only its draft; the page owns
 // the mutation and hands back `busy` (request pending) and `error` (the server's own message), so
@@ -85,7 +86,7 @@ export function RecordPaymentModal({ defaultKind, busy, error, onSubmit, onClose
             />
           </FormField>
           <FormField label="วันที่รับเงิน (ไม่บังคับ)" htmlFor="fin-pay-date" hint="เว้นว่าง = ใช้เวลาตอนบันทึก">
-            <input id="fin-pay-date" type="date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} />
+            <ThaiDateInput id="fin-pay-date" value={receivedAt} onChange={(e) => setReceivedAt(e.target.value)} />
           </FormField>
         </div>
         <FormField label="เลขอ้างอิง" htmlFor="fin-pay-ref">

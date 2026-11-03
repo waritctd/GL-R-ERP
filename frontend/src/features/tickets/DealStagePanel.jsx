@@ -22,6 +22,7 @@ import {
 } from './stageMeta.js';
 import { UpdateStageModal } from './UpdateStageModal.jsx';
 import { stageForQuotationRecipient } from '../quotations/quotationMeta.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 function daysSince(iso) {
   if (!iso) return null;
@@ -546,8 +547,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             {showGoodsWarning ? <p className="m-0 text-xs font-bold text-warning-dark">{goodsNotArrivedWarning(next.no)}</p> : null}
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               วันติดตามครั้งถัดไป *
-              <input
-                type="date"
+              <ThaiDateInput
                 value={guidedDraft.nextFollowUpAt}
                 onChange={(event) => setGuidedDraft((d) => ({ ...d, nextFollowUpAt: event.target.value }))}
                 data-testid="guided-advance-followup"

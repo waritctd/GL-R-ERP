@@ -4,6 +4,7 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { bangkokToday } from './factoryContactMeta.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * CR-1 (GLA-167) R3 / R5 / R7 — "ติดต่อโรงงานแล้ว". A small dialog, not a confirm: import (or the
@@ -47,9 +48,8 @@ export function FactoryContactDialog({ factoryName, pending, onCancel, onConfirm
           htmlFor="pcr-contact-date"
           error={contactedOn && contactedOn > today ? 'เลือกวันที่หลังวันนี้ไม่ได้' : undefined}
         >
-          <input
+          <ThaiDateInput
             id="pcr-contact-date"
-            type="date"
             max={today}
             value={contactedOn}
             onChange={(event) => setContactedOn(event.target.value)}

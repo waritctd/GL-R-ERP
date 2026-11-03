@@ -18,7 +18,7 @@ describe('QuotationAdjustmentRow (v3 S3)', () => {
   it('defaults to a percent with the deadline prefilled — the normal case is one typed number', () => {
     renderRow();
     expect(screen.getByLabelText(/^ส่วนลด %/)).not.toBeNull();
-    expect(screen.getByLabelText(/^สั่งซื้อภายในวันที่/).value).toBe('2026-07-31');
+    expect(screen.getByLabelText(/^สั่งซื้อภายในวันที่/).value).toBe('31/07/2569');
     expect(screen.queryByLabelText(/^จำนวนเงินส่วนลด/)).toBeNull();
   });
 

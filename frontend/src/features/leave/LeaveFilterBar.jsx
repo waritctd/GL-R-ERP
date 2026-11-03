@@ -2,6 +2,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FilterField } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Leave-surface IA restructure (2026-08-10). This markup previously existed as two verbatim
 // copies -- MyLeaveTab.jsx and TeamLeaveTab.jsx each carried its own FILTER_BAR_CLASS constant,
@@ -72,15 +73,13 @@ export function LeaveFilterBar({
   return (
     <SafeForm className={FILTER_BAR_CLASS} onSubmit={onSubmit}>
       <FilterField label="จากวันที่">
-        <input
-          type="date"
+        <ThaiDateInput
           value={values.from}
           onChange={(event) => onChange('from', event.target.value)}
         />
       </FilterField>
       <FilterField label="ถึงวันที่">
-        <input
-          type="date"
+        <ThaiDateInput
           value={values.to}
           onChange={(event) => onChange('to', event.target.value)}
         />

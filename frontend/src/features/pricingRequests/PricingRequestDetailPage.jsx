@@ -85,6 +85,7 @@ import { SearchableCombobox } from '../../components/common/SearchableCombobox.j
 // B6 (GLA-135): reuses the catalog page's own add-factory dialog rather than a second, drifting
 // copy of the same five fields + validation — see ImportFactoryPicker's own comment below.
 import { FactoryFormModal } from '../catalog/PriceImportPage.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 function isImport(user) {
   return user?.role === 'import';
@@ -3623,7 +3624,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       <input className="rounded border border-border p-2 text-sm" placeholder="เงื่อนไขการจัดส่ง"
                         value={quotationHeaderDraft.deliveryTerms ?? quotation.deliveryTerms ?? ''}
                         onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, deliveryTerms: e.target.value }))} />
-                      <input type="date" className="rounded border border-border p-2 text-sm"
+                      <ThaiDateInput className="rounded border border-border p-2 text-sm"
                         value={quotationHeaderDraft.validityDate ?? quotation.validityDate ?? ''}
                         onChange={(e) => setQuotationHeaderDraft((cur) => ({ ...cur, validityDate: e.target.value }))} />
                       <textarea className="rounded border border-border p-2 text-sm md:col-span-2" placeholder="หมายเหตุถึงลูกค้า"
