@@ -85,6 +85,24 @@ describe('DataTable', () => {
     }
   });
 
+  it('in production a missing gridClassName logs once, not on every render', async () => {
+    vi.stubEnv('DEV', false);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // fresh module: the once-flag is module state, so this must not depend on test order
+      vi.resetModules();
+      const { DataTable: FreshTable } = await import('./DataTable.jsx');
+      const table = (rows) => <FreshTable columns={baseColumns} rows={rows} getRowKey={(row) => row.id} />;
+      const { rerender } = render(table(makeRows(2)));
+      rerender(table(makeRows(3)));
+      rerender(table(makeRows(4)));
+      expect(consoleError.mock.calls.filter(([message]) => String(message).includes('gridClassName'))).toHaveLength(1);
+    } finally {
+      consoleError.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('uses native desktop table structure with header and body groups', () => {
     const { container } = render(
       <DataTable

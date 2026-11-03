@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
 import { commissionStatusLabel } from '../../utils/format.js';
+import { gridTrackCount } from '../../test/gridTracks.js';
 
 globalThis.React = React;
 
@@ -1102,6 +1103,15 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
     await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(801));
   });
 
+  it('the all-records table lays its header out with one grid track per column', async () => {
+    stub(managerPending);
+    renderAt(salesManagerUser);
+    const region = await screen.findByRole('region', { name: 'รายการทั้งหมดในรอบนี้' });
+    await waitFor(() => expect(region.querySelector('tbody tr.data-row')).not.toBeNull());
+    const head = region.querySelector('tr.table-head');
+    expect(gridTrackCount(head.className)).toBe(head.querySelectorAll('th').length);
+  });
+
   // ── all-records table on a phone (≤720px) ─────────────────────────────────────────────────
   // #1222 dropped this table's mobileCard, so a phone got the desktop grid. One compact card per
   // record: rep + amount on top, what it is (invoice, or kind + Manual + reason), status, a
@@ -1156,10 +1166,43 @@ describe('CommissionPage — payroll-round approval page (sales_manager / ceo)',
       renderAt(salesManagerUser);
       const card = await cardFor('INV-PEND-0701');
       expect(card.textContent).toContain('สมชาย ใจดี');
-      expect(within(card).getByRole('button', { name: 'ผู้จัดการปฏิเสธ' })).not.toBeNull();
-      fireEvent.click(within(card).getByRole('button', { name: 'ผู้จัดการอนุมัติ' }));
+      // same words as the รอคุณอนุมัติ queue rows above it
+      expect(within(card).getByRole('button', { name: 'ไม่อนุมัติ' })).not.toBeNull();
+      fireEvent.click(within(card).getByRole('button', { name: 'อนุมัติ' }));
       fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'อนุมัติ' }));
       await waitFor(() => expect(api.commissions.approve).toHaveBeenCalledWith(701));
+    });
+
+    it('approve / reject on a card are disabled while an approval is in flight', async () => {
+      stub(managerPending);
+      api.commissions.approve.mockReturnValue(new Promise(() => {})); // never settles
+      renderAt(salesManagerUser);
+      const card = await cardFor('INV-PEND-0701');
+      fireEvent.click(within(card).getByRole('button', { name: 'อนุมัติ' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'อนุมัติ' }));
+      await waitFor(() => expect(within(card).getByRole('button', { name: 'อนุมัติ' }).disabled).toBe(true));
+      expect(within(card).getByRole('button', { name: 'ไม่อนุมัติ' }).disabled).toBe(true);
+    });
+
+    it('the CEO acts on MANAGER_APPROVED cards only', async () => {
+      stub([dto703]);
+      renderAt(ceoUser);
+      expect(within(await cardFor('INV-MA-0703')).getByRole('button', { name: 'อนุมัติ' })).not.toBeNull();
+      expect(within(await cardFor('INV-PEND-0701')).queryByRole('button', { name: /อนุมัติ$/ })).toBeNull();
+    });
+
+    it('a card shows who approved it, like the desktop อนุมัติโดย column', async () => {
+      stub(managerPending);
+      renderAt(salesManagerUser);
+      const card = await cardFor('INV-MA-0703');
+      expect(card.textContent).toContain('สมหญิง ผจก.');
+      expect(card.textContent).toContain('CEO');
+    });
+
+    it('a card nobody has approved yet carries no empty "ผู้จัดการ: - / CEO: -" lines', async () => {
+      stub(managerPending);
+      renderAt(salesManagerUser);
+      expect((await cardFor('INV-PEND-0701')).textContent).not.toContain('CEO:');
     });
 
     it('CANNOT REACH: a card past the viewer\'s stage has no approve / reject', async () => {
