@@ -5,7 +5,7 @@ import {
 } from './demoHr.js';
 import { buildDemoSalesSeed } from './demoSales.js';
 
-export const divisions = [
+const divisions = [
   { id: 'SAL', th: 'ขายและการตลาด', en: 'Sales & Marketing' },
   { id: 'WHL', th: 'คลังสินค้าและจัดส่ง', en: 'Warehouse & Logistics' },
   { id: 'PRC', th: 'จัดซื้อ', en: 'Procurement' },
@@ -14,7 +14,7 @@ export const divisions = [
   { id: 'IT', th: 'เทคโนโลยีสารสนเทศ', en: 'Information Technology' },
 ];
 
-export const departments = {
+const departments = {
   SAL: ['ขายปลีก', 'ขายโครงการ', 'การตลาด'],
   WHL: ['คลังสินค้า', 'ขนส่ง', 'ควบคุมสต็อก'],
   PRC: ['จัดซื้อในประเทศ', 'นำเข้า'],
@@ -23,7 +23,7 @@ export const departments = {
   IT: ['พัฒนาระบบ', 'ไอทีซัพพอร์ต'],
 };
 
-export const statuses = [
+const statuses = [
   { id: 'ACT', th: 'ทำงานปกติ', en: 'Active', tone: 'success' },
   { id: 'PRB', th: 'ทดลองงาน', en: 'Probation', tone: 'warning' },
   { id: 'RSG', th: 'ลาออก', en: 'Resigned', tone: 'danger' },

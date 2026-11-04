@@ -834,7 +834,7 @@ export const CONSENT_APPLICABLE_DEDUCTION_KINDS = [
 // Bangkok is the business zone for every attendance/leave/overtime date. Deriving "today" from
 // the browser's zone instead makes a late-evening session disagree with the server about which
 // day it is — which matters most on the attendance page, whose primary control is a date stepper.
-export function bangkokDateParts(date = new Date()) {
+function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(
     new Intl.DateTimeFormat('en-US', {
       timeZone: 'Asia/Bangkok',

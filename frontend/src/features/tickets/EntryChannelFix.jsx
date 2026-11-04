@@ -9,7 +9,7 @@ import { entryChannelLabel } from '../../utils/format.js';
  * once a channel has been stated it must not be possible to un-state it. Offering it would be
  * offering an action that dies on click.
  */
-export const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
+const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'];
 
 /**
  * "แก้ช่องทางดีล" — the remedy for the route gate's own refusal.

@@ -40,7 +40,7 @@ const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border 
 // copies are gone: this component is the single one, so the conversion lives here once.
 
 // Mirrors LeaveStatus (backend enum) -- the five states LeaveService#parseStatus accepts.
-export const LEAVE_STATUS_OPTIONS = [
+const LEAVE_STATUS_OPTIONS = [
   { value: '', label: 'ทุกสถานะ' },
   { value: 'SUBMITTED', label: 'รออนุมัติ' },
   { value: 'APPROVED', label: 'อนุมัติแล้ว' },

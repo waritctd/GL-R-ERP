@@ -44,7 +44,7 @@ import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
 /** The approver-side twin of salesActions' AWAIT_DIRECT_APPROVAL bucket (slice 2). */
-export const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
+const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
 
 /**
  * The single next action for `user` on `deal`, or the "whose turn is it"

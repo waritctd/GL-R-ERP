@@ -55,7 +55,7 @@ export function convertToThb(amount, currency, fxRatesByCurrency) {
  * Returns null for an unknown/absent unit rather than inventing one — the figure then renders
  * without a unit suffix instead of claiming the wrong basis.
  */
-export function priceUnitLabel(priceUnit) {
+function priceUnitLabel(priceUnit) {
   switch (priceUnit) {
     case 'per_sqm':      return 'ตร.ม.';
     case 'per_piece':    return 'แผ่น';

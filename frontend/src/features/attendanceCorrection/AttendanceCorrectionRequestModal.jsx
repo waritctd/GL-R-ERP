@@ -46,9 +46,9 @@ function defaultForm() {
   };
 }
 
-export const CORRECTION_REASON_MIN_LENGTH = 5;
+const CORRECTION_REASON_MIN_LENGTH = 5;
 
-export function createAttendanceCorrectionFormSchema() {
+function createAttendanceCorrectionFormSchema() {
   return z.object({
     workDate: z.string().min(1, 'กรุณาเลือกวันที่'),
     correctionType: z.enum(['CHECK_IN', 'CHECK_OUT', 'BOTH']),

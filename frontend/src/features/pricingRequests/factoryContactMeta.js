@@ -17,7 +17,7 @@ export function formatShortThaiDay(isoDate) {
   return month ? `${Number(match[3])} ${month}` : '';
 }
 
-export const LEAD_TIME_UNKNOWN = 'ยังไม่ระบุ';
+const LEAD_TIME_UNKNOWN = 'ยังไม่ระบุ';
 
 /** 75, 90 -> '75–90' · 60, 60 -> '60' · nothing -> 'ยังไม่ระบุ' (never a bare dash). */
 export function leadTimeRangeText(min, max) {
@@ -53,17 +53,8 @@ export function contactedByName(quote, events = []) {
   return hit?.actorName ?? null;
 }
 
-/** The unit/currency pair Sales fixed on a line; null when the line is legacy (carries neither). */
-export function requestedTerms(requestItem) {
-  if (!requestItem?.requestedCurrency && !requestItem?.requestedPriceUnitBasis) return null;
-  return {
-    currency: requestItem.requestedCurrency ?? null,
-    unitBasis: requestItem.requestedPriceUnitBasis ?? null,
-  };
-}
-
 /** True once a line has BOTH halves of the locked terms (currency AND price unit). */
-export function hasLockedTerms(requestItem) {
+function hasLockedTerms(requestItem) {
   return Boolean(requestItem?.requestedCurrency && requestItem?.requestedPriceUnitBasis);
 }
 
@@ -95,7 +86,7 @@ export function splitLeadTimeChanges(changes = []) {
   };
 }
 
-export const LEAD_TIME_MAX_DAYS = 3650;
+const LEAD_TIME_MAX_DAYS = 3650;
 
 /** Client-side mirror of LeadTimeChangeService#validLines for one ticked line (server stays authoritative). */
 export function isValidLeadTimeRange(min, max) {

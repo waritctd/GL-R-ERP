@@ -19,7 +19,7 @@ const EXTENSION_BY_MIME = {
   'text/plain': 'txt',
 };
 
-export function extensionForBlob(blob, requestedFormat) {
+function extensionForBlob(blob, requestedFormat) {
   const type = (blob?.type || '').split(';')[0].trim().toLowerCase();
   return EXTENSION_BY_MIME[type] ?? requestedFormat;
 }

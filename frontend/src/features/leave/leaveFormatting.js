@@ -3,7 +3,7 @@
 // verbatim out of the pre-A1 LeavePage.jsx (same function bodies) so both tabs render
 // dates/day-counts identically instead of each growing its own slightly-different copy.
 
-export function bangkokDateParts(date = new Date()) {
+function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Bangkok',
     year: 'numeric',
@@ -15,11 +15,6 @@ export function bangkokDateParts(date = new Date()) {
 export const todayIso = () => {
   const parts = bangkokDateParts();
   return `${parts.year}-${parts.month}-${parts.day}`;
-};
-
-export const monthStartIso = () => {
-  const parts = bangkokDateParts();
-  return `${parts.year}-${parts.month}-01`;
 };
 
 export function yearFrom(dateString) {

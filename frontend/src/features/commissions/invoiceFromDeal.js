@@ -20,7 +20,7 @@ export function emptyInvoiceForm(grossAmount = '') {
   };
 }
 
-export function numberOrNull(value) {
+function numberOrNull(value) {
   if (value === '' || value == null) return null;
   const n = Number(value);
   return Number.isNaN(n) ? null : n;

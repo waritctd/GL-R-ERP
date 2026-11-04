@@ -89,13 +89,13 @@ const OT_END_DATE_RANGE_MESSAGE = 'วันที่สิ้นสุดต้
 
 // Mirrors OvertimeService: advance notice was removed, so the only limits on a backdated request
 // are how far back it may reach and that the reason explains why it is late.
-export const OT_RETROACTIVE_WINDOW_DAYS = 60;
-export const OT_BACKDATED_REASON_MIN_LENGTH = 20;
+const OT_RETROACTIVE_WINDOW_DAYS = 60;
+const OT_BACKDATED_REASON_MIN_LENGTH = 20;
 const OT_WINDOW_MESSAGE = `ย้อนหลังได้ไม่เกิน ${OT_RETROACTIVE_WINDOW_DAYS} วัน`;
 const OT_BACKDATED_REASON_MESSAGE =
   `กรุณาอธิบายเหตุผลที่ขอย้อนหลังให้ชัดเจน (อย่างน้อย ${OT_BACKDATED_REASON_MIN_LENGTH} ตัวอักษร)`;
 
-export function createOvertimeFormSchema({
+function createOvertimeFormSchema({
   requireEmployeeId,
   retroactiveWindowDays = OT_RETROACTIVE_WINDOW_DAYS,
 } = {}) {

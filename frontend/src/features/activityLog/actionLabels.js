@@ -91,5 +91,3 @@ export function actionTone(action) {
   if (/(^|_)CANCEL|WITHDRAW/.test(action)) return 'muted';
   return 'neutral';
 }
-
-export const ACTION_LABEL_MAP = ACTION_LABELS;
