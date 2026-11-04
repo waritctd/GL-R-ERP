@@ -16,6 +16,7 @@ const items = [
 
 afterEach(() => {
   Element.prototype.scrollIntoView = originalScrollIntoView;
+  vi.restoreAllMocks();
 });
 
 describe('Tabs', () => {
@@ -44,19 +45,39 @@ describe('Tabs', () => {
     expect(screen.getByTestId('tabs-scroll-right-affordance')).not.toBeNull();
   });
 
-  it('scrolls the selected tab into view on mount and after roving-keyboard changes', () => {
+  it('keeps the selected tab visible by scrolling the tablist horizontally, never calling scrollIntoView (which would scroll the page)', () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
     const onChange = vi.fn();
 
     render(<Tabs items={items} value="overview" onChange={onChange} ariaLabel="รายละเอียดดีล" idPrefix="ticket-detail" />);
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ inline: 'nearest', block: 'nearest', behavior: 'instant' });
+    const tablist = screen.getByRole('tablist', { name: 'รายละเอียดดีล' });
+    Object.defineProperties(tablist, {
+      scrollLeft: { configurable: true, writable: true, value: 0 },
+      clientWidth: { configurable: true, value: 300 },
+      scrollWidth: { configurable: true, value: 520 },
+    });
+    // The last tab sits beyond the visible right edge (400..500 vs. 0..300).
+    Object.defineProperties(screen.getByRole('tab', { name: /กิจกรรม/ }), {
+      offsetLeft: { configurable: true, value: 400 },
+      offsetWidth: { configurable: true, value: 100 },
+    });
 
     fireEvent.keyDown(screen.getByRole('tab', { name: /ภาพรวม/ }), { key: 'End' });
 
     expect(onChange).toHaveBeenCalledWith('activity');
-    expect(scrollIntoView).toHaveBeenCalledWith({ inline: 'nearest', block: 'nearest', behavior: 'instant' });
+    // scrollIntoView scrolls EVERY scrollable ancestor, including the vertical page container.
+    // The deal page's tablist lives in a sticky header that re-renders on scroll, and this effect
+    // re-runs on each of those renders, so a vertical scroll from here dragged the page around.
+    // Horizontal visibility is handled by the scrollLeft math alone.
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    // Roving focus stays a plain focus(): on pages where the tablist is in the normal flow, the
+    // browser must still be free to bring an off-screen tab into view (preventScroll would hide it).
+    expect(focus).toHaveBeenCalledWith();
+    // tabRight (500) - clientWidth (300) + paddingRight (0) + edge padding (8)
+    expect(tablist.scrollLeft).toBe(208);
   });
 
   // Regression coverage for a real incident: ActivityLogPage.jsx shipped `items: [{ value: 'x',
