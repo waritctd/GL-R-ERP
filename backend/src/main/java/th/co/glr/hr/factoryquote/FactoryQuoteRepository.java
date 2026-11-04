@@ -469,6 +469,13 @@ public class FactoryQuoteRepository {
             """, Map.of("quoteId", quoteId));
     }
 
+    /** A PENDING lead-time change on this quote (CR-1), read before supersede/markNotAvailable auto-withdraws it. */
+    public boolean hasPendingLeadTimeChange(long quoteId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM sales.lead_time_change WHERE factory_quote_id = :quoteId AND status = 'PENDING')",
+            Map.of("quoteId", quoteId), Boolean.class));
+    }
+
     public int markNotAvailable(long quoteId, String reason, long actorId) {
         int rows = markNotAvailableRows(quoteId, reason, actorId);
         if (rows > 0) {

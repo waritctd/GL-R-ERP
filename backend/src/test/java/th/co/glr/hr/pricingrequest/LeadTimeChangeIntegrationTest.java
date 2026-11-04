@@ -16,9 +16,7 @@ import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.CreateLeadTimeChangeRe
 import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.LineInput;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeRequests.RejectLeadTimeChangeRequest;
 import th.co.glr.hr.notification.DealNoticeText;
-import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.support.RecordingSalesMailer;
-import th.co.glr.hr.ticket.TicketRepository;
 
 /**
  * CR-1 (GLA-167), part C — lead-time change request (option C: one request per factory quote,
@@ -49,10 +47,9 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
 
     @BeforeEach
     void setUp() {
-        wireServicesAndCreateDeal();
         mailer = new RecordingSalesMailer(jdbc);
-        leadTimeChangeService = new LeadTimeChangeService(new LeadTimeChangeRepository(jdbc), factoryQuoteRepository,
-            pricingRequests, new TicketRepository(jdbc), new NotificationRepository(jdbc, mailer));
+        fixtureMailer = mailer;
+        wireServicesAndCreateDeal();
         long managerPosition = jdbc.queryForObject("""
             INSERT INTO hr.position (source_code, name_th, is_active) VALUES ('LTC-SM', 'ผู้จัดการฝ่ายขาย', TRUE)
             RETURNING position_id
@@ -189,9 +186,26 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         assertThat(edited.reason()).isEqualTo("r1 edited");
         assertThat(edited.lines()).extracting(LeadTimeChangeDtos.LeadTimeChangeLineDto::pricingRequestItemId)
             .containsExactlyInAnyOrder(a2, a3);
-        // an edit while pending (and every refused attempt) sends nothing: no bell, no email
-        assertThat(mailer.mails()).as("emails after update").hasSize(mailsAfterCreate);
-        assertThat(bellRowCount()).as("bell rows after update").isEqualTo(bellsAfterCreate);
+        // the edit re-tells the rep and the managers what they are now approving (bell AND email, never
+        // import); the refused attempts above sent nothing
+        String editedMessage = "ฝ่ายนำเข้า (" + importActor.name() + ") แก้ไขคำขอเปลี่ยนระยะเวลานำเข้าของโรงงาน Factory A"
+            + " (2 รายการ) — เหตุผล: r1 edited\n" + requestLine() + "\nสิ่งที่ต้องทำต่อ: ตรวจสอบระยะเวลานำเข้าใหม่ แล้วอนุมัติหรือไม่อนุมัติ";
+        assertThat(jdbc.queryForList(
+                "SELECT employee_id FROM hr.notification WHERE type = :type AND message = :message AND link = :link",
+                Map.of("type", PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED, "message", editedMessage, "link", link()),
+                Long.class))
+            .as("bell rows of the edit").containsExactlyInAnyOrder(salesRepId, salesManagerUserId, otherSm);
+        assertThat(bellRowCount()).as("bell rows after update").isEqualTo(bellsAfterCreate + 3);
+        List<RecordingSalesMailer.Mail> editMails = mailer.mails().subList(mailsAfterCreate, mailer.mails().size());
+        assertThat(editMails).as("emails of the edit: one to the rep, one sales_manager fan-out").hasSize(2)
+            .allSatisfy(m -> {
+                assertThat(m.message()).isEqualTo(editedMessage);
+                assertThat(m.title()).isEqualTo("ขอเปลี่ยนระยะเวลานำเข้า รอฝ่ายขายอนุมัติ");
+            });
+        assertThat(editMails).filteredOn(m -> m.employeeId() != null).singleElement()
+            .satisfies(m -> assertThat(m.employeeId()).isEqualTo(salesRepId));
+        assertThat(editMails).filteredOn(m -> "sales_manager".equals(m.role())).singleElement()
+            .satisfies(m -> assertThat(m.notifiedEmployeeIds()).containsExactlyInAnyOrder(salesManagerUserId, otherSm));
     }
 
     @Test
@@ -439,6 +453,8 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
         assertThat(old.status()).isEqualTo(LeadTimeChangeStatus.WITHDRAWN);
         assertThat(old.decisionReason()).isEqualTo("ใบราคาถูกแก้ไข — คำขอเดิมถูกยกเลิกอัตโนมัติ");
         assertThat(eventCount(prId, PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN)).isEqualTo(1L);
+        // the rep and the managers who were asked to approve are told it is gone (bell AND email)
+        assertAutoWithdrawnNotices("ฝ่ายนำเข้า (" + importActor.name() + ") แก้ไขใบราคาโรงงาน");
         // the owning rep can no longer approve the dead request, and nothing was applied
         assertConflict(() -> leadTimeChangeService.approve(old.id(), old.version(), salesActor));
         assertLeadTime(a1, 30, 45);
@@ -519,10 +535,24 @@ class LeadTimeChangeIntegrationTest extends Cr1FixtureSupport {
     void markingTheQuoteNotAvailableAutoWithdrawsItsPendingChange() {
         LeadTimeChangeDto change = leadTimeChangeService.create(quoteA.id(), body("r1", line(a1, 100, 120)), importActor);
 
+        // a quote with no pending change dies quietly: nothing about a lead-time change to tell
+        factoryQuoteService.markNotAvailable(quoteB.id(),
+            new th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest("โรงงานปิดสายการผลิต"), importActor);
+        mailer.assertNoNotice(PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN, "ถอนคำขอเปลี่ยนระยะเวลานำเข้าแล้ว");
+
         factoryQuoteService.markNotAvailable(quoteA.id(),
             new th.co.glr.hr.factoryquote.FactoryQuoteRequests.MarkNotAvailableRequest("โรงงานปิดสายการผลิต"), importActor);
 
         assertAutoWithdrawn(change.id());
+        assertAutoWithdrawnNotices("ฝ่ายนำเข้า (" + importActor.name() + ") แจ้งว่าโรงงานไม่สามารถเสนอราคาได้");
+    }
+
+    /** The rep + both managers (once each, never import) hear that the change they were asked to approve was withdrawn. */
+    private void assertAutoWithdrawnNotices(String because) {
+        String message = "ระบบถอนคำขอเปลี่ยนระยะเวลานำเข้าของโรงงาน Factory A อัตโนมัติ — " + because + "\n"
+            + requestLine() + "\nแจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว";
+        assertNotices(PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN, "ถอนคำขอเปลี่ยนระยะเวลานำเข้าแล้ว",
+            Map.of(salesRepId, message, salesManagerUserId, message, otherSm, message), 2);
     }
 
     private void assertAutoWithdrawn(long changeId) {

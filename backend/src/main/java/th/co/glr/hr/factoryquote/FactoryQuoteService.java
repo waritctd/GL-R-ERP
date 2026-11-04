@@ -33,6 +33,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.UpdateFactoryQuoteDraftReq
 import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
+import th.co.glr.hr.pricingrequest.LeadTimeChangeService;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
@@ -485,7 +486,12 @@ public class FactoryQuoteService {
                 "คำขอราคา " + summary.requestCode() + " ได้รับราคาจาก " + current.factoryName());
         } else if (Set.of(FactoryQuoteStatus.RESPONSE_RECEIVED, FactoryQuoteStatus.NEGOTIATING,
                 FactoryQuoteStatus.READY_FOR_COSTING).contains(current.status())) {
+            boolean hadPendingChange = quotes.hasPendingLeadTimeChange(current.id());
             quotes.supersede(current.id());
+            if (hadPendingChange) {
+                notifyAutoWithdrawnLeadTimeChange(summary, current.factoryName(),
+                    "ฝ่ายนำเข้า (" + actor.name() + ") แก้ไขใบราคาโรงงาน");
+            }
             long newId = quotes.createRevision(current, request.supplierQuoteRef(), request.defaultCurrency(),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
             quotes.replaceResponseItems(newId, normalizedItems);
@@ -616,9 +622,14 @@ public class FactoryQuoteService {
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, MUTABLE_STATUSES);
         requireActiveDeal(summary.ticketId());
+        boolean hadPendingChange = quotes.hasPendingLeadTimeChange(quoteId);
         int rows = quotes.markNotAvailable(quoteId, request.reason(), actor.id());
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถทำเครื่องหมายว่าโรงงานนี้ไม่พร้อมเสนอราคาได้ในสถานะปัจจุบัน");
+        }
+        if (hadPendingChange) {
+            notifyAutoWithdrawnLeadTimeChange(summary, quote.factoryName(),
+                "ฝ่ายนำเข้า (" + actor.name() + ") แจ้งว่าโรงงานไม่สามารถเสนอราคาได้");
         }
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_NOT_AVAILABLE, summary.status(), summary.status(),
             request.reason());
@@ -632,6 +643,15 @@ public class FactoryQuoteService {
                 + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName())
                 + "\n" + DealNoticeText.FYI);
         return requireQuote(quoteId);
+    }
+
+    /** The repository auto-withdrew a PENDING lead-time change in SQL; tell the rep and managers who were asked to approve it. */
+    private void notifyAutoWithdrawnLeadTimeChange(PricingRequestSummaryDto summary, String factoryName, String because) {
+        LeadTimeChangeService.notifyRepAndManagers(notifications, summary,
+            PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN,
+            LeadTimeChangeService.notice(summary,
+                "ระบบถอนคำขอเปลี่ยนระยะเวลานำเข้าของโรงงาน " + factoryName + " อัตโนมัติ — " + because,
+                "แจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว"));
     }
 
     /**
