@@ -16,6 +16,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteItemDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeDtos.LeadTimeChangeDto;
 import th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.LineWrite;
@@ -50,6 +51,7 @@ public class LeadTimeChangeService {
     private static final int REASON_MAX = 1000;
     // pricing_request_item.lead_time_*_days is SMALLINT; 10 years is well past any real lead time.
     private static final int MAX_DAYS = 3650;
+    private static final String REVIEW_NEXT_STEP = "สิ่งที่ต้องทำต่อ: ตรวจสอบระยะเวลานำเข้าใหม่ แล้วอนุมัติหรือไม่อนุมัติ";
 
     private final LeadTimeChangeRepository changes;
     private final FactoryQuoteRepository quotes;
@@ -94,12 +96,9 @@ public class LeadTimeChangeService {
         }
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED,
             "Lead-time change requested for " + quote.factoryName() + " (" + lines.size() + " line(s)): " + reason);
-        String message = "คำขอราคา " + summary.requestCode() + " ฝ่ายนำเข้าขอเปลี่ยนระยะเวลานำเข้าของโรงงาน "
-            + quote.factoryName() + " รอฝ่ายขายอนุมัติ";
-        notifications.notifyEmployeeForPricingRequestInAppOnly(summary.ticketCreatedById(), summary.id(),
-            PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED, message);
-        notifications.notifyByRoleForPricingRequestInAppOnly("sales_manager", summary.id(),
-            PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED, message);
+        String message = notice(summary, "ฝ่ายนำเข้า (" + actor.name() + ") ขอเปลี่ยนระยะเวลานำเข้าของโรงงาน "
+            + quote.factoryName() + " (" + lines.size() + " รายการ) — เหตุผล: " + reason, REVIEW_NEXT_STEP);
+        notifyRepAndManagers(notifications, summary, PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED, message);
         return requireChange(changeId);
     }
 
@@ -119,6 +118,9 @@ public class LeadTimeChangeService {
         }
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED,
             "Lead-time change edited for " + quote.factoryName() + " (" + lines.size() + " line(s)): " + reason);
+        notifyRepAndManagers(notifications, summary, PricingRequestEventKind.LEAD_TIME_CHANGE_REQUESTED,
+            notice(summary, "ฝ่ายนำเข้า (" + actor.name() + ") แก้ไขคำขอเปลี่ยนระยะเวลานำเข้าของโรงงาน "
+                + quote.factoryName() + " (" + lines.size() + " รายการ) — เหตุผล: " + reason, REVIEW_NEXT_STEP));
         return requireChange(changeId);
     }
 
@@ -133,6 +135,9 @@ public class LeadTimeChangeService {
         PricingRequestSummaryDto summary = requirePricingRequest(change.pricingRequestId());
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN,
             "Lead-time change withdrawn");
+        notifyRepAndManagers(notifications, summary, PricingRequestEventKind.LEAD_TIME_CHANGE_WITHDRAWN,
+            notice(summary, "ฝ่ายนำเข้า (" + actor.name() + ") ถอนคำขอเปลี่ยนระยะเวลานำเข้าของโรงงาน "
+                + factoryName(change), "แจ้งเพื่อทราบ ไม่ต้องอนุมัติแล้ว"));
         return requireChange(changeId);
     }
 
@@ -153,9 +158,9 @@ public class LeadTimeChangeService {
         changes.applyLinesToItems(changeId);
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_APPROVED,
             "Lead-time change approved (" + change.lines().size() + " line(s))");
-        notifications.notifyByRoleForPricingRequestInAppOnly("import", summary.id(),
-            PricingRequestEventKind.LEAD_TIME_CHANGE_APPROVED,
-            "คำขอราคา " + summary.requestCode() + " ฝ่ายขายอนุมัติการเปลี่ยนระยะเวลานำเข้าแล้ว");
+        String decided = actor.name() + " อนุมัติการเปลี่ยนระยะเวลานำเข้าของโรงงาน " + factoryName(change) + " แล้ว";
+        String fyi = notice(summary, decided, DealNoticeText.FYI);
+        notifyDecision(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_APPROVED, fyi, fyi);
         return requireChange(changeId);
     }
 
@@ -179,9 +184,11 @@ public class LeadTimeChangeService {
         }
         addEvent(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_REJECTED,
             "Lead-time change rejected: " + reason);
-        notifications.notifyByRoleForPricingRequestInAppOnly("import", summary.id(),
-            PricingRequestEventKind.LEAD_TIME_CHANGE_REJECTED,
-            "คำขอราคา " + summary.requestCode() + " ฝ่ายขายไม่อนุมัติการเปลี่ยนระยะเวลานำเข้า: " + reason);
+        String decided = actor.name() + " ไม่อนุมัติการเปลี่ยนระยะเวลานำเข้าของโรงงาน " + factoryName(change)
+            + " — เหตุผล: " + reason;
+        notifyDecision(summary, actor, PricingRequestEventKind.LEAD_TIME_CHANGE_REJECTED,
+            notice(summary, decided, "สิ่งที่ต้องทำต่อ: ตรวจสอบเหตุผล แล้วส่งคำขอใหม่หากยังต้องเปลี่ยน"),
+            notice(summary, decided, DealNoticeText.FYI));
         return requireChange(changeId);
     }
 
@@ -193,6 +200,41 @@ public class LeadTimeChangeService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return changes.findByPricingRequest(pricingRequestId);
+    }
+
+    // ── notices (bell AND email; Ploy 11-03) ─────────────────────────────────────────────────
+
+    public static String notice(PricingRequestSummaryDto summary, String what, String thirdLine) {
+        return what + "\nคำขอราคา " + summary.requestCode() + " · "
+            + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName()) + "\n" + thirdLine;
+    }
+
+    private String factoryName(LeadTimeChangeDto change) {
+        return quotes.find(change.factoryQuoteId()).map(FactoryQuoteDto::factoryName).orElse("");
+    }
+
+    /** Import raised or withdrew: the owning rep and the sales managers (not the rep a second time). */
+    public static void notifyRepAndManagers(NotificationRepository notifications, PricingRequestSummaryDto summary,
+                                            String type, String message) {
+        notifications.notifyEmployeeForPricingRequest(summary.ticketCreatedById(), summary.id(), type, message);
+        notifications.notifyByRoleForPricingRequestExcluding("sales_manager", summary.id(), type, message,
+            summary.ticketCreatedById());
+    }
+
+    /**
+     * Sales decided: import hears the outcome (never the actor); the OTHER decider side is told so its
+     * "รออนุมัติ" bell is not left hanging: the rep when a manager decided, the managers always, and
+     * never the actor or the rep twice.
+     */
+    private void notifyDecision(PricingRequestSummaryDto summary, UserPrincipal actor, String type,
+                                String importMessage, String fyiMessage) {
+        long rep = summary.ticketCreatedById();
+        String link = "/pricing-requests/" + summary.id();
+        notifications.notifyByRoleForPricingRequestExcluding("import", summary.id(), type, importMessage, actor.id());
+        if (actor.id() != rep) {
+            notifications.notifyEmployeeForPricingRequest(rep, summary.id(), type, fyiMessage);
+        }
+        notifications.notifyByRoleAtLink("sales_manager", type, fyiMessage, link, actor.id(), rep);
     }
 
     // ── validation ───────────────────────────────────────────────────────────────────────────

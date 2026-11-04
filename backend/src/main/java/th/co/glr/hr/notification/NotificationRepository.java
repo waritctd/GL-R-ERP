@@ -149,6 +149,7 @@ public class NotificationRepository {
         Map.entry("LEAD_TIME_CHANGE_REQUESTED", "ขอเปลี่ยนระยะเวลานำเข้า รอฝ่ายขายอนุมัติ"),
         Map.entry("LEAD_TIME_CHANGE_APPROVED", "อนุมัติการเปลี่ยนระยะเวลานำเข้าแล้ว"),
         Map.entry("LEAD_TIME_CHANGE_REJECTED", "ไม่อนุมัติการเปลี่ยนระยะเวลานำเข้า"),
+        Map.entry("LEAD_TIME_CHANGE_WITHDRAWN", "ถอนคำขอเปลี่ยนระยะเวลานำเข้าแล้ว"),
         Map.entry("FACTORY_RESPONSE_RECEIVED", "ได้รับราคาโรงงานแล้ว"),
         Map.entry("FACTORY_NEGOTIATION_STARTED", "เริ่มเจรจากับโรงงาน"),
         Map.entry("FACTORY_RESPONSE_READY_FOR_COSTING", "ราคาโรงงานพร้อมคำนวณต้นทุน"),
@@ -266,16 +267,8 @@ public class NotificationRepository {
      * role mailbox is only mailed when somebody else received a row.
      */
     public void notifyByRoleAtLink(String role, String type, String message, String link, long... excludeEmployeeIds) {
-        notifyByRoleInternal(role, type, message, link, true,
+        notifyByRoleInternal(role, type, message, link,
             Arrays.stream(excludeEmployeeIds).boxed().toList());
-    }
-
-    /**
-     * CR-1 (GLA-167): in-app row only, NO email -- the lead-time change flow is deliberately
-     * bell-only (owner decision). Same INSERT as {@link #notifyEmployeeForPricingRequest}, minus the mailer.
-     */
-    public void notifyEmployeeForPricingRequestInAppOnly(long employeeId, long pricingRequestId, String type, String message) {
-        insertEmployeeNotification(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
     }
 
     /**
@@ -285,13 +278,8 @@ public class NotificationRepository {
      */
     public void notifyByRoleForPricingRequestExcluding(String role, long pricingRequestId, String type,
                                                        String message, long excludeEmployeeId) {
-        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, true,
+        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId,
             List.of(excludeEmployeeId));
-    }
-
-    /** In-app-only counterpart of {@link #notifyByRoleForPricingRequest}; see above. */
-    public void notifyByRoleForPricingRequestInAppOnly(String role, long pricingRequestId, String type, String message) {
-        notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId, false);
     }
 
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
@@ -372,14 +360,10 @@ public class NotificationRepository {
     }
 
     private void notifyByRoleInternal(String role, String type, String message, String link) {
-        notifyByRoleInternal(role, type, message, link, true);
+        notifyByRoleInternal(role, type, message, link, List.of());
     }
 
-    private void notifyByRoleInternal(String role, String type, String message, String link, boolean email) {
-        notifyByRoleInternal(role, type, message, link, email, List.of());
-    }
-
-    private void notifyByRoleInternal(String role, String type, String message, String link, boolean email,
+    private void notifyByRoleInternal(String role, String type, String message, String link,
                                       List<Long> excludeEmployeeIds) {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
@@ -452,8 +436,8 @@ public class NotificationRepository {
             Long.class);
         // The mailbox is skipped only when the exclusion is what emptied the fan-out: an excluded id is an active
         // member of the role. An exclusion matching nobody leaves the mailbox mailed, like the no-exclusion path.
-        if (email && (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
-                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds))) {
+        if (!notified.isEmpty() || excludeEmployeeIds.isEmpty()
+                || !excludedIdIsActiveRoleMember(divisionFilter, excludeEmployeeIds)) {
             salesMailer.emailForRole(role, notified, title, message, link);
         }
     }

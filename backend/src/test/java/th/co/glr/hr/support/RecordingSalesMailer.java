@@ -16,7 +16,7 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
  * Test double for {@link SalesNotificationMailer} that RECORDS what {@code NotificationRepository}
  * handed it, instead of {@link SalesNotificationMailer#NO_OP}'s silence. Wiring this (not NO_OP) is
  * what lets a test say "the EMAIL path was invoked for the same recipient with the same
- * title/message/link as the bell row" — a regression to an {@code *InAppOnly} method, or a missing
+ * title/message/link as the bell row" — a regression to a bell-only path, or a missing
  * {@code notify*} call, leaves {@link #mails} empty and the assertion fails.
  *
  * <p>The assertion helpers read {@code hr.notification} (the bell) and {@link #mails} (the email
