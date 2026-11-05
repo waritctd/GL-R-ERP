@@ -13,63 +13,31 @@ import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
 import { UserMenu } from './UserMenu.jsx';
 
-// Tailwind port of `.content-scroll` (styles.css): the gutters are CSS custom
-// properties (not plain utilities) because `.content-scroll`'s own padding
-// references them, and DepositNoticePage.jsx measures scrollWidth against this
-// same padding — every one of those call sites keys off these exact
-// custom-property names, so the names themselves must survive the port
-// unchanged even though the declarations move from a CSS rule to inline
-// arbitrary-property utilities. (`--deal-header-h` is still written by
-// TicketDetailPage.jsx's ResizeObserver, but is now consumed only by the deal
-// page's content scroll-margin.)
+// Tailwind port of `.content-scroll`: the gutters are CSS custom properties (not plain
+// utilities) because DepositNoticePage.jsx measures scrollWidth against this same padding,
+// so the names must stay stable. `--deal-header-h` is written by TicketDetailPage.jsx's
+// ResizeObserver and consumed only by the deal page's content scroll-margin.
 //
-// There is deliberately no desktop scroll-padding-top here. Native focus scrolls
-// the focused element clear of scroll-padding, so a padding sized to the sticky
-// deal header made focusing any control inside that header (and, via the 18rem
-// fallback, anything in the top ~300px of every page) scroll the page. The deal
-// page instead puts an equivalent scroll-margin-top on its content's descendants
-// (TicketDetailPage.jsx content wrapper), which clears the sticky header for
-// focus and jumps without ever applying to the header's own controls.
+// There is deliberately no desktop scroll-padding-top here. Native focus scrolls the focused
+// element clear of scroll-padding, so a padding sized to the sticky deal header made focusing
+// any control inside that header (and, via the 18rem fallback, anything in the top ~300px of
+// every page) scroll the page. The deal page instead puts a scroll-margin-top on its content's
+// descendants (TicketDetailPage.jsx content wrapper).
 const CONTENT_SCROLL_CLASS = cn(
-  // `content-scroll` carries no CSS of its own (the rule was deleted with the
-  // rest of the legacy shell) — it survives as a *selector* hook. The
-  // e2e/shared-shell.spec.js assertNoShellOverflow() this comment used to cite
-  // went with the mock e2e suite on 2026-08-08; the live consumer is
-  // TicketDetailPage.jsx's `chrome.closest('.content-scroll')`, which walks up
-  // to this element to read its scrollTop. Renaming the class breaks that.
+  // `content-scroll` carries no CSS of its own; it is a *selector* hook. TicketDetailPage.jsx's
+  // `chrome.closest('.content-scroll')` walks up to this element to read its scrollTop, so
+  // renaming the class breaks it.
   'content-scroll',
-  // `relative` is load-bearing, not cosmetic: it makes the scroll container its
-  // own subtree's containing block. Without it this element is
-  // `position: static`, so any `position: absolute` descendant with no other
-  // positioned ancestor resolves its containing block to the *initial*
-  // containing block — the document — and is laid out at its static position in
-  // document coordinates. Because the app's content scrolls inside THIS box, a
-  // static position far down a long page lands hundreds or thousands of px
-  // below the viewport, and `<html>` gains exactly that much scrollable
-  // overflow. The result is a second, outer scrollbar over a shell that is
-  // supposed to be exactly viewport-height: the page scrolls past its own
-  // content into empty space, and the sticky topbar/sidebar get dragged along.
-  // Note the two ancestor walks differ — "nearest positioned ancestor"
-  // (containing block) is not "nearest `overflow: auto` ancestor" (scroll
-  // container) — so `overflow-auto` here never made this element a candidate.
-  // Tailwind's `sr-only` is `position: absolute`, which is what makes this bite
-  // in practice, on elements that are invisible but still count toward
-  // scrollable overflow (clip-rect, not `display: none`):
-  //   - `/employee-requests?tab=welfare` — FileUploadField's hidden
-  //     `<input type="file">` sat at y=1442, doc scrollHeight 1443 vs
-  //     clientHeight 900 → 543px of phantom scroll.
-  //   - `/tax-allowance` — six `<span class="sr-only">(เปิดในแท็บใหม่)</span>`
-  //     link suffixes at y≈2629-2895 → 1994px of phantom scroll.
-  // Both went to 0 with this one declaration, with every element still at the
-  // same in-page position — just clipped and scrolled by this box instead of
-  // the document. Fixing it here rather than per page is deliberate: this is a
-  // property of the scroll container, and the leak is not specific to file
-  // inputs — LeaveSurfacePage.jsx carried a page-local `relative` for its own
-  // instance of this in 2026-08, and DataTable's `sr-only` live region and
-  // `<caption class="sr-only">` are one long page away from the same bug.
-  // `z-index` stays `auto`, so this creates no stacking context and nothing
-  // repaints in a different order; portalled/`fixed` chrome (Modal, Toast,
-  // OverflowMenu) is unaffected by a `relative` ancestor by definition.
+  // `relative` is load-bearing: it makes the scroll container its own subtree's containing
+  // block. Without it, a `position: absolute` descendant with no other positioned ancestor
+  // resolves against the initial containing block (the document) at its static position, which
+  // on a long page lands far below the viewport and gives `<html>` a second, outer scrollbar
+  // over a shell that should be exactly viewport-height. Tailwind's `sr-only` is
+  // `position: absolute`, so invisible elements (FileUploadField's hidden file input,
+  // `<span class="sr-only">` link suffixes, DataTable's live region and caption) hit this.
+  // Fixed here, not per page: it is a property of the scroll container. `overflow-auto` does not
+  // help (containing block != scroll container). `z-index` stays `auto`, so no stacking context
+  // is created; portalled/`fixed` chrome (Modal, Toast, OverflowMenu) is unaffected.
   'relative',
   'min-w-0 max-w-full flex-1 overflow-auto [scrollbar-gutter:stable]',
   '[--deal-scroll-pad-y:28px] [--deal-scroll-pad-x:max(32px,env(safe-area-inset-right))] [--deal-scroll-pad-left:max(32px,env(safe-area-inset-left))]',
@@ -80,8 +48,7 @@ const CONTENT_SCROLL_CLASS = cn(
   'scroll-pb-8 has-[[data-sticky-chrome]]:[overflow-anchor:none]',
   'mobile:[--deal-scroll-pad-y:16px] mobile:[--deal-scroll-pad-x:max(16px,env(safe-area-inset-right))] mobile:[--deal-scroll-pad-left:max(16px,env(safe-area-inset-left))]',
   'mobile:pb-[32px] mobile:scroll-pt-4 mobile:scroll-pb-[calc(112px_+_env(safe-area-inset-bottom))]',
-  // Item 5 (owner-approved polish): the content gutter widens from 32px to
-  // 40px at the 1366px desktop band — nothing between 721-1365px changes.
+  // The content gutter widens from 32px to 40px at the 1366px desktop band.
   'min-[1366px]:[--deal-scroll-pad-x:max(40px,env(safe-area-inset-right))]',
   'min-[1366px]:[--deal-scroll-pad-left:max(40px,env(safe-area-inset-left))]',
 );
@@ -101,12 +68,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const drawerId = 'mobile-navigation-drawer';
   const mainContentId = 'main-content';
 
-  // Item 2 (owner-approved polish): the topbar's bottom border is chrome that
-  // should only announce itself once there is content scrolled underneath it
-  // — a permanent 1px line reads as static decoration, an on-scroll one reads
-  // as "there's more above". Tracks `.content-scroll`'s own scrollTop rather
-  // than the window's, since that element — <main> — is the app's real scroll
-  // container (see its own comment below); the document never scrolls.
+  // The topbar's bottom border only appears once content is scrolled underneath it. Tracks
+  // `.content-scroll`'s own scrollTop (<main> is the real scroll container), not the window's.
   const updateContentScrolled = useCallback(() => {
     setIsContentScrolled((mainRef.current?.scrollTop ?? 0) > 0);
   }, []);
@@ -119,10 +82,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     return () => el.removeEventListener('scroll', updateContentScrolled);
   }, [updateContentScrolled]);
 
-  // A route change swaps `.content-scroll`'s children (the element itself
-  // never remounts), which does not reset scrollTop on its own — without this, a
-  // border "stuck on" from a long, scrolled page would wrongly persist onto
-  // the next, shorter page until the user next scrolled.
+  // A route change swaps `.content-scroll`'s children without remounting it, so scrollTop is
+  // not reset on its own; reset the border so it doesn't stay "stuck on" for a shorter page.
   useEffect(() => {
     updateContentScrolled();
   }, [location.pathname, updateContentScrolled]);
@@ -145,15 +106,11 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // not part of any one ฝ่าย's work. Hiding it is cosmetic — ActivityLogService.requireAdmin is
     // what actually refuses everyone else.
     { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', show: Boolean(user.admin) },
-    // Division-manager (non-sales) "ทีมของฉัน" group — reuses the same
-    // /employee-requests, /leave, /attendance routes every role already has
-    // (they are dual submit+approve pages for anyone with reports; a division
-    // manager is no exception), framed here as the team-facing entry points.
-    // The unchanged 'self' entries below stay the manager's own personal
-    // self-service, same as every other role. No roster/`/employees` link:
-    // canViewEmployees is hr-only (ROLE_PERMISSIONS) and this task does not
-    // grant it — `/attendance` already gives a division manager a per-employee
-    // view of their team, so it stands in for "ทีมในฝ่าย" too.
+    // Division-manager (non-sales) "ทีมของฉัน" group: reuses the /employee-requests, /leave,
+    // /attendance routes every role already has (dual submit+approve pages for anyone with
+    // reports), framed as team-facing entry points. The 'self' entries below stay the manager's
+    // own self-service. No roster/`/employees` link: canViewEmployees is hr-only, and
+    // `/attendance` already gives a division manager a per-employee view of their team.
     {
       path: '/employee-requests',
       label: 'การอนุมัติ OT',
@@ -177,25 +134,19 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       icon: 'briefcase',
       group: 'sales',
       // Role-scoped views: the pipeline BROWSER is canViewDealPipeline (sales/
-      // sales_manager/ceo) — narrower than canViewTickets (detail-read, kept
-      // for import/account). Instead of this item, Import gets คิวขอราคา +
-      // งานนำเข้า and Account gets งานการเงิน, all below.
-      //
-      // This comment used to promise Import a "จัดซื้อ & นำเข้า worklist below"
-      // and was false for six days: that nav item and its /procurement page were
-      // deleted in ebaf6888 (owner ruling — the page duplicated the dashboard
-      // worklist), leaving nothing below to point at. งานนำเข้า is its
-      // replacement and is NOT the same page — see
-      // .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §0.
+      // sales_manager/ceo), narrower than canViewTickets (detail-read, kept
+      // for import/account). Import gets คิวขอราคา + งานนำเข้า and Account gets
+      // งานการเงิน instead, all below. งานนำเข้า is not the same page as the
+      // dashboard worklist: see .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §0.
       // See docs/role-scoped-views.md.
       show: hasPermission(user.role, 'canViewDealPipeline') && SALES_ENABLED,
       match: ['/tickets'],
     },
-    // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09).
-    // Mirrors ROLE_PERMISSIONS.canViewDealQuotations (sales/sales_manager/ceo/import/account)
-    // OR'd with the per-employee canCreateQuotation capability grant, same as the '/quotations'
-    // PATH_GUARDS entry (app/permissions.js) -- a grant-holder's role need not be in that list at
-    // all. `sales` sees only its own deals' quotations, scoped server-side, not by this nav item.
+    // Direct deal quotation. Mirrors ROLE_PERMISSIONS.canViewDealQuotations
+    // (sales/sales_manager/ceo/import/account) OR'd with the per-employee canCreateQuotation
+    // capability grant, same as the '/quotations' PATH_GUARDS entry (app/permissions.js): a
+    // grant-holder's role need not be in that list at all. `sales` sees only its own deals'
+    // quotations, scoped server-side, not by this nav item.
     {
       path: '/quotations',
       label: 'ใบเสนอราคา',
@@ -206,9 +157,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       match: ['/quotations'],
     },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
-    // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog),
-    // not just the feature flag — previously any authenticated role could
-    // reach it once SALES_ENABLED, even employee.
+    // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog), not just the
+    // feature flag.
     { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', group: 'sales', show: hasPermission(user.role, 'canViewCatalog') && SALES_ENABLED },
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'sales', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
@@ -222,21 +172,17 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // find every button on this page 403s. `building`, not `clipboard`: the
     // neighbour already owns that glyph, and the chain ends at the warehouse.
     { path: '/fulfilment', label: 'งานนำเข้า', helper: 'Import fulfilment worklist', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
-    // Account has NO ค่าคอมมิชชัน nav item (finalized Account design, owner-confirmed
-    // 2026-07-24): the invoice+commission step (บันทึกใบกำกับ / create-from-deal
-    // at close) is the LAST STAGE of the งานการเงิน money lifecycle + the Overview worklist
-    // (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a
+    // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
+    // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
+    // Overview worklist (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a
     // standalone menu. The /commissions ROUTE stays reachable (canViewCommissions still
     // includes account) so /commissions?ticketId=NN still deep-links into the create-from-deal
-    // flow (the งานการเงิน deal page now records the invoice in-page via RECORD_INVOICE); account has no list access (canListCommissionRecords
-    // excludes it — GET /api/commissions is sales/sales_manager/ceo only).
+    // flow; account has no list access (canListCommissionRecords excludes it: GET
+    // /api/commissions is sales/sales_manager/ceo only).
     { path: '/commissions', label: 'ค่าคอมมิชชัน', helper: 'Commissions', icon: 'badgeDollar', group: 'sales', show: hasPermission(user.role, 'canViewCommissions') && SALES_ENABLED && user.role !== 'account' },
-    // Account's money-lifecycle worklist (Account role-scoped views): deposit
-    // -> final payment -> close-ready -> record-invoice/commission, one page.
-    // Deliberately NOT OR'd with the per-employee canIssueBillingNote grant (GLA-129) yet — see
-    // permissions.js's isBillingNoteReleaseUser for why: the grant is wired into this nav item,
-    // the PATH_GUARDS entry, and AccountFinancePage.jsx's own tab scoping together, on the branch
-    // that adds the scoping.
+    // Account's money-lifecycle worklist: deposit -> final payment -> close-ready ->
+    // record-invoice/commission, one page. Deliberately NOT OR'd with the per-employee
+    // canIssueBillingNote grant: see permissions.js's isBillingNoteReleaseUser for why.
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
@@ -244,31 +190,29 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // the topbar UserMenu, and the two pages are merged into /profile. /requests
     // stays here because an HR review queue is work, not personal admin.
     { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', group: 'hr', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
-    // Tax-allowance (ล.ย.01) HR register (issue #387) — mirrors the route's own guard
+    // Tax-allowance (ล.ย.01) HR register: mirrors the route's own guard
     // (canViewTaxAllowanceRegister: hr+ceo) so CEO's read-only visibility into the register
     // still gets a nav entry, even though only hr can act on a row (canReviewTaxAllowances).
     { path: '/tax-allowance-review', label: 'ตรวจสอบค่าลดหย่อนภาษี', helper: 'Tax allowance review (ล.ย.01)', icon: 'badgeCheck', group: 'hr', show: hasPermission(user.role, 'canViewTaxAllowanceRegister') },
-    // Attendance calendar admin (PR #480's API, this branch's UI): hr.holiday CRUD + the manual
+    // Attendance calendar admin: hr.holiday CRUD + the manual
     // BOT-fetch trigger, hr.work_schedule_assignment CRUD. HR/CEO only.
     { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'hr', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
-    // §5 announcement PDF upload (issue #744). Sits beside the calendar admin above because they are
-    // the same job — HR/CEO maintaining the rules that govern time and leave — and the same audience.
+    // §5 announcement PDF upload. Sits beside the calendar admin above because they are
+    // the same job and the same audience.
     // `fileText` matches the glyph the leave page's own reference bar uses for this document, so the
     // nav item and the thing it administers read as the same object.
     { path: '/settings/leave-policy', label: 'ประกาศวันลา (PDF)', helper: 'Leave policy announcement', icon: 'fileText', group: 'hr', show: hasPermission(user.role, 'canManageLeavePolicyDocument') },
-    // Split (issue #390): nav visibility follows read access (hr+ceo); CEO lands on a read-only
+    // Nav visibility follows read access (hr+ceo); CEO lands on a read-only
     // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
     // `exact` because /payroll/deduction-shortfalls below is a SIBLING item, not a detail page of
     // this one — without it prefix matching would light both rows at once (see Sidebar.jsx).
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', exact: true, show: hasPermission(user.role, 'canViewPayroll') },
-    // Garnishment shortfall ledger (issue #376's read surface). Same audience as /payroll —
-    // canViewPayroll is hr+ceo, mirroring the endpoint's own hasAnyRole('HR','CEO').
+    // Garnishment shortfall ledger. Same audience as /payroll —
     // `fileText`, not `triangleAlert`: that glyph already means "live warning" across six feature
     // surfaces (PayrollPage, TaxAllowanceReviewPage, SpecialMoneyPanel …), and no other nav item
     // uses it. Permanent navigation chrome pointing at a routine ledger would dilute it.
     { path: '/payroll/deduction-shortfalls', label: 'ยอดค้างหักตามหมายบังคับคดี', helper: 'Deduction shortfalls', icon: 'fileText', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
-    // Written-consent register (issue #376's other read surface). Same audience as its two siblings
-    // — canViewPayroll is hr+ceo, mirroring the GET's own hasAnyRole('HR','CEO'); HR alone gets the
+    // Written-consent register. Same audience as its two siblings
     // record action once inside. `clipboard`, not `shield` or `badgeCheck`: this is HR's filing
     // record of a signed letter, and a shield/check glyph would imply the app is verifying or
     // clearing something, which is precisely what this register does NOT do.
@@ -279,9 +223,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // the /overtime redirect alias, mirroring the /tickets pattern above.
     {
       path: '/employee-requests',
-      // Matches the page's own <PageHeader> title (RequestsPage.jsx). A nav item that says one
-      // thing and lands on a page titled another is the "navigation shows current location"
-      // check failing — so this moved with it rather than being left behind.
+      // Matches the page's own <PageHeader> title (RequestsPage.jsx).
       label: 'คำขอเงินพิเศษ',
       helper: 'Requests (overtime / welfare)',
       icon: 'clock',
@@ -290,7 +232,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       match: ['/employee-requests', '/overtime'],
     },
     { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', group: 'self', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
-    // Tax-allowance (ล.ย.01) self-service declaration (issue #387) — mirrors the route's own
+    // Tax-allowance (ล.ย.01) self-service declaration — mirrors the route's own
     // guard in permissions.js's PATH_GUARDS (`!!u.employeeId`, same shape as /profile).
     { path: '/tax-allowance', label: 'ค่าลดหย่อนภาษี', helper: 'Tax allowance (ล.ย.01)', icon: 'calculator', group: 'self', show: !!user.employeeId },
   ]
@@ -311,19 +253,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // links: its three entries point at /employee-requests, /leave and
     // /attendance, which are the same routes the surviving 'self' group lists.
     //
-    // One exception (owner, 2026-09-11): ใบเสนอราคา stays for the quotation audience — the nav
+    // One exception: ใบเสนอราคา stays for the quotation audience, the nav
     // twin of permissions.js's quotation-release path exemption, keyed on the same predicate so
     // the two cannot disagree. It keeps its 'sales' group, so that header shows with this one item.
     .filter((item) => !navLocked || !item.group || item.group === 'self'
       || (item.path === '/quotations' && isQuotationReleaseUser(user))
-      // Sales release (owner ruling 2026-10-22): import's งานนำเข้า + คิวขอราคา and account's
-      // งานการเงิน survive the lock — the same allowlist canAccessPath applies.
+      // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
+      // allowlist canAccessPath applies.
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
 
-  // Close the mobile drawer whenever the URL changes (navigation happened).
   useEffect(() => {
     closeDrawer();
     closeTopbarPopover();
@@ -390,11 +331,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
 
   return (
     <div className="flex h-dvh w-full max-w-full overflow-hidden">
-      {/* WCAG 2.2 §2.4.1 Bypass Blocks: the first focusable element in the
-          shell, ahead of the sidebar's ~10 nav items + group headers, so
-          keyboard/screen-reader users don't re-traverse the nav on every
-          route. sr-only until focused; `focus:not-sr-only` brings it on
-          screen only while focused. */}
+      {/* Bypass Blocks (WCAG 2.2 §2.4.1): the first focusable element, ahead of the nav items.
+          sr-only until focused. */}
       <a
         href={`#${mainContentId}`}
         onClick={handleSkipLinkClick}
@@ -420,29 +358,16 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
         onClick={closeDrawer}
         tabIndex={-1}
       />
-      {/* The topbar is a SIBLING of <main>, never a child — this wrapper, not
-          <main>, owns the header+content column. `<header>` scoped to <body>
-          maps to the `banner` landmark, and a banner nested inside `main` is
-          a structural a11y defect: screen-reader landmark navigation expects
-          the two beside each other, so a user jumping to "main" would land
-          with the topbar inside the region they just skipped past. It also
-          silently broke the `getByRole('main')` == "the page content" query
-          idiom — scoping there excluded nothing. Measured in real Chromium on
-          /leave/new: `getByRole('main').getByRole('button')` returned 9, being
-          the page's own 7 plus the notification bell and the account menu (the
-          hamburger is display:none at desktop, so it was not among them; below
-          1041px it is a tenth).
-          A plain <div> is the right wrapper: it is neither sectioning content
-          nor a sectioning root, so the header's landmark scope is still
-          <body> and it stays a `banner`. The flex math is unchanged from when
-          <main> carried these classes — same column with a flex-none header
-          and a flex-1 overflow-auto scroller — so the topbar stays pinned
-          above the scroll region at every breakpoint. */}
+      {/* The topbar is a SIBLING of <main>, never a child: `<header>` scoped to <body> maps to
+          the `banner` landmark, and a banner nested inside `main` is an a11y defect (landmark
+          navigation expects them side by side, and `getByRole('main')` would include the
+          notification bell and account menu). A plain <div> wraps header+content so the header
+          stays a `banner`; the flex-none header + flex-1 overflow-auto scroller keeps the topbar
+          pinned at every breakpoint. */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header
           className={cn(
-            // `topbar`/`topbar-title` below carry no CSS of their own — kept
-            // only because e2e/shared-shell.spec.js selects them directly.
+            // `topbar`/`topbar-title` carry no CSS of their own; kept as selector hooks.
             'topbar',
             'h-[var(--app-topbar-h)] max-w-full flex-none flex items-center justify-between gap-4',
             'pr-[max(28px,env(safe-area-inset-right))] pl-[max(28px,env(safe-area-inset-left))]',
@@ -491,18 +416,13 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             />
           </div>
         </header>
-        {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not
-            part of the normal Tab sequence. The global `:focus-visible`
-            outline rule in styles.css excludes `[tabindex="-1"]`, and an
-            outset outline would clip against this shell's `overflow-hidden`,
-            so an inset ring (reusing the same focus-ring token) is used here
-            to confirm the landing without changing layout.
-            <main> *is* the scroll container rather than wrapping one, which
-            keeps the landmark and the scrolled box the same node: `.content-scroll`
-            stays a direct parent of page content (LeaveSurfacePage.jsx's
-            positioning-context fix depends on that), and no extra flex level
-            is added that would need its own `min-h-0` to avoid an
-            automatic-minimum-size overflow. */}
+        {/* tabIndex={-1}: focusable via the skip link's .focus() call, but not part of the Tab
+            sequence. The global `:focus-visible` rule excludes `[tabindex="-1"]`, and an outset
+            outline would clip against this shell's `overflow-hidden`, so an inset ring is used.
+            <main> *is* the scroll container, so the landmark and the scrolled box are the same
+            node: `.content-scroll` stays a direct parent of page content (LeaveSurfacePage.jsx's
+            positioning-context fix depends on that) and no extra flex level needs its own
+            `min-h-0`. */}
         <main
           id={mainContentId}
           ref={mainRef}

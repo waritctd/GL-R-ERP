@@ -59,12 +59,9 @@ describe('formatAddress', () => {
   });
 });
 
-// Issue #395: every dashboard greeting used to prepend "คุณ" unconditionally,
-// which doubled up whenever the resolved name already carried an honorific —
-// "สวัสดี คุณคุณสมหมาย ขายดี" for a `user.name` seeded as "คุณสมหมาย ขายดี".
-// Root cause was inconsistent name data (some rows already have a leading
-// honorific, some don't), not a case for stripping/rewriting the stored
-// name — so the greeting now detects an existing honorific instead.
+// A name that already carries an honorific must not get "คุณ" prepended again
+// ("สวัสดี คุณคุณสมหมาย ขายดี"): some stored names have a leading honorific and some don't,
+// so the greeting detects an existing one instead of rewriting the data.
 describe('greetingName', () => {
   it('prepends "คุณ" for a name with no honorific (the common case: an employee nickname)', () => {
     expect(greetingName('ภูมิ')).toBe('คุณภูมิ');
@@ -109,30 +106,24 @@ describe('attendanceSourceLabel', () => {
 
 describe('pricing workflow status labels', () => {
   it('maps backend pricing workflow codes to user-facing Thai labels', () => {
-    // Relabelled again 2026-08-16 (owner ruling, factory-price-import-ui redesign) — "รอ CEO
-    // อนุมัติราคา", one wording for this state everywhere it appears. See format.js's own comment on
-    // FACTORY_QUOTE_STATUS_LABELS.READY_FOR_COSTING for the superseded 2026-08-15 reasoning (the
-    // CONSTANT NAME is still a fossil of V141 severing the costing aggregate; only the label text
-    // changed here, not the key, so statusCatalog.test.js's digest guard — which pins backend STATUS
-    // KEYS, never label text — needed no update).
+    // One wording for this state everywhere it appears: "รอ CEO อนุมัติราคา". The constant name
+    // is a fossil of V141 severing the costing aggregate; statusCatalog.test.js's digest guard
+    // pins backend STATUS KEYS, never label text.
     expect(factoryQuoteStatusLabel('READY_FOR_COSTING')).toMatchObject({ label: 'รอ CEO อนุมัติราคา', tone: 'success' });
     expect(pricingDecisionStatusLabel('RETURNED')).toMatchObject({ label: 'ตีกลับให้แก้ไข', tone: 'danger' });
     expect(quotationStatusLabel('REVISION_REQUESTED')).toMatchObject({ label: 'ลูกค้าขอแก้ไข', tone: 'warning' });
     // VW-07: a direct-deal quotation reaches the finance accepted-quotation badge as APPROVED.
     expect(quotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
-    // Absorbed from a deleted 'keeps stale costing visible' case: that test only ever exercised
-    // the ` · ต้องคำนวณใหม่` suffix, which V141 removed along with pricing_costing.stale — but it
-    // was also the file's ONLY call of pricingCostingStatusLabel, so the still-true base mapping
-    // would have gone uncovered with it.
+    // Kept from a deleted 'keeps stale costing visible' case: it was the file's ONLY call of
+    // pricingCostingStatusLabel, so the base mapping would otherwise go uncovered.
     expect(pricingCostingStatusLabel('CALCULATED')).toMatchObject({ label: 'คำนวณแล้ว', tone: 'warning' });
   });
 });
 
-// GLA-117: sales.deposit_notice.status only ever holds DRAFT (default) / ISSUED (#issue) /
-// SUPERSEDED (#supersede) — see format.js's own comment on depositNoticeStatusLabel for the
-// backend verification. The bug being regression-tested here is the old inline
+// sales.deposit_notice.status only ever holds DRAFT (default) / ISSUED (#issue) / SUPERSEDED
+// (#supersede) -- see format.js's comment on depositNoticeStatusLabel. Guards against an inline
 // `status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternary, which rendered SUPERSEDED (and anything
-// else) as if it were an untouched draft.
+// else) as an untouched draft.
 describe('depositNoticeStatusLabel', () => {
   it('maps DRAFT to the neutral ฉบับร่าง label', () => {
     expect(depositNoticeStatusLabel('DRAFT')).toMatchObject({ label: 'ฉบับร่าง', tone: 'neutral' });
@@ -172,9 +163,8 @@ describe('formatMoney', () => {
   });
 });
 
-// F5: this function had no test coverage at all before this fix. It is NOT the same
-// `formatThaiMonthYear` exported by `features/specialmoney/specialMoneyRules.js` (that one takes a
-// `Date` and returns a 2-digit BE year) — see the rename/collision note on the export in format.js.
+// Not the same `formatThaiMonthYear` exported by `features/specialmoney/specialMoneyRules.js`
+// (that one takes a `Date` and returns a 2-digit BE year); see the note on the export in format.js.
 describe('formatThaiMonthYearFromMonthInputValue', () => {
   it('formats a valid "YYYY-MM" month-input value with a 4-digit Buddhist-era year', () => {
     expect(formatThaiMonthYearFromMonthInputValue('2026-07')).toBe('ก.ค. 2569');
@@ -210,9 +200,8 @@ describe('formatThaiMonthYearFromMonthInputValue', () => {
 });
 
 describe('formatShortDate', () => {
-  // `process` isn't in this project's eslint browser globals (see eslint.config.js) even though it's
-  // available at runtime under vitest/Node — go through `globalThis` rather than the bare identifier
-  // so lint doesn't need a per-line exception.
+  // `process` isn't in this project's eslint browser globals even though it's available under
+  // vitest/Node, so go through `globalThis` to avoid a per-line lint exception.
   const originalTz = globalThis.process.env.TZ;
 
   afterEach(() => {
@@ -231,11 +220,10 @@ describe('formatShortDate', () => {
     expect(formatShortDate('2026-01-05')).toBe('05/01/2569');
   });
 
-  // F6: `new Date('2026-07-26')` parses a date-only ISO string as UTC midnight, so reading it back
-  // with local getters rolled to the previous day in negative-offset zones. The fix parses the
-  // "YYYY-MM-DD" prefix directly instead of going through `new Date()`, so this must hold regardless
-  // of the runtime's timezone -- pin it down under a negative-offset zone specifically (measured
-  // wrong before the fix: America/New_York and Pacific/Honolulu both showed 25/07/2569).
+  // `new Date('2026-07-26')` parses a date-only ISO string as UTC midnight, so reading it back
+  // with local getters rolls to the previous day in negative-offset zones. The date-only prefix is
+  // parsed directly, so this must hold in any timezone; pin it under a negative-offset zone
+  // (America/New_York and Pacific/Honolulu).
   it('is timezone-independent for a date-only value, incl. under a negative UTC offset', () => {
     globalThis.process.env.TZ = 'Pacific/Honolulu';
     expect(formatShortDate('2026-07-26')).toBe('26/07/2569');
@@ -263,10 +251,8 @@ describe('formatShortDate', () => {
 });
 
 describe('specialMoneyStatusLabel', () => {
-  // Welfare is CEO-only in a single stage (#482 removed the manager stage), so
-  // SUBMITTED means "waiting for the CEO". It used to read 'รอผู้จัดการ', which
-  // named a holder that no longer exists in the flow -- a wrong next-actor is
-  // worse than a vague one, because the employee chases the wrong person.
+  // Welfare is CEO-only in a single stage, so SUBMITTED means "waiting for the CEO"; naming a
+  // manager would send the employee chasing the wrong person.
   it('says the CEO holds a SUBMITTED request, not a manager', () => {
     expect(specialMoneyStatusLabel('SUBMITTED').label).toBe('รอ CEO อนุมัติ');
     expect(specialMoneyStatusLabel('SUBMITTED').label).not.toContain('ผู้จัดการ');
@@ -282,9 +268,8 @@ describe('specialMoneyStatusLabel', () => {
       .toBe(specialMoneyStatusLabel('SUBMITTED').tone);
   });
 
-  // The panel's status filter renders straight from this list. Guards against
-  // the drift that caused this bug: an inline copy of the options in the panel
-  // that nobody updated when the flow changed.
+  // The panel's status filter renders straight from this list; guards against an inline copy of
+  // the options drifting from the flow.
   it('covers every SpecialMoneyStatus enum value with a real Thai label', () => {
     expect(SPECIAL_MONEY_STATUSES)
       .toEqual(['SUBMITTED', 'MANAGER_APPROVED', 'APPROVED', 'REJECTED', 'CANCELLED']);
@@ -294,13 +279,11 @@ describe('specialMoneyStatusLabel', () => {
   });
 });
 
-// A1 (OT UAT defect #1): unlike welfare above, overtime has TWO real approval routes per request
-// (see OvertimeRepository#resolvePendingApproverRole) -- SUBMITTED means "waiting for a division
+// Unlike welfare above, overtime has TWO real approval routes per request (see
+// OvertimeRepository#resolvePendingApproverRole): SUBMITTED means "waiting for a division
 // manager" on most requests, but "waiting for the CEO directly" when the employee's ฝ่าย has no
-// manager or the requester IS one. A status-only map cannot tell the two apart, so it used to label
-// EVERY SUBMITTED row 'รอผู้จัดการ' even on the manager-less route -- the exact mislabel
-// specialMoneyStatusLabel already fixed for welfare, except welfare could use one static string
-// because ALL its requests are CEO-only, and overtime's route varies per row.
+// manager or the requester IS one. A status-only map cannot tell the two apart, whereas welfare
+// can use one static string because ALL its requests are CEO-only.
 describe('overtimeStatusLabel', () => {
   it('reads รอผู้จัดการ for a SUBMITTED request with no role given, so existing 1-arg callers keep working', () => {
     expect(overtimeStatusLabel('SUBMITTED').label).toBe('รอผู้จัดการ');
@@ -325,10 +308,9 @@ describe('overtimeStatusLabel', () => {
   });
 });
 
-// Attendance date stepper bug: `new Date(iso + 'T00:00:00+07:00').toISOString().slice(0,10)`
-// reads the UTC calendar day off a Bangkok-midnight instant, which is one day behind the Bangkok
-// date intended -- netting a 2-day back-step and a stuck forward-step on the attendance page.
-// addDaysIso replaces that with pure YYYY-MM-DD calendar-field arithmetic.
+// `new Date(iso + 'T00:00:00+07:00').toISOString().slice(0,10)` reads the UTC calendar day off a
+// Bangkok-midnight instant, one day behind the intended Bangkok date (a 2-day back-step and a
+// stuck forward-step on the attendance page). addDaysIso uses pure YYYY-MM-DD calendar arithmetic.
 describe('addDaysIso', () => {
   it('stepping +1 then -1 returns the original date', () => {
     expect(addDaysIso(addDaysIso('2026-08-15', 1), -1)).toBe('2026-08-15');
@@ -371,9 +353,9 @@ describe('bangkokMonthStartIso monthsBack', () => {
   });
 });
 
-// S3 (SPEC_APPROVED) is "the party who specifies has agreed the spec" — only the WORDING varies by
-// the deal's entry channel. Nine existing call sites pass ONE argument, so the 1-arg call must not
-// change; every other stage must be indistinguishable with or without a channel.
+// S3 (SPEC_APPROVED) is "the party who specifies has agreed the spec": only the WORDING varies by
+// the deal's entry channel. The 1-arg call must not change; every other stage must be
+// indistinguishable with or without a channel.
 describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () => {
   const DESIGNER = 'ผู้ออกแบบอนุมัติสเปค';
 
@@ -403,8 +385,7 @@ describe('dealStageLabel(code, entryChannel?) — route-aware S3 wording', () =>
   });
 
   // Wrong-way-round: the channel may re-word S3 and S1 (STAGE_LABEL_BY_CHANNEL) and NOTHING else.
-  // LEAD_APPROACH left this list on 2026-10-01 when the owner ruled S1 should name the party the
-  // deal entered through instead of hedging "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ".
+  // LEAD_APPROACH is not in this list: S1 names the party the deal entered through.
   const OTHER_STAGES = [
     'PRESENTATION', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',
     'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED',
@@ -452,10 +433,9 @@ describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
 });
 
 describe('S1 LEAD_APPROACH wording follows the entry channel', () => {
-  // The default label hedges with a slash — เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ — because one string had
-  // to serve every route. Owner ruling 2026-10-01: name the party the deal actually entered
-  // through. S1 ONLY; S7's "รอผลประมูล / รอผู้ซื้อ" and S18's slash join two real situations, not
-  // two routes, so they are deliberately untouched.
+  // The default label hedges with a slash (เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ) because one string had
+  // to serve every route; name the party the deal actually entered through. S1 ONLY: S7's
+  // "รอผลประมูล / รอผู้ซื้อ" and S18's slash join two real situations, not two routes.
   it('names the single party for each real channel', () => {
     expect(dealStageLabel('LEAD_APPROACH', 'DESIGNER_LED').label).toBe('เข้าถึงผู้ออกแบบโครงการ');
     expect(dealStageLabel('LEAD_APPROACH', 'OWNER_DIRECT').label).toBe('เข้าถึงเจ้าของโครงการ');
@@ -512,7 +492,7 @@ describe('formatFileSize', () => {
   });
 });
 
-// QA-16 (owner ruling 2026-10-29): two new neutral payment-chip values, derived by the backend.
+// Two neutral payment-chip values, derived by the backend.
 describe('paymentStageLabel — QA-16 chip values', () => {
   it('labels NOT_STARTED and NO_DEPOSIT, both neutral', () => {
     expect(paymentStageLabel('NOT_STARTED')).toEqual({ label: 'ยังไม่ถึงขั้นชำระ', tone: 'neutral' });

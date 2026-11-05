@@ -1,21 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — mock coverage for
-// DealQuotationService#createFromPricingRequest and #update's origin=PRICING_REQUEST behaviour:
-// the extra-row refusal, and the pricing_request_item/pricing_decision_item link surviving a
-// save. NOT authz/permission coverage (nothing here substitutes for the real-DB Java tests in
-// PricingRequestQuotationIntegrationTest) — this only verifies the mock's OWN plumbing, per
-// CLAUDE.md's "Mock API contract".
+// Mock coverage for DealQuotationService#createFromPricingRequest and #update's
+// origin=PRICING_REQUEST behaviour: the extra-row refusal, and the
+// pricing_request_item/pricing_decision_item link surviving a save. NOT authz/permission
+// coverage (the real-DB Java tests in PricingRequestQuotationIntegrationTest are the authority):
+// this only verifies the mock's OWN plumbing.
 
 function nextClientRequestId() {
   return crypto.randomUUID();
 }
 
-/** Drives a fresh PCR (Phase 1 new-form shape) all the way to an APPROVED NET decision — mirrors
- * mockApi.pricingDecisionCeoPriceMode.test.js's own `startNewFormDecision` helper, extended to
- * also set NET mode (zero discount) and approve, since this file needs
- * pricing_request.status === APPROVED_FOR_QUOTATION to call createFromPricingRequest at all.
+/** Drives a fresh PCR to an APPROVED NET decision (mirrors mockApi.pricingDecisionCeoPriceMode.test.js's
+ * `startNewFormDecision`, plus NET mode with zero discount and approve), since
+ * pricing_request.status === APPROVED_FOR_QUOTATION is needed to call createFromPricingRequest.
  * Returns { ticketId, prId, decision } with the session left logged in as the OWNING sales user. */
 async function approvedNetPricingRequest() {
   await api.auth.login({ role: 'sales' });
@@ -44,7 +42,7 @@ async function approvedNetPricingRequest() {
 
   const { pricingRequest: draftPr } = await api.pricingRequests.create(ticketId, {
     recipientType: 'DESIGNER',
-    // The quotation's ผู้ติดต่อ comes from here: the deal's own contact is no fallback (ruling 2026-10-18).
+    // The quotation's ผู้ติดต่อ comes from here: the deal's own contact is no fallback.
     recipientContactId: contact.id,
     recipientLabel: 'ผู้ออกแบบทดสอบ PCRQ',
     clientRequestId: nextClientRequestId(),
@@ -76,7 +74,7 @@ async function approvedNetPricingRequest() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
-  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  // Price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
   for (const q of quotes) {
     await api.pricingRequests.markFactoryQuoteContacted(q.id, {
       contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
@@ -115,10 +113,9 @@ async function approvedNetPricingRequest() {
   return { ticketId, prId, decision: approved };
 }
 
-/** M4(c)/(d)'s own fixture — the SAME chain as {@link approvedNetPricingRequest}, but with TWO
- * pricing-request items instead of one, so a drop test can remove ONE linked line while leaving
- * the quotation with at least one (both the real service and this mock refuse a fully-empty
- * item list on save — see buildItems'/buildDealQuotationItems' own "ต้องมีอย่างน้อยหนึ่งรายการ"). */
+/** Same chain as {@link approvedNetPricingRequest}, but with TWO pricing-request items, so a drop
+ * test can remove ONE linked line while leaving the quotation with at least one (the real service
+ * and this mock refuse a fully-empty item list on save: "ต้องมีอย่างน้อยหนึ่งรายการ"). */
 async function twoItemApprovedNetPricingRequest() {
   await api.auth.login({ role: 'sales' });
   const { customer } = await api.customers.create({
@@ -169,7 +166,7 @@ async function twoItemApprovedNetPricingRequest() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
-  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  // Price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
   for (const q of quotes) {
     await api.pricingRequests.markFactoryQuoteContacted(q.id, {
       contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
@@ -219,25 +216,24 @@ describe('mockApi.dealQuotations.createFromPricingRequest', () => {
     expect(item.priceChangedFromCeo).toBe(false);
   });
 
-  // Round 8: DealQuotationDto now serves recipientType/recipientLabel (already persisted; copied
-  // from the source pricing request for PRICING_REQUEST-origin rows). Mock parity.
+  // DealQuotationDto serves recipientType/recipientLabel (copied from the source pricing
+  // request for PRICING_REQUEST-origin rows). Mock parity.
   it('serves the source pricing request recipient on the created row and on listForTicket', async () => {
     const { ticketId, prId } = await approvedNetPricingRequest();
     const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
     expect(quotation.recipientType).toBe('DESIGNER');
     expect(quotation.recipientLabel).toBe('ผู้ออกแบบทดสอบ PCRQ');
-    // ...and its recipient contact as the ผู้ติดต่อ, whose name is the signature name (ruling
-    // 2026-10-18). Mirrors DealQuotationService#createFromPricingRequest.
+    // ...and its recipient contact as the ผู้ติดต่อ, whose name is the signature name.
+    // Mirrors DealQuotationService#createFromPricingRequest.
     expect(quotation).toMatchObject({ contactName: 'สมชาย ทดสอบ', orderedByName: 'สมชาย ทดสอบ' });
     const { items } = await api.dealQuotations.listForTicket(ticketId);
     expect(items.find((q) => q.id === quotation.id).recipientType).toBe('DESIGNER');
   });
 
-  // MINOR (Opus review, 2026-09-20) — mock parity: a second call for the same PR (a double-click;
-  // this endpoint takes no clientRequestId to dedupe on) must not mint a duplicate DRAFT. Mirrors
-  // DealQuotationService#createFromPricingRequest's own idempotent-replay guard
-  // (findOpenDraftForPricingRequest) — see duplicateCreate_returnsTheSameOpenDraft_doesNotInsertASecondRow
-  // on the backend IT.
+  // Mock parity: a second call for the same PR (a double-click; this endpoint takes no
+  // clientRequestId to dedupe on) must not mint a duplicate DRAFT. Mirrors
+  // DealQuotationService#createFromPricingRequest's idempotent-replay guard
+  // (findOpenDraftForPricingRequest).
   it('a second call for the same PR returns the SAME quotation, not a duplicate', async () => {
     const { prId } = await approvedNetPricingRequest();
     const { quotation: first } = await api.dealQuotations.createFromPricingRequest(prId);
@@ -248,9 +244,9 @@ describe('mockApi.dealQuotations.createFromPricingRequest', () => {
   });
 });
 
-// Spec L1 (2026-10-27): the deal page's sticky "เสนอใบราคา<party>" calls this endpoint, so the mock
+// The deal page's sticky "เสนอใบราคา<party>" calls this endpoint, so the mock
 // refuses what DealQuotationService#createFromPricingRequest refuses (same 409s, same Thai messages)
-// instead of quietly writing a second quotation. Mock plumbing only — the real-DB tests are the
+// instead of quietly writing a second quotation. Mock plumbing only: the real-DB tests are the
 // authority on the service itself.
 describe('mockApi.dealQuotations.createFromPricingRequest — refuses what the service refuses (mock parity)', () => {
   it('a deal that is no longer ACTIVE: 409 "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE"', async () => {
@@ -332,9 +328,8 @@ describe('mockApi.dealQuotations.update — origin=PRICING_REQUEST link carry-fo
   });
 });
 
-// M4 (Opus review, 2026-09-20) — mock coverage for the identity guard and the drop/restore
-// flag, mirroring DealQuotationService's requireLinkedLineIdentityUnchanged/#update/
-// #restoreRemovedItem's own three behaviours.
+// Mock coverage for the identity guard and the drop/restore flag, mirroring DealQuotationService's
+// requireLinkedLineIdentityUnchanged/#update/#restoreRemovedItem.
 describe('mockApi.dealQuotations.update — origin=PRICING_REQUEST M4(a)/(b) linked-line identity guard', () => {
   it('refuses changing a linked line away from TILE', async () => {
     const { prId } = await approvedNetPricingRequest();
@@ -418,15 +413,12 @@ describe('mockApi.dealQuotations.update/restoreRemovedItem — M4(c)/(d) drop fl
   });
 });
 
-// MINOR fix (Opus review, 2026-09-20) — mock parity: listForTicket/list/counts used to include a
-// PRICING_REQUEST-origin row, unlike the real DealQuotationRepository#findByTicket/#search/
-// #counts, which are deliberately DEAL_DIRECT-only (see directDealSearch_doesNotIncludePricingRequestOriginRows
-// on the backend IT). A PRICING_REQUEST-origin quotation has its own separate display surface
-// (PricingRequestDetailPage's panel, M1) and must never leak into this one.
+// Mock parity: listForTicket/list/counts must match the real DealQuotationRepository#findByTicket/
+// #search/#counts, which are deliberately DEAL_DIRECT-only. A PRICING_REQUEST-origin quotation has
+// its own display surface (PricingRequestDetailPage's panel) and must never leak into this one.
 describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (mock parity)', () => {
-  // CHANGED (Round 8): listForTicket now INCLUDES the PRICING_REQUEST-origin row, mirroring
-  // DealQuotationRepository#findByTicket's `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (GLA-123
-  // S3 MAJOR 4 fix; the backend IT is directDealSearch_includesPricingRequestOriginRows). list()/
+  // listForTicket INCLUDES the PRICING_REQUEST-origin row, mirroring
+  // DealQuotationRepository#findByTicket's `origin IN ('DEAL_DIRECT','PRICING_REQUEST')`. list()/
   // counts() below stay DEAL_DIRECT-only, as #search/#counts do.
   it('listForTicket returns the PRICING_REQUEST-origin row for the same ticket', async () => {
     const { ticketId, prId } = await approvedNetPricingRequest();
@@ -436,11 +428,10 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
     expect(items.map((q) => q.id)).toEqual([quotation.id]);
   });
 
-  // Round 10 (Opus review): the mock must not be MORE permissive than
-  // DealQuotationService#listForTicket, which drops a PRICING_REQUEST-origin row (CEO's price and
-  // discount) unless canViewPricingRequestOriginRow: the owning sales rep, sales_manager, ceo.
-  // Mirrors DealQuotationOutcomeIntegrationTest.listForTicket_hidesPricingRequestOriginRow_from*.
-  // Mock authz is not authoritative evidence — the real-DB tests are.
+  // The mock must not be MORE permissive than DealQuotationService#listForTicket, which drops a
+  // PRICING_REQUEST-origin row (CEO's price and discount) unless canViewPricingRequestOriginRow:
+  // the owning sales rep, sales_manager, ceo. Mock authz is not authoritative evidence; the
+  // real-DB DealQuotationOutcomeIntegrationTest is.
   describe('listForTicket visibility of a PRICING_REQUEST-origin row (wrong-way-round)', () => {
     async function ticketWithPrRow() {
       const { ticketId, prId } = await approvedNetPricingRequest(); // logged in as the owning sales rep
@@ -459,10 +450,10 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
       expect(await idsFor('ceo@glr.co.th', ticketId)).toContain(id);
     });
 
-    // 2026-09-30 owner ruling (reverses M3 FOR ACCOUNT ONLY): account may read a PR-origin row, but only on a
-    // deal inside its list scope (live, S10+). This deal is still below S10, so account is refused the list
-    // outright (403), exactly as DealQuotationService.listForTicket does; import and a grant holder still get
-    // the row filtered out. The in-scope allow-case is pinned by the real-DB DealQuotationOutcomeIntegrationTest.
+    // Account may read a PR-origin row, but only on a deal inside its list scope (live, S10+).
+    // This deal is still below S10, so account is refused the list outright (403), exactly as
+    // DealQuotationService.listForTicket does; import and a grant holder still get the row
+    // filtered out. The in-scope allow-case is pinned by the real-DB DealQuotationOutcomeIntegrationTest.
     it('import and a can_create_quotation grant holder do NOT see it; account is refused below S10', async () => {
       const { ticketId, id } = await ticketWithPrRow();
       expect(await idsFor('import@glr.co.th', ticketId)).not.toContain(id);
@@ -479,9 +470,8 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
     });
 
     it('a DEAL_DIRECT row stays visible to the same roles the gate always admitted (unaffected)', async () => {
-      // Slice 2 (N6, S2-B3): ticket 18's seed already holds a LIVE direct quotation (id 1, DRAFT),
-      // so a second create there is refused by design — this case only needs A DEAL_DIRECT row on
-      // the deal, and the seeded one is exactly that.
+      // ticket 18's seed already holds a LIVE direct quotation (id 1, DRAFT), so a second create
+      // there is refused by design; this case only needs A DEAL_DIRECT row on the deal.
       await api.auth.login({ email: 'sales@glr.co.th', password: 'demo1234' });
       const { quotation } = await api.dealQuotations.get(1);
       expect(quotation.origin).toBe('DEAL_DIRECT');
@@ -506,8 +496,8 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
   });
 });
 
-// MINOR-3 fix (Opus re-review, 2026-09-20) — mock parity: refuse a restore once the document has
-// switched away from Thai/THB, mirroring DealQuotationService#restoreRemovedItem exactly.
+// Mock parity: refuse a restore once the document has switched away from Thai/THB,
+// mirroring DealQuotationService#restoreRemovedItem exactly.
 describe('mockApi.dealQuotations.restoreRemovedItem — MINOR-3 mock parity (language switch)', () => {
   it('refuses restoring once the document has switched to EN', async () => {
     const { prId } = await twoItemApprovedNetPricingRequest();
@@ -529,14 +519,11 @@ describe('mockApi.dealQuotations.restoreRemovedItem — MINOR-3 mock parity (lan
   });
 });
 
-// MINOR fix (Opus review, 2026-09-20) — the mock's dealQuotation authz helpers used to never look
-// at `origin` at all, so an import/account user could GET a PRICING_REQUEST quotation (every
-// ceo* field included) and a canCreateQuotation grant holder could write one under
-// VITE_USE_MOCKS=true — both 403 against the real Java service (DealQuotationService
-// #requireViewAccess / #requireEditAccessForQuotation). This is the "mock MORE permissive than
-// production" shape CLAUDE.md names (#199): these tests only pin the mock's OWN plumbing so it
-// stops actively lying in the dangerous direction while devs/QA drive it — they are NOT authz
-// evidence; that is PricingRequestQuotationIntegrationTest's job against the real backend.
+// The mock's dealQuotation authz helpers must look at `origin`: otherwise an import/account user
+// could GET a PRICING_REQUEST quotation (every ceo* field included) and a canCreateQuotation
+// grant holder could write one under VITE_USE_MOCKS=true, both 403 against the real Java service
+// (DealQuotationService#requireViewAccess / #requireEditAccessForQuotation). These tests only pin
+// the mock's OWN plumbing; they are NOT authz evidence (PricingRequestQuotationIntegrationTest is).
 describe('mockApi.dealQuotations — origin=PRICING_REQUEST authz is NOT origin-blind (mock parity)', () => {
   it('import cannot GET a PRICING_REQUEST quotation (wrong-way-round: DEAL_DIRECT view roles include import)', async () => {
     const { prId } = await approvedNetPricingRequest();
@@ -566,7 +553,7 @@ describe('mockApi.dealQuotations — origin=PRICING_REQUEST authz is NOT origin-
     const { prId } = await approvedNetPricingRequest();
     const { quotation } = await api.dealQuotations.createFromPricingRequest(prId);
 
-    await api.auth.login({ role: 'employee' }); // id 4, canCreateQuotation: true (see mockApi.dealQuotations.test.js's #H4 suite)
+    await api.auth.login({ role: 'employee' }); // id 4, canCreateQuotation: true
     await expect(api.dealQuotations.update(quotation.id, {
       priceMode: quotation.priceMode,
       items: [{ ...quotation.items[0], id: quotation.items[0].id }],

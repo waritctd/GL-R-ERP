@@ -224,64 +224,47 @@ export function createDemoDatabase() {
 
   const users = [
     { id: 2, email: 'hr@glr.co.th', password: 'demo1234', name: employees[20].nameTh, role: 'hr', employeeId: employees[20].id, active: true, createdAt: iso(2025, 1, 5) },
-    // canCreateQuotation: true exercises the Quotation v2 per-employee grant (owner ruling
-    // 2026-09-09 -- ภิญญดา, employee 144, QC&ISO / role `qc`, which this demo seed has no persona
-    // for) on a non-sales `employee` role, mirroring AuthResponse.canCreateQuotation /
-    // hr.employee.can_create_quotation (V166). See quotationMeta.js's hasDealQuotationGrant.
-    // canIssueBillingNote: true exercises the billing-note per-employee grant (GLA-99/GLA-129,
-    // owner ruling 2026-09-19) on the same non-sales `employee` role -- on prod this is the same
-    // real person (ภิญญดา holds both grants), so reusing this persona rather than inventing a
-    // second one keeps the demo faithful. Mirrors AuthResponse.canIssueBillingNote /
-    // hr.employee.can_issue_billing_note (V189). See permissions.js's isBillingNoteReleaseUser.
+    // canCreateQuotation: true exercises the Quotation v2 per-employee grant on a non-sales
+    // `employee` role (mirrors AuthResponse.canCreateQuotation / hr.employee.can_create_quotation;
+    // see quotationMeta.js's hasDealQuotationGrant). canIssueBillingNote: true exercises the
+    // billing-note grant on the same persona (on prod the same real person holds both); mirrors
+    // AuthResponse.canIssueBillingNote / hr.employee.can_issue_billing_note, see permissions.js's
+    // isBillingNoteReleaseUser.
     { id: 4, email: 'employee@glr.co.th', password: 'demo1234', name: employees[8].nameTh, role: 'employee', employeeId: employees[8].id, active: true, createdAt: iso(2025, 2, 11), canCreateQuotation: true, canIssueBillingNote: true },
     // WHL division manager — lets the seeded stage-1 OT approval (OT#1, whose
     // employee reports to this ผู้จัดการฝ่าย) be demoed. role is 'employee' on
     // purpose: a division manager's OT-review authority is derived from the org
     // chart (positionTh 'ผู้จัดการฝ่าย' → publicUser sets manager: true), not from a
-    // special role — there is no 'supervisor'/'director' role (#206 removed those
-    // phantom personas; ApplicationRoles.java never allowed them).
+    // special role: there is no 'supervisor'/'director' role (ApplicationRoles.java never allowed them).
     { id: 10, email: 'warehouse.manager@glr.co.th', password: 'demo1234', name: employees[5].nameTh, role: 'employee', employeeId: employees[5].id, active: true, createdAt: iso(2025, 2, 11) },
     // Sales module users
     { id: 6, email: 'sales@glr.co.th', password: 'demo1234', name: 'คุณสมหมาย ขายดี', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 7, email: 'import@glr.co.th', password: 'demo1234', name: 'คุณนำเข้า พานิช', role: 'import', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     { id: 8, email: 'ceo@glr.co.th', password: 'demo1234', name: 'คุณวิชัย ธนาคาร', role: 'ceo', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
-    // employees[0], the SAL ผู้จัดการฝ่าย — NOT employees[1], which is where this persona used to
-    // point (2026-08-11 fix). employees[1] is an ordinary พนักงานขาย whose own managerId is
-    // employees[0], so the persona literally named "ผู้จัดการฝ่ายขาย" had ZERO direct reports:
-    // api.leave.employees() returned only themselves, and /leave rendered a single "ของฉัน" tab
-    // with no "ลูกทีม" and no "รอพิจารณา" — reported from a screenshot as "the division manager
-    // has no tab for the team leave they approve". Same hole on every other team-scoped
-    // self-service surface, since they all key off reports_to_employee_id.
-    //
-    // demoHr.js already assumed this binding (`const salManager = { id: employees[0].id, ... }`,
-    // the recorded stage-1 OT approver for the SAL rows) — the users table was the one place that
-    // disagreed. `name` follows the employee row for the same reason every other employee-bound
-    // persona here does: the topbar shows `user.name` while the tables show `employee.nameTh`, and
-    // two names for one person reads as two people. Historical approver-name snapshots in
-    // demoPayroll.js keep saying "คุณมณี ผู้จัดการฝ่ายขาย" on purpose — a recorded approval is a
-    // point-in-time fact, not a live join.
-    //
-    // Deliberately NOT a change to the org chart: re-pointing one demo user leaves every
-    // reports_to FK — and therefore every OT chain, attendance scope and dashboard count — exactly
-    // as it was.
+    // employees[0], the SAL ผู้จัดการฝ่าย (not employees[1], an ordinary พนักงานขาย whose managerId
+    // is employees[0]): this persona needs direct reports, or api.leave.employees() returns only
+    // themselves and /leave shows no "ลูกทีม" or "รอพิจารณา" tab (likewise on every team-scoped
+    // self-service surface, which all key off reports_to_employee_id). demoHr.js already assumes
+    // this binding. `name` follows the employee row so the topbar (`user.name`) and the tables
+    // (`employee.nameTh`) agree; approver-name snapshots in demoPayroll.js keep "คุณมณี
+    // ผู้จัดการฝ่ายขาย" on purpose (a recorded approval is a point-in-time fact). Deliberately not
+    // an org-chart change: every reports_to FK, OT chain, attendance scope and dashboard count
+    // stays as it was.
     { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: employees[0].nameTh, role: 'sales_manager', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
     // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on
     // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
     // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
     { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
-    // Second sales rep (chore/mock-demo-seed-state-matrix): with a single sales
-    // user, per-rep scoping and DRAFT-pricing-request privacy (owning rep +
-    // CEO/sales_manager only) are never observable locally. Owns tickets
-    // 16-18 and their own DRAFT/SUBMITTED pricing requests — see demoSales.js.
+    // Second sales rep: with a single sales user, per-rep scoping and DRAFT-pricing-request
+    // privacy (owning rep + CEO/sales_manager only) are never observable locally. Owns tickets
+    // 16-18 and their own DRAFT/SUBMITTED pricing requests (see demoSales.js).
     { id: 12, email: 'sales2@glr.co.th', password: 'demo1234', name: 'คุณอรุณี ขายเก่ง', role: 'sales', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
-    // GLA-46: a login for employees[9] (id 10, WHL, reports to the warehouse manager same as
-    // employees[8]/id 9 above), so mockApi.specialMoneyScope.test.js can log in as the OWNER of
-    // its legacy on-behalf seed row (buildDemoSpecialMoneyRequests id 13) and prove the employee
-    // can still attach/cancel their own confidential row even though the row's requestedById is
-    // the manager who filed it before the 2026-08-10 ruling. Placed last and kept role: 'employee'
-    // on purpose: api.auth.login({ role: 'employee' }) does `db.users.find(...)`, which returns
-    // the FIRST matching row, so this entry never changes what loginReport()/role:'employee' logs
-    // in as elsewhere (still id 4 / employees[8]) — it is reachable only by its own email.
+    // A login for employees[9] (id 10, WHL, same manager as employees[8]/id 9 above), so
+    // mockApi.specialMoneyScope.test.js can log in as the OWNER of its legacy on-behalf seed row
+    // (buildDemoSpecialMoneyRequests id 13) and prove they can still attach/cancel their own
+    // confidential row. Placed last and kept role: 'employee' on purpose: api.auth.login({ role:
+    // 'employee' }) returns the FIRST matching row, so this entry never changes what role:'employee'
+    // logs in as elsewhere (id 4 / employees[8]); it is reachable only by its own email.
     { id: 13, email: employees[9].email, password: 'demo1234', name: employees[9].nameTh, role: 'employee', employeeId: employees[9].id, active: true, createdAt: iso(2025, 2, 11) },
   ];
 
@@ -636,27 +619,23 @@ export function createDemoDatabase() {
     },
   ];
 
-  // Sales/CRM PricingRequest chain state matrix (chore/mock-demo-seed-state-matrix) —
-  // demoSales.js owns tickets 16-18 (rep2's deals + the deal hosting the "extra" downstream
-  // states) plus every PricingRequest/FactoryQuote/PricingCosting/PricingDecision/
-  // CustomerQuotation/DepositNotice/FactoryPurchaseOrder/DealActivity/attachment row. Only
-  // its tickets merge into `tickets` here; the rest is exposed via `salesSeed` below for
-  // mockApi.js to push into its own module-level stores (those live in mockApi.js, not `db`).
+  // Sales/CRM PricingRequest chain state matrix: demoSales.js owns tickets 16-18 (rep2's deals +
+  // the deal hosting the "extra" downstream states) plus every PricingRequest/FactoryQuote/
+  // PricingCosting/PricingDecision/CustomerQuotation/DepositNotice/FactoryPurchaseOrder/
+  // DealActivity/attachment row. Only its tickets merge into `tickets` here; the rest is exposed
+  // via `salesSeed` below for mockApi.js to push into its own module-level stores (those live in
+  // mockApi.js, not `db`).
   const salesSeed = buildDemoSalesSeed();
   tickets.push(...salesSeed.tickets);
 
-  // notifications/profileRequests/leaveRequests/overtimeRequests/specialMoneyRequests now
-  // live in demoHr.js as a full state matrix (chore/mock-demo-seed-state-matrix) — this
-  // replaces both the old handful of rows here AND the now-permanently-unreachable
-  // `if (db.leaveRequests.length === 0) {...}` blocks that used to sit in mockApi.js (dead
-  // code, since this array was never actually empty by the time those blocks ran).
+  // notifications/profileRequests/leaveRequests/overtimeRequests/specialMoneyRequests live in
+  // demoHr.js as a full state matrix.
   const notifications = buildDemoNotifications();
   const profileRequests = buildDemoProfileRequests(employees);
   const leaveRequests = buildDemoLeaveRequests(employees);
   const overtimeRequests = buildDemoOvertimeRequests(employees);
   const specialMoneyRequests = buildDemoSpecialMoneyRequests(employees);
-  // Previously seeded `|| []` in mockApi.js, i.e. never — every role saw the empty state,
-  // so nothing about /attendance's correction section could be judged. See demoHr.js.
+  // Without seed rows every role saw /attendance's empty correction state. See demoHr.js.
   const attendanceCorrectionRequests = buildDemoAttendanceCorrectionRequests(employees);
 
   // ════════════════════════════════════════════════════════════════════════════════
@@ -694,15 +673,6 @@ export function createDemoDatabase() {
       });
     }
   }
-
-  // NOTE: this file used to export a `commissionRecords` array here, but it was never
-  // actually wired to the real store (`db.commissions`, seeded in mockApi.js from
-  // demoPayroll.js's `buildDemoCommissions()`) — the key mismatch (`commissionRecords` vs
-  // `commissions`) meant it silently seeded nothing and `db.commissions` was always `[]`.
-  // Removed rather than fixed in place: its shape (flat `invoiceNumber`, `netAmount`,
-  // `commissionBase`, a `PROCESSED` status that doesn't exist) doesn't match what the real
-  // commission handlers read/write (nested `invoiceDetails`, no `PROCESSED` status — see
-  // demoPayroll.js for the correct shape and the full status/kind matrix).
 
   // ════════════════════════════════════════════════════════════════════════════════
   // Projects (context for deal pipeline)
