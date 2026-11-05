@@ -1245,7 +1245,7 @@ export function CeoSettingsPage({ showToast }) {
         />
       )}
 
-      {/* BRANCH 1: Formula Config Edit Modal */}
+      {/* Formula Config Edit Modal */}
       {editingFormulaConfig && formulaConfig && (
         <FormulaConfigEditModal
           config={formulaConfig}

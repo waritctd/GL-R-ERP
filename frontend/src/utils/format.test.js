@@ -425,7 +425,7 @@ describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
   });
 
   it('leaves the channel OPTION labels alone — they deliberately differ from the recipient\'s', () => {
-    // Owner ruling: the how-the-deal-arrived nuance beats symmetry. Do not "fix" this divergence.
+    // The how-the-deal-arrived nuance beats symmetry. Do not "fix" this divergence.
     expect(entryChannelLabel('DESIGNER_LED').label).toBe('ผู้ออกแบบนำดีล');
     expect(entryChannelLabel('OWNER_DIRECT').label).toBe('เจ้าของติดต่อโดยตรง');
     expect(quotationRecipientLabel('DESIGNER').label).not.toBe(entryChannelLabel('DESIGNER_LED').label);

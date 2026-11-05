@@ -20,8 +20,8 @@ import { selectCurrentDeclaration, selectResumableDeclaration, taxAllowanceStatu
 const EDITABLE_STATUS_KEYS = new Set(['NONE', 'REJECTED', 'EXPIRED']);
 
 /**
- * Already confirmed, and revisable. An approved or applied declaration used to have NO action
- * here, so an employee whose circumstances changed (a child born, a policy lapsed, an amount
+ * Already confirmed, and revisable. An approved or applied declaration needs an action
+ * here, or an employee whose circumstances changed (a child born, a policy lapsed, an amount
  * imported wrong from the legacy report) could not correct their filing or even get a copy.
  *
  * <p>The server has always accepted a revision: {@code TaxAllowanceDeclarationService#submitOwn}

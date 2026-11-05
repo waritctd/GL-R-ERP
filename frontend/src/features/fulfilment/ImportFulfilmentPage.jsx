@@ -17,59 +17,45 @@ import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
 import { IMPORT_STEPS } from '../importProgress/importSteps.js';
 
 /**
- * งานนำเข้า — Import's cross-deal fulfilment worklist, REDESIGNED for per-factory tracking
- * (revision 2026-09-19, PR-B — see .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §11).
+ * งานนำเข้า — Import's cross-deal fulfilment worklist, tracking per FACTORY (see
+ * .design/import-fulfilment/INFORMATION_ARCHITECTURE.md §11).
  *
- * Ported from Yang.Pongburit's origin/feat/per-factory-import-tracking (commit 65dfe171), which
- * built this exact per-factory redesign against a `api.importProgress` namespace his branch's own
- * (not-merged) backend supplied. PR-A (#1008) rebuilt the backend on the existing V154
- * `sales.import_request` aggregate instead (one row per (deal, FACTORY), not a second table), so
- * this port re-wires the same UI onto `api.storedImportRequests` and PR-A's own six step codes
- * (CONTACTED/ORDERED/PICKED_UP/IN_TRANSIT/AWAITING_CUSTOMS/RECEIVED — importSteps.js) instead of
- * Yang's original set. See importSteps.js's header for why the codes differ.
+ * It runs on `api.storedImportRequests` (the V154 `sales.import_request` aggregate: one row per
+ * (deal, FACTORY)) and its six step codes (CONTACTED/ORDERED/PICKED_UP/IN_TRANSIT/AWAITING_CUSTOMS/
+ * RECEIVED — importSteps.js; see its header). The unit is a FACTORY SHIPMENT (one stored ใบขอซื้อ
+ * row) at one of six steps, not a deal at a deal-level `fulfillment_status`: a tracked deal's
+ * fulfillment_status stays `IR_ISSUED` from its first factory's issue until every factory reaches
+ * RECEIVED, so deal-level bucketing would mislabel it and then drop it the moment the rollup set
+ * GOODS_RECEIVED (importActions.js's irTracked awareness handles the same case).
  *
- * The original page (2026-08-17, pre-redesign) bucketed each DEAL into one of four deal-level
- * `fulfillment_status` transitions and performed them in place. Per-factory import tracking broke
- * that premise: a tracked deal's fulfillment_status stays `IR_ISSUED` from its first factory's
- * issue until every factory reaches RECEIVED, so a tracked deal sat mislabelled in "ออกคำขอนำเข้า"
- * / never advanced on the old page, and then vanished the moment the rollup set GOODS_RECEIVED.
- * Both were reported as bugs; this page (and importActions.js's own irTracked awareness) is the
- * fix.
- *
- * The core principle is unchanged — this is "the room", not "a door": Import advances work here
- * without opening N deal pages. Only the UNIT changed, from a deal at one of four statuses to a
- * FACTORY SHIPMENT (one stored ใบขอซื้อ row) at one of six steps. Each shipment renders as the
- * same {@link FactoryProgressBar} used on the deal page's per-factory cards, so the two surfaces
- * read identically; import/ceo advance a step, edit lead time, and manage the order email in
- * place.
+ * This is "the room", not "a door": Import advances work here without opening N deal pages. Each
+ * shipment renders as the same {@link FactoryProgressBar} used on the deal page's per-factory
+ * cards, so the two surfaces read identically; import/ceo advance a step, edit lead time, and
+ * manage the order email in place.
  *
  * A deal stays here while ANY of its ISSUED factory rows is < RECEIVED. When every factory is
- * received the deal rolls up to GOODS_RECEIVED (server-side) and drops into a collapsed "รับครบ
- * แล้ว · รอส่งมอบ" group at the foot, rather than disappearing, so the handoff to Sales's delivery
- * step reads as a handoff, never as a lost row. Delivery itself is still NOT here (owner ruling):
- * it is Sales's, on the deal's จัดซื้อ-ส่งมอบ tab.
+ * received the deal rolls up to GOODS_RECEIVED (server-side) and drops into a collapsed "รับครบแล้ว ·
+ * รอส่งมอบ" group at the foot, rather than disappearing, so the handoff to Sales's delivery step
+ * reads as a handoff, never as a lost row. Delivery itself is NOT here: it is Sales's, on the
+ * deal's จัดซื้อ-ส่งมอบ tab.
  *
  * NO CROSS-DEAL LIST ENDPOINT EXISTS for the stored aggregate (only per-ticket
- * `GET /tickets/{id}/import-requests` and per-row `GET /import-requests/{id}`) — a real backend
- * gap noted rather than worked around with a backend change. This page compensates client-side:
- * it reads the deal list (already role-scoped server-side) and fetches each CANDIDATE deal's
- * stored rows in parallel (`useQueries`), where a candidate is any deal whose deal-level
- * `fulfillmentStatus` is non-null and not FROM_STOCK/FULLY_DELIVERED (see the `candidateIds`
- * filter below). The FETCH is wider than what actually gets SHOWN: once each candidate's rows
- * come back, PR-B REVIEW ROUND 2, X3 classifies the result —
+ * `GET /tickets/{id}/import-requests` and per-row `GET /import-requests/{id}`), so this page reads
+ * the deal list (already role-scoped server-side) and fetches each CANDIDATE deal's stored rows in
+ * parallel (`useQueries`), where a candidate is any deal whose deal-level `fulfillmentStatus` is
+ * non-null and not FROM_STOCK/FULLY_DELIVERED (see the `candidateIds` filter below). The FETCH is
+ * wider than what gets SHOWN: once each candidate's rows come back they are classified —
  *
  *   - has ISSUED rows           -> tracked (an active card, or the done group once every
  *                                  required factory is RECEIVED — see `allReceived` below)
  *   - IR_ISSUED/IR_SENT/SHIPPING with NO rows -> the legacy section (pre-V184 chain still
  *                                  reachable at the deal page)
- *   - GOODS_RECEIVED/PARTIALLY_DELIVERED with NO rows -> dropped entirely. Reaching either
- *     status with zero stored rows means pure stock (FROM_STOCK, or a stock-only mixed deal)
- *     — there is no per-factory import work here to show or link to, so it must not read as a
- *     legacy import-chain deal the way an IR_ISSUED/IR_SENT/SHIPPING candidate does.
+ *   - GOODS_RECEIVED/PARTIALLY_DELIVERED with NO rows -> dropped entirely. Zero stored rows at
+ *     either status means pure stock (FROM_STOCK, or a stock-only mixed deal): there is no
+ *     per-factory import work here to show or link to.
  *
- * This is an N+1 fetch bounded by the deal list's own role scope, acceptable for import's
- * worklist size; it is not a substitute for a real cross-deal endpoint, which would be a
- * backend change out of this PR's scope.
+ * This is an N+1 fetch bounded by the deal list's own role scope, acceptable for import's worklist
+ * size; a real cross-deal endpoint would be a backend change.
  */
 
 function receivedCount(rows) {
@@ -91,7 +77,7 @@ function LeadTimeInline({ row, editable, onSave, saving, showToast }) {
       </span>
     );
   }
-  // Nit: a blank/invalid value must show a VALIDATION message, not silently submit a 0/NaN that
+  // A blank/invalid value must show a VALIDATION message, not silently submit a 0/NaN that
   // the server would 400 on (SetLeadTimeRequest requires both fields, 1-365).
   function handleSave() {
     if (min === '' || max === '') {
@@ -104,10 +90,9 @@ function LeadTimeInline({ row, editable, onSave, saving, showToast }) {
       showToast?.('error', 'ระยะเวลานำเข้าไม่ถูกต้อง — ต่ำสุดต้องไม่เกินสูงสุด และอยู่ระหว่าง 1-365 วัน');
       return;
     }
-    // PR-B REVIEW ROUND 1, nit: stay OPEN on a 400 (or any failure) — onSave returns the
-    // mutation's own promise (mutateAsync), so this only closes once the server actually accepted
-    // it. It used to close unconditionally right after firing the mutation, which hid a rejected
-    // save behind an editor that had already vanished.
+    // Stay OPEN on a 400 (or any failure): onSave returns the mutation's own promise
+    // (mutateAsync), so this only closes once the server actually accepted it, rather than hiding
+    // a rejected save behind an editor that had already vanished.
     Promise.resolve(onSave(row.id, { leadTimeMinDays: minN, leadTimeMaxDays: maxN }))
       .then(() => setOpen(false))
       .catch(() => {});
@@ -136,9 +121,9 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const [stepFilter, setStepFilter] = useState('ALL');
   const [search, setSearch] = useState('');
   const [emailRow, setEmailRow] = useState(null);
-  // PR-B REVIEW ROUND 1, B1: field names MUST be emailTo/emailSubject/emailBody, matching Java's
-  // UpdateEmailDraftRequest exactly — see ImportRequestFactoryCard.jsx's own comment on this same
-  // fix for the failure mode (`to`/`subject`/`body` silently dropped, old value kept, 200 OK).
+  // Field names MUST be emailTo/emailSubject/emailBody, matching Java's UpdateEmailDraftRequest
+  // exactly — see ImportRequestFactoryCard.jsx's comment on the failure mode (`to`/`subject`/`body`
+  // silently dropped, old value kept, 200 OK).
   const [emailDraft, setEmailDraft] = useState({ emailTo: '', emailSubject: '', emailBody: '' });
 
   const ticketsQuery = useQuery({
@@ -148,17 +133,15 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   // See this file's header for why this is a bounded N+1 rather than one cross-deal call.
   //
-  // PR-B REVIEW ROUND 1, B4: used to be IR_ISSUED/GOODS_RECEIVED only, which dropped a
-  // PARTIALLY_DELIVERED mixed stock+import deal (still has factories mid-transit) and every
-  // legacy IR_SENT/SHIPPING deal (the pre-V184 chain, still reachable via the deal page's own
-  // legacy buttons) from this worklist entirely — Import lost visibility into work it still owns.
-  // Widened to any non-null status except FROM_STOCK (never touches import at all) and
-  // FULLY_DELIVERED (delivery is done; see this file's header for why delivery itself stays off
-  // this page regardless). A candidate with no stored ISSUED row renders in the `deals` builder's
-  // `legacyDeals` branch ONLY when it is still on the pre-V184 IR_ISSUED/IR_SENT/SHIPPING chain
-  // (PR-B REVIEW ROUND 2, X3) — a GOODS_RECEIVED/PARTIALLY_DELIVERED candidate with no rows
-  // reached that status through pure stock and is dropped there instead, see that branch's own
-  // comment and this file's header table.
+  // Any non-null status except FROM_STOCK (never touches import at all) and FULLY_DELIVERED
+  // (delivery is done; see this file's header for why delivery itself stays off this page).
+  // Widened beyond IR_ISSUED/GOODS_RECEIVED so a PARTIALLY_DELIVERED mixed stock+import deal
+  // (still has factories mid-transit) and every legacy IR_SENT/SHIPPING deal (the pre-V184 chain,
+  // still reachable via the deal page's own legacy buttons) are not dropped from Import's
+  // worklist. A candidate with no stored ISSUED row renders in the `deals` builder's
+  // `legacyDeals` branch ONLY when it is still on the pre-V184 IR_ISSUED/IR_SENT/SHIPPING chain;
+  // a GOODS_RECEIVED/PARTIALLY_DELIVERED candidate with no rows reached that status through pure
+  // stock and is dropped there instead (see that branch's comment and this file's header).
   const candidateIds = useMemo(() => tickets
     .filter((t) => t.fulfillmentStatus != null
       && t.fulfillmentStatus !== 'FROM_STOCK'
@@ -187,16 +170,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
   const advance = useMutation({
     mutationFn: ({ rowId, targetStep }) => api.storedImportRequests.advanceStep(rowId, { targetStep }),
-    // PR-B REVIEW ROUND 2, X4: the completion toast used to be a CLIENT-side guess —
-    // `deal.rows.every(...)` against rows this page already had loaded, computed from state that
-    // predates the advance's own server-side rollup. That is wrong whenever the rollup declines to
-    // complete (a required factory never issued at all, so not even in the loaded row set —
-    // mirrors mockApi's own S3 fix in mockApi.storedImportRequestRollup.test.js), and it can NEVER
-    // be right for a PARTIALLY_DELIVERED deal: TicketService#applyImportRequestRollup
-    // (backend/.../TicketService.java ~942-948, Owner decision 3) writes only the GOODS_RECEIVED
-    // EVENT for that status, never fulfillment_status itself. So the toast is now keyed on a FRESH
-    // read taken after the advance actually lands — only worth taking when the row could possibly
-    // have completed the deal (targetStep RECEIVED); any other step is never a completion.
+    // The completion toast is keyed on a FRESH read taken after the advance lands, not a
+    // CLIENT-side guess (`deal.rows.every(...)` against state that predates the advance's
+    // server-side rollup). A guess is wrong whenever the rollup declines to complete (a required
+    // factory never issued, so not in the loaded row set -- mirrors mockApi's S3 fix in
+    // mockApi.storedImportRequestRollup.test.js), and can NEVER be right for a PARTIALLY_DELIVERED
+    // deal: TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948)
+    // writes only the GOODS_RECEIVED EVENT for that status, never fulfillment_status itself. Only
+    // worth taking when the row could have completed the deal (targetStep RECEIVED).
     onSuccess: async (_data, { ticketId, targetStep }) => {
       invalidateAfterAdvance(ticketId);
       let completesDeal = false;
@@ -256,12 +237,10 @@ export function ImportFulfilmentPage({ user, showToast }) {
     onError: (e) => showToast?.('error', e?.message ?? 'ดาวน์โหลดไม่สำเร็จ'),
   });
 
-  // Group the flat rows (per candidate ticket) into one entry per deal.
-  //
-  // PR-B REVIEW ROUND 1, B4 + S5: three outcomes per candidate now, not two — a fetch ERROR is
-  // its own bucket (erroredDeals), never silently collapsed into "nothing to track" the way an
-  // empty `?? []` used to read. See B4's own comment above the candidateIds filter for why a
-  // candidate with zero ISSUED rows (legacyDeals) is shown rather than dropped.
+  // Group the flat rows (per candidate ticket) into one entry per deal. Three outcomes per
+  // candidate: a fetch ERROR is its own bucket (erroredDeals), never collapsed into "nothing to
+  // track"; a candidate with zero ISSUED rows (legacyDeals) is shown rather than dropped (see the
+  // comment above the candidateIds filter).
   const { deals, legacyDeals, erroredDeals } = useMemo(() => {
     const tracked = [];
     const legacy = [];
@@ -284,13 +263,12 @@ export function ImportFulfilmentPage({ user, showToast }) {
       // deal page) is not this worklist's concern.
       const issuedRows = factoryRows.filter((r) => r.status === 'ISSUED');
       if (issuedRows.length === 0) {
-        // PR-B REVIEW ROUND 2, X3: the legacy section is for the pre-V184 chain only —
-        // IR_ISSUED/IR_SENT/SHIPPING candidates with nothing stored yet, still actionable at the
-        // deal page. A GOODS_RECEIVED/PARTIALLY_DELIVERED candidate with zero stored rows reached
-        // that status through pure stock (FROM_STOCK, or a stock-only mixed deal) or finished the pre-V184
-        // chain via the deal-page buttons — either way there is no
-        // per-factory import work to show or link to, so it must be dropped, not shown as if it
-        // were still on the legacy import chain (see this file's header for the full table).
+        // The legacy section is for the pre-V184 chain only — IR_ISSUED/IR_SENT/SHIPPING
+        // candidates with nothing stored yet, still actionable at the deal page. A
+        // GOODS_RECEIVED/PARTIALLY_DELIVERED candidate with zero stored rows reached that status
+        // through pure stock (FROM_STOCK, or a stock-only mixed deal) or finished the pre-V184
+        // chain via the deal-page buttons; either way there is no per-factory import work to show
+        // or link to, so it is dropped (see this file's header).
         const fs = ticket?.fulfillmentStatus ?? null;
         if (fs === 'IR_ISSUED' || fs === 'IR_SENT' || fs === 'SHIPPING') {
           legacy.push({
@@ -318,20 +296,18 @@ export function ImportFulfilmentPage({ user, showToast }) {
         rows,
         received,
         total: rows.length,
-        // PR-B REVIEW ROUND 1, S2: for GOODS_RECEIVED, keyed on the DEAL's own server-computed
-        // rollup (ticket.fulfillmentStatus), NOT derived from "every ISSUED row I can currently
-        // see is RECEIVED" — a deal can have a factory still in DRAFT (not counted in `rows` at
-        // all), so a row-only check would collapse an incomplete deal into the done group the
-        // moment its ISSUED subset finished, ahead of ImportRequestService#applyImportRequestRollup
-        // actually saying so server-side.
+        // For GOODS_RECEIVED, keyed on the DEAL's own server-computed rollup
+        // (ticket.fulfillmentStatus), NOT "every ISSUED row I can see is RECEIVED": a deal can have
+        // a factory still in DRAFT (not counted in `rows`), so a row-only check would collapse an
+        // incomplete deal into the done group ahead of ImportRequestService#applyImportRequestRollup
+        // saying so server-side.
         //
-        // PR-B REVIEW ROUND 2, X2: PARTIALLY_DELIVERED (Owner decision 3, mixed stock+import
-        // Case 8) is the one status that check cannot cover — TicketService
-        // #applyImportRequestRollup (backend/.../TicketService.java ~942-948) deliberately writes
-        // ONLY the GOODS_RECEIVED event for it, never fulfillment_status itself, so a delivery
-        // already under way is not disturbed. There is no server rollup on THIS status to key on,
-        // so it falls back to the row-only check S2 avoids for GOODS_RECEIVED — every ISSUED row
-        // here is RECEIVED (`received === rows.length`, both computed just above).
+        // PARTIALLY_DELIVERED (mixed stock+import) is the one status that check cannot cover:
+        // TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948) writes
+        // ONLY the GOODS_RECEIVED event for it, never fulfillment_status, so a delivery already
+        // under way is not disturbed. With no server rollup to key on, it falls back to the
+        // row-only check: every ISSUED row here is RECEIVED (`received === rows.length`, both
+        // computed just above).
         allReceived: ticket?.fulfillmentStatus === 'GOODS_RECEIVED'
           || (ticket?.fulfillmentStatus === 'PARTIALLY_DELIVERED' && received === rows.length
             // A factory still in DRAFT is not received: Java's allFactoriesReceived requires every
@@ -446,7 +422,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
         </label>
       </FilterBar>
 
-      {/* PR-B REVIEW ROUND 1, S5: a fetch failure must render as an error, not read as "nothing to
+      {/* a fetch failure must render as an error, not read as "nothing to
           do" — the deal-list query failing used to fall straight into the nothingAtAll EmptyState,
           which told Import their worklist was empty when it had simply not loaded. */}
       {ticketsQuery.isError ? (
@@ -602,7 +578,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
             </details>
           ) : null}
 
-          {/* PR-B REVIEW ROUND 1, B4: deals whose worklist candidacy comes from a ticket-level
+          {/* deals whose worklist candidacy comes from a ticket-level
               fulfillmentStatus (IR_SENT/SHIPPING — the pre-V184 chain — or a deal with nothing
               ISSUED here yet) but that carry no stored per-factory row this page can act on. Shown
               with a link out rather than dropped, so Import never loses visibility into a deal
@@ -648,7 +624,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           footer={(
             <>
               <Button type="button" variant="secondary" onClick={() => setEmailRow(null)}>ปิด</Button>
-              {/* Nit: hide "บันทึก" once sent — mirrors ImportRequestFactoryCard.jsx's own fix. */}
+              {/* Hide "บันทึก" once sent — mirrors ImportRequestFactoryCard.jsx's own fix. */}
               {!emailRow.emailSentAt ? (
                 <Button type="button" variant="secondary" disabled={saveEmail.isPending}
                   onClick={() => saveEmail.mutate({ rowId: emailRow.id, payload: emailDraft, ticketId: emailRow.ticketId })}>
