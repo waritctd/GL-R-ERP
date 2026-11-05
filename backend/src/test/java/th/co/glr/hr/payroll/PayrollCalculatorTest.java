@@ -10,7 +10,7 @@ class PayrollCalculatorTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
 
     // ---------------------------------------------------------------------------------------------
-    // ป.96/2543 withholding compliance (2026-07-28, V92)
+    // ป.96/2543 withholding compliance
     //
     // Source: คำสั่งกรมสรรพากร ที่ ป.96/2543, as restated in the คำชี้แจง printed on แบบ ภ.ง.ด.1
     // (https://www.rd.go.th/fileadmin/tax_pdf/withhold/200360_WHT1.pdf):
@@ -38,10 +38,9 @@ class PayrollCalculatorTest {
         String salary, String bonus, PayrollYearToDate yearToDate, int month, int remainingPayPeriods) {
         return calculator.calculate(new PayrollCalculationInput(
             new BigDecimal(salary),
-            // Slot 1: where HR actually types a bonus (owner-confirmed 2026-07-29). Slots 1-6 and 8
-            // (F7 correction, Opus review 2026-07-30: was "1-5, 7 and 8" -- the accountant's-workbook
-            // renumbering, handoff section 9d, moved คอมมิชชั่น from slot 6 to slot 7, so it is now slot
-            // 7 that is excluded, not slot 6) are all occasional, so this is the ข้อ 2.5 limb.
+            // Slot 1: where HR actually types a bonus. Slots 1-6 and 8
+            // are all occasional (คอมมิชชั่น is slot 7, which is the one excluded),
+            // so this is the ข้อ 2.5 limb.
             List.of(new BigDecimal(bonus), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
@@ -77,7 +76,7 @@ class PayrollCalculatorTest {
     }
 
     // ---------------------------------------------------------------------------------------------
-    // ค่าลดหย่อน correctness (2026-07-28, V93)
+    // ค่าลดหย่อน correctness
     // ---------------------------------------------------------------------------------------------
 
     /** A ฿100,000/month salary in January with a single allowance declaration under test. */
@@ -91,10 +90,8 @@ class PayrollCalculatorTest {
             null, taxYear, 0, age));
     }
 
-    // ข้อ 9 ล.ย.01 / กองทุนสำรองเลี้ยงชีพ: RESTORED 2026-08-08 (V137), reversing V99. V99 had
-    // deleted three PVD tests from here along with the field. Their replacements are the
-    // providentFund* tests below -- deliberately NOT the originals reinstated, because the sub-cap
-    // is no longer PVD's 15%-of-pay: the engine now applies กอช.'s ฿30,000, the tightest of the four
+    // ข้อ 9 ล.ย.01 / กองทุนสำรองเลี้ยงชีพ: the providentFund* tests below cover it. The sub-cap
+    // is not PVD's 15%-of-pay: the engine applies กอช.'s ฿30,000, the tightest of the four
     // funds ข้อ 9 covers. See PayrollCalculator#retirementAllowance.
     private PayrollTaxAllowanceInput declaration(
         String childAllowance, String disabledCareAllowance, String rmf, String ssf,
@@ -130,7 +127,7 @@ class PayrollCalculatorTest {
 
     /**
      * ค่าลดหย่อนบุตร is per head: 30,000 each, 60,000 for the second and later child born from
-     * พ.ศ. 2561. The declared baht amount used to be trusted without any limit at all.
+     * พ.ศ. 2561. The declared baht amount is not trusted without a limit.
      */
     @Test
     void theChildAllowanceIsCappedByTheDeclaredNumberOfChildren() {
@@ -295,11 +292,10 @@ class PayrollCalculatorTest {
     }
 
     /**
-     * ข้อ 2.9, and the second half of the same bug.
-     *
-     * <p>A large bonus late in the year used to over-withhold PERMANENTLY: November projected income
-     * that would never arrive, and December's {@code .max(ZERO)} clamp meant the excess could never
-     * be handed back. ฿500,000 in November made the year withhold ฿119,708.34 against an actual
+     * ข้อ 2.9: a large bonus late in the year must not over-withhold PERMANENTLY. Without the
+     * true-up, November projected income that would never arrive, and December's
+     * {@code .max(ZERO)} clamp meant the excess could never
+     * be handed back: ฿500,000 in November made the year withhold ฿119,708.34 against an actual
      * liability of ฿100,900.00 — ฿18,808.34 the employee could only reclaim on their ภ.ง.ด.91.
      */
     @Test
@@ -336,7 +332,7 @@ class PayrollCalculatorTest {
     }
 
     /**
-     * ข้อ 2.9, the direction the old clamp made impossible: when year-to-date withholding already
+     * ข้อ 2.9, the other direction (a {@code .max(ZERO)} clamp alone would make it impossible): when year-to-date withholding already
      * EXCEEDS the year's liability, the final period withholds nothing rather than a further slice.
      */
     @Test
@@ -394,11 +390,8 @@ class PayrollCalculatorTest {
     @Test
     void theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome() {
         String[][] cases = {
-            // F7 correction (Opus review, 2026-07-30): this row's พิเศษ7 value was labelled
-            // "(occasional)", which was true under the OLD numbering (พิเศษ7 was ทำได้ตาม KPI, an
-            // occasional slot) but is now wrong -- the accountant's-workbook renumbering (handoff
-            // section 9d) moved คอมมิชชั่น to พิเศษ7, and COMMISSION_SPECIAL_PAY_INDEX now correctly
-            // treats it as RECURRING (the regular limb). See
+            // พิเศษ7 is คอมมิชชั่น, and COMMISSION_SPECIAL_PAY_INDEX treats it as RECURRING (the
+            // regular limb), not occasional. See
             // theSeventhSpecialPaySlotIsCommissionAndLandsInTheRegularLimbNotVariable below for a test
             // that actually pins this, unlike the partition-only assertions in this method.
             //
@@ -431,15 +424,14 @@ class PayrollCalculatorTest {
     }
 
     /**
-     * F4 correction (Opus review, 2026-07-30): commit f5eaa01e ("fix the commission slot index")
-     * claimed "no test places a non-zero amount at either index" -- false. The first row of {@link
+     * The first row of {@link
      * #theTwoIncomeLimbsAlwaysSumToGrossTaxableIncome} above places 5,000.00 at zero-based index 6
-     * (specialPay7) and always passed anyway, because that test only asserts a PARTITION invariant
+     * (specialPay7) but passes regardless, because that test only asserts a PARTITION invariant
      * (regular + variable == gross) that holds no matter which limb index 6 lands in -- an engine that
      * put specialPay7 in the WRONG limb would still pass it. It is structurally incapable of catching
      * what it appears to cover.
      *
-     * <p>This test closes that gap: it isolates specialPay7's own contribution (against an otherwise
+     * <p>This test covers that: it isolates specialPay7's own contribution (against an otherwise
      * identical zeroed run) and pins specifically that it lands in the REGULAR limb, not the variable
      * one -- the actual behaviour {@code COMMISSION_SPECIAL_PAY_INDEX} is supposed to produce.
      */
@@ -541,10 +533,9 @@ class PayrollCalculatorTest {
         assertThat(result.unpaidLeaveDeduction()).isEqualByComparingTo(new BigDecimal("1333.33"));
         assertThat(result.grossTaxableIncome()).isEqualByComparingTo(new BigDecimal("41166.67"));
         assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal("875.00"));
-        // ป.96/2543 (2026-07-28): these two figures CHANGED with the ข้อ 2.5 fix, deliberately.
-        // The ฿2,500 of ค่าล่วงเวลา in this scenario used to be annualised along with the salary --
-        // 41,166.67 x 12 = 494,000.04, projecting a year of overtime the employee has not worked and
-        // an annual tax of 6,425.00. ข้อ 2.5 names ค่าล่วงเวลา explicitly as เงินพิเศษที่จ่ายเป็น
+        // ป.96/2543: the ฿2,500 of ค่าล่วงเวลา in this scenario is NOT annualised along with the
+        // salary (41,166.67 x 12 = 494,000.04 would project a year of overtime the employee has
+        // not worked, and an annual tax of 6,425.00). ข้อ 2.5 names ค่าล่วงเวลา explicitly as เงินพิเศษที่จ่ายเป็น
         // ครั้งคราว: only the regular limb is multiplied out (38,666.67 x 12 = 464,000.04) and the OT
         // enters at its actual 2,500.00, giving 466,500.04 and 5,050.00.
         assertThat(result.projectedAnnualIncome()).isEqualByComparingTo(new BigDecimal("466500.04"));
@@ -792,11 +783,11 @@ class PayrollCalculatorTest {
     // ---- ข้อ 9 ล.ย.01: กองทุนสำรองเลี้ยงชีพ / กบข. / กอช. / ครูโรงเรียนเอกชน (V137) --------------
 
     /**
-     * Owner decision #5 is that ข้อ 9 is fillable AND feeds withholding. Asserted as a RELATIONSHIP
+     * ข้อ 9 is fillable AND feeds withholding. Asserted as a RELATIONSHIP
      * -- the same employee, identical in every respect except the declared ข้อ 9 figure, must have
      * strictly less tax withheld -- rather than against a hardcoded baht figure. A total-only
      * assertion would still pass if the term reached {@code taxAllowanceTotal} but never reached the
-     * tax computation, which is precisely the "feeds withholding" half of the decision.
+     * tax computation, which is precisely the "feeds withholding" half of the rule.
      */
     @Test
     void providentFundContributionsReduceWithholdingNotJustTheAllowanceTotal() {
@@ -847,12 +838,12 @@ class PayrollCalculatorTest {
      * ⚠️ Documents a REAL LIMIT of this suite, and is written as a property rather than as an
      * ordering assertion on purpose.
      *
-     * <p>{@code PayrollCalculator#retirementAllowance} takes ข้อ 9 before RMF, on V93's rationale
+     * <p>{@code PayrollCalculator#retirementAllowance} takes ข้อ 9 before RMF, on the rationale
      * that a contribution taken at source cannot be stopped by the employee. That ordering is
      * currently <b>unobservable in the result</b>: every term is capped independently and then
      * clamped to the remaining budget, and greedy fill of a fixed bucket totals
      * min(sum of own-caps, 500,000) whichever order the terms are taken in. Swapping the ข้อ 9 and
-     * RMF blocks in the calculator therefore turns NO test red -- verified by mutation, 2026-08-08.
+     * RMF blocks in the calculator therefore turns NO test red -- verified by mutation.
      *
      * <p>So rather than pretend an ordering test exists, this pins the invariant that makes the
      * ordering moot. If a future change ever makes order matter -- a per-item breakdown, a sub-cap
@@ -988,14 +979,14 @@ class PayrollCalculatorTest {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Reconciliation additions (2026-07-21, C3/C4) -- see PayrollExcelReconciliationTest for the
+    // Reconciliation additions -- see PayrollExcelReconciliationTest for the
     // accountant's-workbook rationale. These are separate from that file (which must not be edited)
     // and cover the engine-level behaviour the reconciliation only demonstrates by example.
     // ------------------------------------------------------------------------------------------
 
     /**
-     * Byte-identical regression: with every new (C3/C4) input at zero, the calculator must reproduce
-     * exactly what it produced before the reconciliation change. This uses the legacy 12-arg
+     * Byte-identical regression: with every input added by the reconciliation at zero, the
+     * calculator must reproduce exactly what it produced before those inputs existed. This uses the legacy 12-arg
      * constructor (so it is exercised the same way the pre-existing tests exercise it) against a
      * fully-populated scenario that exercises allowances, unpaid leave, YTD and legal execution
      * together, and asserts every output field.
@@ -1118,7 +1109,7 @@ class PayrollCalculatorTest {
     }
 
     /**
-     * C4's whole point: a pre-tax deduction changes the tax base (and therefore withholding), while
+     * A pre-tax deduction changes the tax base (and therefore withholding), while
      * an equal-sized post-tax deduction does not. Same 1,000 THB, same employee, different treatment.
      */
     @Test
@@ -1142,7 +1133,7 @@ class PayrollCalculatorTest {
             .isEqualByComparingTo(postTaxResult.grossTaxableIncome().subtract(new BigDecimal("1000.00")));
         assertThat(preTaxResult.withholdingTax()).isLessThan(postTaxResult.withholdingTax());
         // Both deduct the same 1,000 from net pay, but the pre-tax version withholds less tax, so its
-        // net pay ends up higher by exactly that tax difference -- the whole point of C4.
+        // net pay ends up higher by exactly that tax difference.
         assertThat(preTaxResult.netPay()).isGreaterThan(postTaxResult.netPay());
     }
 
@@ -1155,7 +1146,7 @@ class PayrollCalculatorTest {
         );
     }
 
-    // ---- Cancel-after-close reversal, AUTO-REFUND (2026-07-23) ------------------------------
+    // ---- Cancel-after-close reversal, AUTO-REFUND ------------------------------
 
     @Test
     void legacySixteenArgConstructorDefaultsLeaveRefundDaysToZero() {
@@ -1262,7 +1253,7 @@ class PayrollCalculatorTest {
         assertThat(result.netPay()).isEqualByComparingTo("81512.50");
     }
 
-    // ---- Withholding-tax override (2026-07-24, V88) ----------------------------------------
+    // ---- Withholding-tax override ----------------------------------------
     // GUARDRAIL under test: the override SUBSTITUTES only the final withheld amount; the entire
     // progressive-tax computation (annualTax, taxableAnnualIncome, projectedAnnualIncome) stays
     // EXACTLY as computed and is still reported, for transparency.
