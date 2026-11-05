@@ -5,10 +5,9 @@ import { loginAs } from './helpers/auth.js';
 import { inDays } from './helpers/sales.js';
 
 /**
- * บันทึกโรงงาน must not reload the page. SafeForm used to preventDefault only when it BLOCKED a
- * submit, so an allowed one was a native GET submission: full reload, every unsaved draft lost.
- * jsdom cannot navigate, so this is the only layer that proves it. Run green against a real
- * stack on 2026-10-18 and mutation-checked (SafeForm reverted -> red on the marker assertion).
+ * บันทึกโรงงาน must not reload the page. SafeForm must preventDefault on an ALLOWED submit too,
+ * not only when it BLOCKS one, or the submit is a native GET submission: full reload, every
+ * unsaved draft lost. jsdom cannot navigate, so this is the only layer that proves it.
  * Proof of "no reload" is the `globalThis.__noReloadMarker` set on the live document before the
  * click: a full reload replaces the document and the marker vanishes. Selectors follow
  * ImportFactoryPicker (`#pcr-item-factory-<itemId>`, button "บันทึกโรงงาน").
