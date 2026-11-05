@@ -25,10 +25,9 @@ import th.co.glr.hr.config.AppProperties;
  * one sheet per branch sequence, each holding a row per insured employee under the six columns the
  * SSO e-service reads — เลขบัตรประชาชน / คำนำหน้า / ชื่อ / สกุล / ค่าจ้าง / เงินสมทบ.
  *
- * <p><b>This replaced a fixed-width CP874 .txt exporter on 2026-08-31 (owner ruling).</b> Both
- * formats are accepted by the e-service, but GL&amp;R has always filed the workbook — the .txt was
- * built from a published spec with no golden sample and was never actually submitted, so it was
- * pure unvalidated surface area. The layout here is pinned to GL&amp;R's real June 2026 filing
+ * <p><b>The workbook, not a fixed-width CP874 .txt.</b> Both formats are accepted by the
+ * e-service, but GL&amp;R has always filed the workbook — a .txt would have no golden sample to
+ * validate against. The layout here is pinned to GL&amp;R's real June 2026 filing
  * ({@code SSO-twotabjube.xls}: sheets {@code 000000} and {@code 110001}), whose per-branch
  * contribution totals — ฿13,725.00 and ฿8,863.00 — reconcile to the SSO's own สปส.1-10/1 receipt.
  * See {@code SsoExporterTest#juneGoldenReconciliation...} and the August companion.
@@ -54,23 +53,20 @@ import th.co.glr.hr.config.AppProperties;
  *   <li><b>เงินสมทบ rounding</b> — {@link RoundingMode#HALF_UP} to whole baht PER INSURED PERSON —
  *       <b>พ.ร.บ.ประกันสังคม พ.ศ. 2533 มาตรา 46 วรรคท้าย</b>: "สำหรับเศษของเงินสมทบที่มีจำนวนตั้งแต่
  *       ห้าสิบสตางค์ขึ้นไปให้นับเป็นหนึ่งบาท ถ้าน้อยกว่านั้นให้ปัดทิ้ง". <b>Whether this rounding changes
- *       anything is time-dependent, so do not read it as "filing-only".</b> Until PR #834 (merged
- *       2026-08-25, backend image {@code v2026-08-25}) it was: the engine stored and deducted the
- *       unrounded ฿562.50 while the employer remitted the filed ฿563. #834 moved the same rounding
- *       into {@code PayrollCalculator}, so a period processed on or after that deploy already
- *       carries whole baht and this rounding is IDEMPOTENT. #834 shipped no backfill, so earlier
- *       periods keep their unrounded stored contribution and this is what CORRECTS them at export
- *       time — it never rewrites the stored value. Real prod split (2026-09-01): May/June
- *       (processed 2026-07) still hold 4 satang-bearing rows each, min ฿82.50; July/August
- *       (processed 2026-08) are whole baht throughout.</li>
- *   <li><b>ค่าจ้าง rounding</b> — also HALF_UP to whole baht per person (owner ruling 2026-08-31).
+ *       anything depends on when the period was processed, so do not read it as
+ *       "filing-only".</b> {@code PayrollCalculator} applies the same rounding (since the
+ *       2026-08-25 deploy), so a period processed after that already carries whole baht and this
+ *       rounding is IDEMPOTENT. Earlier periods were processed unrounded (e.g. ฿562.50 stored and
+ *       deducted while the employer remitted the filed ฿563) and were never backfilled, so this is
+ *       what CORRECTS them at export time — it never rewrites the stored value.</li>
+ *   <li><b>ค่าจ้าง rounding</b> — also HALF_UP to whole baht per person (owner ruling).
  *       Unlike the contribution rounding this is NOT stated by any statute this codebase has found;
  *       it is inferred from the reference filing, where all 27 ค่าจ้าง figures were integral (a
  *       monthly-salary company rarely pays satang). If a future wage genuinely carries satang this
  *       rounds it, which is unconfirmed but matches every observed real filing.</li>
  *   <li><b>คำนำหน้า</b> — the Thai title word ({@code hr.title.name_th}: นาย / นาง / นางสาว) exactly as
- *       the reference filing spells it, NOT an SSO 3-char code. The .txt format wanted a code and
- *       had none, so it shipped three spaces; the workbook wants the word, which the ERP has.</li>
+ *       the reference filing spells it, NOT an SSO 3-char code (the workbook wants the word,
+ *       which the ERP has).</li>
  * </ul>
  * Only employees with a positive contribution appear — directors, whose SSO is 0, are not insured
  * under this filing and are excluded.
@@ -201,8 +197,7 @@ public class SsoExporter {
      * <p>For modern Thai records the two are the same 13 digits, but any employee whose {@code
      * social_security_no} holds something else (a legacy SSO number, or a stale value) would be
      * filed under a number the SSO cannot match to the person. National id is the field the SSO
-     * actually reconciles against, so it wins — owner ruling 2026-08-03, carried over from the .txt
-     * exporter this class replaced.
+     * actually reconciles against, so it wins (owner ruling).
      */
     private String ssn(PayrollExportRow row) {
         String n = digits(row.nationalId());
