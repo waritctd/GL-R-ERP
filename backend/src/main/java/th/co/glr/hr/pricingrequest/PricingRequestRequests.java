@@ -18,9 +18,9 @@ public final class PricingRequestRequests {
     private PricingRequestRequests() {}
 
     /**
-     * GLA-125 header-term fields (owner ruling 2026-09-18): mirror sales.quotation's own
+     * Header-term fields: mirror sales.quotation's own
      * DEAL_DIRECT header columns so Sales can fill the same terms on the PCR that they will
-     * eventually fill on the quotation. NOT yet carried onto the quotation itself (Phase 3) — see
+     * eventually fill on the quotation. NOT carried onto the quotation itself — see
      * V185's migration header. All nullable/optional, exactly as most of the direct-deal
      * equivalents already are.
      */
@@ -45,8 +45,8 @@ public final class PricingRequestRequests {
         Boolean omitContactHonorific,
         @NotEmpty List<@Valid PricingRequestItemRequest> items
     ) {
-        /** The pre-GLA-125 shape — kept so every existing construction site (tests, mostly)
-         * compiles unchanged. Defaults every new field to null. */
+        /** The shape without the header-term fields — kept so every existing construction site
+         * (tests, mostly) compiles unchanged. Defaults every header-term field to null. */
         public CreatePricingRequestRequest(String recipientType, Long recipientContactId,
                                            String recipientLabel, LocalDate requiredDate,
                                            BigDecimal customerTargetPrice, String targetCurrency,
@@ -77,8 +77,8 @@ public final class PricingRequestRequests {
         Boolean omitContactHonorific,
         List<@Valid PricingRequestItemRequest> items
     ) {
-        /** The pre-GLA-125 shape — kept so every existing construction site (tests, mostly)
-         * compiles unchanged. Defaults every new field to null. */
+        /** The shape without the header-term fields — kept so every existing construction site
+         * (tests, mostly) compiles unchanged. Defaults every header-term field to null. */
         public UpdatePricingRequestRequest(String recipientType, Long recipientContactId,
                                            String recipientLabel, LocalDate requiredDate,
                                            BigDecimal customerTargetPrice, String targetCurrency,
@@ -90,21 +90,20 @@ public final class PricingRequestRequests {
     }
 
     /**
-     * Phase 1 of the sales-flow redesign (owner ruling, 2026-09-18): the item form Sales fills is
-     * now the SAME as the direct-deal quotation's TILE row —
-     * {@code th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput} — minus price/discount,
-     * which stay a later phase. {@code requestedQty}/{@code requestedQtySqm}/{@code requestedUnit}/
-     * {@code requestedUnitBasis} lost their {@code @NotNull}/{@code @NotBlank}: Sales no longer
-     * types a quantity or unit directly, so a new-form payload sends none of the four and
+     * The item form Sales fills is the SAME as the direct-deal quotation's TILE row —
+     * {@code th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput} — minus price/discount.
+     * {@code requestedQty}/{@code requestedQtySqm}/{@code requestedUnit}/
+     * {@code requestedUnitBasis} carry no {@code @NotNull}/{@code @NotBlank}: Sales does not
+     * type a quantity or unit directly, so a payload sends none of the four and
      * {@code PricingRequestService#resolveItems} DERIVES all four from the fields below via
      * {@code WastageCalculator} (mirroring {@code DealQuotationService#buildTileItem} exactly,
-     * with a zero price) before persisting — see that method's Javadoc. A legacy caller that still
-     * sends the four directly (an old client, a test fixture) is unaffected by the relaxation
-     * itself; whether it is ACCEPTED depends on {@code resolveItems}, which as of this phase always
-     * re-derives them regardless of what was sent, so a legacy caller must now also supply the new
+     * with a zero price) before persisting — see that method's Javadoc. A caller that still
+     * sends the four directly (an old client, a test fixture) is not rejected for that;
+     * whether it is ACCEPTED depends on {@code resolveItems}, which always
+     * re-derives them regardless of what was sent, so such a caller must also supply the
      * tile fields (see that method's own required-field list) — required-field validation applies
-     * to every item created/updated from this migration onward, never to an already-persisted
-     * legacy row (ruling 4).
+     * to every item created/updated from V185 onward, never to an already-persisted
+     * legacy row.
      */
     public record PricingRequestItemRequest(
         Long sourceTicketItemId,
@@ -138,10 +137,9 @@ public final class PricingRequestRequests {
         /** Sales-typed รหัสสินค้า — distinct from {@code catalogProductCode}, the catalog
          * SNAPSHOT taken at submit() time. See V185's migration header. */
         @Size(max = 255) String productCode,
-        /** ความหนา (มม.) — required (owner ruling). {@code @Digits}/{@code @DecimalMax} mirror
+        /** ความหนา (มม.) — required. {@code @Digits}/{@code @DecimalMax} mirror
          * {@code sales.pricing_request_item.thickness_mm} (NUMERIC(6,2)) so an out-of-range value
-         * 400s here instead of overflowing the column as a raw 500 (Opus review finding #7,
-         * 2026-09-18). */
+         * 400s here instead of overflowing the column as a raw 500. */
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 2) BigDecimal thicknessMm,
         /** ตร.ม./แผ่น — required. {@code @Digits} matches {@code sales.quotation_item.sqm_per_piece}
          * (NUMERIC(10,6)), the same column this mirrors. */
@@ -153,7 +151,7 @@ public final class PricingRequestRequests {
         /** "PERCENT" | "PIECES" | "NONE" — เผื่อ (wastage). */
         String wastageMode,
         BigDecimal wastageValue,
-        /** แผ่น/กล่อง — required (owner ruling). */
+        /** แผ่น/กล่อง — required. */
         @Min(1) @Max(1000) Integer piecesPerBox,
         /** ตร.ม./กล่อง — optional, matching the direct-deal form. */
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox,
@@ -162,7 +160,7 @@ public final class PricingRequestRequests {
         Boolean roundToFullBox,
         @Size(max = 40) String originCountry,
         // SMALLINT columns (V185) -- @Max(32767) stops an overflow value reaching the column as a
-        // raw 500 (Opus review finding #7, 2026-09-18); @Min(0) matches "a lead time cannot be
+        // raw 500; @Min(0) matches "a lead time cannot be
         // negative days", the same business floor every other quantity field in this record uses.
         @Min(0) @Max(32767) Integer leadTimeMinDays,
         @Min(0) @Max(32767) Integer leadTimeMaxDays,
@@ -176,7 +174,7 @@ public final class PricingRequestRequests {
         Integer piecesAfterWastage,
         Integer boxes,
 
-        // GLA-125 (owner ruling 2026-09-18) — typed name when originCountry = "อื่นๆ". Required by
+        // Typed name when originCountry = "อื่นๆ". Required by
         // PricingRequestService#requireItemFieldsComplete exactly then. Appended at the END (not
         // beside originCountry above) so every existing positional constructor call — the compat
         // ctor below, and every hand-wired test call site — keeps compiling unchanged.
@@ -188,7 +186,7 @@ public final class PricingRequestRequests {
         // via the compat constructors below. TEST-FIRST SCAFFOLDING: the field is carried and
         // persisted, nothing validates or acts on it yet.
         String stockSource,
-        // CR-1 (GLA-167): currency + price unit Sales fixes on the line; import may not override them
+        // Currency + price unit Sales fixes on the line; import may not override them
         // (FactoryQuoteService#receive enforces it). Normalized in PricingRequestService#resolveItem.
         // Nullable: legacy lines carry neither.
         String requestedCurrency,
@@ -272,8 +270,8 @@ public final class PricingRequestRequests {
                 null);
         }
 
-        /** The pre-GLA-125 (post-V185) shape — the canonical 35-field constructor that existed
-         * before originCountryOther was appended. Defaults it to null. */
+        /** The shape without originCountryOther — the canonical 35-field constructor kept for
+         * existing call sites. Defaults it to null. */
         public PricingRequestItemRequest(Long sourceTicketItemId, Long productId, Long variantId,
                                          String brand, String model, String productDescription,
                                          String color, String texture, String size, String factory,
@@ -310,18 +308,17 @@ public final class PricingRequestRequests {
      * {@code PricingRequestService#setItemFactory} for the full set of guards and why this is a
      * gap-FILL rather than a re-route.
      *
-     * <p><b>B6 (GLA-135) — factoryId, not a free-text name.</b> Until this fix the field was a
-     * free-typed {@code String factory}, so a name that did not exactly match a
-     * {@code price_catalog.factories} row saved with {@code resolved_factory_id} left NULL — the
-     * direct cause of the reported "brand-new factory → factory config error": downstream
-     * {@code FactoryConfigRepository.findByName} (factory-email + CEO landed-cost lookups) had
-     * nothing to match. The picker now sends the id of a real master row instead; the service
-     * resolves it and stores BOTH {@code resolved_factory_id} and the canonical
-     * {@code factory} name (see {@code PricingRequestService#setItemFactory} /
+     * <p><b>factoryId, not a free-text name.</b> A free-typed {@code String factory} that did not
+     * exactly match a {@code price_catalog.factories} row would save with
+     * {@code resolved_factory_id} left NULL — causing a "brand-new factory → factory config
+     * error": downstream {@code FactoryConfigRepository.findByName} (factory-email + CEO
+     * landed-cost lookups) would have nothing to match. The picker sends the id of a real master
+     * row instead; the service resolves it and stores BOTH {@code resolved_factory_id} and the
+     * canonical {@code factory} name (see {@code PricingRequestService#setItemFactory} /
      * {@code PricingRequestRepository#fillItemFactory}). factoryId-only, not
-     * factoryId-or-name: grepping every caller (backend integration tests, the frontend
-     * {@code hrApi}/{@code mockApi} pair, e2e) found none outside this one flow, and sales/import
-     * must pick from existing factories only — a brand-new one is added in-flow via
+     * factoryId-or-name: no caller (backend integration tests, the frontend
+     * {@code hrApi}/{@code mockApi} pair, e2e) sends a name outside this one flow, and
+     * sales/import must pick from existing factories only — a brand-new one is added in-flow via
      * {@code POST /api/price-import/factories} (import/ceo-only), never typed here.
      */
     public record SetItemFactoryRequest(
@@ -343,7 +340,7 @@ public final class PricingRequestRequests {
         @DecimalMin("0.00") BigDecimal customerTargetPrice,
         String targetCurrency,
         String note,
-        // GLA-125 header terms — see CreatePricingRequestRequest's own Javadoc.
+        // Header terms — see CreatePricingRequestRequest's own Javadoc.
         String paymentTermMode,
         @Min(0) @Max(32767) Integer creditDays,
         @Min(0) @Max(32767) Integer validityDays,
@@ -354,8 +351,8 @@ public final class PricingRequestRequests {
         Boolean omitContactHonorific,
         @NotEmpty List<@Valid PricingRequestItemRequest> items
     ) {
-        /** The pre-GLA-125 shape — kept so every existing construction site (tests, mostly)
-         * compiles unchanged. Defaults every new field to null. */
+        /** The shape without the header-term fields — kept so every existing construction site
+         * (tests, mostly) compiles unchanged. Defaults every header-term field to null. */
         public CustomerChangeRevisionRequest(String revisionReason, String clientRequestId,
                                              String recipientType, Long recipientContactId,
                                              String recipientLabel, LocalDate requiredDate,

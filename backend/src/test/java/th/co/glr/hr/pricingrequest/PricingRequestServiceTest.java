@@ -425,8 +425,7 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
-    // INVERTED 2026-08-11 (owner request): "Finding A" used to make the catalog MANDATORY, so a
-    // free-text item 422'd here. It no longer does — a คำขอราคา may name a product that is not in
+    // The catalog is not mandatory: a free-text item must not 422 here. A คำขอราคา may name a product that is not in
     // the catalogue yet, which is precisely what Import is being asked to price. This is the
     // wrong-way-round case for the removal: it fails if anyone reinstates the gate.
     @Test
@@ -478,7 +477,7 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
-    // ── recipient contact ownership (Part 2) ────────────────────────────────
+    // ── recipient contact ownership ────────────────────────────────
 
     @Test
     void createDraft_rejectsContactBelongingToAnotherCustomer() {
@@ -551,8 +550,8 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE, 5L);
         when(contactRepo.findById(1L)).thenReturn(Optional.of(
             new ContactDto(1L, 99L, "Other", "Customer's Contact", null, null, null)));
-        // recipientType must be a real value here (not null): updateDraft is now a
-        // full-replacement PUT (Fix 2) that validates recipientType unconditionally
+        // recipientType must be a real value here (not null): updateDraft is a
+        // full-replacement PUT that validates recipientType unconditionally
         // before it ever reaches the contact-ownership check this test targets —
         // a null would fail-fast on THAT guard instead, never exercising this one.
         UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
@@ -561,11 +560,11 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).updateDraft(anyLong(), any());
     }
 
-    // ── updateDraft: full-replacement re-validation (Commit F gap fill) ────────
-    // The full-replacement PUT (commit C) re-runs EVERY validation against the
-    // replacement payload, not just the contact-ownership check above — none of
-    // that re-validation, nor the ownership/status guards ahead of it, nor the
-    // happy path, had a service-level test before this.
+    // ── updateDraft: full-replacement re-validation ────────
+    // The full-replacement PUT re-runs EVERY validation against the
+    // replacement payload, not just the contact-ownership check above; these
+    // service-level tests cover that re-validation, the ownership/status guards
+    // ahead of it, and the happy path.
 
     @Test
     void updateDraft_otherSalesCannotDiscoverAnotherRepsDraft() {
@@ -626,7 +625,7 @@ class PricingRequestServiceTest {
 
     @Test
     void updateDraft_rejectsReplacementItemWithNoIdentityField() {
-        // Part 1's item-identity rule is re-run against the REPLACEMENT items
+        // The item-identity rule is re-run against the REPLACEMENT items
         // list, same as createDraft — a full-replacement PUT could otherwise be
         // used to smuggle an unidentified line past the create-time check.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
@@ -689,7 +688,7 @@ class PricingRequestServiceTest {
             eq(PricingRequestStatus.DRAFT), eq(null), eq(null));
     }
 
-    // ── updateDraft (GLA-102 part 2: recipient guard closed on the OTHER route) ────────────
+    // ── updateDraft (recipient guard on the OTHER route) ────────────
     //
     // createCustomerChangeRevision refuses a revision child whose recipientType differs from its
     // parent's, but that guard alone was reachable sideways: nothing stopped a plain PUT
@@ -698,7 +697,7 @@ class PricingRequestServiceTest {
     // CEO approve -> issue would then take the recipient from the mismatched value, and
     // CustomerQuotationService's supersedeSupersededChainQuotations — keyed only on
     // root_pricing_request_id, never recipient_type — would retire the OTHER recipient's already-
-    // issued, already-delivered quotation. Same GLA-102 bug, reached through the other door.
+    // issued, already-delivered quotation. Same bug as the revision route, reached through the other door.
 
     @Test
     void updateDraft_rejectsDifferentRecipientTypeOnRevisionChildAndMutatesNothing() {
@@ -914,10 +913,10 @@ class PricingRequestServiceTest {
         verify(ticketRepo, never()).findById(anyLong());
     }
 
-    // ── createCustomerChangeRevision (GLA-102 recipient guard) ─────────────
+    // ── createCustomerChangeRevision (recipient guard) ─────────────
     //
-    // Bug: createCustomerChangeRevision let the caller pass a DIFFERENT recipientType than the
-    // parent's own, with nothing checking they matched. The parent got marked SUPERSEDED anyway,
+    // The caller must not be able to pass a DIFFERENT recipientType than the
+    // parent's own: the parent would get marked SUPERSEDED anyway,
     // and later, when the child's quotation was issued, CustomerQuotationService#issue's
     // supersedeSupersededChainQuotations retires every OTHER issued quotation sharing the same
     // root_pricing_request_id — including a different recipient's already-delivered quotation.
@@ -997,11 +996,9 @@ class PricingRequestServiceTest {
         assertForbidden(() -> service.get(20L, salesActor));
     }
 
-    // This inverts the old get_importCanViewAnyDeal, which asserted the exact bug
-    // this class's own Javadoc disclaims ("a draft is the rep's private
-    // scratchpad until submit()"): import could previously read ANY rep's DRAFT
-    // by id. That was a real privacy bug, not a rule worth preserving — see
-    // requireViewable/canSeeDraft. Approved policy: DRAFT is visible only to its
+    // This class's own Javadoc says "a draft is the rep's private
+    // scratchpad until submit()", so import must not be able to read ANY rep's DRAFT
+    // by id — see requireViewable/canSeeDraft. Policy: DRAFT is visible only to its
     // owning sales rep plus ceo/sales_manager oversight; NOT import, NOT account.
     // A non-owner/non-oversight caller gets 404, not 403 — see requireViewable's
     // comment for why (403 would confirm the row exists and let a non-owner
@@ -1075,9 +1072,9 @@ class PricingRequestServiceTest {
         verify(requestRepo).findSummaries(null, null, null, true, true, 4L);
     }
 
-    // Gap 3 (review-remediation Commit F): sales_manager is the OTHER oversight
+    // sales_manager is the OTHER oversight
     // role in draftOversight's "ceo".equals(...) || "sales_manager".equals(...)
-    // check — only ceo had ever been proven to flip that flag to true. account
+    // check, so it must also flip that flag to true. account
     // is neither owner-filtered nor oversight, so it must behave like import.
     @Test
     void list_salesManagerHasDraftOversight() {
@@ -1131,7 +1128,7 @@ class PricingRequestServiceTest {
 
     @Test
     void listForTicket_ownerSalesSeesOwnDraftRequest() {
-        // Unlike listForTicket_salesSeesOnlyOwnDeal below (which only proves the
+        // Unlike listForTicket_salesSeesOnlyOwnDeal (which only proves the
         // repo call happens), this proves the owner's OWN draft actually survives
         // the service's DRAFT-privacy filter, not just import/ceo/sales_manager's.
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
@@ -1177,7 +1174,7 @@ class PricingRequestServiceTest {
         assertBadRequest(() -> service.list("BOGUS", null, true, salesActor));
     }
 
-    // ── B1: dead-deal lifecycle filter is wired, but get(id) bypasses it ───────
+    // ── dead-deal lifecycle filter is wired, but get(id) bypasses it ───────
 
     @Test
     void list_defaultQueueExcludesOnHoldDealButGetStillReachesIt() {
@@ -1224,11 +1221,11 @@ class PricingRequestServiceTest {
 
     @Test
     void pickup_rejectsNonSubmittedStatus() {
-        // Side effect of the Part 1 privacy fix: this pricing request is still
+        // This pricing request is still
         // DRAFT and importActor (id 3) is not its owner (id 1) nor ceo/
-        // sales_manager, so requireViewable now hides it from import entirely —
-        // 404, not the old 409 "Only a submitted pricing request can be picked
-        // up". That 409 message would have leaked the row's existence/status to
+        // sales_manager, so requireViewable hides it from import entirely —
+        // 404, not a 409 "Only a submitted pricing request can be picked
+        // up". That 409 message would leak the row's existence/status to
         // an import user who should not even know a draft with this id exists;
         // a still-DRAFT request literally cannot reach a submitted-only import
         // yet, so 404 is the correct status once DRAFT is private.
@@ -1292,7 +1289,7 @@ class PricingRequestServiceTest {
         when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, 4L)).thenReturn(1);
 
         PricingRequestService.CancelOpenForTicketResult result =
-            service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", ceoActor);
+            service.cancelOpenForTicket(10L, "PROJECT_ON_HOLD", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(2);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1315,7 +1312,7 @@ class PricingRequestServiceTest {
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1335,7 +1332,7 @@ class PricingRequestServiceTest {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.CANCELLED);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(0);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1343,11 +1340,10 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).addEvent(eq(21L), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
 
-    // Review-remediation plan Commit D: a raced compare-and-set used to `continue`
-    // immediately, silently leaving a CLOSED_LOST/CANCELLED deal with an open
-    // IMPORT_REVIEWING pricing request behind. cancelOpenForTicket now retries a
-    // raced row up to CANCEL_MAX_ATTEMPTS (3) times against a freshly-read status
-    // before giving up on it.
+    // A raced compare-and-set must not be skipped, which would silently leave a
+    // CLOSED_LOST/CANCELLED deal with an open IMPORT_REVIEWING pricing request behind.
+    // cancelOpenForTicket retries a raced row up to CANCEL_MAX_ATTEMPTS (3) times
+    // against a freshly-read status before giving up on it.
     @Test
     void cancelOpenForTicket_retriesARacedTransitionAndEndsCancelled() {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
@@ -1356,7 +1352,7 @@ class PricingRequestServiceTest {
         // the stub is a fixed answer) succeeds.
         when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L)).thenReturn(0, 1);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).isEmpty();
@@ -1379,7 +1375,7 @@ class PricingRequestServiceTest {
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
         when(requestRepo.cancelForDeadDeal(22L, PricingRequestStatus.SUBMITTED, 4L)).thenReturn(1);
 
-        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", ceoActor);
+        PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
 
         assertThat(result.cancelledCount()).isEqualTo(1);
         assertThat(result.abandonedIds()).containsExactly(21L);
@@ -1417,9 +1413,8 @@ class PricingRequestServiceTest {
      * {@code PricingRequestFlowIntegrationTest} for that behavior. A non-draft status isolates
      * THIS method's own explicit ownership re-check.
      *
-     * <p>The status used to be MORE_INFO_REQUIRED, which V140 retired; AWAITING_FACTORY_RESPONSE
-     * replaces it and preserves the property that matters. The 403 asserted here is genuinely the
-     * ownership guard's and not the status guard's: uploadAttachment checks ownership BEFORE
+     * <p>AWAITING_FACTORY_RESPONSE keeps the property that matters: the 403 asserted here is
+     * genuinely the ownership guard's and not the status guard's: uploadAttachment checks ownership BEFORE
      * ATTACHMENT_EDITABLE_STATUSES, so a status guard firing first would surface as a 409 and turn
      * this assertion red rather than silently passing for the wrong reason.
      */
@@ -1561,7 +1556,7 @@ class PricingRequestServiceTest {
         return summary;
     }
 
-    /** Variant for GLA-102: caller controls recipientType directly instead of the hardcoded BUYER default. */
+    /** Variant where the caller controls recipientType directly instead of the hardcoded BUYER default. */
     private PricingRequestSummaryDto stubPricingRequestWithRecipient(long id, long ticketId, long ticketCreatedById,
                                                                       String status, String recipientType) {
         PricingRequestSummaryDto summary = new PricingRequestSummaryDto(
@@ -1574,7 +1569,7 @@ class PricingRequestServiceTest {
     }
 
     /**
-     * Variant for GLA-102 part 2: a revision CHILD — parentPricingRequestId is non-null, exactly
+     * Variant for a revision CHILD — parentPricingRequestId is non-null, exactly
      * the signal PricingRequestService#updateDraft's new guard keys on.
      */
     private PricingRequestSummaryDto stubPricingRequestRevisionChild(long id, long ticketId, long ticketCreatedById,
@@ -1697,8 +1692,8 @@ class PricingRequestServiceTest {
     }
 
     private static UpdatePricingRequestRequest sampleUpdateRequest() {
-        // recipientType is a real value, not null: updateDraft is now a
-        // full-replacement PUT (Fix 2) that validates recipientType
+        // recipientType is a real value, not null: updateDraft is a
+        // full-replacement PUT that validates recipientType
         // unconditionally, so this helper must represent a request that could
         // otherwise legitimately succeed on THAT guard. It still has no
         // recipientContactId/recipientLabel, so it fails

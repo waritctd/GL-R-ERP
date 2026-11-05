@@ -20,7 +20,7 @@ import { queryKeys } from '../../api/queryKeys.js';
 /** What every consumer gets before the catalog has loaded. See EMPTY_STAGE_CATALOG's own reasoning
  * in stageCatalog.js: deliberately empty rather than a hardcoded fallback, so a broken endpoint
  * shows up as an empty select for one frame instead of hiding behind stale-but-plausible data. */
-export const EMPTY_UNIT_BASIS_CATALOG = Object.freeze({ unitBases: [] });
+const EMPTY_UNIT_BASIS_CATALOG = Object.freeze({ unitBases: [] });
 
 /**
  * Immutable server data — the same four constants for every user, for the life of the deployed

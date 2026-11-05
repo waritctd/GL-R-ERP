@@ -6,13 +6,13 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * Quotation v2 (direct deal quotation, V165) — see docs/sales/quotation-v2-plan.md's "API" section for the
+ * Quotation v2 (direct deal quotation) — see docs/sales/quotation-v2-plan.md's "API" section for the
  * exact shape. Sales creates a deal, adds items straight onto a quotation with typed unit price +
- * discount (the pricing-request/factory-quote/CEO-costing chain is bypassed for this release —
- * owner ruling 2026-09-09), the server computes every number, and sales_manager/ceo approves.
+ * discount (the pricing-request/factory-quote/CEO-costing chain is bypassed), the server computes
+ * every number, and sales_manager/ceo approves.
  *
  * <p>Extends the SAME {@code sales.quotation}/{@code sales.quotation_item} aggregate the pricing
- * chain (Step 4, {@code customerquotation/*}) already uses — tagged {@code origin =
+ * chain ({@code customerquotation/*}) already uses — tagged {@code origin =
  * 'DEAL_DIRECT'} so the two flows' rows never see each other (see V165's migration comment).
  */
 public final class DealQuotationDtos {
@@ -28,7 +28,7 @@ public final class DealQuotationDtos {
         long createdById,
         String createdByName,
         /** {@code hr.employee.first_name_en + last_name_en}, or null when the employee has none —
-         * quotation v3b (2026-09-11). The ENGLISH document's signature block prints these and
+         * The ENGLISH document's signature block prints these and
          * FALLS BACK to the Thai name when blank, rather than printing an empty slot; the Thai
          * document never looks at them. Served on the DTO rather than resolved at render time so
          * the adapter stays the pure function it is documented to be. */
@@ -43,9 +43,8 @@ public final class DealQuotationDtos {
         String approvedByNameEn,
         Instant approvedAt,
         String approvalNote,
-        // The date the sales rep CREATED the quotation (Bangkok), for EVERY status — owner
-        // feedback F8, 2026-09-10, "for วันที่ at the top of the page it should be the date it was
-        // created by the sale". Was "approved date, else today" until then; the header cell the
+        // The date the sales rep CREATED the quotation (Bangkok), for EVERY status — not the
+        // approved date; the header cell the
         // renderer prints follows the same rule (DealQuotationRenderAdapter#toRenderModel), so the
         // UI and the document always agree. NOT offerDate (remark 1, วันที่รับจำนวน), which is a
         // separate rep-editable date.
@@ -54,8 +53,8 @@ public final class DealQuotationDtos {
         String customerAddress,
         String customerTaxId,
         String customerPhone,
-        // ผู้สั่งซื้อ — the FROZEN snapshot V167 stores at create/update (owner feedback F2,
-        // 2026-09-10), never a live read of the ticket's contact; null only on a pre-V167 row
+        // ผู้สั่งซื้อ — the FROZEN snapshot V167 stores at create/update,
+        // never a live read of the ticket's contact; null only on a pre-V167 row
         // whose ticket had no contact, which submit() refuses until one is chosen.
         Long contactId,
         String contactName,
@@ -70,16 +69,16 @@ public final class DealQuotationDtos {
         Integer creditDays,
         Integer validityDays,
         LocalDate validityDate,
-        /** "DAYS" (default) | "DATE" — owner feedback 2026-09-14, remark 7's second variant.
+        /** "DAYS" (default) | "DATE" — remark 7's second variant.
          * Never null on the wire; a stored NULL (every pre-V178 row, and the whole legacy
          * customer-quotation path) normalises to DAYS on read. */
         String validityMode,
         /** DATE mode only — the exact "ภายในวันที่" deadline the rep typed. Null in DAYS mode. */
         LocalDate validityUntil,
         String customerNotes,
-        /** "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3 (V168). Never null on the wire; a
+        /** "NET" | "SPECIAL_SQM" | "DIRECT_NET" (V168). Never null on the wire; a
          * stored NULL (every pre-V168 row) normalises to NET on read. Per-QUOTATION, because in
-         * all nine of the owner's documents every tile row shares one mode. */
+         * the owner's documents every tile row shares one mode. */
         String priceMode,
         /** "TH" | "EN" — quotation v3b (V169). Never null on the wire; a stored NULL (every
          * pre-V169 row) normalises to TH on read, which is the Thai F-SM-002 every document has
@@ -93,13 +92,12 @@ public final class DealQuotationDtos {
         BigDecimal grandTotal,
         String currency,
         boolean approverHasSignature,
-        // ── V179 (owner feedback #4, 2026-09-14) — PRINT-ONLY name override. "they should be able
-        // to select who to show for ผู้พิมพ์ and พนักงานขาย": when admin fills in a quotation on
-        // behalf of a sales rep, ผู้พิมพ์ should read the admin's name and พนักงานขาย the rep's.
+        // ── V179 — PRINT-ONLY name override: when admin fills in a quotation on
+        // behalf of a sales rep, ผู้พิมพ์ reads the admin's name and พนักงานขาย the rep's.
         // NOT a change of deal ownership/access/commission — createdById/salesRepId (and every
         // access/commission decision built on them) are completely untouched; these seven fields
         // only ever change what DealQuotationRenderAdapter prints. Null (the default) means "use
-        // the real name", i.e. today's behaviour — see that class's #printedByName /
+        // the real name" — see that class's #printedByName /
         // #salesRepDisplayNameOrReal / #salesRepDisplayPhoneOrReal helpers.
         /** Overrides {@link #createdByName}/{@link #createdByNameEn} on the ผู้พิมพ์ slot when set. */
         Long printedByDisplayId,
@@ -111,25 +109,25 @@ public final class DealQuotationDtos {
         String salesRepDisplayName,
         String salesRepDisplayNameEn,
         String salesRepDisplayPhone,
-        /** Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — see
+        /** V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ" — see
          * {@code DealQuotationRequests.UpsertDealQuotationRequest#omitContactHonorific}'s Javadoc.
          * {@code NOT NULL DEFAULT FALSE} on the column (V180), so this is never null once read from
          * the repository — unlike the {@code Boolean} on the request DTO, which is nullable on the
          * wire and resolved to this primitive by
          * {@code DealQuotationService#resolveOmitContactHonorific}. */
         boolean omitContactHonorific,
-        /** Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — see
+        /** V181, "ไม่รับมัดจำ" — see
          * {@code DealQuotationRequests.UpsertDealQuotationRequest#fullPaymentTerm}'s Javadoc. Null
          * on every row whose {@link #depositPercent} is not exactly 0, and on every LEGACY
          * zero-deposit row that predates this feature — {@code DealQuotationRenderAdapter} keeps
          * printing such a row's existing {@link #remainderMode}/{@link #creditDays}-based text
          * byte-for-byte when this is null, so an already-approved document never changes. */
         String fullPaymentTerm,
-        /** GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186) — the APPROVED quotation this row
+        /** "สร้างจากใบเดิม" / สั่งเหมือนเดิม (V186) — the APPROVED quotation this row
          * was CLONED from, for audit only. Null on every ordinary create/revision. Distinct from
          * {@link #parentQuotationId}: this column itself is never read by {@code approve}'s
          * ancestor walk, {@code hasOpenRevision}, or the "แก้" bucket predicate — see
-         * {@code DealQuotationService#createReorder}. Owner ruling 2026-09-19: that does NOT mean
+         * {@code DealQuotationService#createReorder}. That does NOT mean
          * the source is immune from supersession — a deal may hold only ONE APPROVED
          * {@code DEAL_DIRECT} quotation, so once THIS row is itself approved, {@code approve}'s
          * SEPARATE same-ticket sweep (keyed on {@code doc_status}/{@code ticket_id}, not on this
@@ -139,7 +137,7 @@ public final class DealQuotationDtos {
          * the UI can print "สั่งเหมือนเดิมจาก {source.number}" without a second round trip. Null
          * exactly when {@link #derivedFromQuotationId} is null. */
         String derivedFromQuotationNumber,
-        /** The source's own {@code docStatus} at read time (Opus review, 2026-09-19) — same live
+        /** The source's own {@code docStatus} at read time — same live
          * join as {@link #derivedFromQuotationNumber}, added because the source's status is NOT
          * frozen at clone time: once the source (or the clone itself) is later approved, the
          * one-approved-per-deal sweep can flip the source from {@code APPROVED} to {@code
@@ -152,26 +150,24 @@ public final class DealQuotationDtos {
         List<DealQuotationItemDto> items,
         Instant createdAt,
         Instant updatedAt,
-        // ── GLA-123 slice S1 (Phase 3 of the sales pricing redesign, 2026-09-19) ────────────────
-        /** {@code 'DEAL_DIRECT'} (the only value this class has ever written before this feature)
-         * or {@code 'PRICING_REQUEST'} — a quotation created from an APPROVED-FOR-QUOTATION
+        // ── Pricing-request quotations (sales pricing redesign) ────────────────
+        /** {@code 'DEAL_DIRECT'} or {@code 'PRICING_REQUEST'} — a quotation created from an
+         * APPROVED-FOR-QUOTATION
          * pricing request via {@link DealQuotationService#createFromPricingRequest}, prefilled
-         * from the CEO's {@code pricing_decision}. NIT fix (Opus review, 2026-09-20): this used
-         * to say "drives the editor's CEO-locked-field UI and the server-side locked-price guard"
-         * — stale since the owner ruling revised 2026-09-19 below, which REPLACED that lock with
-         * sales editing price freely and a CEO-re-approval flag instead. What this field actually
-         * drives now: the editor's CEO-comparison badge/marker UI, the extra-row refusal, the
+         * from the CEO's {@code pricing_decision}. There is no server-side locked-price guard:
+         * sales edits price freely and a CEO-re-approval flag follows. What this field
+         * drives: the editor's CEO-comparison badge/marker UI, the extra-row refusal, the
          * linked-line identity guard, and the origin-aware view gate (M3) — see {@link
          * #priceChangedFromCeo}/{@link #itemsRemovedFromCeoCount} below for the flags themselves.
-         * Never null on the wire — a stored NULL/legacy row (every row this class wrote before
-         * this field existed) reads as {@code DEAL_DIRECT}, see the repository's own mapping. */
+         * Never null on the wire — a stored NULL/legacy row reads as {@code DEAL_DIRECT}, see the
+         * repository's own mapping. */
         String origin,
         /** Non-null exactly when {@link #origin} is {@code PRICING_REQUEST} — the source pricing
          * request this quotation was created from, so the editor can link back to it. Null for
          * every {@code DEAL_DIRECT} row. */
         Long pricingRequestId,
-        // ── Owner ruling revised 2026-09-19: sales MAY edit price on a PRICING_REQUEST quotation,
-        // subject to CEO re-approval — there is no server-side lock any more. These two fields are
+        // ── Sales MAY edit price on a PRICING_REQUEST quotation,
+        // subject to CEO re-approval — there is no server-side lock. These two fields are
         // the header half of that: whether the CHOSEN {@link #priceMode} itself still matches the
         // CEO's original decision, and what that original was, so the editor can show "ราคา CEO:
         // วิธี X" beside a changed price-mode picker. Recomputed fresh on every read, never stored.
@@ -185,15 +181,15 @@ public final class DealQuotationDtos {
         /** {@code sales.pricing_request.request_code} (e.g. {@code "PCR-2026-0042"}) for
          * {@link #pricingRequestId} — joined in purely so the editor can print "สร้างจากคำขอราคา
          * {code}" without a second round trip. Null exactly when {@link #pricingRequestId} is
-         * null (coordinator follow-up, 2026-09-20). */
+         * null. */
         String pricingRequestCode,
-        /** GLA-123 slice S1 M4(c) fix (Opus review, 2026-09-20) — count of CEO-linked lines
+        /** Count of CEO-linked lines
          * dropped from this quotation since creation (V191). Always 0 for a {@code DEAL_DIRECT}
          * row (the concept is meaningless there — no line is ever CEO-linked). Drives the
          * header-level "รายการที่ CEO อนุมัติถูกลบออก N รายการ" marker, the removal-side
          * counterpart of {@link #priceModeChangedFromCeo} above. */
         int itemsRemovedFromCeoCount,
-        /** M4(d) fix (Opus review, 2026-09-20) — every CEO-linked line this quotation's decision
+        /** Every CEO-linked line this quotation's decision
          * has that is NOT currently live on it, i.e. what {@code POST
          * .../items/{pricingDecisionItemId}/restore} can bring back. Empty for a DEAL_DIRECT row
          * or a PRICING_REQUEST row with nothing dropped ({@link #itemsRemovedFromCeoCount} and
@@ -205,14 +201,14 @@ public final class DealQuotationDtos {
          * {@code DealQuotationService#requireQuotation}. */
         List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems,
         /** The ผู้สั่งซื้อ signature-slot name ({@code sales.quotation.ordered_by_name}, V192) — the
-         * ONLY source {@code DealQuotationRenderAdapter#orderedByName} prints there. Ruling
-         * 2026-10-18: {@code DealQuotationService} writes it from the picked contact's name on every
-         * DRAFT save (null when no contact is picked) and no longer takes it from the request, so a
+         * ONLY source {@code DealQuotationRenderAdapter#orderedByName} prints there.
+         * {@code DealQuotationService} writes it from the picked contact's name on every
+         * DRAFT save (null when no contact is picked) and does not take it from the request, so a
          * draft prints its contact or the dotted line. A row past DRAFT keeps whatever it was frozen
-         * with (a name typed under the 2026-09-26 rule included); a revision/reorder copies it.
+         * with (including a name typed under an older rule); a revision/reorder copies it.
          * Null/blank prints the dotted placeholder — the customer signs on paper. */
         String orderedByName,
-        /** Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา"
+        /** V192.1 — "ไม่แสดงชื่อโครงการในใบเสนอราคา"
          * ({@code sales.quotation.hide_project_name}). When {@code true},
          * {@code DealQuotationRenderAdapter} hands the renderer no project name, so the printed
          * document carries no "Project : …" line. {@link #projectName} itself is untouched — the
@@ -222,7 +218,7 @@ public final class DealQuotationDtos {
         boolean hideProjectName,
         /** V192.3 — how to reach the person named in {@link #orderedByName} (the editor's
          * ผู้ติดต่อ): {@code sales.quotation.ordered_by_phone}. Shown on the
-         * quotation's details AND (owner ruling 2026-10-13) printed on the document's customer
+         * quotation's details AND printed on the document's customer
          * contact line when filled: see {@code DealQuotationRenderAdapter#printedPhone}. It is
          * the ONLY phone that line prints. Not {@link #contactPhone}, the customer-master contact
          * snapshot, which that line does not print. Null when nobody typed one (every pre-V192.3 row). A revision / reorder
@@ -235,13 +231,13 @@ public final class DealQuotationDtos {
         /** {@code sales.quotation.recipient_type} — who this quotation is FOR: the source pricing
          * request's {@code DESIGNER/OWNER/BUYER} for a PRICING_REQUEST-origin row, {@code
          * UNSPECIFIED} for a DEAL_DIRECT row (see {@code DealQuotationRepository.InsertDraftParams}).
-         * Read-only exposure of an already-persisted column (Round 8, owner-approved 2026-09-30):
+         * Read-only exposure of an already-persisted column:
          * the register shows it as a chip. Null only on a row read through a path that predates it. */
         String recipientType,
         /** {@code sales.quotation.recipient_label} — the free-text recipient name that goes with
          * {@link #recipientType} (e.g. "คุณสมชาย (ผู้ออกแบบ)"). Nullable. */
         String recipientLabel,
-        // ── Quotation ↔ deal linking, slice 1 (IA approved 2026-09-30, .design/quotation-deal-link) ──
+        // ── Quotation ↔ deal linking (.design/quotation-deal-link) ──
         /** {@code sales.ticket.code} of the deal this quotation hangs off ({@link #ticketId}) — joined
          * in on list AND detail so {@code /quotations} and the editor header can print "ดีล
          * {code}" and link to it without a second round trip. Null only if the ticket has no code. */
@@ -250,14 +246,14 @@ public final class DealQuotationDtos {
         String dealStage,
         /** {@code true} exactly when {@link #origin} is {@code LEGACY} — a pre-v2 {@code
          * customerquotation/} row ({@code sales.quotation.origin IS NULL}) that {@code GET
-         * /api/deal-quotations} now LISTS (owner decision D4: "show, read-only") but that no read-by-id
+         * /api/deal-quotations} LISTS (shown read-only) but that no read-by-id
          * or mutation path on this engine will ever serve (they all 404 it). {@code false} for
          * {@code DEAL_DIRECT} and {@code PRICING_REQUEST}. */
         boolean readOnly
     ) {
-        /** The pre-slice-1 shape (no {@link #ticketCode}/{@link #dealStage}/{@link #readOnly}) —
+        /** The shape without {@link #ticketCode}/{@link #dealStage}/{@link #readOnly} —
          * kept so every existing construction site (tests, mostly) compiles unchanged, the same
-         * device {@code TicketSummaryDto} used in #1083. Defaults to null/null/false, which is what
+         * device {@code TicketSummaryDto} uses. Defaults to null/null/false, which is what
          * every one of those fixtures means (none of them is a LEGACY row). */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
@@ -295,10 +291,10 @@ public final class DealQuotationDtos {
                 removedCeoItems, orderedByName, false, null, null, null, null, null, null, false);
         }
 
-        /** #1084's shape (recipient chip, merged into develop the same day as slice 1) — with
-         * {@link #recipientType}/{@link #recipientLabel} but no slice-1 fields —
+        /** The shape with {@link #recipientType}/{@link #recipientLabel} but without
+         * {@link #ticketCode}/{@link #dealStage}/{@link #readOnly} —
          * kept so every existing construction site (tests, mostly) compiles unchanged, the same
-         * device {@code TicketSummaryDto} used in #1083. Defaults to null/null/false, which is what
+         * device {@code TicketSummaryDto} uses. Defaults to null/null/false, which is what
          * every one of those fixtures means (none of them is a LEGACY row). */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
@@ -379,7 +375,7 @@ public final class DealQuotationDtos {
                 null, null, null, null, false);
         }
 
-        /** Ruling 3 (2026-09-30): the account view -- number, totals and each line's NET price stay; list price, discount and CEO pricing metadata are emptied. */
+        /** The account view -- number, totals and each line's NET price stay; list price, discount and CEO pricing metadata are emptied. */
         public DealQuotationDto withoutPriceInternals() {
             return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
         }
@@ -450,9 +446,9 @@ public final class DealQuotationDtos {
                 orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
         }
 
-        /** The pre-M4(c) shape (no {@link #itemsRemovedFromCeoCount}) — kept so every existing
+        /** The shape without {@link #itemsRemovedFromCeoCount} — kept so every existing
          * construction site (tests, mostly) compiles unchanged. Defaults to 0, correct for every
-         * one of those fixtures (nothing before this feature ever dropped a CEO-linked line). */
+         * one of those fixtures (none dropped a CEO-linked line). */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
             Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
@@ -488,10 +484,9 @@ public final class DealQuotationDtos {
                 null, null, null, null, false);
         }
 
-        /** The pre-GLA-123 shape (no {@link #origin}/{@link #pricingRequestId}/CEO-comparison
-         * fields) — kept so every existing construction site (tests, mostly) compiles unchanged.
-         * Defaults origin to {@code DEAL_DIRECT} (the only value that has ever existed before this
-         * feature) and everything else to false/null. */
+        /** The shape without {@link #origin}/{@link #pricingRequestId}/CEO-comparison
+         * fields — kept so every existing construction site (tests, mostly) compiles unchanged.
+         * Defaults origin to {@code DEAL_DIRECT} and everything else to false/null. */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
             Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
@@ -523,11 +518,10 @@ public final class DealQuotationDtos {
                 derivedFromQuotationStatus, items, createdAt, updatedAt, "DEAL_DIRECT", null, false, null, null);
         }
 
-        /** The pre-GLA-74 shape (no {@link #derivedFromQuotationId}/
-         * {@link #derivedFromQuotationNumber}/{@link #derivedFromQuotationStatus}) — kept so
+        /** The shape without {@link #derivedFromQuotationId}/
+         * {@link #derivedFromQuotationNumber}/{@link #derivedFromQuotationStatus} — kept so
          * every existing construction site (tests, mostly) compiles unchanged. Defaults all
-         * three to null, which is correct for every one of those fixtures (nothing before this
-         * feature was ever a clone). */
+         * three to null, which is correct for every one of those fixtures (none is a clone). */
         public DealQuotationDto(
             long id, String number, long ticketId, String docStatus, int revisionNo,
             Long parentQuotationId, long createdById, String createdByName, String createdByNameEn,
@@ -650,8 +644,8 @@ public final class DealQuotationDtos {
     }
 
     /**
-     * Per-status counts for the caller's OWN list scope (owner feedback F5, 2026-09-10: "for
-     * สถานะ make it ทั้งหมด, รออนุมัติ, แก้, ยกเลิก" — the list page's tab labels carry counts). Same
+     * Per-status counts for the caller's OWN list scope (the list page's tab labels
+     * ทั้งหมด, รออนุมัติ, แก้, ยกเลิก carry counts). Same
      * scope rule as {@code GET /api/deal-quotations} (sales: own deals only), computed in ONE SQL
      * statement so the tabs never need a second full fetch. {@code needsRework} = DRAFT rows sent
      * back with a reason ({@code approvalNote}) OR revisions in progress ({@code parentQuotationId}),
@@ -668,7 +662,7 @@ public final class DealQuotationDtos {
 
     /**
      * {@code POST /api/deal-quotations/{id}/confirm-order}'s result (and its one-release alias
-     * {@code …/promote-to-deal}, GLA-136's name — hence this record's name, kept so the wire shape
+     * {@code …/promote-to-deal} — hence this record's name, kept so the wire shape
      * does not move): the deal's id (the SAME ticket the quotation always hung off — confirmation
      * never mints a second one), its summary AFTER confirmation (status {@code quotation_issued},
      * stage {@code ORDER_RECEIVED}, payment {@code CUSTOMER_CONFIRMED}), and the quotation itself. An
@@ -721,7 +715,7 @@ public final class DealQuotationDtos {
         String sizeLine,
         String calculationLine,
 
-        // ── quotation v3 (owner feedback pass 3, 2026-09-11) ──────────────────────────────────
+        // ── quotation v3 ──────────────────────────────────
         /** "TILE" | "PLAIN" | "ADJUSTMENT". Never null on the wire — a stored NULL (every pre-V168
          * row) is normalised to TILE on read, so the client never has to know about the default. */
         String lineType,
@@ -748,16 +742,15 @@ public final class DealQuotationDtos {
          * the two is ever non-null and the "exactly one of percent / flat" rule is satisfied by
          * echoing what we returned.
          *
-         * <p>Added by review fix F2, which is about the GET→PUT round-trip. Relaxing the
-         * unitPrice rejection alone fixes only the percentage case: a flat adjustment stores its
-         * figure in {@code unit_price}/{@code amount} and has NO dedicated column, so before this
-         * field the client had no way to hand the amount back and the PUT 400'd on "must be a
+         * <p>Exists for the GET→PUT round-trip. A flat adjustment stores its
+         * figure in {@code unit_price}/{@code amount} and has NO dedicated column, so without this
+         * field the client could not hand the amount back and the PUT would 400 on "must be a
          * percent or an amount". Derived on read rather than stored — see V168's note on why a
          * duplicate column would only invite drift.
          */
         BigDecimal adjustmentAmount,
 
-        // ── GLA-75 item pictures (V170) ───────────────────────────────────────────────────────
+        // ── item pictures (V170) ───────────────────────────────────────────────────────
         /** Whether this item carries a picture. The BYTES are never inlined in this DTO — fetch
          * them from {@link #pictureUrl}. */
         boolean hasPicture,
@@ -771,21 +764,21 @@ public final class DealQuotationDtos {
          * one whose id was foreign/stale/a duplicate) gets a new id and therefore a new URL. */
         String pictureUrl,
         /** V176 — the supplier-stated square metres per box (TILE rows; null when unknown).
-         * OPTIONAL for an ENGLISH per-sqm quotation (Option B, owner decision 2026-09-16): WITH one,
+         * OPTIONAL for an ENGLISH per-sqm quotation: WITH one,
          * {@code quantity} is {@code boxes × sqmPerBox} (2dp); WITHOUT one, it derives from
          * {@code piecesFinal × sqmPerPiece} instead (see {@code WastageCalculator#sqmQuantityFromPieces}
          * and {@code DealQuotationLines#tilePrint}). */
         BigDecimal sqmPerBox,
-        /** Owner-approved "sell loose pieces" (2026-09-16, V182). {@code true} (the default, and
+        /** "Sell loose pieces" (V182). {@code true} (the default, and
          * every pre-V182 row) prints/charges {@code piecesFinal} rounded UP to the next
-         * {@code piecesPerBox} multiple, exactly as before. {@code false} sells the
+         * {@code piecesPerBox} multiple. {@code false} sells the
          * wastage-adjusted piece count UNROUNDED — {@link #boxes} is then the full-box count and
          * {@code piecesFinal - boxes * piecesPerBox} (the frontend's own arithmetic, not a separate
          * wire field) is the loose-piece remainder. Never false together with an English
          * per-sqm price mode — see {@code DealQuotationService#requireBoxDataForPerSqm}. */
         boolean roundToFullBox,
-        // ── GLA-123 slice S1 (2026-09-19; owner ruling revised 2026-09-19 — sales MAY edit a
-        // linked line's price, subject to CEO re-approval, rather than the field being locked) ──
+        // ── Sales MAY edit a linked line's price, subject to CEO re-approval, rather than the
+        // field being locked ──
         /** {@code true} when this TILE row is linked to a {@code pricing_decision_item} (i.e.
          * {@code sales.quotation_item.pricing_decision_item_id IS NOT NULL}) AND its currently
          * saved price — {@link #unitPrice}/{@link #discountPct} under NET, {@link
@@ -793,11 +786,11 @@ public final class DealQuotationDtos {
          * document's {@code priceMode} itself, no longer matches the CEO's ORIGINAL decision
          * (below). Recomputed fresh on every read (repository join, never a stored column) — see
          * {@link DealQuotationRepository#mapItemColumns}. Drives the editor's
-         * "เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ" marker; does NOT block the save (S2's dual
+         * "เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ" marker; does NOT block the save (the dual
          * approval, reusing the SAME comparison, is what actually requires the CEO to re-approve
          * before ISSUE). Always {@code false} on a {@code DEAL_DIRECT} quotation and on any
-         * {@code PRICING_REQUEST} row with no decision link (an unlinked TILE row is impossible in
-         * S1 — extra rows are refused for this origin, see {@code DealQuotationService#update}). */
+         * {@code PRICING_REQUEST} row with no decision link (an unlinked TILE row is impossible
+         * — extra rows are refused for this origin, see {@code DealQuotationService#update}). */
         boolean priceChangedFromCeo,
         /** The CEO's ORIGINAL {@code pricing_decision_item.list_unit_price} for this line —
          * meaningful under NET mode, the effective list price the CEO's discount applied to. Null
@@ -818,7 +811,7 @@ public final class DealQuotationDtos {
          * that replaces the old boolean "priceLocked" flag — a {@code DEAL_DIRECT} row or an
          * unlinked TILE row always reads null here). */
         BigDecimal ceoNetUnitPrice,
-        /** Sales feedback #1 (2026-10-06, V192.2) — the list price (ราคาตั้ง) exactly as the rep
+        /** V192.2 — the list price (ราคาตั้ง) exactly as the rep
          * typed it: บาท per ตร.ม. INCLUDING VAT ({@code sales.quotation_item.list_price_sqm}).
          * {@link #unitPrice} is the per-แผ่น figure the server derived from it, and is what the
          * document prints. Null on a row whose list price was stated per แผ่น — every pre-V192.2 row,
@@ -832,18 +825,18 @@ public final class DealQuotationDtos {
          * net was stated per แผ่น. */
         BigDecimal directNetPriceSqm,
         /** This row's OWN price mode — "NET" | "SPECIAL_SQM" | "DIRECT_NET" — as stored in
-         * {@code sales.quotation_item.price_mode} (V192.5; sales feedback #14, owner 2026-10-06).
+         * {@code sales.quotation_item.price_mode} (V192.5).
          * Non-null ONLY on a TILE row of a document whose {@code priceMode} is {@code MIXED}; on
          * every other row it is null and the document's mode applies
          * ({@code WastageCalculator#rowPriceMode} is the one rule). */
         String priceMode,
         /** V194 — "IN_THAILAND" | "IN_TRANSIT" when this row came from a stock-flagged pricing-request
-         * line (owner ruling 2026-10-28: stock lines skip import, so they carry no import lead time);
+         * line (stock lines skip import, so they carry no import lead time);
          * null = สั่งนำเข้า, and null on every DEAL_DIRECT row. Read-only: set at insert from the
          * pricing-request item, never accepted from the client. */
         String stockSource
     ) {
-        /** Ruling 3 (2026-09-30): the account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
+        /** The account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
         public DealQuotationItemDto withoutPriceInternals() {
             return new DealQuotationItemDto(id, seq, locationLabel, null, productCode, brand, model, color, texture, sizeText, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue, piecesPerBox, null, null, originCountry, leadTimeMinDays, leadTimeMaxDays, itemNotes, piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, netUnitPrice, lineAmount, descriptionLine, sizeLine, null, lineType, quantity, unit, null, null, adjustmentDeadline, null, null, hasPicture, picturePlacement, pictureUrl, sqmPerBox, roundToFullBox, false, null, null, null, null, null, null, directNetPriceSqm, null, stockSource);
         }
@@ -905,10 +898,10 @@ public final class DealQuotationDtos {
                 ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode, value);
         }
 
-        /** The pre-GLA-123 canonical shape (no CEO-original/changed-flag fields) — kept so every
-         * existing construction site (tests, mostly) compiles unchanged. Defaults every new field
-         * to false/null, correct for every DEAL_DIRECT fixture (nothing before this feature was
-         * ever linked to a pricing decision). */
+        /** The canonical shape without the CEO-original/changed-flag fields — kept so every
+         * existing construction site (tests, mostly) compiles unchanged. Defaults every CEO field
+         * to false/null, correct for every DEAL_DIRECT fixture (none is linked to a pricing
+         * decision). */
         public DealQuotationItemDto(
             long id, int seq, String locationLabel, Long catalogPriceId, String productCode,
             String brand, String model, String color, String texture, String sizeText,
@@ -956,7 +949,7 @@ public final class DealQuotationDtos {
                 hasPicture, picturePlacement, pictureUrl, null, true);
         }
 
-        /** The pre-GLA-75 shape — no picture. Kept so existing call sites (the calculate-line
+        /** The shape without a picture. Kept so existing call sites (the calculate-line
          * preview and many test fixtures) compile unchanged; same device as
          * {@code DealQuotationRequests.ItemInput}'s legacy constructor. */
         public DealQuotationItemDto(
@@ -1009,7 +1002,7 @@ public final class DealQuotationDtos {
                 ceoNetUnitPrice, listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
 
-        /** This item carrying the GLA-123 CEO-comparison fields — same device as
+        /** This item carrying the CEO-comparison fields — same device as
          * {@link #withSqmPerBox}/{@link #withRoundToFullBox} (appended fields written after the
          * shorter legacy constructors most call sites still build from). */
         public DealQuotationItemDto withCeoComparison(boolean changed, BigDecimal listUnitPrice,

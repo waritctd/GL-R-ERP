@@ -14,14 +14,14 @@ import { DealPicker } from './DealPicker.jsx';
 import { QUOTATION_RECIPIENT_OPTIONS, isRecipientOffRoute } from './quotationMeta.js';
 import { routeForChannel, useStageCatalog } from '../tickets/stageCatalog.js';
 
-// The app's one pill-choice voice (ช่องทางรับงาน below, and the ดีล / ผู้รับ choices added in
-// slice 2): indigo tint when chosen, --radius-md, 38px desktop / 44px phone. `whitespace-nowrap`
-// keeps a Thai label on one line — the ROW wraps on a narrow screen, never the label.
+// The app's one pill-choice voice (ช่องทางรับงาน below, and the ดีล / ผู้รับ choices): indigo tint
+// when chosen, --radius-md, 38px desktop / 44px phone. `whitespace-nowrap` keeps a Thai label on
+// one line — the ROW wraps on a narrow screen, never the label.
 const PILL_BASE = 'min-h-[38px] mobile:min-h-[44px] whitespace-nowrap rounded-md border px-3 text-xs font-bold';
 const PILL_ON = 'border-primary bg-primary/10 text-primary';
 const PILL_OFF = 'border-border bg-surface';
 
-// "ดีล" step (slice 2, SLICE-2-FLOW-A.md §A): which way the quotation gets its deal.
+// "ดีล" step: which way the quotation gets its deal.
 const DEAL_MODES = [
   { code: 'pick', label: 'เลือกดีลที่มีอยู่' },
   { code: 'create', label: 'สร้างดีลใหม่' },
@@ -29,21 +29,19 @@ const DEAL_MODES = [
 
 /**
  * ผู้รับใบเสนอราคา* — three pill radios in S-order (ผู้ออกแบบ · เจ้าของโครงการ · ผู้ซื้อ / ผู้รับเหมา),
- * required on a direct quotation (S2-B1: the server 400s a DEAL_DIRECT create without one; the PDF
- * prints its เรียน line from it). A real radiogroup: one tab stop (roving tabindex), arrow keys move
- * the choice, every pill keeps the global :focus-visible ring. Exported for the editor's
- * existing-DRAFT path (§C), which renders the same field inside ข้อมูลลูกค้าและผู้ขาย.
+ * required on a direct quotation (the server 400s a DEAL_DIRECT create without one; the PDF prints
+ * its เรียน line from it). A real radiogroup: one tab stop (roving tabindex), arrow keys move the
+ * choice, every pill keeps the global :focus-visible ring. Exported for the editor's existing-DRAFT
+ * path, which renders the same field inside ข้อมูลลูกค้าและผู้ขาย.
  *
- * Owner ruling 2026-09-30 (slice-2 scope reduction): the deal-stage rule is owned by another
- * session, so this field no longer moves — or promises to move — the deal's stage. The spec's live
- * "ดีลจะอยู่ที่ขั้น …" helper line under the pills was removed for that reason.
+ * This field does not move — or promise to move — the deal's stage (the deal-stage rule is owned
+ * elsewhere).
  *
- * Owner ruling 2026-09-30 #1 — off-route recipient: ALLOW + inline note. Every pill stays
- * selectable on every deal. `entryChannel` is the deal's channel (on the new-deal card: the one being
- * chosen there); when the chosen recipient's quote stage is not on that channel's route — READ from
- * the served stage catalog via routeForChannel, never a local table — one quiet info line says so
- * under the pills. No block, no modal. With no `entryChannel` there is no route to compare against,
- * so no note.
+ * Off-route recipient: ALLOW + inline note. Every pill stays selectable on every deal.
+ * `entryChannel` is the deal's channel (on the new-deal card: the one being chosen there); when
+ * the chosen recipient's quote stage is not on that channel's route — READ from the served stage
+ * catalog via routeForChannel, never a local table — one quiet info line says so under the pills.
+ * No block, no modal. With no `entryChannel` there is no route to compare against, so no note.
  */
 export function QuotationRecipientField({ value, onChange, error, idPrefix = 'quotation-recipient', entryChannel = null }) {
   const { catalog } = useStageCatalog();
@@ -116,7 +114,7 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
 
 const OFF_ROUTE_RECIPIENT_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
 
-// ช่องทางรับงาน (owner ask 2026-09-10): the three real channels th.co.glr.hr.ticket.EntryChannel
+// ช่องทางรับงาน: the three real channels th.co.glr.hr.ticket.EntryChannel
 // accepts as INPUT. UNSPECIFIED is deliberately NOT offered — it is the stored default, and the
 // server refuses it as a setEntryChannel input — so it is never a button, matching
 // TicketCreateModal.jsx's own ENTRY_CHANNEL_OPTIONS. The form's initial value stays UNSPECIFIED
@@ -129,25 +127,23 @@ function emptyNewCustomer() {
 
 /**
  * "ลูกค้าและโครงการ" -- the inline deal-creation card at the top of QuotationEditorPage when a
- * sales rep opens `/quotations/new` with no `?ticket=` (owner ask 2026-09-10,
- * `inline-deal-spec.md`). Lets the rep pick or create a customer, then a project under it, then
+ * sales rep opens `/quotations/new` with no `?ticket=`. Lets the rep pick or create a customer, then a project under it, then
  * pick the entry channel -- everything TicketService.create needs that isn't already implied by
  * the quotation items themselves. The parent owns the selected values (`value`/`onChange`, the
  * same controlled-field contract QuotationItemRow.jsx uses for its own patch-upward pattern); this
  * component owns only its own transient search/create UI state, exactly like QuotationItemRow's
  * catalog typeahead.
  *
- * This card does not collect the ผู้ติดต่อ. Ruling 2026-10-18: the editor renders the shared
- * QuotationContactPicker itself, next to this card, on both the inline-create and ?ticket= paths.
- * The ผู้ติดต่อ is picked per quotation (`contactId`), the server derives the ผู้สั่งซื้อ
- * signature name (`ordered_by_name`) from it, and the deal's own contact is never inherited.
+ * This card does not collect the ผู้ติดต่อ: the editor renders the shared QuotationContactPicker
+ * itself, next to this card, on both the inline-create and ?ticket= paths. The ผู้ติดต่อ is picked
+ * per quotation (`contactId`), the server derives the ผู้สั่งซื้อ signature name
+ * (`ordered_by_name`) from it, and the deal's own contact is never inherited.
  *
- * Slice 2 — flow A (SLICE-2-FLOW-A.md §A): this card is now step 1, "ดีล". With `onModeChange`
- * set (the editor always sets it) it leads with a two-way choice — เลือกดีลที่มีอยู่ (DealPicker,
- * which turns the page into the existing ?ticket= path) or สร้างดีลใหม่ (everything below, as
- * before) — then ผู้รับใบเสนอราคา* for either branch. ช่องทางรับงาน belongs to a NEW deal only.
- * Without `onModeChange` the card behaves as the plain customer/project card it always was
- * (`mode` defaults to 'create'), which is what its older tests exercise.
+ * This card is step 1, "ดีล". With `onModeChange` set (the editor always sets it) it leads with a
+ * two-way choice — เลือกดีลที่มีอยู่ (DealPicker, which turns the page into the existing ?ticket=
+ * path) or สร้างดีลใหม่ (everything below) — then ผู้รับใบเสนอราคา* for either branch. ช่องทางรับงาน
+ * belongs to a NEW deal only. Without `onModeChange` the card behaves as the plain customer/project
+ * card (`mode` defaults to 'create'), which is what its older tests exercise.
  *
  * `pickOnly`: only the customer and project boxes. "เปลี่ยนลูกค้า" re-points an existing deal, so the
  * customer-record fields (the editor already shows them), the entry channel and the recipient are not
@@ -165,7 +161,7 @@ export function DealCustomerCard({
   const [customerResults, setCustomerResults] = useState([]);
   const [customerOpen, setCustomerOpen] = useState(false);
   const [customerLoading, setCustomerLoading] = useState(false);
-  // #L2-style: a PER-INSTANCE debounce timer ref, not a module-level singleton -- see
+  // A PER-INSTANCE debounce timer ref, not a module-level singleton -- see
   // QuotationItemRow.jsx's own comment on why a shared timer is the wrong shape once more than
   // one of these could ever be on screen.
   const customerTimer = useRef(null);
@@ -174,21 +170,18 @@ export function DealCustomerCard({
   const [showNewCustomer, setShowNewCustomer] = useState(false);
   const [newCustomer, setNewCustomer] = useState(emptyNewCustomer());
   const [savingCustomer, setSavingCustomer] = useState(false);
-  // Foreign-customer toggle inside เพิ่มลูกค้าใหม่ (bug fix, prod QT-2026-0039-1): a customer
-  // outside Thailand has no จังหวัด/เขต/แขวง to pick, so ThaiAddressFields' three `required`
-  // comboboxes could never be satisfied and the rep had no way to save one — the ticket that
-  // shipped got its address hand-typed into the (Thai-only) addressLine field instead, printing
-  // as "---Vietnam--- แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพมหานคร 10110". Checking this box swaps the
-  // structured fields for a plain textarea and, on save, sends a payload with every structured
-  // field OMITTED (not merely blank -- CustomerController#structured / mockApi's own
-  // structuredCustomerAddress both treat a present-but-empty string as "structured", matching
-  // `Objects::nonNull`) so the backend takes its already-existing non-structured
+  // Foreign-customer toggle inside เพิ่มลูกค้าใหม่: a customer outside Thailand has no
+  // จังหวัด/เขต/แขวง to pick, so ThaiAddressFields' three `required` comboboxes could never be
+  // satisfied. Checking this box swaps the structured fields for a plain textarea and, on save,
+  // sends a payload with every structured field OMITTED (not merely blank -- CustomerController
+  // #structured / mockApi's own structuredCustomerAddress both treat a present-but-empty string as
+  // "structured", matching `Objects::nonNull`) so the backend takes its non-structured
   // `customers.create(name, taxId, address, branch, phone)` path (CustomerController ~73-77).
   const [foreignCustomer, setForeignCustomer] = useState(false);
 
-  // F7 (2026-09-10) + owner 2026-09-11: the SELECTED customer's เลขที่ผู้เสียภาษี / โทร. / ที่อยู่
-  // are edited through the shared CustomerDetailsFields (see its own doc) — the editor renders the
-  // same component on the paths where this card is absent.
+  // The SELECTED customer's เลขที่ผู้เสียภาษี / โทร. / ที่อยู่ are edited through the shared
+  // CustomerDetailsFields (see its own doc) — the editor renders the same component on the paths
+  // where this card is absent.
 
   // ── โครงการ / ผู้ติดต่อ, loaded once a customer is selected ─────────────────────────────────
   const [projectOptions, setProjectOptions] = useState([]);
@@ -197,8 +190,7 @@ export function DealCustomerCard({
   const [newProjectName, setNewProjectName] = useState('');
   const [savingProject, setSavingProject] = useState(false);
 
-  // โครงการ type-ahead (owner testing feedback, 2026-09-11: "as the project list grows, typing
-  // the first few characters should filter it down"). The full list is already fetched once per
+  // โครงการ type-ahead: the full list is already fetched once per
   // customer above (`api.customers.projects`), so this filters CLIENT-SIDE over that already-loaded
   // array rather than adding a search endpoint -- there is no per-keystroke request to debounce.
   // Interaction mirrors the ลูกค้า combobox above (input + `role="listbox"` popup, a chip once
@@ -234,7 +226,7 @@ export function DealCustomerCard({
   }
 
   function openNewProjectFromDropdown() {
-    // F3-style seed, same idea as เพิ่มลูกค้าใหม่ below: start the new-project name from whatever
+    // Seed, same idea as เพิ่มลูกค้าใหม่ below: start the new-project name from whatever
     // the rep already typed into the filter instead of a blank field.
     setNewProjectName(projectSearch.trim());
     setShowNewProject(true);
@@ -662,7 +654,7 @@ export function DealCustomerCard({
       </>
       ) : null}
 
-      {/* ช่องทางรับงาน — a NEW deal's own field (#1085: a real channel is required, UNSPECIFIED is no
+      {/* ช่องทางรับงาน — a NEW deal's own field (a real channel is required, UNSPECIFIED is no
           longer offered, and a missing one shows its error here). Only on the สร้างดีลใหม่ branch: a
           picked deal already has its channel. */}
       {creating && !pickOnly ? (

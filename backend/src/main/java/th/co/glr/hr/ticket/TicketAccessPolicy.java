@@ -69,7 +69,7 @@ public final class TicketAccessPolicy {
         if (summary == null || actor == null) {
             return false;
         }
-        return actor.id() == summary.createdById()
+        return DealOwnership.isOwnerOrKeyer(summary, actor.id())
             || (summary.assignedToId() != null && actor.id() == summary.assignedToId());
     }
 

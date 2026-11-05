@@ -50,10 +50,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         comment: vi.fn(),
         confirmFinalPayment: vi.fn(),
         verifyClose: vi.fn(),
-        // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 2): เลื่อนไป
-        // moved into the header overflow menu, whose onSelect calls this via
-        // DealStagePanel's own onUpdateStage prop — see the "stage-advance
-        // readiness travels with เลื่อนไป" describe block.
+        // เลื่อนไป lives in the header overflow menu, whose onSelect calls this via DealStagePanel's
+        // onUpdateStage prop (see the "stage-advance readiness travels with เลื่อนไป" describe).
         updateStage: vi.fn(),
         // แก้ช่องทางดีล (EntryChannelFix): the remedy for the route gate's "— แก้ช่องทางดีลก่อน" refusal.
         setEntryChannel: vi.fn(),
@@ -62,17 +60,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadQuotationXlsx: vi.fn(),
         downloadQuotationPdf: vi.fn(),
         remainingInvoiceOptions: vi.fn(),
-        // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+        // Deal tracking.
         listActivities: vi.fn(),
         addActivity: vi.fn(),
         updateTracking: vi.fn(),
-        // Slice C2b moved the revoke-close-confirm control into the "การเงิน"
-        // tab (see TicketDetailPage.jsx's own comment on that section) —
-        // the money-section rebuild left it untouched, in place,
-        // outside that new component.
+        // The revoke-close-confirm control lives in the "การเงิน" tab, outside the money section.
         revokeCloseConfirmation: vi.fn(),
-        // Fulfilment (Phase 3 Slice S4 — handoff 105): DealFulfilmentPanel's
-        // own mutations, same self-contained pattern.
+        // Fulfilment: DealFulfilmentPanel's own mutations, same self-contained pattern.
         issueImportRequest: vi.fn(),
         markIrSent: vi.fn(),
         markShipping: vi.fn(),
@@ -80,18 +74,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       },
       attachments: {
         list: vi.fn(),
-        // upload/delete were previously unmocked because nothing exercised them.
-        // The "attachment upload reports back" guard below does — see its own
-        // comment for the TypeError it exists to catch.
+        // upload/delete: exercised by the "attachment upload reports back" guard below.
         upload: vi.fn(),
         delete: vi.fn(),
         fileUrl: (id) => `#mock-file-${id}`,
       },
-      // Commit 6: PricingRequestPanel (mounted below the items table),
-      // DealStagePanel's substep strip, and DealStateHeader's PCR chip all
-      // read this list. DealQuotationPanel (Phase 2 Slice S2) reads the
-      // customer-quotation tail for whichever request reaches
-      // APPROVED_FOR_QUOTATION+ — see its own tests below.
+      // PricingRequestPanel (below the items table), DealStagePanel's substep strip, and
+      // DealStateHeader's PCR chip all read this list. DealQuotationPanel reads the customer-quotation
+      // tail for whichever request reaches APPROVED_FOR_QUOTATION+.
       pricingRequests: {
         listForTicket: vi.fn(),
         get: vi.fn(),
@@ -105,22 +95,21 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadCustomerQuotationPdf: vi.fn(),
         downloadCustomerQuotationXlsx: vi.fn(),
       },
-      // GLA-125: PricingRequestCreateModal's header-terms section fetches the same
-      // eligible-display-name list the direct-deal quotation editor uses.
+      // PricingRequestCreateModal's header-terms section fetches the same eligible-display-name list
+      // the direct-deal quotation editor uses.
       dealQuotations: {
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
-        // Slice 2: DealDirectQuotationPanel's list, and the APPROVED direct quotation's
-        // ยืนยันคำสั่งซื้อ from the sticky CTA. listForTicket is only given a resolved value inside
-        // the slice-2 describe block, so every older test renders that panel exactly as before.
+        // DealDirectQuotationPanel's list, and the APPROVED direct quotation's ยืนยันคำสั่งซื้อ from the
+        // sticky CTA. listForTicket is only given a resolved value inside the direct-quotation
+        // describe block, so every other test renders that panel as before.
         listForTicket: vi.fn(),
         promoteToDeal: vi.fn(),
         // The sticky "เสนอใบราคา<party>" CTA writes the new-engine quotation from the approved PR.
         createFromPricingRequest: vi.fn(),
-        // PR A — the sticky "แก้ใบเสนอราคา" CTA mints the revision.
+        // The sticky "แก้ใบเสนอราคา" CTA mints the revision.
         createRevision: vi.fn(),
       },
-      // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel reads/writes
-      // this namespace directly, same pattern as pricingRequests above.
+      // Deposit: DealDepositPanel reads/writes this namespace directly, like pricingRequests above.
       depositNotices: {
         listByTicket: vi.fn(),
         // Direct-quotation deals: the sticky สร้างใบแจ้งยอดเงินรับมัดจำ creates the draft this way.
@@ -131,10 +120,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadPdf: vi.fn(),
         noteTemplates: vi.fn(),
       },
-      // The STORED remaining invoice aggregate (V188, GLA-99 step 2) — RemainingInvoiceDialog
-      // always checks this first, so an undefined namespace would throw before it ever reaches
-      // the stateless preview (tickets.remainingInvoiceOptions) these tests exercise. Defaults to
-      // "no live document yet", matching every fixture below (none seeds a stored row).
+      // The STORED remaining invoice aggregate: RemainingInvoiceDialog always checks it first, so an
+      // undefined namespace would throw before reaching the stateless preview
+      // (tickets.remainingInvoiceOptions). Defaults to "no live document yet", matching every fixture.
       storedRemainingInvoices: {
         listForTicket: vi.fn().mockResolvedValue({ remainingInvoices: [] }),
         createDraft: vi.fn(),
@@ -150,22 +138,18 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       fxRates: {
         list: vi.fn(),
       },
-      // ใบขอซื้อ (F-SM-001). Mocked for the same reason as fxRates: DealFulfilmentPanel's IR block
-      // queries brands for every import/CEO viewer, and an undefined namespace would throw rather
-      // than render the block.
+      // ใบขอซื้อ (F-SM-001). Mocked like fxRates: DealFulfilmentPanel's IR block queries brands for
+      // every import/CEO viewer, and an undefined namespace would throw rather than render the block.
       importRequests: {
         brands: vi.fn(),
         pages: vi.fn(),
         download: vi.fn(),
       },
-      // PR-B REVIEW ROUND 1, S5: the STORED ใบขอซื้อรายโรงงาน (V184) section DealFulfilmentPanel
-      // added queries this for every canReadStoredIr viewer (sales owner/CEO/import/sales_manager)
-      // — same reason `importRequests` above is mocked: an undefined namespace throws a TypeError
-      // rather than resolving, which used to be silently swallowed into "no stored IRs" (S5's own
-      // fix now surfaces that as a genuine error instead, so this gap had to be closed here too).
-      // Defaults to an empty list — the everyday "not IR-tracked" case every legacy-chain test in
-      // this file assumes — and individual tests override with mockResolvedValueOnce where the
-      // per-factory aggregate itself is what's under test.
+      // The STORED ใบขอซื้อรายโรงงาน section DealFulfilmentPanel queries for every canReadStoredIr
+      // viewer (sales owner/CEO/import/sales_manager); like `importRequests` above, an undefined
+      // namespace throws a TypeError, which the panel surfaces as a genuine error. Defaults to an
+      // empty list (the "not IR-tracked" case every legacy-chain test assumes); tests override with
+      // mockResolvedValueOnce where the per-factory aggregate is under test.
       storedImportRequests: {
         listForTicket: vi.fn().mockResolvedValue({ importRequests: [] }),
         createDrafts: vi.fn(),
@@ -184,9 +168,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       priceImport: {
         countries: vi.fn().mockResolvedValue([]),
       },
-      // fix/ticket-edit-items-required-markers: edit-items mode's ยี่ห้อ/รุ่น fields now share
-      // TicketCreateModal's CatalogAutocompleteField, which searches this on every keystroke
-      // (debounced). Previously absent from this mock entirely — edit-items had no catalog search.
+      // Edit-items mode's ยี่ห้อ/รุ่น fields share TicketCreateModal's CatalogAutocompleteField, which
+      // searches this on every keystroke (debounced).
       catalog: {
         prices: vi.fn(),
       },
@@ -234,8 +217,7 @@ function buildTicket(overrides = {}) {
       { id: 1, kind: 'SUBMITTED', actorName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z' },
     ],
     quotations: overrides.quotations ?? [],
-    // B5 fix: read-only fallback-to-quotation-items flag (TicketDto#fromPricingChain on the
-    // backend). Defaults to false/absent, same as every ticket before this fix existed.
+    // Read-only fallback-to-quotation-items flag (TicketDto#fromPricingChain). Defaults to false/absent.
     fromPricingChain: overrides.fromPricingChain ?? false,
   };
 }
@@ -250,8 +232,8 @@ function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
 
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      {/* DealQuotationPanel (Phase 2 Slice S2) links out to
-          /pricing-requests/:id and uses useNavigate — needs Router context. */}
+      {/* DealQuotationPanel links out to /pricing-requests/:id and uses useNavigate: needs Router
+          context. */}
       <MemoryRouter>
         <TicketDetailPage
           user={user}
@@ -265,21 +247,16 @@ function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
   return { ...utils, queryClient };
 }
 
-// Ticket-detail IA rebuild Phase 2: every section this file used to find
-// straight off the page now lives inside a tab (Tabs.jsx keeps only the
-// active one mounted — see TicketDetailPage.jsx's own "runOnTab" doc
-// comment). `namePattern` matches the tab BUTTON's accessible name, which
-// concatenates the Thai label and its English helper span with no inserted
-// whitespace in jsdom (no real layout, so no implied word boundary) — a
-// regex on the Thai label alone (e.g. `/ราคา/`) is enough and avoids
-// depending on that concatenation's exact shape.
+// Every section lives inside a tab (Tabs.jsx keeps only the active one mounted; see
+// TicketDetailPage.jsx's "runOnTab" doc comment). `namePattern` matches the tab BUTTON's accessible
+// name, which concatenates the Thai label and its English helper span with no whitespace in jsdom,
+// so a regex on the Thai label alone (e.g. `/ราคา/`) is enough.
 async function openTab(namePattern) {
   fireEvent.click(await screen.findByRole('tab', { name: namePattern }));
 }
 
-// Exposes the current router location's search string as text, so a test
-// can assert `?tab=` was actually written (and with `replace: true`) without
-// reaching into react-router's internals.
+// Exposes the router location's search string as text, so a test can assert `?tab=` was written
+// (and with `replace: true`) without reaching into react-router's internals.
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
@@ -327,8 +304,8 @@ describe('TicketDetailPage', () => {
         status: 'price_proposed',
       },
       // PICKUP/PROPOSE_PRICE/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/APPROVE/REJECT/
-      // GENERATE_QUOTATION/MARK_QUOTATION_* are retired (Phase 2 Slice S1/S2) — the
-      // real actions() endpoint never advertises them any more either.
+      // GENERATE_QUOTATION/MARK_QUOTATION_* are retired; the real actions() endpoint no longer
+      // advertises them either.
       availableActions: [],
     });
     api.attachments.list.mockResolvedValue({ attachments: [] });
@@ -356,10 +333,8 @@ describe('TicketDetailPage', () => {
       createdById: 1, createdByName: 'สมชาย ใจดี', createdAt: '2026-07-10T09:00:00.000Z',
     });
     api.tickets.updateTracking.mockResolvedValue({ ticket: buildTicket() });
-    // Deposit (Phase 3 Slice S3 — handoff 105): DealDepositPanel mounts for
-    // every role that isn't 'import' (sections.depositNotice), so its list
-    // query needs a default resolve or every existing test above would hit
-    // "api.depositNotices.listByTicket is not a function"-shaped rejections.
+    // DealDepositPanel mounts for every role that isn't 'import' (sections.depositNotice), so its list
+    // query needs a default resolve or every test above would reject.
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
     // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an
     // empty table — no rate, so no conversion — which keeps every unrelated test's item rows
@@ -375,13 +350,10 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.get).toHaveBeenCalledWith(701);
   });
 
-  // Phase 2 Slice S1/S2 "engine collapse" (docs/agent-handoffs/104): ticket-native
-  // submit/pickup/propose-price/calculate-prices/override-item-price/approve/reject/
-  // generate-quotation/mark-quotation-* have no route, no hrApi method, and no render
-  // path any more. These assert the dead controls are actually GONE — even under a
-  // (deliberately unrealistic) actions() payload that still lists the retired verbs,
-  // proving the page no longer reads them at all rather than merely not being handed
-  // them today.
+  // Ticket-native submit/pickup/propose-price/calculate-prices/override-item-price/approve/reject/
+  // generate-quotation/mark-quotation-* have no route, hrApi method or render path. These assert the
+  // dead controls are GONE even under a (deliberately unrealistic) actions() payload that still lists
+  // the retired verbs, proving the page no longer reads them at all.
   it('never renders the retired price-approval/quotation-generate controls, even if actions() lists the retired verbs', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
@@ -411,9 +383,8 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('heading', { level: 2, name: 'การอนุมัติราคา' })).toBeNull();
   });
 
-  // Phase 2 Slice S2: the state header sits above every other section and
-  // names the sales stage, PCR status, payment/fulfilment status, and deal
-  // value at a glance.
+  // The state header sits above every other section and names the sales stage, PCR status,
+  // payment/fulfilment status, and deal value at a glance.
   it('renders the DealStateHeader stat strip', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 50000 } }),
@@ -422,8 +393,7 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage();
 
     expect(await screen.findByText('ขั้นตอนดีล')).not.toBeNull();
-    // DealStagePanel below also names the current stage — assert presence, not uniqueness.
-    // S4's Thai copy narrowed to the designer alone when V143 gave the owner their own stage (S5).
+    // DealStagePanel below also names the current stage: assert presence, not uniqueness.
     expect(screen.getAllByText('เสนอราคาผู้ออกแบบ').length).toBeGreaterThan(0);
     expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
     // The payment panel below also renders amountPayable — assert presence, not uniqueness.
@@ -437,8 +407,7 @@ describe('TicketDetailPage', () => {
     expect(within(header).getByText('อัปเดตล่าสุด', { exact: false })).not.toBeNull();
     expect(within(header).getByText('2 ก.ค. 2569')).not.toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
-    // Slice C2b: the items table now lives in its own "สินค้าและราคา" tab,
-    // not the default "ดีล" tab.
+    // The items table lives in its own "สินค้าและราคา" tab, not the default "ดีล" tab.
     await openTab(/สินค้าและราคา/);
     expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
   });
@@ -461,24 +430,31 @@ describe('TicketDetailPage', () => {
     expect(stickyChrome.className).toContain('sticky');
     expect(stickyChrome.className).toContain('top-[calc(var(--deal-scroll-pad-y)*-1)]');
     expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดดีล' })).not.toBeNull();
+    // Desktop header clearance for focus/jumps sits on the content wrapper (the chrome's next
+    // sibling) so the header's own controls never get it.
+    expect(stickyChrome.nextElementSibling.className).toContain(
+      'min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]',
+    );
 
-    // Ticket-workspace IA rebuild Slice B: the sticky context rail (and its own
-    // measured `--deal-header-h` sticky-offset classes) is retired — there is
-    // no second column any more, so no `data-testid="ticket-context-rail"`
-    // element exists at all. `--deal-header-h` itself stays defined (index.css)
-    // and consumed by AppShell.jsx's `scroll-pt-[...]` (Tailwind port of the
-    // old `.content-scroll` rule) for mobile focus scrolling — see
-    // ticketWorkspaceLayout.test.js, unaffected by this.
+    // No sticky context rail (and no `data-testid="ticket-context-rail"` element); `--deal-header-h`
+    // stays defined (index.css) and consumed by the content wrapper's descendant
+    // `scroll-mt-[...]` (see ticketWorkspaceLayout.test.js).
     expect(screen.queryByTestId('ticket-context-rail')).toBeNull();
   });
 
-  // Regression guard for the sticky-chrome jitter bug: the header must condense off the
-  // two sentinels' IntersectionObserver visibility, NEVER off a scroller.scrollTop threshold
-  // (whose feedback loop — condense shrinks the page, scrollTop re-crosses the threshold —
-  // made the page bounce / snap to the top), and with HYSTERESIS so slow scrolling parked at
-  // the trigger can't flip-flop the collapse. jsdom has no layout and no real
+  it('marks the sticky chrome with data-sticky-chrome so the shell scroller opts out of scroll anchoring (condensing would otherwise pull scrollTop back up by the shrink)', async () => {
+    renderTicketDetailPage();
+
+    const chrome = await screen.findByTestId('ticket-detail-sticky-chrome');
+    expect(chrome.hasAttribute('data-sticky-chrome')).toBe(true);
+  });
+
+  // Regression guard for the sticky-chrome jitter: the header must condense off the two sentinels'
+  // IntersectionObserver visibility, NEVER off a scroller.scrollTop threshold (condense shrinks the
+  // page, scrollTop re-crosses the threshold: the page bounced / snapped to the top), and with
+  // HYSTERESIS so slow scrolling at the trigger can't flip-flop. jsdom has no layout and no real
   // IntersectionObserver, so this pins the WIRING (condense follows sentinel visibility + the
-  // dead-band); the actual no-oscillation behaviour is verified in a real browser.
+  // dead-band); no-oscillation is verified in a real browser.
   describe('sticky chrome condense is sentinel-driven with hysteresis (not scrollTop)', () => {
     // Restore ONLY IntersectionObserver — vi.unstubAllGlobals() would also revert globals the
     // shared setup stubs (e.g. URL.createObjectURL), breaking later files in the same worker.
@@ -532,7 +508,7 @@ describe('TicketDetailPage', () => {
       act(() => condenseIo.cb([{ target: condenseSentinel, isIntersecting: false }]));
       expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('false');
       expect(screen.getByRole('menu')).not.toBeNull();
-      // Closing the menu applies what was held back (review of cacff6d7).
+      // Closing the menu applies what was held back.
       fireEvent.keyDown(document, { key: 'Escape' });
       expect(screen.getByTestId('deal-state-header').getAttribute('data-condensed')).toBe('true');
     });
@@ -551,11 +527,9 @@ describe('TicketDetailPage', () => {
     expect(within(chip).queryByText('฿0.00')).toBeNull();
   });
 
-  // The ราคาตั้ง (ประมาณการ) column that used to sit here — catalog price × FX × a CEO-configured
-  // markup — was removed on the owner's instruction after UAT, together with dealEstimatePricing.js.
-  // What replaces it on this page is not another estimate: the factory price already shown in
-  // ราคาโรงงาน now carries a plain baht conversion beside it when it is quoted in a foreign
-  // currency. The live catalog is EUR + USD only, and sales.fx_rates covers both.
+  // The factory price in ราคาโรงงาน carries a plain baht conversion beside it when quoted in a
+  // foreign currency (the live catalog is EUR + USD, and sales.fx_rates covers both). There is no
+  // ราคาตั้ง (ประมาณการ) estimate column.
   describe('factory price in baht (ราคาตั้ง estimate removed)', () => {
     it('shows the factory price in its own currency with a baht conversion beside it', async () => {
       // The suite-wide default is an empty rate table (no conversion possible); this test is
@@ -605,12 +579,9 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation
-  // phase"): sales.ticket_item stays empty until order confirmation, so a deal still working
-  // its pricing-request/quotation chain has no rows for the items grid — even though its real
-  // items already exist on the deal's quotation. The backend now falls back to those items
-  // (TicketDto#fromPricingChain) when ticket_item is empty; this describes the frontend's
-  // read-only rendering of that fallback.
+  // sales.ticket_item stays empty until order confirmation, so a deal still in its
+  // pricing-request/quotation chain would show "0 รายการ". The backend falls back to the quotation's
+  // items (TicketDto#fromPricingChain); this describes the frontend's read-only rendering of that.
   describe('items grid: read-only fallback to pricing-chain quotation items (B5 fix)', () => {
     it('shows the fallback quotation items read-only, with the banner, and hides the edit button', async () => {
       api.tickets.get.mockResolvedValueOnce({
@@ -685,10 +656,9 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // GLA-136 used to render a quotation-only container ticket (V193) as "not in the pipeline": a
-  // banner, no stage panel, no primary CTA. Slice 1 (backend 2ed3468e) made the flag provenance only
-  // and IA §7 ("Nothing hidden") makes a quotation-first deal an ordinary deal — so the page must now
-  // render it EXACTLY like any other. Both shapes are asserted to render the same controls.
+  // A quotation-only container ticket (V193) renders exactly like any other deal (IA §7, "Nothing
+  // hidden"): no "not in the pipeline" banner, and the stage panel and primary CTA are present. Both
+  // shapes are asserted to render the same controls.
   describe('quotation-first deal (GLA-136 hiding reverted, IA §7)', () => {
     it.each([[true], [false]])('quotationOnly=%s: stage panel and primary CTA present, no "not in the pipeline" banner', async (quotationOnly) => {
       api.tickets.get.mockResolvedValue({
@@ -716,10 +686,9 @@ describe('TicketDetailPage', () => {
           dueDate: '2026-07-31',
           contactName: 'คุณอรุณ ติดต่อ',
         },
-        // A COMMENTED event on the ticket — planted specifically to prove the
-        // rail's old read-only "3 most recent comments" roll-up is genuinely
-        // gone (DealHistoryPanel already renders the full stream on กิจกรรม),
-        // not merely relocated: this message must NOT surface on ภาพรวม.
+        // A COMMENTED event, planted to prove the old read-only "3 most recent comments" roll-up is
+        // gone (DealHistoryPanel renders the full stream on กิจกรรม): this message must NOT surface on
+        // ภาพรวม.
         events: [
           {
             id: 3,
@@ -750,20 +719,18 @@ describe('TicketDetailPage', () => {
     // uniqueness.
     expect(within(peopleSection).getByText('สมชาย ใจดี')).not.toBeNull();
     expect(within(peopleSection).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
-    // Wrong-way-round: the deal no longer shows a ผู้ติดต่อ (owner ruling
-    // 2026-10-18 — the contact is picked per quotation instead). FieldRow
-    // renders its label even when empty, so the missing label proves the row
-    // is gone; the fixture still sets contactName, so the missing value proves
-    // it does not surface by another route.
+    // Wrong-way-round: the deal shows no ผู้ติดต่อ (the contact is picked per quotation). FieldRow
+    // renders its label even when empty, so the missing label proves the row is gone; the fixture
+    // still sets contactName, so the missing value proves it doesn't surface another way.
     expect(within(peopleSection).queryByText('ผู้ติดต่อ')).toBeNull();
     expect(within(peopleSection).queryByText('คุณอรุณ ติดต่อ')).toBeNull();
 
-    // Wrong-way-round: the deleted roll-up's content must be absent from the
-    // whole page while ภาพรวม is active, not just out of these two sections.
+    // Wrong-way-round: the deleted roll-up's content must be absent from the whole page while ภาพรวม
+    // is active.
     expect(screen.queryByText('บันทึกสำหรับบริบทดีล')).toBeNull();
   });
 
-  // QA-33: the backend only writes summary.lastFollowUpAt from the CEO billing form, so logging an
+  // The backend only writes summary.lastFollowUpAt from the CEO billing form, so logging an
   // activity never moved "ติดตามล่าสุด". The card shows the later of that field and the newest
   // activity the page already fetched.
   it.each([
@@ -788,21 +755,15 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(within(row).getByText(formatThaiDate(expectedIso))).not.toBeNull());
   });
 
-  // The core defect this slice fixes: a comment composer that rendered from
-  // TWO different components depending on which tab was open (the context
-  // rail's own copy everywhere except กิจกรรม, DealHistoryPanel's copy on
-  // กิจกรรม). DealHistoryPanel is now the only composer in the codebase, and
-  // — because Tabs.jsx unmounts every inactive TabPanel — it is reachable
-  // from exactly the one tab it lives in. Checking both tabs (not just one)
-  // is what the mutation-check below actually exercises: reintroducing the
-  // old rail-shaped duplicate makes the ภาพรวม assertion (0) go red.
+  // One comment composer: DealHistoryPanel is the only one in the codebase, and since Tabs.jsx
+  // unmounts every inactive TabPanel it is reachable from exactly the one tab it lives in. Checking
+  // both tabs is what the mutation-check exercises: reintroducing a rail-shaped duplicate makes the
+  // ภาพรวม assertion (0) go red.
   it('renders the comment composer exactly once, only inside the ประวัติ tab', async () => {
     renderTicketDetailPage(salesOwnerUser);
     await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
 
-    // ดีล is the default tab — wrong-way-round: no composer anywhere on
-    // the page while it's active (this is what used to fail: the rail's own
-    // copy rendered here).
+    // ดีล is the default tab. Wrong-way-round: no composer anywhere on the page while it's active.
     expect(screen.queryAllByPlaceholderText('เพิ่มความคิดเห็น…')).toHaveLength(0);
     expect(screen.queryAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(0);
 
@@ -821,8 +782,8 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.comment).toHaveBeenCalledWith(701, { message: 'จดไว้จากแท็บกิจกรรม' }));
   });
 
-  // GLA-156: the "รอ<ฝ่าย>" waiting bar looked expandable, did nothing and named no next step. It is
-  // gone from the page itself — workState.test.js pins the resolver, this pins where it rendered.
+  // The "รอ<ฝ่าย>" waiting bar is gone from the page itself: workState.test.js pins the resolver,
+  // this pins where it rendered.
   it('renders no "รอ…" waiting line in the sticky action bar', async () => {
     api.tickets.get.mockResolvedValueOnce({ ticket: buildTicket() });
     renderTicketDetailPage(salesOwnerUser);
@@ -831,8 +792,8 @@ describe('TicketDetailPage', () => {
     expect(bar?.textContent ?? '').not.toMatch(/รอ(ฝ่าย|CEO)/);
   });
 
-  // The stage panel's "เอกสารของขั้นนี้" row used to carry this as a full-size bordered secondary
-  // button, heavier than the stage headline above it. It is a link to a document, not an action.
+  // The stage panel's "เอกสารของขั้นนี้" row is a link to a document, not an action, so it is not a
+  // full-size bordered secondary button.
   it('offers the quotation PDF as a compact inline link, not a full-size bordered button', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -900,11 +861,9 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage();
     await openTab(/เอกสาร/);
 
-    // Scoped to DealLegacyQuotations' own panel (not `screen` globally):
-    // Slice D's DealDocumentRegister now ALSO lists these same legacy rows
-    // in its own roll-up, in the same tab — see DealDocumentRegister's own
-    // header comment ("a register is an index, not a replacement for the
-    // panel it indexes") — so an unscoped query now matches twice.
+    // Scoped to DealLegacyQuotations' own panel (not `screen` globally): DealDocumentRegister also
+    // lists these legacy rows in the same tab ("a register is an index, not a replacement for the
+    // panel it indexes"), so an unscoped query matches twice.
     const legacyHeading = await screen.findByRole('heading', { level: 2, name: 'ใบเสนอราคา (เอกสารเดิม)' });
     const legacy = within(legacyHeading.closest('section'));
     expect(legacy.getByText('ผู้ออกแบบ')).not.toBeNull();
@@ -984,12 +943,8 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
   });
 
-  // Slice C2b moved this control into the การเงิน tab (see
-  // TicketDetailPage.jsx's own comment above the `can.revokeCloseConfirm`
-  // section) — the money-section rebuild left it in place, outside
-  // that component, and untouched. Not previously covered by a dedicated
-  // test; adding one here per the "every existing action must still be
-  // present and behave identically" requirement.
+  // The revoke-close-confirm control lives in the การเงิน tab, outside the money section (see
+  // TicketDetailPage.jsx's comment above the `can.revokeCloseConfirm` section).
   it('renders "ยกเลิกการยืนยันปิดงาน" for account with REVOKE_CLOSE_CONFIRM, and calls revokeCloseConfirmation on click', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
@@ -1008,9 +963,8 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.revokeCloseConfirmation).toHaveBeenCalledWith(701, {}));
   });
 
-  // Wrong-way-round: without the REVOKE_CLOSE_CONFIRM action on offer, the
-  // button must not render at all — even for a role (account) that CAN see
-  // it once the action is actually available.
+  // Wrong-way-round: without the REVOKE_CLOSE_CONFIRM action on offer, the button must not render,
+  // even for a role (account) that CAN see it once the action is available.
   it('wrong-way-round: hides "ยกเลิกการยืนยันปิดงาน" for account when REVOKE_CLOSE_CONFIRM is not an available action', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
@@ -1065,12 +1019,9 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage(accountUser);
 
     expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
-    // Slice C2b: PricingRequestPanel's whole-tab gate is gone — it merged
-    // into "สินค้าและราคา" (unconditionally visible) as an INNER render
-    // condition (pricing_accountCannotReadAPricingRequest — see
-    // ticketDetailTabs.js's own comment on that tab). Account still gets
-    // the tab (the items table lives there too), just not this panel inside
-    // it, and never the fetch behind it.
+    // PricingRequestPanel is an INNER render condition inside "สินค้าและราคา"
+    // (pricing_accountCannotReadAPricingRequest, see ticketDetailTabs.js). Account still gets the
+    // tab (the items table lives there), just not this panel, and never the fetch behind it.
     await openTab(/สินค้าและราคา/);
     expect(screen.queryByRole('heading', { name: 'คำขอราคา' })).toBeNull();
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
@@ -1080,11 +1031,9 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
   });
 
-  // GLA-118 (owner ruling 2026-09-20, part A): renderTicketDetailPage()'s default actor is
-  // ceoUser, but confirmFinalPayment is account-only now (PAYMENT_RECORD_ROLES has no CEO
-  // fallback) — explicitly renders as accountUser so this UX-34 regression test still exercises
-  // a viewer who can actually reach the button, rather than silently asserting against a viewer
-  // who no longer can.
+  // Final payment is account-only (PAYMENT_RECORD_ROLES has no CEO fallback), but
+  // renderTicketDetailPage()'s default actor is ceoUser: render as accountUser so this test reaches
+  // the button.
   it('UX-34: Final Payment opens a confirm dialog with the real outstanding amount instead of firing the mutation on click', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -1116,9 +1065,7 @@ describe('TicketDetailPage', () => {
     const finalPaymentButton = await screen.findByRole('button', { name: 'ยืนยันชำระครบ (Final Payment)' });
     fireEvent.click(finalPaymentButton);
 
-    // The single click must NOT call the mutation directly — it only opens
-    // the confirm dialog (this is the exact defect UX-34 flags: previously
-    // this click called confirmFinalPayment straight away).
+    // The single click must NOT call the mutation directly: it only opens the confirm dialog.
     expect(api.tickets.confirmFinalPayment).not.toHaveBeenCalled();
 
     // The dialog states the real outstanding amount, sourced from the same
@@ -1176,12 +1123,8 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
-    // Slice A "chip diet": the deal pipeline panel (DealStagePanel, outside
-    // every tab) used to also show this coarse progress — that copy was
-    // removed as a straight duplicate of DealFulfilmentPanel's own aggregate
-    // (see DealStagePanel.jsx's own doc comment), so it, the delivery HISTORY
-    // rows (คลังสินค้า source), and the record-delivery button are all only
-    // inside DealFulfilmentPanel now, in the "จัดซื้อ-ส่งมอบ" tab.
+    // The delivery progress, delivery HISTORY rows (คลังสินค้า source) and the record-delivery button
+    // are only inside DealFulfilmentPanel, in the "จัดซื้อ-ส่งมอบ" tab (DealStagePanel has no copy).
     await openTab(/จัดซื้อ-ส่งมอบ/);
     expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
@@ -1203,7 +1146,7 @@ describe('TicketDetailPage', () => {
     queryClient.setQueryData(queryKeys.financeDeal(701), { deal: {} });
 
     await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-    // The comment box now lives in DealHistoryPanel, in the "ประวัติ" tab.
+    // The comment box lives in DealHistoryPanel, in the "ประวัติ" tab.
     await openTab(/ประวัติ/);
 
     const textarea = screen.getByPlaceholderText('เพิ่มความคิดเห็น…');
@@ -1220,14 +1163,11 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // ── UX-03 (slice 5a): inline validation for the quotation/payment/delivery
-  // modals — see TicketCreateModal.jsx / DepositNoticePage.jsx for the same
-  // aria-invalid + aria-describedby + role="alert" contract this mirrors. ──
+  // ── Inline validation for the quotation/payment/delivery modals, mirroring the aria-invalid +
+  // aria-describedby + role="alert" contract of TicketCreateModal.jsx / DepositNoticePage.jsx. ──
 
-  // GLA-118 (owner ruling 2026-09-20, part A): renderTicketDetailPage()'s default actor is
-  // ceoUser, but recordPayment is account-only now (PAYMENT_RECORD_ROLES has no CEO fallback) —
-  // explicitly renders as accountUser so this inline-validation test still exercises a viewer who
-  // can actually reach the button.
+  // recordPayment is account-only, but renderTicketDetailPage()'s default actor is ceoUser: render as
+  // accountUser so this test reaches the button.
   it('payment modal: submitting with an empty amount marks the amount field inline and does not call recordPayment', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
@@ -1237,9 +1177,8 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(accountUser);
-    // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section now —
-    // the Modal itself, once opened, stays mounted regardless of the active
-    // tab (it's not inside any TabPanel).
+    // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section; the Modal, once opened, stays
+    // mounted regardless of the active tab (it's not inside any TabPanel).
     await openTab(/การเงิน/);
 
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
@@ -1265,14 +1204,9 @@ describe('TicketDetailPage', () => {
     expect(amountInput.getAttribute('aria-invalid')).toBeNull();
   });
 
-  // The delivery modal (and its "at least 1 line qty > 0" group-level guard)
-  // moved into DealFulfilmentPanel (Phase 3 Slice S4 — see
-  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md), which
-  // does not carry TicketDetailPage's aria-invalid/fieldErrors apparatus —
-  // it reports the same guard via a toast, matching DealDepositPanel/
-  // DealQuotationPanel's simpler mutation-level error convention. Full
-  // coverage of this modal lives in the 'deal fulfilment panel' describe
-  // block below; this is now just the "shows a toast, not a crash" case.
+  // The delivery modal (and its "at least 1 line qty > 0" guard) lives in DealFulfilmentPanel, which
+  // reports it via a toast (no aria-invalid/fieldErrors). Full coverage is in the 'deal fulfilment
+  // panel' describe block below; this is the "shows a toast, not a crash" case.
   it('delivery modal: submitting with no line quantities shows a toast and does not call recordDelivery', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -1289,7 +1223,7 @@ describe('TicketDetailPage', () => {
 
     const showToast = vi.fn();
     renderTicketDetailPage(ceoUser, showToast);
-    // DealFulfilmentPanel now lives in the "จัดซื้อ-ส่งมอบ" tab.
+    // DealFulfilmentPanel lives in the "จัดซื้อ-ส่งมอบ" tab.
     await openTab(/จัดซื้อ-ส่งมอบ/);
 
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
@@ -1313,18 +1247,14 @@ describe('TicketDetailPage', () => {
     ));
   });
 
-  // ── UX-03 (slice 5b — final slice): the remaining inline page-body
-  // validations (revise / edit-items qty). Reject-form and CEO-price-override
-  // were retired along with ticket-native pricing (Phase 2 Slice S1/S2). ──
+  // ── The remaining inline page-body validations (revise / edit-items qty). ──
 
   it('edit-items: multiple invalid rows each get their own inline qty error — not one shared message', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
         summary: { status: 'submitted', createdById: 1 },
-        // brand/model/size all filled — fix/ticket-edit-items-required-markers added a
-        // ยี่ห้อ/รุ่น/ขนาด required-field check alongside this qty one (see the dedicated
-        // required-field describe block below), so this fixture stays valid on those three to
-        // isolate what this test is actually about: per-row qty errors, not required fields.
+        // brand/model/size all filled, so this fixture stays valid on the required-field check (see
+        // the required-field describe block below) and isolates per-row qty errors.
         items: [
           { id: 70101, brand: 'SCG', model: 'A1', size: '60x60', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
           { id: 70102, brand: 'Cotto', model: 'B2', size: '30x30', qty: 0, qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null },
@@ -1340,19 +1270,14 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    // Slice C2b: "แก้ไขรายการสินค้า" now sits in the items table's own panel
-    // header, inside the "สินค้าและราคา" tab (not the default "ดีล" tab).
+    // "แก้ไขรายการสินค้า" sits in the items table's panel header, inside the "สินค้าและราคา" tab.
     await openTab(/สินค้าและราคา/);
     fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการแก้ไข' }));
 
-    // This is the headline assertion for this slice: the old code showed ONE
-    // toast covering every row ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ"); now
-    // each offending row gets its own inline error message and input. The message text itself
-    // (fix/ticket-edit-items-required-markers, review round 2) is now the same basis-aware
-    // missingQtyMessage create uses — row-numbered, not the old generic
-    // "กรุณากรอกจำนวนสินค้าของรายการนี้ให้ถูกต้อง" — see the save handler's own comment for why
-    // aligning was evidence-backed rather than a silent behaviour change.
+    // Each offending row gets its own inline error message and input (not one toast covering every
+    // row). The message is the basis-aware missingQtyMessage create uses, row-numbered (see the save
+    // handler's comment).
     expect(await screen.findByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 1')).toBeTruthy();
     expect(await screen.findByText('กรุณากรอกจำนวน (แผ่น) ในรายการที่ 2')).toBeTruthy();
 
@@ -1380,9 +1305,9 @@ describe('TicketDetailPage', () => {
     expect(api.tickets.editItems.mock.calls[0][1].items.map((it) => it.qty)).toEqual([3, 2]);
   });
 
-  // Walk 4 (W4-09, owner ruling 2026-10-29): "จากสต็อก" is just a flag on the deal line - the
-  // sales-typed ราคาขายจากสต็อก is gone (the deal shows the CEO-approved price). The post-creation edit
-  // screen shows no price input, never blocks save for want of one, and sends no stockSalePrice.
+  // "จากสต็อก" is just a flag on the deal line: the sales-typed ราคาขายจากสต็อก is gone (the deal shows
+  // the CEO-approved price). The post-creation edit screen shows no price input, never blocks save
+  // for want of one, and sends no stockSalePrice.
   it('edit-items: flagging a row "จากสต็อก" shows no price input and saves straight away with no stockSalePrice', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -1452,10 +1377,9 @@ describe('TicketDetailPage', () => {
     expect(sent.stockSalePrice ?? null).toBeNull();
   });
 
-  // Walk 4 (W4-09): the read-only items table still flags a saved จากสต็อก line with the orange badge, but
-  // the deal shows the CEO-approved price - NEVER stock_sale_price. A legacy row that still carries one
-  // (written before the sales-typed price was removed) must not surface it: not as the price, not as a
-  // secondary "ราคาสต็อก" line, in either price cell variant.
+  // The read-only items table still flags a saved จากสต็อก line with the orange badge, but shows the
+  // CEO-approved price, NEVER stock_sale_price. A legacy row that still carries one must not surface
+  // it: not as the price, not as a secondary "ราคาสต็อก" line, in either price cell variant.
   it('read mode: a จากสต็อก line shows the badge but never its stockSalePrice; a normal line is unchanged', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({
@@ -1539,11 +1463,9 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByText(/ราคาสต็อก/)).toBeNull();
   });
 
-  // fix/ticket-edit-items-required-markers: the UAT report this branch fixes — "เวลาเรียกดีลมาแก้
-  // ดาวแดงหายไป ไม่เหมือนเดิม" — reopening a deal to edit its items showed none of the create
-  // modal's required-field asterisks/validation, and a blank ยี่ห้อ/รุ่น/ขนาด only failed with a
-  // backend 400. These pin the fix: shared markers, shared catalog autocomplete, a real inline
-  // required-field guard before the API is ever called.
+  // Edit-items must show the create modal's required-field asterisks/validation: a blank ยี่ห้อ/รุ่น/ขนาด
+  // must fail inline before the API is called, not with a backend 400. These pin shared markers,
+  // the shared catalog autocomplete, and that guard.
   describe('edit-items: required-field markers (ยี่ห้อ/รุ่น/ขนาด) match create, and catalog autocomplete', () => {
     function mockCatalogProduct(overrides = {}) {
       return {
@@ -1564,8 +1486,8 @@ describe('TicketDetailPage', () => {
       };
     }
 
-    // item0Overrides lets a test seed row 0 with fields the default fixture doesn't carry (e.g. a
-    // real catalogPriceId/catalogProductCode, for the focus-does-not-mutate regression test below).
+    // item0Overrides seeds row 0 with fields the default fixture doesn't carry (e.g. a real
+    // catalogPriceId/catalogProductCode, for the focus-does-not-mutate test below).
     async function openEditMode(item0Overrides = {}) {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({
@@ -1610,12 +1532,9 @@ describe('TicketDetailPage', () => {
       expect(textureLabel.textContent).not.toContain('*');
     });
 
-    // Review round 2: the source-text pin test alone (ticketItemFields.test.jsx) does not catch a
-    // hand-typed literal passed into CatalogAutocompleteField's own `label` prop — the component
-    // happily renders whatever string it's given, imported or not. A reviewer proved this: edit's
-    // brand label was changed to a hand-typed `label="ชื่อยี่ห้อ"` and every existing test (including
-    // the source-text pin) stayed green. This asserts the actual RENDERED text instead, which a
-    // hand-typed label cannot fake past.
+    // The source-text pin test alone (ticketItemFields.test.jsx) does not catch a hand-typed literal
+    // passed into CatalogAutocompleteField's `label` prop (it renders whatever it's given). This
+    // asserts the actual RENDERED text, which a hand-typed label cannot fake.
     it('ยี่ห้อ/รุ่น labels render the exact canonical text from ITEM_FIELD_META — not a hand-typed drift like ชื่อยี่ห้อ', async () => {
       await openEditMode();
       const brandLabel = document.querySelector('label[for="edit-item-0-brand"]');
@@ -1629,8 +1548,7 @@ describe('TicketDetailPage', () => {
     it('there is no separate โรงงาน input — ยี่ห้อ and โรงงาน are one field, same as create', async () => {
       await openEditMode();
       expect(document.getElementById('edit-item-0-factory')).toBeNull();
-      // A standalone "โรงงาน" label (as opposed to "ยี่ห้อ / โรงงาน") would mean the old separate
-      // input came back.
+      // A standalone "โรงงาน" label (not "ยี่ห้อ / โรงงาน") would mean the old separate input came back.
       expect(screen.queryByText('โรงงาน')).toBeNull();
     });
 
@@ -1667,18 +1585,16 @@ describe('TicketDetailPage', () => {
         catalogPriceId: 501,
         catalogProductCode: 'BNFJ30126CA',
       });
-      // Row 1 was never touched — its factory must round-trip unchanged, not fall back to null or
+      // Row 1 was never touched: its factory must round-trip unchanged, not fall back to null or
       // pick up row 0's newly-picked factory.
       expect(payloadItems[1]).toMatchObject({ brand: 'Cotto', factory: 'Cotto Industry' });
     });
 
-    // Review round 2 (HIGH): a reviewer proved onFocusSearch ran through the SAME mutating path a
-    // real keystroke does (onEditCatalogInput -> applyDescriptiveFieldEdit), so merely re-focusing
-    // an already-filled ยี่ห้อ/รุ่น box — no retyping, value unchanged — silently re-ran the
-    // brand->factory lockstep and cleared the row's catalog link. Concretely: row {factory: 'Bode
-    // Factory', catalogPriceId: 501, catalogProductCode: 'BN1'}, focus brand then model, save ->
-    // payload factory became 'Bode' (from the raw brand string, dropping ' Factory') and
-    // catalogPriceId went null. That corrupts persisted data
+    // Re-focusing an already-filled ยี่ห้อ/รุ่น box (no retyping, value unchanged) must not run the
+    // mutating keystroke path (onEditCatalogInput -> applyDescriptiveFieldEdit), which re-runs the
+    // brand->factory lockstep and clears the catalog link. Row {factory: 'Bode Factory',
+    // catalogPriceId: 501, catalogProductCode: 'BN1'}, focus brand then model, save: the payload
+    // factory must not become 'Bode' and catalogPriceId must not go null. That would corrupt data
     // PricingRequestCreateModal.emptyItemFromTicketItem seeds its own catalog link from.
     it('re-focusing ยี่ห้อ/รุ่น on a row that already has a catalog link does NOT clear it (search-only focus, no row mutation)', async () => {
       await openEditMode({
@@ -1713,8 +1629,8 @@ describe('TicketDetailPage', () => {
       expect(document.getElementById('edit-item-1-brand').getAttribute('aria-invalid')).toBe('true');
       expect(api.tickets.editItems).not.toHaveBeenCalled();
 
-      // Delete row 0 (the row WITHOUT the error) — row 1 shifts down to index 0, and its error
-      // must follow it, not stay pinned to the old index or vanish.
+      // Delete row 0 (the row WITHOUT the error): row 1 shifts down to index 0, and its error must
+      // follow it, not stay pinned to the old index or vanish.
       fireEvent.click(screen.getByRole('button', { name: 'ลบรายการที่ 1' }));
 
       await waitFor(() => {
@@ -1723,11 +1639,10 @@ describe('TicketDetailPage', () => {
       expect(screen.getByText('กรุณากรอกยี่ห้อ / โรงงาน')).toBeTruthy();
     });
 
-    // Review round 3 (MEDIUM): the qty rule now uses requiredQtyField/missingQtyMessage — same as
-    // create — instead of unconditionally checking item.qty. This pins the actual behaviour change
-    // rather than just the plumbing: a SQM-basis row with NO ตร.ม./แผ่น factor (qty is a read-only
-    // derived display in that mode, never an input) must not be blocked on a qty=0 it has no way to
-    // fill, and must send exactly what the rep typed into พื้นที่ (ตร.ม.).
+    // The qty rule uses requiredQtyField/missingQtyMessage, as create does, instead of unconditionally
+    // checking item.qty. A SQM-basis row with NO ตร.ม./แผ่น factor (qty is a read-only derived display)
+    // must not be blocked on a qty=0 it can't fill, and must send exactly what the rep typed into
+    // พื้นที่ (ตร.ม.).
     it('SQM-basis row with no ตร.ม./แผ่น factor: qty 0 is not required — save sends the row as typed', async () => {
       await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: 12, sqmPerPiece: null });
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
@@ -1768,17 +1683,14 @@ describe('TicketDetailPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข/ }));
 
-    // Slice C2a: the form is now a real Modal (role="dialog", aria-modal),
-    // not an inline page section — this is the headline change for this test.
+    // The form is a real Modal (role="dialog", aria-modal), not an inline page section.
     const dialog = await screen.findByRole('dialog', { name: 'ขอแก้ไข' });
     const confirmButton = await within(dialog).findByRole('button', { name: 'ยืนยันขอแก้ไข' });
 
-    // The button's disabled={actionLoading || !reviseReason.trim()} guard
-    // (unchanged by this slice) makes the inline-error branch in its onClick
-    // unreachable through a real click while the reason is blank — jsdom
-    // respects the native disabled attribute, so fireEvent.click on it does
-    // not invoke the handler. This is the narrowest honest proof available:
-    // the guard still gates the button exactly as before.
+    // The button's disabled={actionLoading || !reviseReason.trim()} guard makes the inline-error
+    // branch in its onClick unreachable through a real click while the reason is blank (jsdom
+    // respects the native disabled attribute). This is the narrowest honest proof: the guard still
+    // gates the button.
     expect(confirmButton.disabled).toBe(true);
     fireEvent.click(confirmButton);
     expect(api.tickets.revision).not.toHaveBeenCalled();
@@ -1795,8 +1707,8 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ขอแก้ไข' })).toBeNull());
   });
 
-  // Walk 4 (W4-04): once the customer's order is confirmed (ขั้น 10+) a deal-level ขอแก้ไข would open a new
-  // pricing round the deal can no longer take (the backend refuses it too), so the ⋯ menu does not offer it.
+  // Once the customer's order is confirmed (ขั้น 10+) a deal-level ขอแก้ไข would open a new pricing
+  // round the deal can no longer take (the backend refuses it too), so the ⋯ menu does not offer it.
   // Control: the same owner and status before the order is confirmed still gets it.
   it('the ⋯ menu offers ขอแก้ไข before the order is confirmed, and not once it is (ขั้น 10+)', async () => {
     const stage = (paymentStatus, salesStage) => {
@@ -1826,13 +1738,9 @@ describe('TicketDetailPage', () => {
     expect(await reviseOffered()).toBe(false);
   });
 
-  // The actual defect this slice fixes: opening ขอแก้ไข from the header's "⋯"
-  // overflow menu (which sits outside every tab) used to force a tab switch
-  // to "ภาพรวม" via runOnTab('overview', …) before scrolling to the inline
-  // form — silently moving the viewer off whatever tab they were looking at.
-  // Now that the form is a modal, handleOpenRevise no longer touches the
-  // active tab at all. A test that only checks the form/modal appears cannot
-  // see this regression — it must assert the URL's ?tab= is unchanged.
+  // Opening ขอแก้ไข from the header's "⋯" menu (outside every tab) must not switch tabs: it is a
+  // modal, so handleOpenRevise doesn't touch the active tab. A test that only checks the modal
+  // appears can't see that regression; it must assert the URL's ?tab= is unchanged.
   it('opening ขอแก้ไข from the overflow menu does NOT change the active tab', async () => {
     api.tickets.get.mockResolvedValue({
       ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
@@ -1857,17 +1765,13 @@ describe('TicketDetailPage', () => {
     // …but the URL's ?tab= and the tab's aria-selected state are untouched.
     expect(screen.getByTestId('location-probe').textContent).toContain('tab=money');
     expect(moneyTab.getAttribute('aria-selected')).toBe('true');
-    // Wrong-way-round: the tab this used to force a switch TO is not the one
-    // now selected.
+    // Wrong-way-round: the tab this used to force a switch TO is not the one selected.
     expect(screen.getByRole('tab', { name: /^ดีล/ }).getAttribute('aria-selected')).not.toBe('true');
   });
 
-  // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): CREATE_PCR
-  // used to render as a "scroll to PricingRequestPanel" sticky button while
-  // that panel ALSO rendered its own "สร้างคำขอราคา" button — the same label,
-  // visible twice at once (the sticky bar never scrolls out of view). The
-  // sticky bar now opens PricingRequestPanel's create modal directly via its
-  // forwardRef, and the panel renders no button of its own.
+  // CREATE_PCR: the sticky bar opens PricingRequestPanel's create modal via its forwardRef, and the
+  // panel renders no "สร้างคำขอราคา" button of its own (the sticky bar never scrolls out of view, so
+  // two same-label buttons would show at once).
   describe('sticky header primary CTA — CREATE_PCR owns "สร้างคำขอราคา" alone', () => {
     it('renders exactly one "สร้างคำขอราคา" control (the sticky primary), and clicking it opens the PCR panel\'s own create modal', async () => {
       api.tickets.get.mockResolvedValue({
@@ -1884,14 +1788,12 @@ describe('TicketDetailPage', () => {
       const stickyButtons = await screen.findAllByRole('button', { name: /สร้างคำขอราคา/ });
       expect(stickyButtons).toHaveLength(1);
       expect(screen.queryByRole('dialog')).toBeNull();
-      // No leftover "ถึงคิวคุณ" banner text anywhere — the CTA button above
-      // stands alone now (see TicketDetailPage.jsx's bannerText comment).
+      // No leftover "ถึงคิวคุณ" banner text: the CTA button stands alone (see TicketDetailPage.jsx's
+      // bannerText comment).
       expect(screen.queryByText(/ถึงคิวคุณ/)).toBeNull();
-      // …and the bannerless bar keeps its MOBILE chrome. It is
-      // `mobile:fixed inset-x-0 bottom-0` over scrolling content, so losing
-      // the background/border there would leave an unreadable transparent bar
-      // — the one failure mode of shedding the desktop chrome, and invisible
-      // to every other assertion in this file.
+      // ...and the bannerless bar keeps its MOBILE chrome: it is `mobile:fixed inset-x-0 bottom-0`
+      // over scrolling content, so losing the background/border there would leave an unreadable
+      // transparent bar, which no other assertion here catches.
       const [actionBar] = screen.getAllByTestId('ticket-action-bar');
       expect(actionBar.className).toContain('mobile:bg-surface');
       expect(actionBar.className).toContain('mobile:border-t');
@@ -1907,11 +1809,11 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
-  // On ขั้น 1–2 the main button is เลื่อนไป: <next stage>. When the rep is ready (a follow-up date and an
-  // activity since the last move) it moves at once; when not, it opens the stage panel's form that
-  // collects both and then moves. It is the only เลื่อนไป button on the page body, and สร้างคำขอราคา
-  // is not offered anywhere, the สินค้าและราคา tab included.
+  // ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3. On ขั้น 1–2 the main
+  // button is เลื่อนไป: <next stage>. When the rep is ready (a follow-up date and an activity since
+  // the last move) it moves at once; when not, it opens the stage panel's form that collects both and
+  // then moves. It is the only เลื่อนไป button on the page body, and สร้างคำขอราคา is not offered
+  // anywhere, the สินค้าและราคา tab included.
   describe('ขั้น 1–2 — the main button is เลื่อนไป, and สร้างคำขอราคา is not offered', () => {
     const READY_ACTIVITIES = {
       items: [{
@@ -1994,13 +1896,9 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // The counterpart to the rule above, and the reason bannerText is not simply
-  // nulled whenever a CTA exists: the four `can.*`-gated primaries carry a
-  // DESCRIPTIVE sentence (NEXT_ACTION_STEPS) that their terse button label does
-  // not repeat. Dropping those lines would delete the precondition and the
-  // consequence from the page — and, since the ticket-workspace IA rebuild
-  // Slice B retired the context rail that used to carry this line as a
-  // fallback, there is no other surface left on the page to say it.
+  // The counterpart to the rule above, and why bannerText is not simply nulled whenever a CTA exists:
+  // the four `can.*`-gated primaries carry a DESCRIPTIVE sentence (NEXT_ACTION_STEPS) that their terse
+  // button label does not repeat, and no other surface on the page says it.
   describe('sticky header primary CTA — the can.* primaries KEEP their descriptive line (prefix-free)', () => {
     it('shows "ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย" next to the CEO\'s terse "ตรวจสอบและปิดงาน" button, with no ถึงคิวคุณ prefix', async () => {
       api.tickets.get.mockResolvedValue({
@@ -2023,9 +1921,8 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/ถึงคิวคุณ/)).toBeNull();
     });
 
-    // W4-10 (owner ruling 2026-10-30): the CEO's close is irreversible, so the click only opens a
-    // confirm; verifyClose runs once, on confirm. (The account's ticket-detail-confirm-close stays
-    // one click — deliberately not covered here.)
+    // The CEO's close is irreversible, so the click only opens a confirm; verifyClose runs once, on
+    // confirm. (The account's ticket-detail-confirm-close stays one click, not covered here.)
     describe('W4-10 CEO ตรวจสอบและปิดงาน asks first', () => {
       async function renderVerifyClose() {
         api.tickets.get.mockResolvedValue({
@@ -2069,19 +1966,13 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-detail IA rebuild Phase 1 clutter follow-up round 2 (FIX 2): the
-  // previous pass only de-duplicated "สร้างคำขอราคา" — an independent review
-  // caught that "ออกใบเสนอราคา" (DealQuotationPanel.jsx, salesActions.js's
-  // ISSUE_QUOTATION label) and "ยืนยันคำสั่งซื้อ" (CONFIRM_ORDER) were STILL
-  // rendering twice: once as the sticky bar's own scroll-to-DealQuotationPanel
-  // button, once as DealQuotationPanel's own button underneath — both visible
-  // at once since the sticky bar never scrolls away. Same "ref-opener, one
-  // copy on the page, and it actually performs the mutation" fix as CREATE_PCR.
+  // ISSUE_QUOTATION ("ออกใบเสนอราคา") and CONFIRM_ORDER ("ยืนยันคำสั่งซื้อ") each render ONCE: the
+  // sticky bar performs the mutation and DealQuotationPanel has no button of its own (both would be
+  // visible at once, since the sticky bar never scrolls away).
   //
-  // Owner ruling 2026-10-27 (specs D2/D3/E1): "เสนอใบราคา<party>" reads the deal's quotation list —
-  // a DRAFT already written is opened, one awaiting approval is a waiting line — refreshes the deal
-  // after writing, never pulls a rep who already left, and a refusal opens the request page (where
-  // both engines' controls are).
+  // "เสนอใบราคา<party>" reads the deal's quotation list: a DRAFT already written is opened, one
+  // awaiting approval is a waiting line; it refreshes the deal after writing, never pulls a rep who
+  // already left, and a refusal opens the request page (where both engines' controls are).
   describe('sticky header primary CTA — ISSUE_QUOTATION/CONFIRM_ORDER own their labels alone', () => {
     // The owner's request, priced and approved; `quotations` is the deal's quotation list
     // (DealQuotationDto rows). A POST here would mint quotation 9201.
@@ -2141,8 +2032,8 @@ describe('TicketDetailPage', () => {
       });
     });
 
-    // C-13: a hook-level onSuccess runs after the page has unmounted; the navigation must belong to
-    // the click (a per-call onSuccess), so it dies with the page.
+    // A hook-level onSuccess runs after the page has unmounted; the navigation must belong to the
+    // click (a per-call onSuccess), so it dies with the page.
     it('a เสนอใบราคา that finishes after the rep has left the deal does not pull them to the quotation', async () => {
       approvedOwnerRequest();
       let finishCreate;
@@ -2197,9 +2088,9 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
     });
 
-    // D3 + ruling 2026-10-27 (e): only a refusal (409) opens the request page; any other failure
-    // just reports. Review V12: the refusal is the way to the request page, not an error (it is
-    // asked again on every click — the server decides, nothing is remembered).
+    // Only a refusal (409) opens the request page; any other failure just reports. The refusal is
+    // the way to the request page, not an error: it is asked again on every click (the server
+    // decides, nothing is remembered).
     it.each([
       [409, 'คำขอราคานี้ยังใช้รูปแบบราคาเดิม (ก่อน CEO เลือกวิธีกรอกราคา) กรุณาสร้างใบเสนอราคาแบบเดิมจากหน้านี้', '/pricing-requests/501', 'info'],
       [500, 'ระบบขัดข้อง', '/tickets/701', 'error'],
@@ -2239,7 +2130,7 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(stickyButtons[0]);
 
-      // SK-02: irreversible (the deal can no longer go below ขั้น 10) -> a dialog first, nothing sent yet.
+      // Irreversible (the deal can no longer go below ขั้น 10), so a dialog first, nothing sent yet.
       const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
       expect(within(dialog).getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
       expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
@@ -2259,8 +2150,8 @@ describe('TicketDetailPage', () => {
       );
     });
 
-    // VW-04 (owner ruling 2026-10-30): the dialog names the quotation the panel SHOWS. A new-engine
-    // deal has no old-engine row, so it used to read "ใบเสนอราคา " + a blank.
+    // The dialog names the quotation the panel SHOWS. A new-engine deal has no old-engine row, so it
+    // must not read "ใบเสนอราคา " + a blank.
     describe('VW-04 the confirm-order dialog names the quotation the panel shows', () => {
       async function openConfirmOrderDialog({ oldEngineRows = [], depositPercent } = {}) {
         api.tickets.get.mockResolvedValue({
@@ -2300,7 +2191,7 @@ describe('TicketDetailPage', () => {
         expect(dialog.textContent).not.toMatch(/ใบเสนอราคา\s{2,}/);
       });
 
-      // W6-03: the tail follows the quotation's deposit %. 0 -> no deposit wording at all.
+      // The tail follows the quotation's deposit %. 0 -> no deposit wording at all.
       it('a quotation with no deposit (0%): the dialog says ไม่เก็บมัดจำ and never mentions ใบแจ้งรับมัดจำ', async () => {
         const dialog = await openConfirmOrderDialog({ depositPercent: 0 });
         expect(dialog.textContent).toContain('ไม่เก็บมัดจำ');
@@ -2323,13 +2214,12 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner ruling 2026-10-27 (PR #1168 made safe to ship): the rep picks the next party when the
-  // designer's or owner's quotation is SENT. The primary is ONE "เสนอราคา<next party>" — a menu when
-  // two parties remain (the later one reads "ข้ามไปเสนอราคา<party>"), a plain button for one — beside
-  // a line naming the sent quotation, with บันทึกผลใบเสนอราคา for it in the ⋯ menu while it is
-  // ISSUED. Picking a party opens the price-request form with ผู้รับ pre-filled. The parties come
-  // from the deal's served route (catalog.routes for its entryChannel). An ACCEPTED quotation is the
-  // order, whoever it went to: ยืนยันคำสั่งซื้อ, as on main.
+  // The rep picks the next party when the designer's or owner's quotation is SENT. The primary is ONE
+  // "เสนอราคา<next party>": a menu when two parties remain (the later one reads
+  // "ข้ามไปเสนอราคา<party>"), a plain button for one, beside a line naming the sent quotation, with
+  // บันทึกผลใบเสนอราคา for it in the ⋯ menu while it is ISSUED. Picking a party opens the price-request
+  // form with ผู้รับ pre-filled. The parties come from the deal's served route (catalog.routes for its
+  // entryChannel). An ACCEPTED quotation is the order, whoever it went to: ยืนยันคำสั่งซื้อ.
   describe('sticky header — once a designer/owner quotation is sent: เสนอราคา<next party> (owner ruling 2026-10-27)', () => {
     const sentRequest = (overrides = {}) => ({
       id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
@@ -2375,7 +2265,7 @@ describe('TicketDetailPage', () => {
     // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
-    // SK-03 (owner ruling 2026-10-29): the menu's trigger is the neutral เสนอราคา ▾, not the first party.
+    // The menu's trigger is the neutral เสนอราคา ▾, not the first party.
     it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
       deal();
       renderTicketDetailPage(salesOwnerUser);
@@ -2404,7 +2294,7 @@ describe('TicketDetailPage', () => {
       expect(dialog.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ').value).toBe('ผู้รับเหมา ข.');
     });
 
-    // At the owner stage the ⋯ also holds PR A's แก้ใบเสนอราคา (review V15: the pair was unpinned).
+    // At the owner stage the ⋯ also holds แก้ใบเสนอราคา.
     it('the ⋯ beside the route choice offers บันทึกผลใบเสนอราคา for the sent owner quotation (opening its request page) and แก้ใบเสนอราคา', async () => {
       deal({ requests: [sentRequest({ recipientType: 'OWNER' })], quotations: [requestQuotation({ recipientType: 'OWNER' })], stage: 'QUOTE_OWNER' });
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
@@ -2446,8 +2336,8 @@ describe('TicketDetailPage', () => {
       expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
     });
 
-    // H2 + ruling 2026-10-27 (b): an unknown route is never "every party is on it", and a sent
-    // designer/owner quotation is never prompted for its outcome — so nothing shows meanwhile.
+    // An unknown route is never "every party is on it", and a sent designer/owner quotation is never
+    // prompted for its outcome, so nothing shows meanwhile.
     it('no primary and no route line while the stage catalog is loading; the menu appears once the served route arrives', async () => {
       let serveCatalog;
       api.meta.dealStages.mockReturnValueOnce(new Promise((resolve) => { serveCatalog = resolve; }));
@@ -2457,7 +2347,7 @@ describe('TicketDetailPage', () => {
 
       expect(screen.queryByTestId('ticket-primary-action')).toBeNull();
       expect(screen.queryByText(/ใบเสนอราคาผู้ออกแบบส่งแล้ว/)).toBeNull();
-      // Ruling 2026-10-27 ("always in ⋯", review G2): the sent quotation's outcome stays one click away.
+      // The sent quotation's outcome stays one click away in the ⋯ menu.
       fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
       expect(await screen.findByRole('menuitem', { name: 'บันทึกผลใบเสนอราคา' })).not.toBeNull();
       fireEvent.keyDown(document, { key: 'Escape' });
@@ -2466,8 +2356,8 @@ describe('TicketDetailPage', () => {
       await primaryWithAction('quote_next_party');
     });
 
-    // D1: the quotation map holds the NEWEST PRICING_REQUEST-origin row per request — a newer DRAFT
-    // revision means the designer's quotation is being redone (ruling 2026-10-27: open that draft).
+    // The quotation map holds the NEWEST PRICING_REQUEST-origin row per request: a newer DRAFT
+    // revision means the designer's quotation is being redone (open that draft).
     it('a designer quotation being redone (a newer DRAFT revision exists): เสนอใบราคาผู้ออกแบบ opens that draft, with no new write', async () => {
       deal({
         quotations: [
@@ -2485,11 +2375,10 @@ describe('TicketDetailPage', () => {
       expect(api.dealQuotations.createFromPricingRequest).not.toHaveBeenCalled();
     });
 
-    // A5: the next party's request was saved as a private DRAFT (e.g. to attach files) — the one
-    // step left is sending it to import, from the items tab where that draft lives.
-    // Review V8: through the panel's ref, not a scroll jump (pulled back to the top until #1158).
-    // The second row: a draft the panel will not send (here, the deal is another rep's) says so
-    // instead of only switching tab (review of cacff6d7).
+    // The next party's request was saved as a private DRAFT (e.g. to attach files): the one step left
+    // is sending it to import, from the items tab where that draft lives, through the panel's ref (a
+    // scroll jump pulled the page back to the top). The second row: a draft the panel will not send
+    // (here, the deal is another rep's) says so instead of only switching tab.
     it.each([
       ['the rep\'s own draft is sent', 1, true],
       ['a draft the panel refuses says why it was not sent', 2, false],
@@ -2513,8 +2402,8 @@ describe('TicketDetailPage', () => {
       }
     });
 
-    // QA-11 (Ploy 2026-10-29): a customer-change revision leaves {parent SUPERSEDED, child DRAFT}. The
-    // primary sends that draft; it never opens a blank new-request form beside it (a duplicate).
+    // A customer-change revision leaves {parent SUPERSEDED, child DRAFT}. The primary sends that
+    // draft; it never opens a blank new-request form beside it (a duplicate).
     it('a revision draft as the deal\'s only open request: ส่งคำขอราคาถึงเจ้าของโครงการ sends it, and no new-request form opens', async () => {
       deal({
         requests: [
@@ -2534,8 +2423,8 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
-    // QA-07 (Ploy 2026-10-29): the deal's FIRST สร้างคำขอราคา pre-fills ผู้รับ with the first party on
-    // the deal's route. Sales may still pick another one.
+    // The deal's FIRST สร้างคำขอราคา pre-fills ผู้รับ with the first party on the deal's route. Sales
+    // may still pick another one.
     it.each([
       ['DESIGNER_LED', /ผู้ออกแบบ/, /เจ้าของโครงการ/],
       ['OWNER_DIRECT', /เจ้าของโครงการ/, /ผู้ออกแบบ/],
@@ -2565,8 +2454,7 @@ describe('TicketDetailPage', () => {
       expect(recipients.getByRole('radio', { name: /เจ้าของโครงการ/ }).getAttribute('aria-checked')).toBe('true');
     });
 
-    // Code review of #1195 (finding 4): the pre-fill follows the deal's channel, so it holds while the
-    // stage catalog itself is still loading.
+    // The pre-fill follows the deal's channel, so it holds while the stage catalog is still loading.
     it('first สร้างคำขอราคา on an OWNER_DIRECT deal pre-fills เจ้าของโครงการ while the stage catalog is still loading', async () => {
       api.meta.dealStages.mockReturnValueOnce(new Promise(() => {}));
       deal({ requests: [], quotations: [], entryChannel: 'OWNER_DIRECT', stage: 'SPEC_APPROVED' });
@@ -2578,8 +2466,8 @@ describe('TicketDetailPage', () => {
       expect(recipients.getByRole('radio', { name: /เจ้าของโครงการ/ }).getAttribute('aria-checked')).toBe('true');
     });
 
-    // Code review of #1195 (finding 1): an unread request list is not "no request" — a DRAFT may be
-    // waiting in it, so สร้างคำขอราคา is never offered until the list is read.
+    // An unread request list is not "no request": a DRAFT may be waiting in it, so สร้างคำขอราคา is
+    // never offered until the list is read.
     it.each([
       ['still loading', () => new Promise(() => {})],
       ['failed to load', () => Promise.reject(new Error('network'))],
@@ -2617,8 +2505,8 @@ describe('TicketDetailPage', () => {
     });
 
 
-    // Review V1 + V2: the owner's request approved after the designer accepted is not quoted, and
-    // ยืนยันคำสั่งซื้อ confirms the ACCEPTED request, not the newest one.
+    // The owner's request approved after the designer accepted is not quoted, and ยืนยันคำสั่งซื้อ
+    // confirms the ACCEPTED request, not the newest one.
     it('an accepted designer quotation, with the owner\'s request approved later: ยืนยันคำสั่งซื้อ is the primary (no เสนอราคา, no route line) and confirms the accepted request', async () => {
       deal({
         requests: [
@@ -2633,7 +2521,7 @@ describe('TicketDetailPage', () => {
       const primary = await primaryWithAction('confirm_order');
       expect(primary.getAttribute('aria-haspopup')).toBeNull();
       expect(actionBarOf(primary).textContent).not.toMatch(/เสนอ(ใบ)?ราคา(เจ้าของโครงการ|ผู้ซื้อ)/);
-      // SK-08: ถัดไป names the stage this main button leads to (ขั้น 10), not the next stage on the route.
+      // ถัดไป names the stage this main button leads to (ขั้น 10), not the next stage on the route.
       const nextLine = screen.getByTestId('deal-stage-next').textContent;
       expect(nextLine).toContain('10.');
       expect(nextLine).not.toContain('5.');
@@ -2645,8 +2533,8 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.pricingRequests.confirmOrder).toHaveBeenCalledWith(501, expect.anything()));
     });
 
-    // SK-08 leftover: while ยืนยันคำสั่งซื้อ is the primary, the ⋯ menu must not also offer เลื่อนไป ขั้น 9
-    // (the server still advertises ADVANCE_STAGE, so only the page can hide it).
+    // While ยืนยันคำสั่งซื้อ is the primary, the ⋯ menu must not also offer เลื่อนไป ขั้น 9 (the server
+    // still advertises ADVANCE_STAGE, so only the page can hide it).
     it('an accepted buyer quotation at ขั้น 8: primary is ยืนยันคำสั่งซื้อ and ⋯ offers no เลื่อนไป', async () => {
       deal({
         stage: 'QUOTE_BUYER',
@@ -2669,8 +2557,9 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/เลื่อนไป:/)).toBeNull();
     });
 
-    // SK-04: after ข้ามไปเสนอราคาผู้ซื้อ the buyer's request is open in import, so ถัดไป names ITS stage
-    // (ขั้น 8), not the next stage on the route (ขั้น 5). A dead request, or one not ahead, changes nothing.
+    // After ข้ามไปเสนอราคาผู้ซื้อ the buyer's request is open in import, so ถัดไป names ITS stage
+    // (ขั้น 8), not the next stage on the route (ขั้น 5). A dead request, or one not ahead, changes
+    // nothing.
     it.each([
       ['a live buyer request', 'IMPORT_REVIEWING', 'QUOTE_DESIGN_SIDE', '8.', '5.'],
       ['a CANCELLED buyer request', 'CANCELLED', 'QUOTE_DESIGN_SIDE', '5.', '8.'],
@@ -2739,11 +2628,11 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Deal-page discoverability fix: a PR sitting at QUOTATION_ISSUED used to fall through
-  // salesActions.js's cascade to follow-up/log-activity. The outcome controls (both engines) live on
-  // the pricing-request page, so the CTA opens it — it never records an outcome itself. Owner ruling
-  // 2026-10-27: this prompt is for the BUYER's issued quotation (the designer's/owner's sits in the ⋯
-  // menu beside the route choice); the deal's quotation list shows it ISSUED.
+  // A PR sitting at QUOTATION_ISSUED must not fall through salesActions.js's cascade to
+  // follow-up/log-activity. The outcome controls (both engines) live on the pricing-request page,
+  // so the CTA opens it; it never records an outcome itself. This prompt is for the BUYER's issued
+  // quotation (the designer's/owner's sits in the ⋯ menu beside the route choice); the deal's
+  // quotation list shows it ISSUED.
   describe('sticky header primary CTA — RECORD_QUOTATION_OUTCOME opens the pricing request', () => {
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
@@ -2779,24 +2668,17 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // P3 (review round 2): the blocker line ("รอชำระมัดจำ" / "รอชำระส่วนที่เหลือ")
-  // lost its `!isAccount` guard — account is the role whose OWN action
-  // (confirmDeposit/confirmFinalPayment, nextAccountAction) clears each wait,
-  // so it must never read as a blocker FOR them too. Uses a legacy
-  // (pre-dual-track, status: 'document_issued') ticket so nextAccountAction
-  // itself resolves to null (its own gates require status: 'quotation_issued')
-  // — isolating the blocker guard from FIX 1's resolver-first primary, which
-  // would otherwise mask the same bug by giving account a real primary action
-  // instead (see workState.test.js's own account/ORDER_RECEIVED case).
+  // The blocker line ("รอชำระมัดจำ" / "รอชำระส่วนที่เหลือ") must not show for account: account's OWN
+  // action (confirmDeposit/confirmFinalPayment, nextAccountAction) clears each wait, so it must
+  // never read as a blocker FOR them. Uses a legacy (status: 'document_issued') ticket so
+  // nextAccountAction resolves to null (its gates require status: 'quotation_issued'), isolating the
+  // blocker guard from the resolver-first primary, which would mask the same bug by giving account a
+  // real primary action (see workState.test.js's account/ORDER_RECEIVED case).
   //
-  // The "shows it to someone else" side originally used sales_manager, not ceo — ROLE_
-  // PERMISSIONS.canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`, so the OLD
-  // `isAccount` guard was ALSO true for ceo, which silently suppressed the blocker for them too
-  // (using ceo here would have exercised the exact same guard as the account case instead of a
-  // genuine "someone who isn't account" control) — this was itself the bug GLA-118 found: the
-  // page now uses `isMoneyRecorder` (role === 'account' exactly) for this guard, not `isAccount`,
-  // specifically so the CEO stops being silently lumped in with account. See the ceo-specific
-  // case below, added for that fix.
+  // The "shows it to someone else" side uses sales_manager, not ceo: ROLE_PERMISSIONS
+  // .canConfirmPayments (src/api/routes.js) is `['account', 'ceo']`, so an `isAccount` guard would
+  // also suppress it for ceo. The page uses `isMoneyRecorder` (role === 'account' exactly); see the
+  // ceo-specific case below.
   describe('blocker line respects !isMoneyRecorder (P3, tightened by GLA-118)', () => {
     function legacyDepositWaitingTicket() {
       return buildTicket({
@@ -2837,11 +2719,10 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
     });
 
-    // GLA-118 review fix: this is the case the old `!isAccount` guard got wrong — canConfirmPayments
-    // (and so the old `isAccount`) still includes ceo, but recording/confirming a payment is
-    // account-only now (PAYMENT_RECORD_ROLES/DEPOSIT_CONFIRM_ROLES have no CEO fallback), so the
-    // CEO no longer clears this wait and must see the same read-only "รอชำระมัดจำ" status a
-    // sales_manager viewer does, not silence.
+    // canConfirmPayments (and an `isAccount` guard) includes ceo, but recording/confirming a payment
+    // is account-only (PAYMENT_RECORD_ROLES/DEPOSIT_CONFIRM_ROLES have no CEO fallback), so the CEO
+    // does not clear this wait and must see the same read-only "รอชำระมัดจำ" status a sales_manager
+    // does, not silence.
     it('shows "รอชำระมัดจำ" to ceo too — the CEO can no longer confirm the deposit either', async () => {
       api.tickets.get.mockResolvedValue({ ticket: legacyDepositWaitingTicket() });
       api.tickets.actions.mockResolvedValue({
@@ -2857,8 +2738,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // QA-27 (owner ruling 2026-10-29): "รอ CEO ตรวจสอบปิดงาน" is a WAIT, so it stops once the CEO has
-  // verified (lifecycle COMPLETED) — closeConfirmedAt stays set forever, so it cannot be the only test.
+  // "รอ CEO ตรวจสอบปิดงาน" is a WAIT, so it stops once the CEO has verified (lifecycle COMPLETED);
+  // closeConfirmedAt stays set forever, so it cannot be the only test.
   describe('blocker line "รอ CEO ตรวจสอบปิดงาน" ends when the CEO has verified (QA-27)', () => {
     const salesManagerUser = { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' };
     function closeConfirmedDeal(lifecycle) {
@@ -2900,20 +2781,16 @@ describe('TicketDetailPage', () => {
     );
   });
 
-  // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
-  // Slice C2b moved DealTrackingPanel from the old "activity" tab into "ดีล"
-  // (the default tab — see ticketDetailTabs.js's own comment on that tab),
-  // so these no longer call openTab at all.
+  // Deal tracking: DealTrackingPanel is in "ดีล" (the default tab; see ticketDetailTabs.js), so
+  // these tests don't call openTab.
   describe('deal tracking panel', () => {
     it('shows the section and the SERVER win%; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({
-          // Issue #738: the panel now renders TicketSummaryDto.effectiveWinProbability off the
-          // payload instead of re-deriving it from a copied stage→% table, so the fixture must
-          // supply it. 37 is deliberately a value NO stage default holds — if this ever reads 40
-          // again the panel has gone back to deriving from QUOTE_DESIGN_SIDE, and if it reads 0
-          // the field stopped being read at all. Both are visible failures rather than a number
-          // that happens to agree.
+          // The panel renders TicketSummaryDto.effectiveWinProbability off the payload instead of
+          // re-deriving it from a copied stage→% table. 37 is a value NO stage default holds: if it
+          // reads 40 the panel is deriving from QUOTE_DESIGN_SIDE again, and if it reads 0 the field
+          // stopped being read.
           summary: { salesStage: 'QUOTE_DESIGN_SIDE', effectiveWinProbability: 37 },
         }),
       });
@@ -2924,11 +2801,9 @@ describe('TicketDetailPage', () => {
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
       expect(screen.getByText('37%')).not.toBeNull();
       expect(screen.queryByText('40%')).toBeNull();
-      // Ticket-detail IA rebuild Phase 1 (Phase-1 audit finding #3, "y=870"):
-      // the descriptive gate sentence moved out of this panel entirely — it
-      // now renders next to DealStagePanel's "เลื่อนไป" button instead (see
-      // the "stage-advance readiness sits next to the button" describe block
-      // below), so it must NOT reappear here alongside the compact badge.
+      // The descriptive gate sentence renders next to DealStagePanel's "เลื่อนไป" button (see the
+      // "stage-advance readiness sits next to the button" describe block), so it must NOT reappear
+      // here beside the compact badge.
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
     });
 
@@ -2949,11 +2824,7 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
     });
 
-    // The add-activity form lives in DealHistoryPanel, not DealTrackingPanel
-    // (ticket-detail IA rebuild Phase 2's merged กิจกรรม tab). Slice C2b split
-    // the two panels across DIFFERENT tabs (DealTrackingPanel -> "ดีล",
-    // DealHistoryPanel -> "ประวัติ"), so this form is only reachable from
-    // "ประวัติ" now.
+    // The add-activity form lives in DealHistoryPanel ("ประวัติ" tab), not DealTrackingPanel ("ดีล").
     it('submits a new activity via api.tickets.addActivity', async () => {
       renderTicketDetailPage(ceoUser);
       await openTab(/ประวัติ/);
@@ -2967,16 +2838,11 @@ describe('TicketDetailPage', () => {
       expect(api.tickets.addActivity.mock.calls[0][1]).toMatchObject({ kind: 'CALL', note: 'โทรคุยเรื่องราคา' });
     });
 
-    // FIX 1 (Opus review, owner decision — supersedes the old "no tab at
-    // all" assertion): account now GETS the "ประวัติ" tab (the audit trail +
-    // comment box are backed by requireViewAccess, which account passes),
-    // but DealTrackingPanel ("การติดตามดีล") and the activities fetch stay
-    // gated on requireDealOwnership — see ticketDetailTabs.js's own doc
-    // comment on the "history" tab and TicketDetailPage.jsx's doc comment on
-    // the "deal"/"history" TabPanels for the split. Slice C2b split these
-    // two assertions across two DIFFERENT tabs: DealTrackingPanel now lives
-    // on the default "ดีล" tab (still gated, still absent for account), and
-    // the audit trail lives on "ประวัติ".
+    // account GETS the "ประวัติ" tab (the audit trail + comment box are backed by requireViewAccess,
+    // which account passes), but DealTrackingPanel ("การติดตามดีล") and the activities fetch stay
+    // gated on requireDealOwnership (see ticketDetailTabs.js's doc comment on "history" and
+    // TicketDetailPage.jsx's on the "deal"/"history" TabPanels). The two assertions are on different
+    // tabs: DealTrackingPanel on the default "ดีล" (absent for account), the audit trail on "ประวัติ".
     it('account gets the "ประวัติ" tab (FIX 1) but not the deal-tracking panel or the activity feed fetch', async () => {
       renderTicketDetailPage(accountUser);
 
@@ -2994,35 +2860,22 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-detail IA rebuild Phase 1 (Phase-1 audit finding #3, "y=870"), then
-  // the Phase-1 clutter follow-up (FIX 2): the stage-advance readiness gate
-  // used to sit directly beside DealStagePanel's own "เลื่อนไป" button; that
-  // button then moved into the header "⋯" overflow menu (a second,
-  // filled-indigo "primary" competing with the sticky header's own CTA was
-  // exactly the clutter this follow-up exists to remove) — its gate had to
-  // travel with it, so it renders present-but-disabled-with-reason in the
-  // menu rather than just not being there.
+  // The stage-advance readiness gate renders present-but-disabled-with-reason in the header "⋯"
+  // overflow menu (where "เลื่อนไป" lives), rather than just not being there.
   describe('stage-advance readiness travels with เลื่อนไป into the overflow menu', () => {
-    // RE-BASED S4→S5 onto S5→S6 by the owner's 2026-10-16 quote-stage ruling
-    // (.design/quote-stage-gates D-2/D-4). This describe's whole subject is the
-    // readiness GATE travelling into the menu — it needs a next stage the menu
-    // item can exist for at all, and all three quote stages are now `auto`, so
-    // `canAdvance` drops the item entirely rather than rendering it disabled.
-    // QUOTE_OWNER (S5) → OWNER_SIGNOFF (S6) is the nearest pair that is still a
-    // manual sales move, so the gate behaviour is pinned unchanged.
-    //
-    // The ruling's own effect — that a quote stage never gets this item — is
-    // pinned by the sibling test at the end of this block, not folded in here:
-    // a fixture that tested both would stop telling us which one broke.
+    // Based on S5→S6: this describe's subject is the readiness GATE travelling into the menu, which
+    // needs a next stage the menu item can exist for, and all three quote stages are `auto`
+    // (`canAdvance` drops the item entirely rather than rendering it disabled). QUOTE_OWNER (S5) →
+    // OWNER_SIGNOFF (S6) is the nearest pair that is still a manual sales move. That a quote stage
+    // never gets this item is pinned by the sibling test at the end of this block, not folded in
+    // here: a fixture testing both wouldn't tell us which one broke.
     function actionsWithAdvance(overrides = {}) {
       return {
         currentState: {
           lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
         },
-        // The target must be `next.code` EXACTLY — hasAdvanceStageAction matches on it, so a stale
-        // target silently drops the item. (This fixture once said OWNER_SIGNOFF while the stage was
-        // QUOTE_DESIGN_SIDE, left over from before V143 inserted S5, and stayed green for as long as
-        // the frontend carried its own 14-stage list — the drift the catalog endpoint ends.)
+        // The target must be `next.code` EXACTLY: hasAdvanceStageAction matches on it, so a stale
+        // target silently drops the item.
         availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'OWNER_SIGNOFF' }],
         ...overrides,
       };
@@ -3073,15 +2926,11 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledWith(701, { stage: 'OWNER_SIGNOFF' }));
     });
 
-    // FIX 3 (P2, clutter-follow-up review round 2): the old inline "เลื่อนไป"
-    // button was `disabled={actionLoading}`, so a mutation already in flight
-    // blocked a second click. The overflow item's own `disabled` used to be
-    // `!readyToAdvance` ONLY — reopening "⋯" and clicking again while the
-    // first updateStage was still pending fired a second POST, the second
-    // one landing as a 409 "Deal is already in stage X" red toast
-    // (TicketService.java:1143). Proves the fix end-to-end: item disabled
-    // while in flight, AND the click is a genuine no-op (not just visually
-    // disabled) — exactly one request total.
+    // The old inline "เลื่อนไป" button was `disabled={actionLoading}`; the overflow item's `disabled`
+    // must carry that too: reopening "⋯" and clicking while the first updateStage is pending would
+    // fire a second POST, landing as a 409 "Deal is already in stage X" toast
+    // (TicketService.java:1143). Proves it end to end: the item is disabled while in flight, AND the
+    // click is a genuine no-op (exactly one request total).
     it('a second click on เลื่อนไป while the first updateStage is still in flight does not fire a duplicate request', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage: 'QUOTE_OWNER', nextFollowUpAt: '2026-07-15' } }),
@@ -3117,16 +2966,14 @@ describe('TicketDetailPage', () => {
     });
 
     /**
-     * THE RULE the re-base above exists because of (owner ruling 2026-10-16, D-2/D-4): a quote
-     * stage is reached by addressing a quotation to that party, so the ⋯ menu must not offer
-     * เลื่อนไป into one — not even disabled-with-a-reason, which is how a merely-ungated stage
-     * appears. The item is ABSENT, because "satisfy the readiness gate" is the wrong instruction:
-     * no follow-up date or logged activity gets this deal to ขั้น 5.
+     * A quote stage is reached by addressing a quotation to that party, so the ⋯ menu must not offer
+     * เลื่อนไป into one, not even disabled-with-a-reason (how a merely-ungated stage appears). The
+     * item is ABSENT, because "satisfy the readiness gate" is the wrong instruction: no follow-up
+     * date or logged activity gets this deal to ขั้น 5.
      *
      * Deliberately handed the server's own `ADVANCE_STAGE` for the quote stage, so the only thing
      * refusing is `canAdvance`'s `!next.auto`. That makes this the test that goes red if `auto` is
-     * dropped from the quote stages while the backend keeps answering 409 — the mock/real drift
-     * this whole slice is closing.
+     * dropped from the quote stages while the backend keeps answering 409.
      */
     it('does NOT list เลื่อนไป at all when the next stage is a quote stage', async () => {
       api.tickets.get.mockResolvedValue({
@@ -3202,8 +3049,7 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // "ราคาและใบเสนอราคา" (Phase 2 Slice S2 — docs/agent-handoffs/104): the
-  // customer-quotation tail pulled onto the deal page.
+  // "ราคาและใบเสนอราคา": the customer-quotation tail on the deal page.
   describe('deal quotation panel', () => {
     const approvedPr = {
       id: 501, requestCode: 'PCR-2026-0501', status: 'APPROVED_FOR_QUOTATION',
@@ -3219,9 +3065,8 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(salesOwnerUser);
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // DealQuotationPanel's home tab is still visible to sales (it also
-      // hosts the legacy quotation docs) — open it to prove the panel
-      // itself renders nothing, not merely that we never looked.
+      // DealQuotationPanel's home tab is still visible to sales (it also hosts the legacy quotation
+      // docs): open it to prove the panel itself renders nothing, not merely that we never looked.
       await openTab(/เอกสาร/);
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
@@ -3232,14 +3077,10 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // Slice D ("the เอกสาร document register") makes this tab
-      // role-unconditional (see ticketDetailTabs.js's own comment on this
-      // tab) so a non-assignee import rep now sees the TAB — but this
-      // pre-existing gap is otherwise unchanged (see ticketDetailTabs.js's
-      // "KNOWN GAP" doc comment): salesViewScope.js still hides BOTH
-      // dealQuotation and quotation from import outright, so neither
-      // DealQuotationPanel's own section nor a single quotation row inside
-      // DealDocumentRegister ever appears for it.
+      // "เอกสาร" is role-unconditional (see ticketDetailTabs.js), so a non-assignee import rep sees the
+      // TAB, but the "KNOWN GAP" in ticketDetailTabs.js is unchanged: salesViewScope.js hides BOTH
+      // dealQuotation and quotation from import outright, so neither DealQuotationPanel's section nor
+      // a quotation row inside DealDocumentRegister ever appears for it.
       expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
       await openTab(/เอกสาร/);
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
@@ -3247,8 +3088,8 @@ describe('TicketDetailPage', () => {
       expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     });
 
-    // Owner ruling 2026-10-27 (spec C1): an acceptance is the order whoever accepted, so the panel
-    // reads main's sentence again — never the retired "เลือกผู้รับรายถัดไป" pointer.
+    // An acceptance is the order whoever accepted, so the panel reads main's sentence again, never
+    // the retired "เลือกผู้รับรายถัดไป" pointer.
     it('an accepted designer request reads the ยืนยันคำสั่งซื้อ sentence, never a next-party pointer', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({
         items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ACCEPTED', recipientType: 'DESIGNER' }],
@@ -3262,7 +3103,7 @@ describe('TicketDetailPage', () => {
       expect(panel.queryByText(/ผู้รับรายถัดไป/)).toBeNull();
     });
 
-    // Ruling 2026-10-27 (d): the panel's own (old-engine) ลูกค้ายอมรับ asks the B2 question too.
+    // The panel's own (old-engine) ลูกค้ายอมรับ asks the B2 question too.
     it('the panel\'s ลูกค้ายอมรับ on a designer request asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" first; confirming records ACCEPTED', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({
         items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'DESIGNER' }],
@@ -3286,7 +3127,7 @@ describe('TicketDetailPage', () => {
       ));
     });
 
-    // QA-35: the buyer's (last party's) accept asks too — the panel used to post it on the first click.
+    // The buyer's (last party's) accept asks too: the panel must not post it on the first click.
     it('the panel\'s ลูกค้ายอมรับ on a buyer request asks first (no "ข้ามผู้รับรายถัดไป"); records ACCEPTED only after ยืนยัน', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({
         items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'BUYER' }],
@@ -3310,7 +3151,7 @@ describe('TicketDetailPage', () => {
       ));
     });
 
-    // F10: the accept confirm records the quotation that was clicked, even if a refetch swaps the shown one.
+    // The accept confirm records the quotation that was clicked, even if a refetch swaps the shown one.
     it('a refetch while the ลูกค้ายอมรับ dialog is open still records ACCEPTED on the clicked quotation', async () => {
       api.pricingRequests.listForTicket.mockResolvedValue({
         items: [{ ...approvedPr, ticketId: 701, status: 'QUOTATION_ISSUED', recipientType: 'BUYER' }],
@@ -3334,9 +3175,9 @@ describe('TicketDetailPage', () => {
       api.pricingRequests.recordCustomerQuotationOutcome.mockReset();
     });
 
-    // W3-06/QA-35 (owner rulings 2026-10-29/30): the panel's ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข ask first with a
-    // required reason (saved as customerNote), and each outcome keeps its own clientRequestId until it
-    // succeeds — the backend replays a reused key as the FIRST outcome's success.
+    // The panel's ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข ask first with a required reason (saved as customerNote),
+    // and each outcome keeps its own clientRequestId until it succeeds: the backend replays a reused
+    // key as the FIRST outcome's success.
     describe('W3-06: the panel\'s ปฏิเสธ / ขอแก้ไข confirm with a reason', () => {
       const record = () => api.pricingRequests.recordCustomerQuotationOutcome;
       const issuedQuotation = (id, number) => ({ id, number, docStatus: 'ISSUED', quotationRevisionNo: 1, grandTotal: 1000 });
@@ -3463,8 +3304,8 @@ describe('TicketDetailPage', () => {
     describe('with the request\'s new-engine quotation in the deal\'s quotation list', () => {
       afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
-      // The third row (review V6): only a live old-engine quotation takes the panel; a dead one does not
-      // hide the new-engine quotation.
+      // The third row: only a live old-engine quotation takes the panel; a dead one does not hide the
+      // new-engine quotation.
       it.each([
         ['APPROVED_FOR_QUOTATION', 'DRAFT', []],
         ['QUOTATION_ISSUED', 'ISSUED', []],
@@ -3492,9 +3333,9 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner ruling 2026-10-31: the "มัดจำ" 3-step card (นโยบายมัดจำ → ใบแจ้งยอดมัดจำ → รับชำระมัดจำ) is gone
-  // from the การเงิน tab. Its controls live elsewhere: the % comes from the quotation, the notice is
-  // created from the main button / เอกสาร tab, and account confirms the money on /finance/deals/:id.
+  // The "มัดจำ" 3-step card (นโยบายมัดจำ → ใบแจ้งยอดมัดจำ → รับชำระมัดจำ) is gone from the การเงิน tab.
+  // Its controls live elsewhere: the % comes from the quotation, the notice is created from the main
+  // button / เอกสาร tab, and account confirms the money on /finance/deals/:id.
   describe('การเงิน tab — no มัดจำ card', () => {
     it.each([['the owning rep', salesOwnerUser], ['account', accountUser]])('%s sees no มัดจำ card and none of its controls', async (_label, user) => {
       api.tickets.get.mockResolvedValue({
@@ -3531,8 +3372,7 @@ describe('TicketDetailPage', () => {
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
     });
 
-    // The sticky bar's account jump used to scroll to #deal-deposit-panel (inside the card above).
-    // Account is sent to the finance deal page (nextAccountAction's `to`) now, not to a missing element.
+    // Account is sent to the finance deal page (nextAccountAction's `to`), not to a missing element.
     it.each([
       ['confirmDeposit', { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }],
       ['chaseOverdue', { paymentStatus: 'DEPOSIT_NOTICE_ISSUED', overdue: true, amountOutstanding: 500 }],
@@ -3549,31 +3389,25 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — docs/agent-handoffs/105): the
-  // deal-level IR/shipping/goods-received/delivery chain + optional
-  // per-factory PO detail, replacing the "การส่งมอบสินค้า" panel and the
-  // docActions IR button/delivery/stock modals that used to live directly
-  // on this page.
+  // "การส่งมอบ / นำเข้า": the deal-level IR/shipping/goods-received/delivery chain + optional
+  // per-factory PO detail.
   describe('deal fulfilment panel', () => {
     const importUser = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
 
-    // DealFulfilmentPanel now lives inside the "จัดซื้อ-ส่งมอบ" tab.
+    // DealFulfilmentPanel lives in the "จัดซื้อ-ส่งมอบ" tab.
     async function fulfilmentSection() {
       await openTab(/จัดซื้อ-ส่งมอบ/);
       const heading = await screen.findByRole('heading', { level: 2, name: 'การส่งมอบ / นำเข้า' });
       return within(heading.closest('section'));
     }
 
-    // Regression: the /fulfilment workspace gave the four fulfilment codes a `to` of
-    // '/fulfilment', which made TicketDetailPage's sticky bar navigate away instead of scrolling
-    // to the panel already on this page — ejecting an import user from the deal they were standing
-    // on to go find it again in a list. The in-page target must win whenever the page has one.
+    // Regression: the /fulfilment workspace gave the four fulfilment codes a `to` of '/fulfilment',
+    // which made the sticky bar navigate away instead of scrolling to the panel already on this page.
+    // The in-page target must win whenever the page has one.
     it('import’s sticky CTA scrolls to the fulfilment panel instead of navigating to /fulfilment', async () => {
-      // Records WHICH element was scrolled, not merely that something was. A bare
-      // vi.fn() on the prototype passes with the fix reverted — other things on this page
-      // scroll on mount, so "scrollIntoView was called" is satisfied by them and the test
-      // proves nothing. Verified by mutation-check: with `&& !jumpId` removed, the id
-      // assertion below goes red and the bare-call assertion did not.
+      // Records WHICH element was scrolled, not merely that something was: a bare vi.fn() on the
+      // prototype passes with the fix reverted (other things scroll on mount). Mutation-checked: with
+      // `&& !jumpId` removed, the id assertion below goes red and the bare-call assertion didn't.
       const scrolledIds = [];
       const original = Element.prototype.scrollIntoView;
       Element.prototype.scrollIntoView = function scrollIntoViewSpy() {
@@ -3613,12 +3447,10 @@ describe('TicketDetailPage', () => {
       }
     });
 
-    // Same regression class, sales' side: RECORD_DELIVERY (stages 13-14 ส่งมอบสินค้า, owner ruling
-    // 2026-08-17) must ALSO land the sticky bar on this panel via an in-page scroll. Unlike
-    // nextImportAction/nextAccountAction, nextSalesAction never sets `.to` on the action object it
-    // returns, so the `to && to !== ... && !jumpId` branch above is never live for this key at all —
-    // this test is what proves IN_PAGE_JUMP_TARGET.record_delivery is the thing actually routing it,
-    // not an accidental fallthrough.
+    // Same regression class, sales' side: RECORD_DELIVERY (stages 13-14 ส่งมอบสินค้า) must ALSO land the
+    // sticky bar on this panel via an in-page scroll. nextSalesAction never sets `.to`, so the
+    // `to && to !== ... && !jumpId` branch is never live for this key; this test proves
+    // IN_PAGE_JUMP_TARGET.record_delivery is what routes it.
     it('sales’ sticky CTA scrolls to the fulfilment panel for a delivery-ready deal it owns', async () => {
       const scrolledIds = [];
       const original = Element.prototype.scrollIntoView;
@@ -3628,9 +3460,9 @@ describe('TicketDetailPage', () => {
       try {
         // Zero pricing requests (api.pricingRequests.listForTicket keeps its beforeEach default,
         // { items: [] }) + a non-null paymentStatus is the "priced outside the PCR chain" shape
-        // (salesActions.js bucket 1's own guard) — the same shape demoData.js tickets 13/14 already
-        // have, and the same shape salesActions.test.js / workState.test.js pin at the unit level.
-        // Ordering ruling 2026-10-22: the remaining invoice wins over บันทึกส่งมอบ until issued — so seed it issued.
+        // (salesActions.js bucket 1's guard), like demoData.js tickets 13/14 and the
+        // salesActions.test.js / workState.test.js unit pins. The remaining invoice wins over
+        // บันทึกส่งมอบ until issued, so seed it issued.
         api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
         api.tickets.get.mockResolvedValue({
           ticket: buildTicket({
@@ -3656,7 +3488,7 @@ describe('TicketDetailPage', () => {
       }
     });
 
-    // ── ใบขอซื้อ (F-SM-001) download block ──────────────────────────────────────────────────
+    // ── ใบขอซื้อ (F-SM-001) download block ──────────────────────────────────────────────
     describe('the ใบขอซื้อ block', () => {
       it('offers one form per brand on the deal', async () => {
         api.importRequests.brands.mockResolvedValue({ brands: ['Padana', 'LEA'] });
@@ -3711,8 +3543,8 @@ describe('TicketDetailPage', () => {
       });
     });
 
-    // W3-04 (owner ruling 2026-10-29): the one-click IR is gone — import is offered no ออกคำขอนำเข้า (IR)
-    // button even when a stale server still advertises ISSUE_IMPORT_REQUEST.
+    // The one-click IR is gone: import is offered no ออกคำขอนำเข้า (IR) button even when a stale
+    // server still advertises ISSUE_IMPORT_REQUEST.
     it('import is offered no one-click Import Request button', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({ summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID' } }),
@@ -3734,27 +3566,17 @@ describe('TicketDetailPage', () => {
       });
       api.tickets.actions.mockResolvedValueOnce({
         currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'SHIPPING', status: 'quotation_issued' },
-        // A deliberately unrealistic payload (mirrors the "retired verbs" test
-        // above) proving the role gate, not just the absence of the action.
+        // A deliberately unrealistic payload (mirrors the "retired verbs" test above) proving the
+        // role gate, not just the absence of the action.
         //
-        // RESERVE_STOCK is deliberately NOT in this list any more. Issue #732:
-        // that action's local role check was removed on purpose, because
-        // TicketService.canDeclareStockCoverage grants it to the deal owner as
-        // well as to import/ceo, and actions() advertises it off that same
-        // predicate — so ANDing it with a frontend role set threw away the
-        // server's answer and hid the button from the one role PR #706 built
-        // it for. Feeding account an action the real service cannot produce for
-        // it would now assert a gate that intentionally does not exist. The
-        // realistic case — account is offered nothing, so account sees nothing
-        // — is asserted below instead.
-        // RECORD_PARTIAL_DELIVERY / COMPLETE_DELIVERY left this list for the SAME reason
-        // RESERVE_STOCK did, one ruling later: stages 13-14 (ส่งมอบสินค้า) are Sales's as of
-        // 2026-08-17, TicketService.canWriteDelivery grants them to the deal owner as well as
-        // import/ceo, and actions() advertises both off that predicate. Their local `isFulfilment`
-        // check is therefore gone, so feeding account two actions the real service cannot produce
-        // for it would assert a gate that intentionally no longer exists. The realistic case —
-        // account is offered nothing, so account sees nothing — is what the assertions below check,
-        // and it is still real evidence: the panel renders those buttons purely from hasAction().
+        // RESERVE_STOCK, RECORD_PARTIAL_DELIVERY and COMPLETE_DELIVERY are NOT in this list: their
+        // local role checks were removed on purpose, because TicketService.canDeclareStockCoverage /
+        // canWriteDelivery grant them to the deal owner as well as import/ceo, and actions()
+        // advertises them off that same predicate. ANDing a frontend role set would throw away the
+        // server's answer, so feeding account actions the real service can't produce for it would
+        // assert a gate that intentionally doesn't exist. The realistic case (account is offered
+        // nothing, so sees nothing) is asserted below; the panel renders those buttons purely from
+        // hasAction().
         availableActions: [
           { action: 'ISSUE_IMPORT_REQUEST', kind: 'fulfillment', label: 'ออกคำขอนำเข้า' },
           { action: 'SHIPPING', kind: 'fulfillment', label: 'สินค้าเดินทาง' },
@@ -3770,10 +3592,10 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
     });
 
-    // ── Walk 4 (owner ruling 2026-10-29): there is no reserve-from-stock feature ─────────
+    // ── There is no reserve-from-stock feature ─────────
     //
     // A stock line ends when the CEO confirms the price and then waits for delivery; nobody reserves
-    // anything. The จองสินค้าจากสต็อก control is gone for every role - even if an older server still
+    // anything. The จองสินค้าจากสต็อก control is gone for every role, even if an older server still
     // advertises RESERVE_STOCK to the deal owner (the endpoint stays for fixtures, the UI does not).
     it('never shows จองสินค้าจากสต็อก - not even to the sales deal owner when the server still advertises RESERVE_STOCK', async () => {
       api.tickets.get.mockResolvedValueOnce({
@@ -3790,16 +3612,15 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'จองสินค้าจากสต็อก' })).toBeNull();
     });
 
-    // ── Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17 ─────────────
+    // ── Stages 13-14 (ส่งมอบสินค้า) belong to Sales ─────────────
     //
-    // Same shape as the (since removed) RESERVE_STOCK pair, one ruling later. TicketService.canWriteDelivery
-    // is FULFILMENT_ROLES ∪ (sales ∧ deal owner) and actions() advertises
-    // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off it, so the panel's own `isFulfilment` check on
-    // those two is gone and the server's answer stands.
+    // TicketService.canWriteDelivery is FULFILMENT_ROLES ∪ (sales ∧ deal owner) and actions()
+    // advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off it, so the panel has no local
+    // `isFulfilment` check on those two and the server's answer stands.
     //
     // ⚠️ RENDERING assertions over a mocked `api`: they pin that the frontend honours the server's
     // answer, and say NOTHING about who the real service grants. That claim is
-    // DeliveryAuthzIntegrationTest's, against real Postgres — see CLAUDE.md.
+    // DeliveryAuthzIntegrationTest's, against real Postgres (see CLAUDE.md).
     it('shows the delivery buttons to the sales deal owner when the server advertises them', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({ summary: { status: 'quotation_issued', salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 } }),
@@ -3836,13 +3657,11 @@ describe('TicketDetailPage', () => {
       expect(section.queryByRole('button', { name: 'ส่งมอบครบ' })).toBeNull();
     });
 
-    // ── Issue #730: a from-stock deal must not claim import milestones ────────
+    // ── A from-stock deal must not claim import milestones ────────
     //
-    // SubstepChips walked a FLAT list and marked every entry before the current
-    // one done. FROM_STOCK sat at index 4, after the whole import sequence, so a
-    // from-stock deal rendered four milestones it never performed — and, per
-    // issueImportRequest's own guard (fulfillmentStatus must be null), never
-    // could have.
+    // SubstepChips once walked a FLAT list and marked every entry before the current one done.
+    // FROM_STOCK sat at index 4, after the whole import sequence, so a from-stock deal rendered four
+    // milestones it never performed (and, per issueImportRequest's guard, never could have).
     it('renders no import milestones on a deal fulfilled FROM_STOCK', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({
@@ -3866,8 +3685,7 @@ describe('TicketDetailPage', () => {
       }
     });
 
-    // The other half: the import journey must still render in full for a deal
-    // that is actually on it — the fix must not have narrowed both paths.
+    // The other half: the import journey must still render in full for a deal that is actually on it.
     it('still renders the full import sequence on a deal that issued an import request', async () => {
       api.tickets.get.mockResolvedValueOnce({
         ticket: buildTicket({
@@ -3891,15 +3709,11 @@ describe('TicketDetailPage', () => {
 
   });
 
-  // Slice A "chip diet": DealStateHeader's stat-chip set is now role-aware
-  // (see DealStateHeader.jsx's own CAN_VIEW_PRICING_REQUESTS_ROLES doc
-  // comment for the full table + reasoning). ขั้นตอนดีล and การนำเข้า are
-  // unconditional for every role that reaches this page; คำขอราคา, การชำระเงิน,
-  // and มูลค่าดีล vary. Assertions are scoped to the header
-  // (`deal-state-header`) specifically — some of these labels have similar
-  // but distinct Thai copy elsewhere on the page (the "การเงิน" tab, the money
-  // panel's own "การชำระเงิน" <h2>), so an unscoped query would be a weaker
-  // assertion, not a stronger one.
+  // DealStateHeader's stat-chip set is role-aware (see DealStateHeader.jsx's
+  // CAN_VIEW_PRICING_REQUESTS_ROLES doc comment). ขั้นตอนดีล and การนำเข้า are unconditional for every
+  // role that reaches this page; คำขอราคา, การชำระเงิน, and มูลค่าดีล vary. Assertions are scoped to the
+  // header (`deal-state-header`): some labels have similar Thai copy elsewhere (the "การเงิน" tab, the
+  // money panel's "การชำระเงิน" <h2>), so an unscoped query would be weaker.
   describe('DealStateHeader chip visibility per role (Slice A "chip diet")', () => {
     it('sales, sales_manager, and ceo all get every one of the 5 header chips', async () => {
       for (const user of [salesOwnerUser, { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }, ceoUser]) {
@@ -3912,11 +3726,9 @@ describe('TicketDetailPage', () => {
       }
     });
 
-    // Correctness fix, not decluttering (see DealStateHeader.jsx's own doc
-    // comment): TicketDetailPage's canViewPricingRequests excludes `account`,
-    // so `pricingRequests` is hard-coded to `[]` for that role regardless of
-    // whether requests actually exist on the deal — showing the chip would
-    // have rendered "ยังไม่มี" (none yet) even when requests are live.
+    // Correctness, not decluttering (see DealStateHeader.jsx's doc comment): canViewPricingRequests
+    // excludes `account`, so `pricingRequests` is hard-coded to `[]` for that role whether or not
+    // requests exist, and the chip would read "ยังไม่มี" even when requests are live.
     it('account never gets the "คำขอราคา" chip (wrong-way-round: it cannot see this even though it keeps การชำระเงิน/มูลค่าดีล)', async () => {
       renderTicketDetailPage(accountUser);
       const header = await screen.findByTestId('deal-state-header');
@@ -3927,10 +3739,8 @@ describe('TicketDetailPage', () => {
       expect(within(header).getByText('มูลค่าดีล')).not.toBeNull();
     });
 
-    // Reduces what import is SHOWN here — NOT a security fix (see
-    // DealStateHeader.jsx's own doc comment): TicketService.projectForRole
-    // still sends summary.amountPayable to import over the wire regardless of
-    // this chip.
+    // Reduces what import is SHOWN here, NOT a security fix (see DealStateHeader.jsx's doc comment):
+    // TicketService.projectForRole still sends summary.amountPayable to import over the wire.
     it('import never gets "การชำระเงิน" or "มูลค่าดีล" (wrong-way-round: it cannot see either, even though it keeps ขั้นตอนดีล/คำขอราคา/การนำเข้า)', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
       const header = await screen.findByTestId('deal-state-header');
@@ -3942,8 +3752,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // QA-22: the header's การนำเข้า chip follows the per-factory IR steps, so the page itself reads the stored
-  // IRs (not only the fulfilment tab) for every role the backend lets read them — and passes them down.
+  // The header's การนำเข้า chip follows the per-factory IR steps, so the page reads the stored IRs
+  // (not only the fulfilment tab) for every role the backend lets read them, and passes them down.
   describe('การนำเข้า header chip follows the stored IRs (QA-22)', () => {
     function dealWithTwoFactories() {
       api.tickets.get.mockResolvedValue({
@@ -3986,18 +3796,13 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-detail IA rebuild Phase 2 built role-projected tab VISIBILITY;
-  // Slice C2b regrouped the seven tabs into six (ticketDetailTabs.js has its
-  // own unit tests for the pure function — these prove the page actually
-  // wires it in, per-role, end to end).
+  // Role-projected tab VISIBILITY (ticketDetailTabs.js has its own unit tests for the pure function;
+  // these prove the page wires it in, per role, end to end).
   describe('tab visibility per role', () => {
-    // Slice D ("the เอกสาร document register") makes "เอกสาร" role-
-    // unconditional, same shape as "ประวัติ" — import now sees the TAB (it
-    // may reach an attachments roll-up once it is this deal's assignee), but
-    // the KNOWN GAP this file's own doc comment still documents is
-    // unchanged: salesViewScope.js hides both dealQuotation and quotation
-    // from import, so it reaches zero quotation rows inside that tab. See
-    // DealDocumentRegister.test.jsx for that content-level proof.
+    // "เอกสาร" is role-unconditional, like "ประวัติ": import sees the TAB (it may reach an attachments
+    // roll-up once it is this deal's assignee), but the KNOWN GAP in this file's doc comment is
+    // unchanged: salesViewScope.js hides both dealQuotation and quotation from import, so it reaches
+    // zero quotation rows inside that tab (see DealDocumentRegister.test.jsx).
     it('import never gets "การเงิน", but now gets "เอกสาร" too (Slice D) — keeps "สินค้าและราคา", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
@@ -4010,15 +3815,11 @@ describe('TicketDetailPage', () => {
       expect(screen.getByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
     });
 
-    // Slice C2b: PricingRequestPanel's whole-tab gate is gone — it merged
-    // into "สินค้าและราคา" (unconditionally visible) as an inner condition,
-    // so account keeps this tab too now (see the content-level test in the
-    // "role -> reachable-content projection" describe block below for proof
-    // it still cannot reach the panel inside it). Slice D additionally
-    // widens "เอกสาร" itself to account — the intended, owner-authorised
-    // change (account confirms money against the deposit-notice/attachment
-    // rows the register now lists) — even though it still cannot reach a
-    // single quotation row inside it (quotation_accountCannotListCustomerQuotations).
+    // PricingRequestPanel is an inner condition inside the unconditionally-visible "สินค้าและราคา", so
+    // account keeps this tab (the content-level test in the "role -> reachable-content projection"
+    // describe proves it still cannot reach the panel inside it). "เอกสาร" is widened to account (it
+    // confirms money against the deposit-notice/attachment rows the register lists) though it can't
+    // reach a quotation row inside it (quotation_accountCannotListCustomerQuotations).
     it('account now gets "เอกสาร" too (Slice D) — keeps "สินค้าและราคา", "การเงิน", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
       renderTicketDetailPage(accountUser);
 
@@ -4043,13 +3844,10 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Slice C2b ("the 7->6 tab restructure"): every gate that used to decide a
-  // whole TAB's existence now decides either the same tab (money/fulfilment/
-  // documents, unchanged) or an INNER render condition inside an
-  // unconditionally-visible tab (pricing-request panel inside "สินค้าและราคา",
-  // attachments panel inside "ประวัติ") — never a widened or narrowed
-  // predicate. These prove the set of *content* each role can reach is
-  // unchanged in EFFECT, even though the tab count changed from 7 to 6.
+  // Every gate that used to decide a whole TAB's existence decides either the same tab
+  // (money/fulfilment/documents) or an INNER render condition inside an unconditionally-visible tab
+  // (pricing-request panel inside "สินค้าและราคา", attachments panel inside "ประวัติ"). These prove the
+  // set of *content* each role can reach.
   describe('role -> reachable-content projection is unchanged by the 7->6 tab restructure', () => {
     it('account still cannot reach pricing-request content (formerly its own "ราคา" tab, now an inner condition inside "สินค้าและราคา")', async () => {
       renderTicketDetailPage(accountUser);
@@ -4058,10 +3856,8 @@ describe('TicketDetailPage', () => {
       expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
     });
 
-    // Slice D: account now reaches the "เอกสาร" TAB (see "tab visibility per
-    // role" above) but this is the content-level proof it still cannot
-    // reach a single quotation ROW inside it — quotation_accountCannot
-    // ListCustomerQuotations, unchanged.
+    // account reaches the "เอกสาร" TAB but still cannot reach a single quotation ROW inside it
+    // (quotation_accountCannotListCustomerQuotations).
     it('account reaches "เอกสาร" but still zero quotation rows inside DealDocumentRegister', async () => {
       renderTicketDetailPage(accountUser);
       await openTab(/เอกสาร/);
@@ -4079,26 +3875,20 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Issue #389's document-read gate (createdById/assignedToId participant OR
-  // ROLE_PERMISSIONS.canViewTicketDocuments) is unchanged by Slice C2b — only
-  // WHERE it lives changed: it used to decide the old "documents" (attachments)
-  // TAB's existence; it now decides DealAttachmentsPanel's presence as an
-  // inner render condition inside "ประวัติ" (an unconditionally-visible tab —
-  // see ticketDetailTabs.js's own comment on that tab). "ประวัติ" itself is
-  // reachable regardless; only the panel comes and goes.
+  // The document-read gate (createdById/assignedToId participant OR
+  // ROLE_PERMISSIONS.canViewTicketDocuments) decides DealAttachmentsPanel's presence as an inner
+  // render condition inside "ประวัติ" (reachable regardless; see ticketDetailTabs.js); only the panel
+  // comes and goes.
   describe('attachments panel inside "ประวัติ" follows the document-read gate, not the deal-read gate', () => {
-    // ticketDetailTabs.js's own role-level predicate for "ประวัติ" is
-    // deliberately coarse (`() => true`, same as "ดีล"/"สินค้าและราคา") because
-    // role+sections alone cannot express the identity half of the document
-    // gate — a deal's participants reach its documents regardless of role.
-    // TicketDetailPage.jsx applies `canViewDocumentsTab` on top, as an inner
-    // condition around DealAttachmentsPanel specifically.
+    // ticketDetailTabs.js's role-level predicate for "ประวัติ" is coarse (`() => true`) because role
+    // + sections can't express the identity half of the document gate (a deal's participants reach
+    // its documents regardless of role); TicketDetailPage.jsx applies `canViewDocumentsTab` on top,
+    // around DealAttachmentsPanel.
     //
-    // Issue #389 rewrote the ROLE half: reading a deal's documents is now the same question as
-    // reading the deal (TicketAccessPolicy.canViewDocuments), so `account` and `import` DO see
-    // the panel — account is the role asked to confirm deposit/final-payment receipts against
-    // these very files, and hiding it would have left the backend fix invisible. A `sales`
-    // rep on someone else's deal is still refused: that one 403s for real.
+    // Reading a deal's documents is the same question as reading the deal
+    // (TicketAccessPolicy.canViewDocuments), so `account` and `import` DO see the panel: account
+    // confirms deposit/final-payment receipts against these files, and hiding it would hide the
+    // backend fix. A `sales` rep on someone else's deal is still refused: that one 403s for real.
     it('the panel follows canViewDocumentsTab; the "ประวัติ" tab itself never disappears', async () => {
       // Presence of the panel's own heading is the READ signal — it renders
       // for all four roles below regardless of `canManageDocuments` (account
@@ -4114,10 +3904,9 @@ describe('TicketDetailPage', () => {
         unmount();
       }
 
-      // A sales rep who is neither this deal's creator (buildTicket()'s default createdById is
-      // 1, i.e. salesOwnerUser) nor its assignee: refused, exactly as the backend refuses them.
-      // Wrong-way-round: "ประวัติ" is still reachable (its own gate is
-      // `() => true`) — only the attachments panel inside it vanishes.
+      // A sales rep who is neither this deal's creator (buildTicket()'s default createdById is 1, i.e.
+      // salesOwnerUser) nor its assignee: refused, as the backend refuses them. Wrong-way-round:
+      // "ประวัติ" is still reachable (its gate is `() => true`); only the attachments panel vanishes.
       const otherSales = { id: 42, employeeId: 42, name: 'พนักงานขายอื่น', role: 'sales' };
       const { container: otherContainer, unmount: unmountOther } = renderTicketDetailPage(otherSales);
       expect(await screen.findByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
@@ -4127,10 +3916,9 @@ describe('TicketDetailPage', () => {
       expect(otherContainer.querySelector('#ticket-attachment-file')).toBeNull();
       unmountOther();
 
-      // Presentation half of THE IMPORT PIN (#389 review). import reads the deal — it renders
-      // this page — and is still refused its documents, because AttachType spans
-      // SIGNED_QUOTATION/INVOICE, i.e. the approved customer price that salesViewScope already
-      // hides from import. The backend pins are
+      // Presentation half of THE IMPORT PIN. import reads the deal and is still refused its
+      // documents, because AttachType spans SIGNED_QUOTATION/INVOICE, i.e. the approved customer
+      // price that salesViewScope hides from import. Backend pins:
       // TicketAccessPolicyTest.importIsRefusedDocumentsDespiteBeingAViewerRole and
       // AttachmentTicketAccessIntegrationTest.importIsRefusedDocumentsOnADealItHasNotPickedUp.
       const nonAssigneeImport = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
@@ -4154,10 +3942,10 @@ describe('TicketDetailPage', () => {
       expect(assigneeSalesContainer.querySelector('#ticket-attachment-file')).not.toBeNull();
     });
 
-    // #389: reading a document and writing one are two different questions. account may open
-    // every deal document but may NOT upload — the closing tax invoice keeps exactly one entry
-    // point (CommissionService.createFromDeal), and a second upload path would satisfy the close
-    // gate's invoiceOnFile check while the rep silently loses their commission.
+    // Reading a document and writing one are different questions: account may open every deal document
+    // but may NOT upload. The closing tax invoice has exactly one entry point
+    // (CommissionService.createFromDeal); a second upload path would satisfy the close gate's
+    // invoiceOnFile check while the rep silently loses their commission.
     it('offers NO upload control to account, which may read documents but not write them', async () => {
       const { container, unmount } = renderTicketDetailPage(accountUser);
       fireEvent.click(await screen.findByRole('tab', { name: /ประวัติ/ }));
@@ -4172,20 +3960,17 @@ describe('TicketDetailPage', () => {
     });
 
     /**
-     * Anti-regression guard, not a coverage box-tick. The "แนบใบกำกับภาษี" control that
-     * used to live in this panel was gated `isAccount` while AttachmentController's gate
-     * granted only participants OR {hr, sales_manager, ceo} — so it 403'd for real, and only
-     * looked functional because mockApi.js had no authz on attachments at all.
+     * Anti-regression guard. The "แนบใบกำกับภาษี" control that used to live in this panel was gated
+     * `isAccount` while AttachmentController's gate grants only participants OR {hr, sales_manager,
+     * ceo}, so it 403'd for real and looked functional only because mockApi.js had no authz on
+     * attachments. Account now READS every deal document (hr reads none) but the WRITE side stays
+     * narrow (TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo, never
+     * account).
      *
-     * Issue #389 rebuilt that gate (account now READS every deal document, hr reads none) but
-     * kept the WRITE side narrow — TicketAccessPolicy.canManageDocuments is participant OR
-     * sales_manager/ceo, never account — for exactly the reason below.
-     *
-     * It was removed rather than re-gated (2026-07-30 owner decision): the closing tax
-     * invoice must come from CommissionService.createFromDeal, which writes the INVOICE
-     * attachment AND the deal owner's commission together. A second control here would
-     * satisfy the close gate's invoiceOnFile while silently skipping the commission.
-     * If this test goes red, someone has reintroduced that path.
+     * The control was removed rather than re-gated: the closing tax invoice must come from
+     * CommissionService.createFromDeal, which writes the INVOICE attachment AND the deal owner's
+     * commission together. A second control would satisfy the close gate's invoiceOnFile while
+     * skipping the commission. If this test goes red, someone reintroduced that path.
      */
     it('offers NO ใบกำกับภาษี upload control in "ประวัติ" — the invoice comes from createFromDeal', async () => {
       const { container } = renderTicketDetailPage(ceoUser);
@@ -4199,20 +3984,16 @@ describe('TicketDetailPage', () => {
     });
 
     /**
-     * Regression guard for a bug that shipped on main: `uploadAttachmentMutation`'s
-     * onSuccess called `queryKeys.ticket(ticketId)`, which does not exist —
-     * queryKeys.js defines ticketDetail/ticketActions/ticketAttachments/… but never a
-     * bare `ticket`. It was the THIRD statement, so the attachments and actions
-     * invalidations above it had already run and the upload looked like it worked,
-     * then `TypeError: queryKeys.ticket is not a function` aborted the handler before
-     * showToast. react-query does not route an onSuccess throw to onError, and
-     * handleUploadAttachment's own `catch {}` swallowed the rejected mutateAsync — so
-     * a SUCCESSFUL upload told the user nothing at all.
+     * Regression guard: `uploadAttachmentMutation`'s onSuccess once called `queryKeys.ticket(ticketId)`,
+     * which does not exist (queryKeys.js defines ticketDetail/ticketActions/ticketAttachments/…).
+     * It was the THIRD statement, so the invalidations above it ran and the upload looked fine, then
+     * `TypeError: queryKeys.ticket is not a function` aborted the handler before showToast.
+     * react-query does not route an onSuccess throw to onError and handleUploadAttachment's `catch {}`
+     * swallowed the rejection, so a SUCCESSFUL upload told the user nothing.
      *
-     * Both assertions matter and neither alone is sufficient: the toast covers the
-     * silence, and the detail refetch covers the real damage — ticket.summary is what
-     * drives the invoiceOnFile close gate, so without it ฝ่ายบัญชี's close confirmation
-     * stays stale until the user navigates away and back.
+     * Both assertions matter: the toast covers the silence, and the detail refetch covers the real
+     * damage (ticket.summary drives the invoiceOnFile close gate, so ฝ่ายบัญชี's close confirmation
+     * would stay stale).
      */
     it('reports back after an attachment upload, and refetches the ticket detail', async () => {
       const showToast = vi.fn();
@@ -4250,11 +4031,9 @@ describe('TicketDetailPage', () => {
     });
 
     it('falls back to ดีล when ?tab= names a tab this role cannot see', async () => {
-      // Slice D widened "documents" to role-unconditional (account can see it
-      // now — see ticketDetailTabs.js), so this case moves to "money": import
-      // still cannot see it (ledger_importCannotReadThePaymentLedger /
-      // depositNotice_import...Refused) — resolveTicketDetailTab must fall
-      // back rather than render nothing/crash.
+      // "documents" is role-unconditional (account can see it), so this case uses "money": import
+      // still cannot see it (ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused),
+      // and resolveTicketDetailTab must fall back rather than render nothing/crash.
       renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       const dealTab = await screen.findByRole('tab', { name: /^ดีล/ });
@@ -4262,16 +4041,11 @@ describe('TicketDetailPage', () => {
       expect(await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ })).not.toBeNull();
     });
 
-    // Slice C2b retired every per-instance TAB-level gate (the old "documents"
-    // (attachments) tab's `canViewDocumentsTab` filter, formerly proven by a
-    // test at this exact spot) — DealAttachmentsPanel is now an inner render
-    // condition inside "ประวัติ", an unconditionally-visible tab with no
-    // tab-level analogue left to fall back FROM. This proves the replacement
-    // invariant: a per-instance-excluded viewer's `?tab=history` deep link
-    // resolves normally (no fallback at all — the tab's own gate really is
-    // `() => true`), and only the attachments panel inside it is missing —
-    // see the "attachments panel inside ประวัติ" describe block above for the
-    // same predicate proven without the URL-driven entry point.
+    // There is no per-instance TAB-level gate: DealAttachmentsPanel is an inner render condition
+    // inside "ประวัติ" (an unconditionally-visible tab). A per-instance-excluded viewer's
+    // `?tab=history` deep link resolves normally (no fallback; the tab's gate really is `() => true`),
+    // and only the attachments panel inside it is missing (see the "attachments panel inside ประวัติ"
+    // describe block above for the same predicate without the URL entry point).
     it('never falls back off "ประวัติ" for a per-instance-hidden attachments panel — the tab itself is unconditional', async () => {
       const otherSales = { id: 42, employeeId: 42, name: 'พนักงานขายอื่น', role: 'sales' };
       renderTicketDetailPageAtRoute(['/tickets/701?tab=history'], otherSales);
@@ -4364,8 +4138,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner design 2026-10-31: the การเงิน tab is ONE "การชำระเงิน" panel (balance + paid bar, the three
-  // document steps, the timeline). สถานะการเงิน, the ใบวางบิล step and the วางบิล controls are gone.
+  // The การเงิน tab is ONE "การชำระเงิน" panel (balance + paid bar, the three document steps, the
+  // timeline); there is no สถานะการเงิน, ใบวางบิล step or วางบิล control.
   describe('การเงิน tab — one การชำระเงิน panel', () => {
     const readyDeal = () => api.tickets.get.mockResolvedValue({
       ticket: buildTicket({
@@ -4424,10 +4198,10 @@ describe('TicketDetailPage', () => {
 
   // ── Remaining-invoice download gate (stock-delivered deals) ─────────────────────────────────
   //
-  // The gate used to be `fulfillmentStatus === 'GOODS_RECEIVED'`, a value only the import axis
-  // writes — so a from-stock deal (FROM_STOCK → …_DELIVERED) never got the button, and an import
-  // deal lost it at its first recorded delivery. Rule now lives in remainingInvoiceReadiness.js.
-  // UI readiness only: DepositNoticeService#getRemainingInvoiceXlsx gates on ticket status alone.
+  // The gate is remainingInvoiceReadiness.js's rule, not `fulfillmentStatus === 'GOODS_RECEIVED'`
+  // (only the import axis writes it, so a from-stock deal never got the button and an import deal
+  // lost it at its first recorded delivery). UI readiness only: DepositNoticeService
+  // #getRemainingInvoiceXlsx gates on ticket status alone.
   describe('remaining-invoice download gate', () => {
     const INVOICE_BUTTON = 'ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ';
     afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
@@ -4468,8 +4242,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Owner rulings 2026-10-28: the deal page's ONE main button creates the deposit notice (ขั้น 10)
-  // and the remaining invoice (ขั้น 13); the panels no longer carry a second copy of either label.
+  // The deal page's ONE main button creates the deposit notice (ขั้น 10) and the remaining invoice
+  // (ขั้น 13); the panels carry no second copy of either label.
   describe('sticky primary — สร้างใบแจ้งยอดเงินรับมัดจำ (ขั้น 10) and สร้างใบแจ้งหนี้ (ขั้น 13), owner rulings 2026-10-28', () => {
     const acceptedPr = {
       id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
@@ -4674,8 +4448,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // QA-09 (owner rulings): at ขั้น 11 (DEPOSIT_RECEIVED, deposit paid, nothing ordered yet) the
-  // owning rep's ONE main button creates the import request through DealFulfilmentPanel's own flow.
+  // At ขั้น 11 (DEPOSIT_RECEIVED, deposit paid, nothing ordered yet) the owning rep's ONE main button
+  // creates the import request through DealFulfilmentPanel's own flow.
   describe('sticky primary — สร้างใบขอซื้อ (IR) (ขั้น 11), QA-09', () => {
     const acceptedPr = {
       id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
@@ -4721,7 +4495,7 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(primary());
 
-      // W3-11: ออกใบขอซื้อ (IR) is irreversible -> the handle opens the panel's confirm; nothing is sent yet.
+      // ออกใบขอซื้อ (IR) is irreversible -> the handle opens the panel's confirm; nothing is sent yet.
       const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' });
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       // The confirm re-checks the factories first; it enables once that answers.
@@ -4746,7 +4520,7 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(location()).toContain('tab=fulfilment'));
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       await waitFor(() => expect(scrolledToIrSection()).toBe(true));
-      // createIrDrafts() now opens the issue confirm, so "not called" alone no longer pins the branch.
+      // createIrDrafts() opens the issue confirm, so "not called" alone doesn't pin the branch.
       expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' })).toBeNull();
     });
 
@@ -4767,9 +4541,9 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Slice 2 — flow B + the direct-quotation CTAs (SLICE-2-FLOW-A.md §D/§E). The ใบเสนอราคา panel
-  // offers the two routes as sibling buttons — never a dialog (DESIGN.md §16) — and the sticky CTA
-  // follows a live direct quotation (TicketSummaryDto.liveDirectQuotation, S2-B4).
+  // Direct-quotation CTAs. The ใบเสนอราคา panel offers the two routes as sibling buttons (never a
+  // dialog, DESIGN.md §16) and the sticky CTA follows a live direct quotation
+  // (TicketSummaryDto.liveDirectQuotation).
   describe('slice 2 — ใบเสนอราคา route choice and the live direct quotation CTA', () => {
     const DRAFT_LIVE = { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' };
 
@@ -4787,10 +4561,10 @@ describe('TicketDetailPage', () => {
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
     });
 
-    // PR A — the deal-page "ใบเสนอราคา" panel (DealDirectQuotationPanel) and its two header buttons
-    // (สร้างคำขอราคา / ใบเสนอราคาตรง + helper note) are GONE from the เอกสาร tab. Quotations stay
-    // listed (with PDF/Excel) in the document register at the top; the one way to start a pricing
-    // request is the sticky CTA, which already exists.
+    // The deal-page "ใบเสนอราคา" panel (DealDirectQuotationPanel) and its two header buttons
+    // (สร้างคำขอราคา / ใบเสนอราคาตรง + helper note) are GONE from the เอกสาร tab. Quotations stay listed
+    // (with PDF/Excel) in the document register at the top; the one way to start a pricing request is
+    // the sticky CTA.
     it.each([
       ['the owning rep', salesOwnerUser],
       ['a role that may not create a quotation (account)', accountUser],
@@ -4855,13 +4629,13 @@ describe('TicketDetailPage', () => {
 
     it('APPROVED: "ยืนยันคำสั่งซื้อ" confirms first (same copy as the editor), then calls the direct-quotation confirm endpoint', async () => {
       activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
-      // W6-03: the dialog reads the % off the deal's quotation list (the live summary carries none).
+      // The dialog reads the % off the deal's quotation list (the live summary carries none).
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED', depositPercent: 0 }] });
       api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
       const showToast = vi.fn();
       renderTicketDetailPage(salesOwnerUser, showToast);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
-      // SK-08: ถัดไป names ขั้น 10 (where this button leads), not the next stage on the route (ขั้น 3).
+      // ถัดไป names ขั้น 10 (where this button leads), not the next stage on the route (ขั้น 3).
       const nextLine = screen.getByTestId('deal-stage-next').textContent;
       expect(nextLine).toContain('10.');
       expect(nextLine).not.toContain('3.');
@@ -4870,7 +4644,7 @@ describe('TicketDetailPage', () => {
       const dialog = within(screen.getByRole('dialog'));
       expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
       expect(dialog.getByText(/QT-2026-0077-1/)).not.toBeNull();
-      expect(await dialog.findByText(/ไม่เก็บมัดจำ/)).not.toBeNull(); // W6-03: copy follows the quotation's 0%
+      expect(await dialog.findByText(/ไม่เก็บมัดจำ/)).not.toBeNull(); // copy follows the quotation's 0%
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว'));
@@ -4929,8 +4703,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // PR A — the sticky primary CTA "แก้ใบเสนอราคา" (SALES_ACTION.REVISE_QUOTATION). The page resolves
-  // the revisable quotation from api.dealQuotations.listForTicket through
+  // The sticky primary CTA "แก้ใบเสนอราคา" (SALES_ACTION.REVISE_QUOTATION). The page resolves the
+  // revisable quotation from api.dealQuotations.listForTicket through
   // quotationMeta.canReviseDealQuotation (the real predicate) and hands it to the cascade. Clicking it
   // mints a revision (api.dealQuotations.createRevision) and opens it; an open revision draft is
   // opened instead ("ไปที่ฉบับแก้ไข"), never a second one.
@@ -4946,9 +4720,9 @@ describe('TicketDetailPage', () => {
       };
       return { pricingRequestId: row.origin === 'PRICING_REQUEST' ? 501 : null, ...row };
     };
-    // The BUYER's request (owner ruling 2026-10-27): its issued quotation keeps บันทึกผลใบเสนอราคา as
-    // the primary. A designer's or owner's issued quotation leads with the route choice instead
-    // (see the "once a designer/owner quotation is sent" describe), so it cannot stand in here.
+    // The BUYER's request: its issued quotation keeps บันทึกผลใบเสนอราคา as the primary. A designer's
+    // or owner's issued quotation leads with the route choice instead (see the "once a designer/owner
+    // quotation is sent" describe), so it cannot stand in here.
     const issuedPr = {
       id: 501, requestCode: 'PCR-2026-0501', ticketId: 701, ticketCreatedById: 1,
       status: 'QUOTATION_ISSUED', recipientType: 'BUYER', recipientLabel: null, orderConfirmedAt: null,
@@ -5012,8 +4786,8 @@ describe('TicketDetailPage', () => {
     });
 
     // At the owner / buyer quote stages the client may want a revision OR be happy with the original,
-    // so revise is an ADDITIONAL action in the header "⋯" overflow menu (the page's existing
-    // secondary slot) and บันทึกผลใบเสนอราคา stays the sticky primary.
+    // so revise is an ADDITIONAL action in the header "⋯" overflow menu (the page's existing secondary
+    // slot) and บันทึกผลใบเสนอราคา stays the sticky primary.
     async function reviseMenuItem() {
       const trigger = await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }).catch(() => null);
       if (!trigger) return null;
@@ -5021,7 +4795,7 @@ describe('TicketDetailPage', () => {
       return screen.queryByTestId('deal-quotation-revise');
     }
 
-    // F4 (QA-13 sibling): the server refuses a revise on a dead request's quotation (409), so the page hides it.
+    // The server refuses a revise on a dead request's quotation (409), so the page hides it.
     it.each(['SUPERSEDED', 'CANCELLED'])('PR-origin: an ISSUED quotation whose request is %s offers no แก้ใบเสนอราคา', async (deadStatus) => {
       prOriginDeal({ salesStage: 'QUOTE_BUYER' });
       api.pricingRequests.listForTicket.mockResolvedValue({ items: [{ ...issuedPr, status: deadStatus }] });
@@ -5168,19 +4942,17 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // A deal follows a ROUTE fixed by its entry channel. The overflow menu's "เลื่อนไป" target was
-  // computed with the route-BLIND nextStageIn, so on an owner-direct deal at S3 it named S4
-  // (เสนอราคาผู้ออกแบบ) — a stage the backend refuses with a 409 (DealRoute). It now steps over
-  // off-route stages via nextOnRoute, reading the server's per-stage `onRoute` verdict.
+  // A deal follows a ROUTE fixed by its entry channel. The overflow menu's "เลื่อนไป" target steps over
+  // off-route stages via nextOnRoute, reading the server's per-stage `onRoute` verdict; a route-blind
+  // nextStageIn named S4 on an owner-direct deal at S3, a stage the backend refuses (409, DealRoute).
   //
-  // Two server shapes are pinned, deliberately:
-  //   * FAITHFUL — TicketService.addStageActions advertises ADVANCE_STAGE only for stages whose
+  // Two server shapes are pinned:
+  //   * FAITHFUL: TicketService.addStageActions advertises ADVANCE_STAGE only for stages whose
   //     decision is `allowed`, and DealRoute makes an off-route stage `allowed:false`. Route-blind,
-  //     the target (S4) is then not advertised at all, so the item silently DISAPPEARS and the rep
-  //     has no way to advance from S3.
-  //   * LAX — a server/mock that advertises ADVANCE_STAGE for the off-route stage too. Route-blind,
-  //     the item appears and names the refused stage: the "invites a click it is about to reject"
-  //     case.
+  //     the target (S4) is not advertised at all, so the item silently DISAPPEARS and the rep can't
+  //     advance from S3.
+  //   * LAX: a server/mock that advertises ADVANCE_STAGE for the off-route stage too. Route-blind,
+  //     the item appears and names the refused stage ("invites a click it is about to reject").
   describe('overflow เลื่อนไป follows the deal route', () => {
     const OFF_ROUTE = {
       DESIGNER_LED: [],
@@ -5243,10 +5015,7 @@ describe('TicketDetailPage', () => {
     }
 
     /**
-     * ⚠️ RESTRUCTURED by the owner's 2026-10-16 quote-stage ruling (.design/quote-stage-gates
-     * D-2/D-4), and the reason is structural rather than a fixture detail.
-     *
-     * Every route-SKIPPING pair in the pipeline now lands on an `auto` stage — enumerated:
+     * Every route-SKIPPING pair in the pipeline lands on an `auto` stage:
      *
      *   OWNER_DIRECT  SPEC_APPROVED     → skips S4 → QUOTE_OWNER  (auto)
      *   BUYER_DIRECT  SPEC_APPROVED     → skips S4–S7 → QUOTE_BUYER (auto)
@@ -5254,20 +5023,17 @@ describe('TicketDetailPage', () => {
      *   BUYER_DIRECT  QUOTE_OWNER       → QUOTE_BUYER (auto)
      *   BUYER_DIRECT  OWNER_SIGNOFF     → QUOTE_BUYER (auto)
      *
-     * …because the only stages a route may ever skip are the party stages S4–S8, and of those only
-     * S6/S7 are non-auto — neither of which any channel skips. So THIS surface can no longer
-     * demonstrate route skipping at all: the item is absent either way, and a route-blind
-     * implementation would be indistinguishable from a route-aware one here.
+     * The only stages a route may skip are the party stages S4–S8, and of those only S6/S7 are
+     * non-auto, which no channel skips. So THIS surface can't demonstrate route skipping: the item
+     * is absent either way, and a route-blind implementation would be indistinguishable here.
      *
-     * The route-skipping coverage is NOT lost — it moved to where it still works:
-     * `DealStagePanel.test.jsx`'s `ถัดไป follows the route`, which reads `deal-stage-next`. That
-     * line renders the route's next stage regardless of `auto`, so it still proves S4 is stepped
-     * over on an owner-direct deal. If this menu ever has to prove route-awareness again, that is
-     * the mechanism to copy — do not resurrect these fixtures expecting them to show it.
+     * Route-skipping coverage lives in `DealStagePanel.test.jsx`'s `ถัดไป follows the route`, which
+     * reads `deal-stage-next` (renders the route's next stage regardless of `auto`). Copy that
+     * mechanism if this menu ever has to prove route-awareness again.
      *
-     * What stays pinned HERE is the two things this block can still distinguish:
+     * What this block still pins:
      *   1. the item is ABSENT when the route's next stage is a quote stage (below, all three
-     *      channels, both server shapes) — the new rule;
+     *      channels, both server shapes);
      *   2. the item NAMES and SENDS `nextOnRoute`'s stage, channel-worded, on a non-auto target.
      */
     it.each([
@@ -5286,11 +5052,10 @@ describe('TicketDetailPage', () => {
     });
 
     /**
-     * The positive control, re-based from S3→S5 to S5→S6 (OWNER_SIGNOFF is on the owner route and
-     * still a manual move). Replaces `the advance click sends the ON-route stage, never the
-     * off-route one`: with a `lax` server advertising every stage including the off-route S4, the
-     * item must still name and send `nextOnRoute`'s answer. Without a positive case here, a menu
-     * that offered เลื่อนไป for NOTHING would satisfy the whole block.
+     * The positive control (S5→S6: OWNER_SIGNOFF is on the owner route and still a manual move). With
+     * a `lax` server advertising every stage including the off-route S4, the item must still name and
+     * send `nextOnRoute`'s answer. Without a positive case, a menu that offered เลื่อนไป for NOTHING
+     * would satisfy the whole block.
      */
     it('names and sends nextOnRoute\'s stage on a non-auto target, even with a lax server', async () => {
       const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'QUOTE_OWNER', lax: true });
@@ -5302,23 +5067,22 @@ describe('TicketDetailPage', () => {
       expect(api.tickets.updateStage).not.toHaveBeenCalledWith(701, { stage: 'QUOTE_DESIGN_SIDE' });
     });
 
-    // Unaffected by the ruling: PRESENTATION's next is SPEC_APPROVED (S3), which is not auto and on
-    // every route. Still the proof that the menu label runs through
-    // dealStageLabel(next.code, entryChannel) rather than a channel-blind string.
+    // PRESENTATION's next is SPEC_APPROVED (S3), not auto and on every route. Proves the menu label
+    // runs through dealStageLabel(next.code, entryChannel), not a channel-blind string.
     it('the S3 wording in the menu follows the route too (owner-direct at PRESENTATION -> เจ้าของตกลงตามสเปคแล้ว)', async () => {
       const item = await openMenuItem({ channel: 'OWNER_DIRECT', salesStage: 'PRESENTATION' });
       expect(item.textContent).toContain('เลื่อนไป: เจ้าของตกลงตามสเปคแล้ว');
       expect(item.textContent).not.toContain('ผู้ออกแบบอนุมัติสเปค');
     });
 
-    // W3-09 (owner ruling 2026-10-29): ขั้น 12 advances by itself when the IR is issued; the manual
-    // move is a deliberate skip, so it must not read like the normal next step. Other stages keep เลื่อนไป.
+    // ขั้น 12 advances by itself when the IR is issued; the manual move is a deliberate skip, so it
+    // must not read like the normal next step. Other stages keep เลื่อนไป.
     it('at PROCUREMENT the manual move reads ข้ามไปขั้น 13 ด้วยตนเอง and still sends DELIVERY_SCHEDULING', async () => {
       const item = await openMenuItem({ channel: 'DESIGNER_LED', salesStage: 'PROCUREMENT' });
       expect(item.textContent).toContain('ข้ามไปขั้น 13 ด้วยตนเอง');
       expect(item.textContent).not.toContain('เลื่อนไป');
 
-      // W3-09: moving before the goods arrive asks first.
+      // Moving before the goods arrive asks first.
       fireEvent.click(item);
       const dialog = await screen.findByRole('dialog');
       expect(api.tickets.updateStage).not.toHaveBeenCalled();
@@ -5328,7 +5092,7 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // SK-05: the page hands the deal's own events to the stage track, so an owner skip reads ข้าม.
+  // The page hands the deal's own events to the stage track, so an owner skip reads ข้าม.
   it('ดูขั้นตอนทั้งหมด marks the owner stages ข้าม on a deal that skipped from 4 to 8', async () => {
     api.tickets.get.mockResolvedValue({
       ticket: buildTicket({
@@ -5353,11 +5117,11 @@ describe('TicketDetailPage', () => {
     expect(within(pip).getByText('ขั้นที่ 5 ข้าม')).not.toBeNull();
   });
 
-  // The gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", and the control that answered it
-  // (EntryChannelControl) was deleted by GLA-156. EntryChannelFix puts it back where the refusal is
-  // read. Driven end to end here so the WIRING is pinned, not just the pieces: the advertisement
-  // gates it, the click reaches api.tickets.setEntryChannel, and the ticket + actions the rep is
-  // looking at refresh WITHOUT a reload — the route, the off-route group and the ribbon follow.
+  // The gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", and EntryChannelFix puts the
+  // control that answers it back where the refusal is read. Driven end to end so the WIRING is
+  // pinned: the advertisement gates it, the click reaches api.tickets.setEntryChannel, and the
+  // ticket + actions the rep is looking at refresh WITHOUT a reload (the route, the off-route group
+  // and the ribbon follow).
   describe('แก้ช่องทางดีล — the remedy for an off-route refusal', () => {
     const OWNER_OFF = new Set(['QUOTE_DESIGN_SIDE']);
     const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value'] };

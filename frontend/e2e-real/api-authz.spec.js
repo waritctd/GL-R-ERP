@@ -9,7 +9,7 @@ import { anonApi, apiSessionsFor, disposeSessions } from './helpers/api.js';
 // it proves react-router-dom's client-side guard renders-or-redirects per app/permissions.js,
 // and explicitly disclaims proving anything about the server. CLAUDE.md is blunter — mockApi's
 // authz is known to diverge from the Java services, and a mock that is MORE permissive than
-// production (issue #199: the mock let HR approve OT that OvertimeService 403s) is a bug you
+// production (e.g. the mock letting HR approve OT that OvertimeService 403s) is a bug you
 // only discover in prod.
 //
 // Every expectation below was read off the Java source AND observed against a running service;
@@ -68,11 +68,9 @@ const GATES = [
     denied: except('sales', 'sales_manager', 'import', 'ceo'),
     // PricingRequestService.VIEWER_ROLES = {sales, import, ceo, sales_manager}. Deliberately one
     // role narrower than TicketAccessPolicy.VIEWER_ROLES above — `account` reads deals but not
-    // pricing requests. That asymmetry is the reason these two rows exist separately, and until
-    // V139 seeded an `account` persona it was pure prose: both rows looked identical from the
-    // seeded personas' point of view, so nothing tested the one role that tells them apart.
-    // `account` is now in this row's denied set and the previous row's allowed set, which is the
-    // assertion that actually pins the difference.
+    // pricing requests. That asymmetry is the reason these two rows exist separately: `account`
+    // (seeded by V139) is in this row's denied set and the previous row's allowed set, which is
+    // the assertion that actually pins the difference.
     source: 'PricingRequestService',
   },
   {
@@ -80,9 +78,9 @@ const GATES = [
     path: '/api/catalog/prices',
     allowed: ALL,
     denied: [],
-    // Open to ANY authenticated user by product decision — issue #205, owner ruling 2026-08-01
-    // closing #388. Asserted so a future "tighten the catalog" change has to be a deliberate one
-    // that updates this line, rather than a silent regression against a documented ruling.
+    // Open to ANY authenticated user by product decision. Asserted so a future "tighten the
+    // catalog" change has to be a deliberate one that updates this line, rather than a silent
+    // regression against a documented decision.
     source: 'CatalogController (product decision #205)',
   },
   {
@@ -91,7 +89,7 @@ const GATES = [
     allowed: ['sales_manager', 'ceo'],
     denied: except('sales_manager', 'ceo'),
     // CommissionController#reps / CommissionService.MANUAL_CREATE_ROLES: the identical gate as
-    // POST /api/commissions/manual (issue #737). hr is in the denied set on purpose: hr is the
+    // POST /api/commissions/manual. hr is in the denied set on purpose: hr is the
     // ONLY role that can read /api/employees (the row above), and it deliberately cannot read
     // this narrower, purpose-built list — the same asymmetry the row above's comment calls out.
     source: 'CommissionController#reps / CommissionService.MANUAL_CREATE_ROLES',

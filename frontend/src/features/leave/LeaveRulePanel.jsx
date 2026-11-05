@@ -121,5 +121,3 @@ export function LeaveRuleWarningList({ warnings, className }) {
     </div>
   );
 }
-
-export const LEAVE_RULE_META = RULE_META;

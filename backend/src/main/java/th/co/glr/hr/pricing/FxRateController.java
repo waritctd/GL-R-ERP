@@ -23,40 +23,22 @@ public class FxRateController {
     private static final Set<String> CEO_ROLES = Set.of("ceo");
 
     /**
-     * Read gate, owner ruling 2026-08-02 — widened from issue #388's {@code ceo}/{@code import}
-     * gate by exactly one role, to {@code sales}, and to {@code sales_manager} by the 2026-10-29
-     * ruling below. NOT opened to every authenticated session: the owner's words were "should
-     * only be to sale", and this set is the whole of those two rulings.
+     * Read gate: the owner-ruled audience is {@code ceo}, {@code import}, {@code sales} and {@code
+     * sales_manager}. NOT opened to every authenticated session: the owner's words were "should
+     * only be to sale", and this set is the whole of the rulings.
      *
-     * <p>The trigger was the deal-create modal's "ราคาตั้ง (ประมาณการ)" estimate (V112): a rep who
-     * picks a catalog item needs the FX rate to convert its price to THB, and every catalog row is
-     * EUR or USD — there are no THB rows at all — so gating the rate to the costing audience
-     * blocked the feature for the one role it exists for. {@code sales} is sufficient and
-     * necessary: {@code ROLE_PERMISSIONS.canCreateTickets} is {@code ['sales']} and
-     * {@code TicketService.create} gates on {@code Set.of("sales")}, so no other role can open that
-     * modal — {@code sales_manager} and {@code ceo} browse the pipeline but cannot create a deal.
+     * <p>{@code sales} reads it because a rep who picks a catalog item needs the FX rate to convert
+     * its price to THB, and every catalog row is EUR or USD — there are no THB rows at all — so
+     * gating the rate to the costing audience would block the one role it exists for. {@code
+     * sales_manager} reads it because the deal page converts SM's foreign-currency prices to THB.
+     * The widening is justified by what an FX rate DISCLOSES, not by any one feature that asks for
+     * it: a rate only converts a number already visible to this caller. Re-narrowing it is an
+     * owner decision, not a tidy-up.
      *
-     * <p><b>THE TRIGGER IS GONE; THE RULING IS NOT.</b> That estimate was removed from the frontend
-     * by PR #682 after UAT (reps read catalog-price-times-markup as a selling price), and issue
-     * #748 then deleted its whole backend surface — {@code DealEstimateMarkupController}, its
-     * repository, DTOs and the V112 table (dropped by V145). This javadoc used to {@code @link}
-     * that controller as the precedent for the read widening below, so the reasoning is restated
-     * here in full rather than left pointing at a deleted class: the widening was justified by what
-     * an FX rate DISCLOSES, not by the feature that happened to ask for it. A rate only converts a
-     * number already visible to this caller, so it survives its trigger. Re-narrowing it is a
-     * separate owner decision, not a tidy-up that follows from #748.
-     *
-     * <p><b>Widened again, owner ruling 2026-10-29 (role check RC-01):</b> {@code sales_manager}
-     * joins the set — the deal page converts SM's foreign-currency prices to THB, which needs this
-     * rate. The "sales_manager cannot create a deal" argument above no longer decides the gate.
-     * Nothing else changes; writes stay CEO-only.
-     *
-     * <p>The reasoning is deliberately narrower than #388's: an FX rate only converts a number that
-     * is ALREADY visible to this caller — {@code /api/catalog/prices} is open to any authenticated
-     * user per the 2026-08-01 ruling that closed #388 — and on its own reveals nothing about landed
-     * cost or margin. It does NOT relax {@link PriceCalcConfigController}, whose {@code marginPct},
+     * <p>{@code /api/catalog/prices} is open to any authenticated user, and an FX rate on its own
+     * reveals nothing about landed cost or margin. It does NOT relax {@link PriceCalcConfigController}, whose {@code marginPct},
      * {@code importDutyPct} and landed-cost components stay gated to {@code RAW_COSTING_ROLES}
-     * exactly as #388 decided; this rate alone cannot reconstruct that policy. Writes stay CEO-only.
+     * exactly as before; this rate alone cannot reconstruct that policy. Writes stay CEO-only.
      *
      * <p>If a test pinning this set fails, someone has re-narrowed or re-widened the gate: reopen
      * the ruling with the owner rather than editing the test to match the code.

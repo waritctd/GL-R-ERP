@@ -1,6 +1,7 @@
 package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -102,7 +103,7 @@ public class DepositNoticeService {
                                                      Integer sourceDepositPercent, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         requireTicketOwner(ticketId, actor);
-        // Owner ruling 2026-10-23: one deposit notice per deal. A new draft would re-seed the % from
+        // One deposit notice per deal. A new draft would re-seed the % from
         // the quotation and, once issued, silently supersede the customer's document.
         docs.findByTicket(ticketId).stream().filter(d -> "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -147,7 +148,7 @@ public class DepositNoticeService {
         // address/tax id differently.
         CustomerHeaderInfo header = resolveCustomerHeader(s, req.customerTaxId(), req.customerAddress(), req.projectName());
 
-        // Owner rulings (2026-09-29, 2026-10-22, 2026-10-23): the deposit percent is the one the
+        // The deposit percent is the one the
         // source quotation's PDF printed: a legacy quotation 50% (the constant its PDF prints), a
         // new-engine one its own deposit_percent, a blank one 30%. The PR route passes it as
         // sourceDepositPercent; the ticket route takes it from the governing quotation. On create,
@@ -155,7 +156,7 @@ public class DepositNoticeService {
         // round trip). 0.50 only when the ticket has no live quotation at all (e.g. a manually
         // approved legacy ticket with no quotation chain); see
         // DepositNoticeRepository#findGoverningQuotation for the pick. Sales may change the percent
-        // on the DRAFT afterwards (update, ruling 2026-10-23).
+        // on the DRAFT afterwards (update).
         BigDecimal effectiveDepositPercent = sourceDepositPercent != null
             ? BigDecimal.valueOf(sourceDepositPercent, 2)
             : governing != null ? governing.depositPercent() : new BigDecimal("0.50");
@@ -184,7 +185,7 @@ public class DepositNoticeService {
         requireRole(actor, SALES_ROLES);
         DepositNoticeDto doc = requireDraft(docId);
         requireTicketOwner(doc.ticketId(), actor);
-        // Owner ruling 2026-10-23: sales may change the deposit percent on a DRAFT (requireDraft
+        // Sales may change the deposit percent on a DRAFT (requireDraft
         // above 409s an issued notice). docs.update recomputes the amount from it. A request
         // without a percent keeps the draft's own.
         BigDecimal depositPercent = req.depositPercent() != null ? req.depositPercent() : doc.depositPercent();
@@ -240,16 +241,15 @@ public class DepositNoticeService {
 
         // Issuing the deposit-notice DOCUMENT is the payment-track step: it requires a
         // customer-confirmed quotation and advances paymentStatus, leaving the main
-        // status at quotation_issued. It no longer flips the ticket to document_issued —
-        // that side effect killed the dual-track UI and let unpaid tickets close
-        // (2026-07-16 audit findings #3/#4).
+        // status at quotation_issued. It must not flip the ticket to document_issued —
+        // that side effect kills the dual-track UI and lets unpaid tickets close.
         TicketSummaryDto s = tickets.findById(doc.ticketId())
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
             .summary();
-        // Loosened precondition (payment-track state machine, site 2): a deposit notice may be
+        // A deposit notice may be
         // (re-)issued from CUSTOMER_CONFIRMED (first issue) OR from DEPOSIT_NOTICE_ISSUED itself
-        // (a revision — PaymentTrack's one legal self-loop; PR #698's own "AND status='DRAFT'"
-        // guard on docs.issue is what makes a revision safe to mint a fresh doc number here).
+        // (a revision — PaymentTrack's one legal self-loop; docs.issue's own "AND status='DRAFT'"
+        // guard is what makes a revision safe to mint a fresh doc number here).
         //
         // The explicit !bypassesDepositNotice(...) guard matters beyond the paymentStatus check
         // above: DEPOSIT_NOTICE_ISSUED is not on a bypass policy's PaymentTrack path AT ALL, so a
@@ -257,11 +257,9 @@ public class DepositNoticeService {
         // paymentStatus check alone would pass) must still be refused HERE, with a clean 409 —
         // not left to fall through to advancePaymentStatus below, which would throw an uncaught
         // IllegalStateException (ApiExceptionHandler has no handler for it, so it would surface as
-        // an opaque 500, not a controlled conflict). Found while writing PaymentTrackIntegrationTest's
-        // off-path case; a bypass-policy deal CAN still hold a DRAFT deposit notice (one drafted while
-        // the deal was REQUIRED survives a later waiver), so this is a genuinely reachable path.
-        // On a bypass policy, issuing a deposit notice now throws — a deliberate behaviour change
-        // from rule 4; see the branch report.
+        // an opaque 500, not a controlled conflict). A bypass-policy deal CAN still hold a DRAFT
+        // deposit notice (one drafted while the deal was REQUIRED survives a later waiver), so this
+        // is a genuinely reachable path. On a bypass policy, issuing a deposit notice throws.
         boolean paymentTrackReady = !DepositPolicy.bypassesDepositNotice(s.depositPolicy())
             && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus()) || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()));
         if (!TicketStatus.QUOTATION_ISSUED.equals(s.status()) || !paymentTrackReady) {
@@ -276,7 +274,7 @@ public class DepositNoticeService {
         // The guard below is check-then-act: lock the deal row first so two drafts issued at once
         // serialize, and the second one sees the first as ISSUED.
         tickets.lockTicketForUpdate(doc.ticketId());
-        // Owner ruling 2026-10-23: one deposit notice per deal. A second draft (written before the
+        // One deposit notice per deal. A second draft (written before the
         // first was issued) must not silently supersede the customer's document.
         docs.findByTicket(doc.ticketId()).stream()
             .filter(d -> d.id() != docId && "ISSUED".equals(d.status())).findFirst().ifPresent(d -> {
@@ -327,7 +325,7 @@ public class DepositNoticeService {
             s.status(), s.status(),
             "เอกสาร " + docNumber + " ออกแล้ว");
 
-        // GLA-32 (owner decision, 2026-09-19): account@glr.co.th is notified at exactly this one
+        // account@glr.co.th is notified at exactly this one
         // sales-pipeline moment — issuing (or re-issuing) a deposit notice is when account gets
         // work (watch for the payment, then confirm it). Deliberately called DIRECTLY inside this
         // @Transactional method, never wrapped in this class's own afterCommit helper
@@ -336,17 +334,16 @@ public class DepositNoticeService {
         // via AfterCommit.run, and a SECOND TransactionSynchronization registered from inside that
         // first callback is silently dropped by Spring 7 -- the in-app row would still land but the
         // email never would. See NotificationRepository/SalesNotificationMailRouter/AfterCommit's
-        // own Javadoc, and the 2026-09-15 DealQuotationService.submitDraftRow incident this exact
-        // trap already caused once.
+        // own Javadoc; this exact trap already bit DealQuotationService.submitDraftRow once.
         //
         // isRevision reads s.paymentStatus() captured ABOVE, before advancePaymentStatus mutates the
         // row -- by the paymentTrackReady guard above it is exactly CUSTOMER_CONFIRMED (first issue)
         // or DEPOSIT_NOTICE_ISSUED (a revision re-issue, PaymentTrack's one legal self-loop), so this
         // is a cheap, already-in-hand signal rather than a second query.
         boolean isRevision = "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus());
-        // Opus review (2026-09-19), two fixes:
+        // Two details:
         //  1. Same "ไม่ระบุลูกค้า" fallback TicketService#notifySalesManagerOfRepDeclaration uses
-        //     (~line 1130) -- a deposit notice's customerName CAN be blank (see resolveCustomerHeader
+        //     -- a deposit notice's customerName CAN be blank (see resolveCustomerHeader
         //     / createDraft's own comments on the new pricing-request chain), and a raw blank in the
         //     sentence reads as a rendering bug rather than "no name on file".
         //  2. Account matches this notice against a BANK TRANSFER, which is the deposit PLUS 7% VAT
@@ -401,7 +398,7 @@ public class DepositNoticeService {
 
     // ── Remaining Invoice (ข้อ 13.5) ─────────────────────────────────────────
     //
-    // Stateless by owner decision: no table, no migration. Every field of the remaining-invoice options is
+    // Stateless: no table, no migration. Every field of the remaining-invoice options is
     // recomputed fresh on each call from the ticket's own data — the dialog's "options" preview
     // and the actual "/file" download MUST agree, so both funnel through the same
     // resolveRemainingInvoice pipeline (and its shared helpers: resolveCustomerHeader,
@@ -409,7 +406,7 @@ public class DepositNoticeService {
     // quotationLineAmount, resolveDepositReferenceOptions) rather than each re-deriving defaults
     // their own way.
     //
-    // Quotation selection (owner ruling, 2026-09-17). A deal can carry several pricing requests
+    // Quotation selection. A deal can carry several pricing requests
     // (designer asks first, owner/buyer makes the final one), each producing its own
     // CustomerQuotation chain. A quotation QUALIFIES as a remaining-invoice source when it is
     // ACCEPTED and either:
@@ -433,35 +430,32 @@ public class DepositNoticeService {
     // fallbacks below (issued deposit-notice item snapshot, then ticket_item.approved_price)
     // apply — kept for any deal manually approved before the pricing-request chain existed.
     //
-    // Item/deduction SOURCE (owner ruling D11, 2026-09-17 — supersedes the quotation-sourced-items
-    // design above; the QUALIFICATION rules (a)/(b) just above are UNCHANGED, only where the
-    // ITEMS and the deduction amount come from changes). When a quotation qualifies via (b) — a
+    // Item/deduction SOURCE (rule D11; the QUALIFICATION rules (a)/(b) just above only decide
+    // which quotation counts, not where the ITEMS and the deduction amount come from). When a quotation qualifies via (b) — a
     // matched ISSUED deposit notice — the remaining invoice's item rows AND its deposit deduction
     // both come from that matched notice's OWN latest ISSUED item snapshot
     // (itemsFromDepositNoticeForRemainingInvoice), never from the quotation's own items. The
-    // quotation only identifies WHICH deposit notice counts (via the reference match above); it no
-    // longer supplies the rows. This drops the old "matched notice's subtotal must equal the
-    // quotation's own item total" rule entirely (see resolveFromQuotation) — a deposit notice can
+    // quotation only identifies WHICH deposit notice counts (via the reference match above); it
+    // does not supply the rows. There is no "matched notice's subtotal must equal the
+    // quotation's own item total" rule (see resolveFromQuotation) — a deposit notice can
     // be edited/re-issued at a different amount than the quotation, and that edited figure IS the
-    // agreed amount now, not a mismatch to block on. The negative-net refusal (rule C below) still
+    // agreed amount, not a mismatch to block on. The negative-net refusal (rule C below)
     // applies, computed off the notice's own items. When a quotation qualifies via (a) — a bypass
-    // policy with no deposit notice to source from — items still come from the quotation itself
-    // (itemsFromQuotationForRemainingInvoice), unchanged; that is the ONLY case items are still
-    // quotation-sourced. Both this document and resolveLegacy's own back-compat path (reached only
-    // when there is no accepted quotation at all) already sourced items from a deposit notice's own
-    // snapshot the same way, so this ruling brings the two paths onto one shared item-sourcing
-    // convention instead of two.
+    // policy with no deposit notice to source from — items come from the quotation itself
+    // (itemsFromQuotationForRemainingInvoice); that is the ONLY case items are
+    // quotation-sourced. resolveLegacy's back-compat path (reached only
+    // when there is no accepted quotation at all) sources items from a deposit notice's own
+    // snapshot the same way, so both paths share one item-sourcing convention.
 
     // Package-private (not private): reused as-is by RemainingInvoiceService for the STORED
-    // remaining-invoice snapshot's own VAT line (GLA-99 step 2, 2026-09-20) — one constant, never
+    // remaining-invoice snapshot's own VAT line — one constant, never
     // two copies that could silently disagree.
     static final BigDecimal VAT_RATE = new BigDecimal("0.07");
 
     /** One money bundle: net (items total minus the deposit deduction), VAT at {@link #VAT_RATE},
-     * and the VAT-inclusive grand total — every rounding step {@code setScale(2, HALF_UP)}, exactly
-     * as {@link #getRemainingInvoiceOptions} always computed it inline. P5 (Opus review, GLA-99
-     * step 2 review-round-2, 2026-09-20): extracted so {@code RemainingInvoiceService}'s own
-     * createDraft/updateDraft/issue stop carrying THREE separately-copied repetitions of these same
+     * and the VAT-inclusive grand total — every rounding step {@code setScale(2, HALF_UP)}.
+     * Shared so {@code RemainingInvoiceService}'s own
+     * createDraft/updateDraft/issue do not each carry a separate copy of these same
      * three lines — one formula, called four times (this class's own preview, plus those three),
      * never four chances for the copies to drift apart. Package-private (not private) for that
      * reuse. */
@@ -479,7 +473,7 @@ public class DepositNoticeService {
 
     RemainingInvoiceMoney computeRemainingInvoiceMoney(BigDecimal itemsTotal, BigDecimal depositAmount, BigDecimal vatRate) {
         BigDecimal netAmount = itemsTotal.subtract(depositAmount).setScale(2, RoundingMode.HALF_UP);
-        // Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT = round2(its own net x 7%) -- usual Thai practice;
+        // Each tax invoice's VAT = round2(its own net x 7%) -- usual Thai practice;
         // a satang gap against the deal's payable is normal and outstanding follows the ISSUED documents.
         BigDecimal vatAmount = netAmount.multiply(vatRate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal grandTotal = netAmount.add(vatAmount).setScale(2, RoundingMode.HALF_UP);
@@ -548,21 +542,19 @@ public class DepositNoticeService {
         );
     }
 
-    // getRemainingInvoiceXlsx (both overloads) REMOVED (owner ruling O1, GLA-99 step 2
-    // review-round-1, 2026-09-20): it backed the stateless GET .../remaining-invoice/file route,
-    // which is gone — only an ISSUED/SUPERSEDED STORED remaining invoice is downloadable now, via
+    // There is no stateless GET .../remaining-invoice/file route and no getRemainingInvoiceXlsx:
+    // only an ISSUED/SUPERSEDED STORED remaining invoice is downloadable, via
     // RemainingInvoiceService#file, which renders a FROZEN snapshot rather than recomputing this
-    // same resolution live on every call. That method's capacity/notes-capacity/negative-net
-    // enforcement moved to RemainingInvoiceService#createDraft/updateDraft/issue's own gates
-    // (requireCapacity/requireNotesCapacity) — resolveRemainingInvoice itself, below, never threw
-    // for those; it always reported them via blockingReason, which is what this method used to
-    // convert into a 409 for capacity/negative-net and which createDraft/updateDraft now convert
-    // instead. getRemainingInvoiceOptions above is UNCHANGED and remains the live preview this
-    // class's callers (and RemainingInvoiceService's own resolveRemainingInvoiceSnapshot) still
+    // same resolution live on every call. Capacity/notes-capacity/negative-net
+    // enforcement lives in RemainingInvoiceService#createDraft/updateDraft/issue's own gates
+    // (requireCapacity/requireNotesCapacity) — resolveRemainingInvoice itself, below, never throws
+    // for those; it reports them via blockingReason, which createDraft/updateDraft convert into a
+    // 409. getRemainingInvoiceOptions above is the live preview this
+    // class's callers (and RemainingInvoiceService's own resolveRemainingInvoiceSnapshot)
     // route through.
 
     /** One resolved snapshot bundle, package-private, reused verbatim by RemainingInvoiceService's
-     * createDraft/updateDraft/issue (GLA-99 step 2, 2026-09-20) to freeze a STORED remaining
+     * createDraft/updateDraft/issue to freeze a STORED remaining
      * invoice off the exact same resolution + customer-header lookup {@link
      * #getRemainingInvoiceOptions} already uses — so the stored document can never compute its
      * content differently than the stateless preview did. {@code ticketSummary} is handed back
@@ -586,7 +578,7 @@ public class DepositNoticeService {
 
     /** Package-private — EXACTLY the predicate {@link #issue} uses to gate issuing a deposit
      * notice (role check + ticket-ownership check), reused verbatim by RemainingInvoiceService for
-     * its own create/update/issue/revise/delete gate (owner ruling 2026-09-20, GLA-99 step 2): "one
+     * its own create/update/issue/revise/delete gate: "one
      * predicate, not a copied role set" — a caller who can issue a deposit notice on this ticket,
      * and no one else, can also write this ticket's remaining invoice. */
     void requireDepositNoticeIssueGate(long ticketId, UserPrincipal actor) {
@@ -601,8 +593,8 @@ public class DepositNoticeService {
     }
 
     private String buildRemainingInvoiceDocNumber(long ticketId) {
-        // GLR + Thai year (2 digits) + running — unchanged formula (sequential per ticket, not a
-        // real document sequence; this document is stateless by owner decision).
+        // GLR + Thai year (2 digits) + running (sequential per ticket, not a
+        // real document sequence; this document is stateless).
         int thaiYear = bangkokToday().getYear() + 543;
         return "GLR" + (thaiYear % 100) + String.format("%03d", ticketId);
     }
@@ -625,9 +617,9 @@ public class DepositNoticeService {
      * is only their difference that is wrong — so both are still returned alongside the reason, to
      * give the dialog something to explain the block with.
      */
-    // Package-private (not private) — reused verbatim by RemainingInvoiceService (GLA-99 step 2)
+    // Package-private (not private) — reused verbatim by RemainingInvoiceService
     // to snapshot a STORED remaining invoice off the exact same resolution this stateless preview
-    // already uses. matchedDepositNoticeId (new field, this branch) is the deposit_notice_id FK a
+    // uses. matchedDepositNoticeId is the deposit_notice_id FK a
     // stored row snapshots for traceability — null when items were quotation-sourced (bypass
     // policy) or there is no accepted quotation at all with nothing to match.
     record ResolvedRemainingInvoice(
@@ -711,7 +703,7 @@ public class DepositNoticeService {
      * </ol>
      */
     // Package-private (not private) — RemainingInvoiceService's own resolveRemainingInvoiceSnapshot
-    // wrapper below calls this directly (GLA-99 step 2).
+    // wrapper below calls this directly.
     ResolvedRemainingInvoice resolveRemainingInvoice(long ticketId, TicketDto ticket, TicketSummaryDto s,
             Long quotationId, List<CustomerQuotationDto> quotationCandidates, List<DepositNoticeDto> notices) {
         List<QualifyingQuotation> qualifying = findQualifyingQuotations(quotationCandidates, notices, s.depositPolicy());
@@ -741,7 +733,7 @@ public class DepositNoticeService {
                 return blocked("ยังไม่ได้ออกใบแจ้งยอดมัดจำจากใบเสนอราคา " + latestAccepted.number());
             }
         }
-        // No deposit to wait for and no legacy quotation: a deal quoted on the NEW engine (W5-01) bills the answered
+        // No deposit to wait for and no legacy quotation: a deal quoted on the NEW engine bills the answered
         // quotation in full. A deal WITH a deposit takes the legacy path below (the issued notice's items).
         if (bypass) {
             DepositNoticeRepository.AnsweredQuotation answered = docs.findAnsweredQuotation(ticketId).orElse(null);
@@ -753,7 +745,7 @@ public class DepositNoticeService {
     }
 
     /**
-     * W5-01 (owner ruling, Ploy): the whole answered new-engine quotation, no deposit deduction (bypass policy: there
+     * The whole answered new-engine quotation, no deposit deduction (bypass policy: there
      * is no notice). It prints the quotation's OWN lines - each line's stored amount, the ส่วนลดพิเศษ row as its own
      * negative line - and money follows the stored total_amount and the document language (EN = no VAT), exactly as
      * payable reads them. A row with no stored total is refused (payable skips it too).
@@ -778,7 +770,7 @@ public class DepositNoticeService {
             answered.totalAmount());
     }
 
-    /** Item/deduction sourcing (owner ruling D11) and rule C (net must not be negative), applied
+    /** Item/deduction sourcing (rule D11) and rule C (net must not be negative), applied
      * to the single chosen quotation — see this section's header comment for the full rules. */
     private ResolvedRemainingInvoice resolveFromQuotation(long ticketId, QualifyingQuotation chosen,
             List<CustomerQuotationDto> quotationCandidates,
@@ -791,7 +783,7 @@ public class DepositNoticeService {
         String defaultDepositReference = null;
         List<RemainingInvoiceOptionsDto.ReferenceOption> depositReferenceOptions = List.of();
         if (matched != null) {
-            // D11 finding 2 (2026-09-18): an ISSUED notice with a null/empty item snapshot is
+            // An ISSUED notice with a null/empty item snapshot is
             // refused outright, the same way resolveLegacy already refuses one (see its own
             // !latestIssued.items().isEmpty() guard) — NEVER silently rendered as a zero-total
             // invoice, and NEVER falls back to the quotation's own items either: under D11 the
@@ -804,13 +796,13 @@ public class DepositNoticeService {
                         + " ไม่มีรายการสินค้า กรุณาตรวจสอบเอกสาร",
                     quotationOptions, defaultQuotationId);
             }
-            // Ruling D11 (2026-09-17): items AND the deduction amount come from the matched
+            // Rule D11: items AND the deduction amount come from the matched
             // deposit notice's own latest ISSUED item snapshot — never the quotation's items. The
             // quotation only identified WHICH notice counts (the reference match in
             // findQualifyingQuotations above); an edited/re-issued notice at a different amount
             // than the quotation IS the agreed amount now, so there is nothing to compare/block on
-            // here — the old subtotal-must-match rule (matched.subtotal() vs the quotation's own
-            // item total) is deliberately gone.
+            // here — there is deliberately no subtotal-must-match rule (matched.subtotal() vs the
+            // quotation's own item total).
             items = itemsFromDepositNoticeForRemainingInvoice(matched.items());
             depositAmount = matched.depositAmount() != null ? matched.depositAmount() : BigDecimal.ZERO;
             DepositRefBundle refs = resolveDepositReferenceOptions(ticketId, matched);
@@ -841,9 +833,9 @@ public class DepositNoticeService {
     }
 
     /** Pre-PCR-chain back-compat only — reached exclusively when the ticket has NO accepted
-     * CustomerQuotation at all (see resolveRemainingInvoice's own Javadoc). Preserves the exact
-     * item-sourcing/reference/deposit-reference behaviour this document always had before the
-     * quotation-selection ruling: the latest ISSUED deposit notice's own item snapshot, else the
+     * CustomerQuotation at all (see resolveRemainingInvoice's own Javadoc). Sources items,
+     * reference and deposit reference as before the quotation-selection rules existed: the
+     * latest ISSUED deposit notice's own item snapshot, else the
      * legacy {@code ticket_item.approved_price} rows, else 409 — there is nothing to price. */
     private ResolvedRemainingInvoice resolveLegacy(long ticketId, TicketDto ticket, List<DepositNoticeDto> notices) {
         DepositNoticeDto latestIssued = notices.stream()
@@ -893,7 +885,7 @@ public class DepositNoticeService {
     /** Same as {@link #blocked}, but also carries the quotation-picker options through — used when
      * the block happens INSIDE {@link #resolveFromQuotation} (a specific quotation was already
      * chosen), so the dialog can still offer switching to a different qualifying quotation instead
-     * of losing the picker entirely. See D11 finding 2 (2026-09-18): an ISSUED notice matched with
+     * of losing the picker entirely. Example: an ISSUED notice matched with
      * a null/empty item snapshot. */
     private ResolvedRemainingInvoice blockedWithOptions(String reason,
             List<RemainingInvoiceOptionsDto.QuotationOption> quotationOptions, Long defaultQuotationId) {
@@ -981,13 +973,13 @@ public class DepositNoticeService {
         return latestAccepted;
     }
 
-    /** Finding 5 (preview/render agreement): the ONE shared line-amount function for a quotation
+    /** Preview/render agreement: the ONE shared line-amount function for a quotation
      * item, used both by the subtotal-match check above and by
      * {@link #itemsFromQuotationForRemainingInvoice}'s own {@code amount} field below —
      * {@code line_subtotal} is nullable (V74), so a null there must never silently diverge between
      * the options preview and the actual renderer input. Stored {@code lineSubtotal} wins when
-     * present (the customer's own agreed figure — see quotation-arithmetic-reconciled: pieces were
-     * HALF_UP until 2026-10-12 and round UP since, so it can differ from a naive recompute by a piece); otherwise
+     * present (the customer's own agreed figure — see quotation-arithmetic-reconciled: pieces
+     * round UP, so it can differ from a naive recompute by a piece); otherwise
      * HALF_UP(finalUnitPrice × qty). */
     private BigDecimal quotationLineAmount(CustomerQuotationItemDto item) {
         if (item.lineSubtotal() != null) return item.lineSubtotal();
@@ -996,16 +988,16 @@ public class DepositNoticeService {
         return price.multiply(qty).setScale(2, RoundingMode.HALF_UP);
     }
 
-    /** Short discount-label form (finding 2b, and D11-finding-1 2026-09-18): {@code "ลด " + amount}
+    /** Short discount-label form: {@code "ลด " + amount}
      * — the only form proven to fit the renderer's narrow column G without
      * truncating it. Blank when there is no discount. Shared by BOTH item-sourcing paths below
-     * so the format can never drift between them — before this, {@link
-     * #itemsFromDepositNoticeForRemainingInvoice} passed the deposit notice's own {@code
-     * discountLabel} straight through, which {@code itemsFromQuotation}
+     * so the format can never drift between them. {@link
+     * #itemsFromDepositNoticeForRemainingInvoice} must not pass the deposit notice's own {@code
+     * discountLabel} straight through: {@code itemsFromQuotation}
      * (DepositNoticeService's static helper, used by both {@code createDraft} and
-     * {@code OrderConfirmationService.createDepositNoticeFromQuotation}) authors in the LONG form
-     * {@code "ส่วนลด " + amount + " ต่อหน่วย"} — that reintroduced the exact clipping this short
-     * form was created to fix, for every notice-matched (the common) case. */
+     * {@code OrderConfirmationService.createDepositNoticeFromQuotation}) authors it in the LONG form
+     * {@code "ส่วนลด " + amount + " ต่อหน่วย"}, which clips in column G for every
+     * notice-matched (the common) case. */
     private String shortDiscountLabel(BigDecimal discountPerUnit) {
         return discountPerUnit != null && discountPerUnit.signum() > 0
             ? "ลด " + discountPerUnit.stripTrailingZeros().toPlainString() : null;
@@ -1029,7 +1021,7 @@ public class DepositNoticeService {
     private List<RemainingInvoiceItemDto> itemsFromDepositNoticeForRemainingInvoice(List<DepositNoticeItemDto> noticeItems) {
         List<RemainingInvoiceItemDto> out = new ArrayList<>();
         for (DepositNoticeItemDto item : noticeItems) {
-            // D11 finding 1 (2026-09-18): normalize into the short form via shortDiscountLabel
+            // Normalize into the short form via shortDiscountLabel
             // above — do NOT pass item.discountLabel() through, it is authored in the long
             // "ส่วนลด X ต่อหน่วย" form (see itemsFromQuotation) and clips in column G. The notice
             // doesn't store a separate discount-amount field, so the per-unit discount is derived
@@ -1076,25 +1068,6 @@ public class DepositNoticeService {
             .toList();
     }
 
-    /** {@code noteIds == null} → the templates' own defaultSelected set (same default createDraft
-     * uses); present-but-empty → no notes at all; otherwise exactly the requested ids, in the
-     * templates' own sortOrder (never the caller-supplied order — this is a curated official list,
-     * not free text). Never truncates — {@code sales.document_note_template} currently seeds
-     * THREE rows (V16), not five/six, and the caller may select any subset; whether the selection
-     * the printed sheet carries only the template's own หมายเหตุ block, so stored notes are never printed. */
-    private List<String> resolveNotes(List<Long> noteIds) {
-        List<DocumentNoteTemplateDto> templates = docs.findNoteTemplates();
-        if (noteIds == null) {
-            return templates.stream().filter(DocumentNoteTemplateDto::defaultSelected)
-                .map(DocumentNoteTemplateDto::text).toList();
-        } else if (noteIds.isEmpty()) {
-            return List.of();
-        }
-        Set<Long> wanted = new LinkedHashSet<>(noteIds);
-        return templates.stream().filter(t -> wanted.contains(t.id()))
-            .map(DocumentNoteTemplateDto::text).toList();
-    }
-
     private String nullSafe(String s) { return s != null ? s : ""; }
 
     // Revision flow (Part A of plan)
@@ -1110,7 +1083,7 @@ public class DepositNoticeService {
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "ขอแก้ไข revision ได้เฉพาะจากสถานะ approved หรือ document_issued เท่านั้น");
         }
-        if (s.createdById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
         }
 
@@ -1120,17 +1093,14 @@ public class DepositNoticeService {
             case NEW_ITEM      -> TicketStatus.IN_REVIEW;         // Import re-prices
         };
 
-        // The status move is now an EXPLICIT transition rather than a side effect of logging the
-        // event below. It used to ride on TicketRepository.addEvent, which wrote whatever toStatus
-        // it was handed as long as TicketStatus.isValid(toStatus) — a membership check, not a
-        // transition guard. addEvent no longer touches the column at all, so without this call the
-        // revision would log its event and leave the deal sitting where it was.
+        // The status move is an EXPLICIT transition, not a side effect of logging the
+        // event below: TicketRepository.addEvent does not touch the status column, so without
+        // this call the revision would log its event and leave the deal sitting where it was.
         //
         // Two of these three edges deliberately move the deal BACKWARDS (approved/document_issued
         // -> price_proposed for the CEO to re-approve, -> in_review for Import to re-price) and one
         // is the approved -> approved self-edge; all six from/to pairs reachable from the guard
-        // above are declared in TicketStatus.ALLOWED as intentional. Converging this flow onto the
-        // pricing-request revision path is a separate, later piece of work.
+        // above are declared in TicketStatus.ALLOWED as intentional.
         int rows = tickets.transitionStatus(ticketId, st, toStatus);
         if (rows == 0) {
             // Lost compare-and-set: another writer moved sales.ticket.status between the read above
@@ -1213,10 +1183,10 @@ public class DepositNoticeService {
     }
 
     /**
-     * Phase 1 lifecycle gate (mirrors TicketService.requireActive): deposit-notice
+     * Lifecycle gate (mirrors TicketService.requireActive): deposit-notice
      * mutations advance the payment track, so a paused/terminal deal blocks them.
      */
-    // Package-private (not private) — reused as-is by RemainingInvoiceService (GLA-99 step 2).
+    // Package-private (not private) — reused as-is by RemainingInvoiceService.
     void requireActiveLifecycle(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -1237,7 +1207,7 @@ public class DepositNoticeService {
      * Read gate mirroring TicketService.requireViewAccess: viewer role required,
      * sales reps only for their own tickets.
      *
-     * <p>Phase B (role-scoped views): import is denied outright, unlike
+     * <p>Role-scoped views: import is denied outright, unlike
      * TicketService.requireViewAccess (which strips only the embedded quotation but
      * still lets import view the rest of the ticket). A deposit notice IS a customer
      * financial document end to end — there is no "rest of it" for import to see —
@@ -1245,21 +1215,26 @@ public class DepositNoticeService {
      * matching salesViewScope.js hiding the whole "depositNotice" section from import.
      */
     // Package-private (not private) — "the existing requireTicketViewer" RemainingInvoiceService's
-    // read/list/download gate reuses directly (owner ruling 2026-09-20, GLA-99 step 2).
+    // read/list/download gate reuses directly.
     TicketDto requireTicketViewer(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if ("sales".equals(actor.role()) && t.summary().createdById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        // H1 lockdown: account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
+        // account is ROW-scoped -- it reads a deal's deposit notices / remaining invoices only
         // when the deal is inside its list scope (the same predicate that filters GET /api/tickets).
         // Every deposit-notice and remaining-invoice read funnels through this method.
-        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
+        // Read gate only (deposit-notice writes use requireTicketOwner): also a lost/cancelled deal that still has an
+        // issued deposit notice, so the finance page can show its documents. This method is
+        // also reached on remaining-invoice writes via resolveRemainingInvoiceSnapshot; those are blocked for a dead
+        // deal by requireDepositNoticeIssueGate + requireActiveLifecycle, so the widening never lets one through.
+        if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)
+                && !tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return t;
@@ -1268,7 +1243,7 @@ public class DepositNoticeService {
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if (t.summary().createdById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -1290,30 +1265,28 @@ public class DepositNoticeService {
 
     /** Resolved customer-master header fields, shared by createDraft (deposit notice) and the
      * remaining-invoice methods below — see {@link #resolveCustomerHeader} for the lookup rule.
-     * {@code branch} is new for this branch: createDraft never needed it standalone (it only ever
-     * folds branch INTO the joined address string), but the remaining invoice's B7 line needs it
+     * {@code branch} is carried standalone: createDraft only folds branch INTO the joined address
+     * string, but the remaining invoice's B7 line needs it
      * separately ("<name> (<branch>) / เลขประจำตัวผู้เสียภาษี : <taxId>"). {@code addressOnly} is
-     * also new (finding 2d, branch-printed-twice): the remaining invoice's B8 must be the address
-     * WITHOUT the branch folded in (B7 already shows it in parens) — {@code address} itself stays
-     * exactly as createDraft has always built it (address+branch joined), since that document's
-     * behaviour predates this branch and must not change. */
-    // Package-private (not private) — reused by RemainingInvoiceService's own customer snapshot
-    // (GLA-99 step 2).
+     * the address WITHOUT the branch folded in, because the remaining invoice's B8 must not repeat
+     * the branch (B7 already shows it in parens) — {@code address} itself is what createDraft
+     * builds (address+branch joined) and must not change. */
+    // Package-private (not private) — reused by RemainingInvoiceService's own customer snapshot.
     record CustomerHeaderInfo(String taxId, String address, String addressOnly, String branch, String projectName) {}
 
     /**
      * Single source of truth for "where does a document's customer header come from", used by
      * createDraft (deposit notice), getRemainingInvoiceOptions (remaining invoice preview), and
      * RemainingInvoiceService's own stored snapshot (remaining invoice, via
-     * resolveRemainingInvoiceSnapshot) — extracted from createDraft's own pre-existing inline logic
-     * so no remaining-invoice document can ever source a customer's address/tax id/branch
+     * resolveRemainingInvoiceSnapshot) — shared so no remaining-invoice document can ever source a
+     * customer's address/tax id/branch
      * differently. A caller-supplied
      * non-blank {@code reqTaxId}/{@code reqAddress}/{@code reqProjectName} always wins (createDraft
      * is the only caller that ever passes one — the remaining-invoice methods pass all-null,
      * meaning "always resolve from the customer master"); a null {@code customerId} (never linked
      * to a customer master row) safely leaves these fields blank rather than throwing.
      */
-    // Package-private (not private) — see resolveRemainingInvoiceSnapshot above (GLA-99 step 2).
+    // Package-private (not private) — see resolveRemainingInvoiceSnapshot above.
     CustomerHeaderInfo resolveCustomerHeader(TicketSummaryDto s,
             String reqTaxId, String reqAddress, String reqProjectName) {
         String customerTaxId = blankToNull(reqTaxId);

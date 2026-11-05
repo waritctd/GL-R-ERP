@@ -24,9 +24,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadCustomerQuotationPdf: vi.fn(),
         downloadCustomerQuotationXlsx: vi.fn(),
       },
-      // GLA-123 slice S3 MAJOR 4 fix — directQuotationsQuery's own source (backs the "ใบเสนอราคา"
-      // panel this register only counts/points to). Absent from this mock before this fix;
-      // harmless while it was never asserted on, but the new test below needs a real value.
+      // directQuotationsQuery's own source (backs the "ใบเสนอราคา" panel this register only
+      // counts/points to).
       dealQuotations: {
         listForTicket: vi.fn().mockResolvedValue({ items: [] }),
         downloadPdf: vi.fn(),
@@ -38,9 +37,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadPdf: vi.fn(),
         noteTemplates: vi.fn(),
       },
-      // The STORED remaining invoice aggregate (V188, GLA-99 step 2) — RemainingInvoiceDialog
-      // checks this before it ever reaches the stateless preview these tests exercise. Defaults
-      // to "no live document yet", matching every fixture below.
+      // The STORED remaining invoice aggregate: RemainingInvoiceDialog checks this before it reaches
+      // the stateless preview these tests exercise. Defaults to "no live document yet", matching
+      // every fixture below.
       storedRemainingInvoices: {
         listForTicket: vi.fn().mockResolvedValue({ remainingInvoices: [] }),
         createDraft: vi.fn(),
@@ -53,7 +52,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       attachments: {
         fileUrl: (id) => `#mock-file-${id}`,
       },
-      // CR-1 (R9): the stored ใบขอซื้อ aggregate — one row per factory, listed in a 5th section.
+      // The stored ใบขอซื้อ aggregate — one row per factory, listed in a 5th section.
       storedImportRequests: {
         listForTicket: vi.fn().mockResolvedValue({ importRequests: [] }),
         download: vi.fn(),
@@ -62,11 +61,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-// Mirrors salesViewScope.js's own section shape closely enough for this
-// component's own gates (`sections?.dealQuotation`/`quotation`/`depositNotice`)
-// — this file does not re-derive salesViewScope's per-role logic (out of
-// bounds for this branch), it only feeds the component the exact shape that
-// module already produces for each role under test.
+// Mirrors salesViewScope.js's own section shape closely enough for this component's own gates
+// (`sections?.dealQuotation`/`quotation`/`depositNotice`); it does not re-derive salesViewScope's
+// per-role logic, only feeds the component the exact shape that module produces for each role.
 const SALES_SECTIONS = { dealQuotation: true, quotation: true, depositNotice: true };
 const IMPORT_SECTIONS = { dealQuotation: false, quotation: false, depositNotice: false };
 const ACCOUNT_SECTIONS = { dealQuotation: true, quotation: true, depositNotice: true };
@@ -108,8 +105,8 @@ describe('DealDocumentRegister', () => {
 
   it('renders one honest empty state — not silently-omitted sections — for a viewer admitted to none of the row families', async () => {
     renderRegister({
-      // CR-1: import is admitted to the ใบขอซื้อ family now (it may read the stored IRs), so the
-      // "admitted to nothing" viewer is a non-participant account here instead.
+      // import is admitted to the ใบขอซื้อ family (it may read the stored IRs), so the "admitted to
+      // nothing" viewer is a non-participant account here instead.
       user: { id: 99, role: 'account' },
       sections: IMPORT_SECTIONS,
       canViewPricingRequests: true, // role-list includes import; sections still zero it out
@@ -155,13 +152,10 @@ describe('DealDocumentRegister', () => {
     await waitFor(() => expect(api.pricingRequests.listCustomerQuotations).toHaveBeenCalledWith(501));
   });
 
-  // GLA-123 item 8 / slice S3 MAJOR 4 fix — DealQuotationRepository#findByTicket used to be
-  // DEAL_DIRECT-only, so a deal whose only quotation was PRICING_REQUEST-origin showed the false
-  // "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state even with one ISSUED. The register now LISTS the
-  // rows of that endpoint itself (versions grouped) instead of pointing at the panel below, so the
-  // row must be visible here and the old pointer sentence must be gone.
-  // CHANGED from the pre-versions test: it asserted the "แสดงอยู่ในแผง" pointer sentence, which the
-  // owner's redesign replaces with the real rows.
+  // DealQuotationRepository#findByTicket also returns PRICING_REQUEST-origin rows: a deal whose only
+  // quotation is one of those must not show the false "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state.
+  // The register LISTS the rows of that endpoint itself (versions grouped) instead of pointing at
+  // the panel below, so the row must be visible here and no pointer sentence shown.
   it('a deal with only a PRICING_REQUEST-origin quotation lists it (no false empty state, no pointer sentence)', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', origin: 'PRICING_REQUEST', revisionNo: 1, grandTotal: 500 }],
@@ -181,7 +175,7 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByText(/แสดงอยู่ในแผง/)).toBeNull();
   });
 
-  // ── Document versions (owner redesign): all versions per document, newest first ─────────────
+  // ── Document versions: all versions per document, newest first ─────────────
   const CHAIN_PR = [{ id: 501, ticketCreatedById: 1, status: 'APPROVED_FOR_QUOTATION' }];
   const SALES = { user: { id: 1, role: 'sales' }, sections: SALES_SECTIONS, canViewPricingRequests: true, canViewDocumentsTab: true };
 
@@ -262,7 +256,6 @@ describe('DealDocumentRegister', () => {
     expect(oldRow.getByRole('button', { name: 'Excel' })).not.toBeNull();
   });
 
-  // ── Round 2 ────────────────────────────────────────────────────────────────────────────────
   // Real backend: sales.quotation.number is UNIQUE from one sequence, so a direct row can never
   // legitimately share a chain row's number. In mock mode (separate counters) it can — and a
   // filter keyed on number silently hid a real document.
@@ -279,10 +272,9 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('document-version-direct-77')).not.toBeNull();
   });
 
-  // Spec I1 (2026-10-27): the number is a plain link — the title only, no stretched overlay over the
-  // row (that part is CSS, which jsdom cannot see). The PDF/Excel downloads are pinned by 'lists
-  // direct quotations … downloads PDF by id' above; "PDF does not navigate" could not fail in jsdom
-  // (the button was never inside the link), so it is gone.
+  // The number is a plain link: the title only, no stretched overlay over the row (that part is
+  // CSS, which jsdom cannot see). The PDF/Excel downloads are pinned by 'lists direct
+  // quotations … downloads PDF by id' above.
   it('a direct quotation\'s number links to /quotations/<id>', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 2, origin: 'DEAL_DIRECT' }],
@@ -362,7 +354,7 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByText('QT-2026-0016-3')).toBeNull();
   });
 
-  // Download gates are unchanged by the versions redesign — regression pins, wrong-way-round.
+  // Download gates: regression pins, wrong-way-round.
   it.each(['DRAFT', 'SUPERSEDED'])('a %s chain quotation row has no PDF/Excel buttons', async (docStatus) => {
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({
       items: [{ id: 3, number: 'QT-G-1', docStatus, quotationRevisionNo: 1, grandTotal: 1 }],
@@ -717,14 +709,11 @@ describe('DealDocumentRegister', () => {
     expect(api.storedRemainingInvoices.listForTicket).not.toHaveBeenCalled();
   });
 
-  // REQUIRED CASE (coordinator addendum): an import rep who IS this deal's
-  // assignee is a genuine PARTICIPANT (canViewDocumentsTab true, passed down
-  // unchanged from TicketDetailPage's own identity-aware gate) — it reaches
-  // the attachments roll-up, but `sections.depositNotice`/`dealQuotation`/
-  // `quotation` stay false for `import` regardless of participation, so it
-  // must see ZERO quotation and ZERO deposit/invoice rows. This is the row
-  // where the two predicates (participant-based vs role+section-based)
-  // visibly disagree — the most likely future regression in this slice.
+  // An import rep who IS this deal's assignee is a genuine PARTICIPANT (canViewDocumentsTab true,
+  // from TicketDetailPage's identity-aware gate): it reaches the attachments roll-up, but
+  // `sections.depositNotice`/`dealQuotation`/`quotation` stay false for `import` regardless, so it
+  // must see ZERO quotation and ZERO deposit/invoice rows. This is where the two predicates
+  // (participant-based vs role+section-based) visibly disagree.
   it('an import assignee reaches attachments but sees zero quotation and zero deposit/invoice rows', async () => {
     renderRegister({
       user: { id: 7, role: 'import' },
@@ -764,14 +753,11 @@ describe('DealDocumentRegister', () => {
     expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
   });
 
-  // GLA-117: DealDocumentRegister lists EVERY deposit notice for the ticket (unlike
-  // DealDepositPanel/DepositNoticePage, which only ever surface the current DRAFT or latest
-  // ISSUED row via a draft ?? latestIssued memo), so a revised deal's original, superseded
-  // notice is the one place this bug was actually user-visible: the old inline
-  // `doc.status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternary rendered SUPERSEDED as "ฉบับร่าง"
-  // (draft), making an already-issued document look untouched and still editable. The old
-  // ternary ALSO gated download actions to ISSUED-only, so a SUPERSEDED notice lost its PDF/Excel
-  // buttons entirely — the ticket's acceptance criterion is that both stay downloadable.
+  // DealDocumentRegister lists EVERY deposit notice for the ticket (unlike DealDepositPanel/
+  // DepositNoticePage, which surface only the current DRAFT or latest ISSUED row), so a revised
+  // deal's superseded notice must read ถูกแทนที่ and keep its PDF/Excel buttons: an inline
+  // `doc.status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternary would render SUPERSEDED as
+  // "ฉบับร่าง" and gate downloads to ISSUED-only.
   it('a SUPERSEDED deposit notice renders ถูกแทนที่ (not ฉบับร่าง) and both it and the ISSUED notice stay downloadable', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [
@@ -804,7 +790,7 @@ describe('DealDocumentRegister', () => {
     expect(pdfButtons).toHaveLength(2);
     expect(xlsxButtons).toHaveLength(2);
 
-    // Newest version first now (v2 = id 12, then v1 = id 11), regardless of API order.
+    // Newest version first (v2 = id 12, then v1 = id 11), regardless of API order.
     fireEvent.click(pdfButtons[0]);
     await waitFor(() => expect(api.depositNotices.downloadPdf).toHaveBeenCalledWith(12));
     fireEvent.click(pdfButtons[1]);
@@ -815,7 +801,7 @@ describe('DealDocumentRegister', () => {
     await waitFor(() => expect(api.depositNotices.downloadXlsx).toHaveBeenCalledWith(11));
   });
 
-  // ── Round 9: two sections instead of one combined block ───────────────────────────────────
+  // ── Two sections, not one combined block ───────────────────────────────────
   it('account sees TWO sections: ใบแจ้งยอดมัดจำ then ใบแจ้งหนี้ส่วนที่เหลือ, each with its own empty state', async () => {
     renderRegister({ ...ACCOUNT });
 
@@ -831,7 +817,7 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
   });
 
-  // W3-10: at ขั้น 10 the empty deposit section points the OWNING sales rep at the button that creates the
+  // At ขั้น 10 the empty deposit section points the OWNING sales rep at the button that creates the
   // notice — unless the deposit is bypassed, the deal is at another stage, or the viewer is not the owner.
   it.each([
     ['ORDER_RECEIVED, deposit required, owner', 'ORDER_RECEIVED', 'REQUIRED', 6, true],
@@ -841,7 +827,7 @@ describe('DealDocumentRegister', () => {
     ['ORDER_RECEIVED, CREDIT_CUSTOMER', 'ORDER_RECEIVED', 'CREDIT_CUSTOMER', 6, false],
     ['another stage (QUOTE_BUYER)', 'QUOTE_BUYER', 'REQUIRED', 6, false],
     ['a sales rep who does not own the deal', 'ORDER_RECEIVED', 'REQUIRED', 99, false],
-    // F7: the page's real signal (the button is up) decides, not a re-derivation from the summary.
+    // The page's real signal (the button is up) decides, not a re-derivation from the summary.
     ['ON_HOLD: stage and policy say yes but the page shows no deposit button', 'ORDER_RECEIVED', 'REQUIRED', 6, false, { depositCtaShown: false }],
     ['the page shows the deposit button, whatever the summary says', 'QUOTE_BUYER', 'REQUIRED', 6, true, { depositCtaShown: true }],
   ])('empty deposit section pointer: %s', async (_label, salesStage, depositPolicy, createdById, pointed, override) => {
@@ -872,7 +858,7 @@ describe('DealDocumentRegister', () => {
     expect(deposit.textContent).not.toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
   });
 
-  // W3-10 / QA-29: the register prints a Thai attachment type too, never the raw enum.
+  // The register prints a Thai attachment type too, never the raw enum.
   it('the ไฟล์แนบ rows show a Thai attachment type, not the raw enum', async () => {
     renderRegister({
       ...ACCOUNT,
@@ -954,8 +940,8 @@ describe('DealDocumentRegister', () => {
     expect(readySection.getByRole('button', { name: 'Excel' })).not.toBeNull();
   });
 
-  // Finding 6 (both entry points must open the dialog, not download directly): this is one of
-  // the two entry points — TicketDetailPage.test.jsx pins the other.
+  // Both entry points must open the dialog, not download directly: this is one of the two entry
+  // points; TicketDetailPage.test.jsx pins the other.
   it('clicking the Excel action opens the RemainingInvoiceDialog rather than downloading directly', async () => {
     api.tickets.remainingInvoiceOptions.mockResolvedValue({
       options: {
@@ -982,8 +968,8 @@ describe('DealDocumentRegister', () => {
     expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
   });
 
-  // A from-stock deal never writes GOODS_RECEIVED (import-axis only), so the old gate left this row
-  // at รอขั้นตอน for its whole life. Ready states and the wrong-way-round transit states both pinned.
+  // A from-stock deal never writes GOODS_RECEIVED (import-axis only), so a gate on it would leave
+  // this row at รอขั้นตอน for its whole life. Ready states and the wrong-way-round transit states both pinned.
   it.each([
     ['FROM_STOCK', true],
     ['PARTIALLY_DELIVERED', true],
@@ -1009,9 +995,9 @@ describe('DealDocumentRegister', () => {
   });
 });
 
-// CR-1 (GLA-167) R6 / R9: the deal เอกสาร tab gets a 5th section, ใบขอซื้อ (รายโรงงาน) — one row
-// per IR (one IR per factory): number or ฉบับร่าง, factory, status, PDF. Read gate mirrors
-// ImportRequestService#requireRead: import / CEO / sales_manager, or the owning sales rep.
+// The deal เอกสาร tab's 5th section, ใบขอซื้อ (รายโรงงาน): one row per IR (one IR per factory):
+// number or ฉบับร่าง, factory, status, PDF. Read gate mirrors ImportRequestService#requireRead:
+// import / CEO / sales_manager, or the owning sales rep.
 describe('DealDocumentRegister — ใบขอซื้อ (รายโรงงาน) section (CR-1)', () => {
   const OWNER = { user: { id: 1, role: 'sales' }, sections: SALES_SECTIONS, canViewPricingRequests: true, canViewDocumentsTab: true, summary: { status: 'order_received', createdById: 1 } };
   const ir = (over = {}) => ({

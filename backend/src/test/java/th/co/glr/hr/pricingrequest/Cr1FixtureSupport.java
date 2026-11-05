@@ -53,6 +53,8 @@ abstract class Cr1FixtureSupport extends AbstractPostgresIntegrationTest {
     protected FactoryQuoteRepository factoryQuoteRepository;
     protected FactoryQuoteService factoryQuoteService;
     protected LeadTimeChangeService leadTimeChangeService;
+    /** Mailer behind every wired service; a test that asserts emails sets it before {@link #wireServicesAndCreateDeal}. */
+    protected SalesNotificationMailer fixtureMailer = SalesNotificationMailer.NO_OP;
 
     protected long salesRepId;
     protected long otherSalesRepId;
@@ -73,7 +75,7 @@ abstract class Cr1FixtureSupport extends AbstractPostgresIntegrationTest {
     protected void wireServicesAndCreateDeal() {
         TicketRepository tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        NotificationRepository notifications = new NotificationRepository(jdbc, fixtureMailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(

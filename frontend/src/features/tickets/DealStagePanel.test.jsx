@@ -31,8 +31,8 @@ globalThis.React = React;
 // backend-served stage catalog. Both are supplied here as the API supplies them.
 const catalog = DEAL_STAGE_CATALOG;
 
-// "Everything the server would allow" — enough for the UPDATE_STAGE gate, which now asks whether
-// ANY decision is allowed rather than recomputing allowedTargetStages.
+// "Everything the server would allow": enough for the UPDATE_STAGE gate, which asks whether ANY
+// decision is allowed rather than recomputing allowedTargetStages.
 const allAllowed = catalog.stages.map((stage, index) => ({
   stage: stage.code, no: index + 1, allowed: true, requiresReason: false, blockedReason: null,
 }));
@@ -65,9 +65,9 @@ const noopHandlers = {
   onSetTenderRequirement: vi.fn(),
 };
 
-// DealStagePanel now calls useQueryClient/useMutation (the guided-advance flow), so it must render
-// inside a QueryClientProvider — at runtime the app root supplies one. A fresh client per render
-// keeps tests isolated; rerender() inherits this wrapper automatically.
+// DealStagePanel calls useQueryClient/useMutation (the guided-advance flow), so it must render
+// inside a QueryClientProvider. A fresh client per render keeps tests isolated; rerender() inherits
+// this wrapper.
 function QueryWrapper({ children }) {
   const [client] = React.useState(() => new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -125,8 +125,8 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     expect(screen.getByRole('dialog')).not.toBeNull();
   });
 
-  // SK-06 (ruling 2026-10-29): a skipped owner stage is final, so แก้ไขสถานะ never offers a stage the
-  // track marks ข้าม. Deal went 4 -> 8 via the skip, so 5/6/7 were never visited.
+  // A skipped owner stage is final, so แก้ไขสถานะ never offers a stage the track marks ข้าม. The deal
+  // went 4 -> 8 via the skip, so 5/6/7 were never visited.
   it('openEditStage() does not offer stages the deal skipped (4 -> 8), but still offers the rest', () => {
     const skipEvents = [{ kind: 'STAGE_CHANGED', fromStatus: 'QUOTE_DESIGN_SIDE', toStatus: 'QUOTE_BUYER' }];
     const { ref } = renderPanelWithRef({
@@ -143,7 +143,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     expect(offered).toContain('NEGOTIATION');
   });
 
-  // F1: only a skipped OWNER stage is final. Never-visited stages elsewhere stay offered.
+  // Only a skipped OWNER stage is final. Never-visited stages elsewhere stay offered.
   it('openEditStage() still offers SPEC_APPROVED on a 1 -> 2 -> 4 deal (the routine 4 -> 3 move)', () => {
     const { ref } = renderPanelWithRef({
       summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }),
@@ -254,10 +254,8 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     expect(screen.getByRole('dialog')).not.toBeNull();
   });
 
-  // FIX 2 (ticket-detail IA rebuild Phase 1 clutter follow-up): "เลื่อนไป"
-  // moved out of this panel's own JSX into TicketDetailPage's header overflow
-  // menu — openAdvance() is now the only way this deal actually advances.
-  // baseSummary's salesStage 'PRESENTATION' -> nextStage is 'SPEC_APPROVED'
+  // "เลื่อนไป" lives in TicketDetailPage's header overflow menu: openAdvance() is the only way this
+  // deal advances. baseSummary's salesStage 'PRESENTATION' -> nextStage is 'SPEC_APPROVED'
   // (SALES_STAGES order), gated to 'sales'; salesOwner is the deal's owner.
   it('openAdvance() is a no-op without ADVANCE_STAGE for the next stage in availableActions', () => {
     const { ref } = renderPanelWithRef({ availableActions: [] });
@@ -283,15 +281,12 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     expect(noopHandlers.onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED' });
   });
 
-  // FIX 3 (P2, clutter-follow-up review round 2): the old inline buttons
-  // these openers replaced were each `disabled={actionLoading}` — a mutation
-  // already in flight blocked a second click on the same action. That
-  // native-attribute guard was lost when the buttons moved into the overflow
-  // menu (whose items use aria-disabled, not the native attribute, so they
-  // stay reachable — see OverflowMenu's own doc comment); these openers are
-  // where it has to come back, since TicketDetailPage's overflow item only
-  // disables on its OWN precondition (readyToAdvance for เลื่อนไป, nothing
-  // at all for the other three) and never re-derives actionLoading itself.
+  // The old inline buttons were each `disabled={actionLoading}`, so a mutation in flight blocked a
+  // second click on the same action. That native-attribute guard was lost when the buttons moved into
+  // the overflow menu (its items use aria-disabled, so they stay reachable; see OverflowMenu's doc
+  // comment), so these openers are where it comes back: TicketDetailPage's overflow item disables
+  // only on its OWN precondition (readyToAdvance for เลื่อนไป, nothing for the other three) and
+  // never re-derives actionLoading.
   it('openAdvance() is a no-op while actionLoading is true, even though the gate and advanceReady both pass', () => {
     // A fresh local spy, not the shared noopHandlers.onUpdateStage — that
     // mock already has a call recorded from the "gate and advanceReady both
@@ -337,17 +332,12 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
   });
 });
 
-// Slice A "chip diet": the pricing-request roll-up strip (commit 6 / Fix 3 of
-// the review-remediation plan — formerly tested right here), the "ยอดชำระ" /
-// "นโยบายมัดจำ" payment badges, the PAYMENT_SUBSTEPS chip row, and the
-// PROCUREMENT_SUBSTEPS chip row + "ส่งมอบ x/y" badge were all removed from
-// this panel (see its own doc comment for where each one went — deleted as a
-// duplicate, or moved to the money tab). These are wrong-way-round regression
-// guards, not the positive "it renders" tests the old suite had: each one
-// feeds in summary/pricingRequests data that used to trigger the removed row,
-// and asserts it stays gone. The `pricingRequests` prop itself no longer
-// exists on this component (it's still accepted as an extra prop here only to
-// prove a stale caller passing it can't resurrect the strip).
+// Wrong-way-round regression guards for what this panel no longer shows: the pricing-request
+// roll-up strip, the "ยอดชำระ" / "นโยบายมัดจำ" payment badges, the PAYMENT_SUBSTEPS chip row, and the
+// PROCUREMENT_SUBSTEPS chip row + "ส่งมอบ x/y" badge (see its doc comment for where each went). Each
+// feeds in summary/pricingRequests data that used to trigger the removed row and asserts it stays
+// gone. The `pricingRequests` prop no longer exists on this component; it's still passed here to
+// prove a stale caller can't resurrect the strip.
 describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay gone', () => {
   it('never renders the pricing-request roll-up strip, regardless of pricingRequests data passed in', () => {
     renderPanel({
@@ -388,20 +378,16 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
 
   it('still renders the pipeline\'s own stage content (this panel is not empty — only the duplicated rows are gone)', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }) });
-    // V143 gave the project owner their own stage (QUOTE_OWNER, S5), so S4's wording narrowed to
-    // the designer alone — it used to read "เสนอราคาผู้ออกแบบ/เจ้าของ", which after the split named
-    // a recipient this stage no longer covers.
+    // S4's wording is the designer alone (the project owner has their own stage, QUOTE_OWNER, S5).
     expect(screen.getByText('เสนอราคาผู้ออกแบบ')).not.toBeNull();
   });
 });
 
 /**
- * The stage headline says who the stage is dealing with, in the title itself — there is no separate
+ * The stage headline says who the stage is dealing with, in the title itself; there is no separate
  * counterparty row. Stages 4-8 already name the party in their own label; ORDER_RECEIVED did not
- * ("ได้รับใบสั่งซื้อ"), so this panel's headline for it names who the order came from.
- *
- * This also replaced ช่องทางรับงาน (entry channel, once an editable select — issue #740), which is no
- * longer shown here, and never offers a control.
+ * ("ได้รับใบสั่งซื้อ"), so this panel's headline for it names who the order came from. The
+ * ช่องทางรับงาน (entry channel) is not shown here and never offers a control.
  */
 describe('DealStagePanel headline names the counterparty', () => {
   const owner = [{ action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value'] }];
@@ -431,7 +417,7 @@ describe('DealStagePanel headline names the counterparty', () => {
     },
   );
 
-  // Owner ruling 2026-10-29: the sales rep owns ขั้น 12 (they issue the IR); ขั้น 11 stays with accounting.
+  // The sales rep owns ขั้น 12 (they issue the IR); ขั้น 11 stays with accounting.
   it.each([['DEPOSIT_RECEIVED', 'ฝ่ายบัญชี'], ['PROCUREMENT', 'ฝ่ายขาย']])(
     'the owner line at %s follows the 2026-10-29 ruling',
     (salesStage, department) => {
@@ -471,9 +457,9 @@ describe('DealStagePanel headline names the counterparty', () => {
 });
 
 /**
- * Redesign (GLA-156 follow-up): the default view answers three questions — which stage, whose move,
- * what comes next — and everything else is one click away. These pin what was taken OFF the default
- * view so it cannot creep back, plus the two controls that were demoted rather than removed.
+ * The default view answers three questions (which stage, whose move, what comes next) and everything
+ * else is one click away. These pin what was taken OFF the default view so it cannot creep back,
+ * plus the two controls that were demoted rather than removed.
  */
 describe('DealStagePanel focused default view', () => {
   const phaseCount = catalog.phases.length;
@@ -512,15 +498,14 @@ describe('DealStagePanel focused default view', () => {
   });
 });
 
-// Bug 4 (fix/stage-advance-readiness-ux): when the ONLY thing blocking the next stage is the
-// readiness gate (a follow-up date + a logged activity since the last stage change), the panel used
-// to hide the advance button and show the misleading "ขั้นถัดไปอัปเดตโดยฝ่ายขาย" hint — dead text
-// the rep is actually allowed to act on. The guided-advance flow replaces that with a button that
-// collects exactly what the gate needs, then satisfies it (updateTracking → addActivity) and moves
-// the stage through the parent's onUpdateStage, so the gate/business-logic is unchanged.
+// When the ONLY thing blocking the next stage is the readiness gate (a follow-up date + a logged
+// activity since the last stage change), the panel must not hide the advance button and show the
+// misleading "ขั้นถัดไปอัปเดตโดยฝ่ายขาย" hint (dead text the rep is allowed to act on). The
+// guided-advance flow collects exactly what the gate needs, satisfies it (updateTracking →
+// addActivity) and moves the stage through the parent's onUpdateStage, so the gate is unchanged.
 describe('DealStagePanel guided advance (readiness gate)', () => {
-  // Next after PRESENTATION (S2) is SPEC_APPROVED (S3), gate=sales, auto=false — a manual sales
-  // move, exactly the case the readiness gate applies to.
+  // Next after PRESENTATION (S2) is SPEC_APPROVED (S3), gate=sales, auto=false: a manual sales move,
+  // which is the case the readiness gate applies to.
   const readinessBlocked = allAllowed.map((decision) => (
     decision.stage === 'SPEC_APPROVED'
       ? {
@@ -529,8 +514,8 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
       : decision
   ));
 
-  // W3-09 (owner ruling 2026-10-29): at ขั้น 12 the deal advances by itself, so the manual move is a
-  // deliberate SECONDARY skip, not the filled primary เลื่อนไป. Every other stage keeps เลื่อนไป.
+  // At ขั้น 12 the deal advances by itself, so the manual move is a deliberate SECONDARY skip, not the
+  // filled primary เลื่อนไป. Every other stage keeps เลื่อนไป.
   it('at PROCUREMENT the visible manual move is a secondary "ข้ามไปขั้น 13 ด้วยตนเอง"; at ขั้น 2 it stays a primary เลื่อนไป', () => {
     const blocked = (stage) => allAllowed.map((d) => (
       d.stage === stage ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
@@ -548,8 +533,8 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     expect(normal.className).not.toContain('bg-surface');
   });
 
-  // W3-09: the skip stays (demoted, not hidden), but moving to ขั้น 13 before the goods arrive warns —
-  // in the guided modal AND on the ready-to-move path (⋯ -> openAdvance), which used to move silently.
+  // The skip stays (demoted, not hidden), but moving to ขั้น 13 before the goods arrive warns, in the
+  // guided modal AND on the ready-to-move path (⋯ -> openAdvance).
   describe('W3-09 goods-not-arrived warning at PROCUREMENT', () => {
     const WARNING = /สินค้าจากโรงงานยังมาไม่ครบ/;
     const procurementProps = (overrides = {}) => ({
@@ -601,7 +586,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     });
   });
 
-  // F2: only the confirm-order CTA replaces เลื่อนไป; a later party's live request (SK-04) does not.
+  // Only the confirm-order CTA replaces เลื่อนไป; a later party's live request does not.
   it('ขั้น 5 with a live BUYER request and readiness unmet still shows guided-advance-open', () => {
     const blocked = allAllowed.map((d) => (
       d.stage === 'OWNER_SIGNOFF' ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
@@ -723,8 +708,8 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     });
   });
 
-  // SK-08: at ขั้น 8 the page's main button is ยืนยันคำสั่งซื้อ (-> ขั้น 10). ถัดไป must name the stage
-  // that button leads to, and the manual เลื่อนไป ขั้น 9 is not offered beside it (walk 6 leftover).
+  // At ขั้น 8 the page's main button is ยืนยันคำสั่งซื้อ (-> ขั้น 10). ถัดไป must name the stage that
+  // button leads to, and the manual เลื่อนไป ขั้น 9 is not offered beside it.
   it('with ctaStage ORDER_RECEIVED at QUOTE_BUYER, ถัดไป names 10 (not 9) and there is no เลื่อนไป 9 button', () => {
     const negotiationBlocked = allAllowed.map((d) => (
       d.stage === 'NEGOTIATION' ? { ...d, allowed: false, blockedReason: STAGE_ADVANCE_GATE_MESSAGE } : d
@@ -778,7 +763,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
 
       // The move goes through the parent (preserving its invalidation/toast) with the next stage code…
       await waitFor(() => expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED' }));
-      // …and only after the gate was satisfied first.
+      // ...and only after the gate was satisfied first.
       expect(api.tickets.updateTracking).toHaveBeenCalledWith(
         501,
         expect.objectContaining({ nextFollowUpAt: '2026-10-05', winProbability: null }),
@@ -787,8 +772,8 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
         501,
         expect.objectContaining({ kind: 'CALL', note: 'โทรติดตามลูกค้า', activityDate: '2026-10-31' }),
       );
-      // QA-33: the activity just logged must refresh the page's activities list (and the key must be
-      // numeric, since the page keys it with the route param — see the key-normalisation test below).
+      // The activity just logged must refresh the page's activities list (and the key must be
+      // numeric, since the page keys it with the route param; see the key-normalisation test below).
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tickets', 'activities', 501] });
     } finally {
       invalidate.mockRestore();
@@ -796,7 +781,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     }
   });
 
-  // QA-33: the page keys activities with a string route param, the panel with the numeric summary.id.
+  // The page keys activities with a string route param, the panel with the numeric summary.id.
   it('queryKeys.ticketActivities normalises the id like ticketDetail, so "6" and 6 share a key', () => {
     expect(queryKeys.ticketActivities('6')).toEqual(queryKeys.ticketActivities(6));
   });
@@ -854,7 +839,7 @@ describe('DealStagePanel route awareness', () => {
       expect(routeLine()).not.toBeNull();
       expect(routeLine().textContent).toContain(name);
       expect(routeLine().textContent).toContain(`${name} · ${total}`);
-      // W5-02: the panel uses ONE numbering (the stage's own 1-15 number), so no route position here.
+      // The panel uses ONE numbering (the stage's own 1-15 number), so no route position here.
       expect(routeLine().textContent).not.toContain('ขั้นที่');
     });
 
@@ -884,8 +869,8 @@ describe('DealStagePanel route awareness', () => {
   describe('ถัดไป follows the route', () => {
     const nextText = () => screen.getByTestId('deal-stage-next').textContent;
 
-    // Walk 4 (W4-05/W4-02): a deal with no deposit never passes ขั้น 11 - nothing for the account team to
-    // confirm - so ถัดไป must jump from ขั้น 10 to ขั้น 12 and must not promise "ได้รับเงินมัดจำ".
+    // A deal with no deposit never passes ขั้น 11 (nothing for the account team to confirm), so ถัดไป
+    // must jump from ขั้น 10 to ขั้น 12 and must not promise "ได้รับเงินมัดจำ".
     it.each(['NOT_REQUIRED', 'WAIVED'])('depositPolicy %s at ORDER_RECEIVED: ถัดไป names 12 (PROCUREMENT), never ขั้น 11 or the account\'s deposit confirmation', (depositPolicy) => {
       renderPanel({
         summary: baseSummary({ salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy }),
@@ -930,10 +915,9 @@ describe('DealStagePanel route awareness', () => {
       expect(nextText()).toContain('4. เสนอราคาผู้ออกแบบ');
     });
 
-    // Owner ruling 2026-10-27 (spec G1): while the sticky bar offers the route choice, ถัดไป is
-    // built from the parties' OWN quote stages (the first, then "หรือข้ามไป" the next), followed by
-    // the first one's auto hint — never from the stage after the current one, since a deal can sit
-    // anywhere (moved by hand) while the choice stands.
+    // While the sticky bar offers the route choice, ถัดไป is built from the parties' OWN quote stages
+    // (the first, then "หรือข้ามไป" the next), followed by the first one's auto hint, never from the
+    // stage after the current one (a deal can sit anywhere, moved by hand, while the choice stands).
     it('route choices name the parties\' own stages: owner and buyer left at ขั้น 7 -> "ถัดไป: 5. เสนอราคาเจ้าของโครงการ หรือข้ามไป 8. …", then the owner\'s auto hint', () => {
       renderPanel({
         summary: baseSummary({ salesStage: 'AWAITING_BUYER', entryChannel: 'DESIGNER_LED' }),
@@ -952,7 +936,7 @@ describe('DealStagePanel route awareness', () => {
       expect(nextText()).toBe(`ถัดไป: 8. เสนอราคาผู้ซื้อ/ผู้รับเหมา — ${AUTO_STAGE_HINT.QUOTE_BUYER}`);
     });
 
-    // Ruling 2026-10-27 (e): the first party's stage missing from the catalog -> today's single line.
+    // The first party's stage missing from the catalog -> today's single line.
     it('the first party\'s stage missing from the catalog: the plain next-stage line, with no "หรือข้ามไป"', () => {
       renderPanel({
         summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE', entryChannel: 'DESIGNER_LED' }),
@@ -964,11 +948,10 @@ describe('DealStagePanel route awareness', () => {
     });
 
     /**
-     * Readiness-gate half only (owner's 2026-10-16 quote-stage ruling, D-4): a route-skipping
-     * pair now always lands on an `auto` stage, which renders no opener, so this is based on
-     * S5 → S6 (a non-auto target on the owner route). Route skipping itself is pinned by the
-     * `ถัดไป follows the route` tests above (`deal-stage-next` renders regardless of `auto`); the
-     * auto-stage rule by the sibling test below.
+     * Readiness-gate half only: a route-skipping pair always lands on an `auto` stage, which renders
+     * no opener, so this is based on S5 → S6 (a non-auto target on the owner route). Route skipping
+     * is pinned by the `ถัดไป follows the route` tests above (`deal-stage-next` renders regardless
+     * of `auto`); the auto-stage rule by the sibling test below.
      */
     it('the guided-advance opener names the route\'s next stage when the readiness gate is the only block', () => {
       const gated = routeDecisions(OWNER_OFF).map((decision) => (
@@ -985,15 +968,13 @@ describe('DealStagePanel route awareness', () => {
     });
 
     /**
-     * THE NEW RULE (owner ruling 2026-10-16, D-2/D-4): a quote stage is reached by QUOTING that
-     * party, never by clicking. So when the route's next stage is a quote stage, the guided opener
-     * must NOT appear even with the readiness gate as the only recorded block — the readiness gate
-     * is not what the rep has to satisfy, a document is.
+     * A quote stage is reached by QUOTING that party, never by clicking. So when the route's next
+     * stage is a quote stage, the guided opener must NOT appear even with the readiness gate as the
+     * only recorded block: the rep has to satisfy a document, not the gate.
      *
-     * The stronger half of the split above, and the one that would silently regress if `auto` were
-     * ever dropped from the three quote stages: the panel would start offering a one-click move into
-     * ขั้น 5 again while the server answers 409. `AUTO_STAGE_HINT` wording stands in its place,
-     * naming the document as the way forward instead of leaving a dead end.
+     * This would silently regress if `auto` were dropped from the three quote stages: the panel
+     * would offer a one-click move into ขั้น 5 while the server answers 409. `AUTO_STAGE_HINT`
+     * wording stands in its place, naming the document as the way forward.
      */
     it('offers NO guided opener when the route\'s next stage is a quote stage, and explains it instead', () => {
       const gated = routeDecisions(OWNER_OFF).map((decision) => (
@@ -1016,13 +997,11 @@ describe('DealStagePanel route awareness', () => {
 
   describe('an off-route target is never one click away', () => {
     /**
-     * ⚠️ Since the owner's 2026-10-16 quote-stage ruling this test passes for TWO independent
-     * reasons, and the one it is NAMED for is no longer the only thing holding it: S4 is off the
-     * owner-direct route (the original point) AND S4 is now `auto` (D-4), either of which alone
-     * makes `canAdvance` false. So a regression that broke the off-route check would still leave
-     * this green. The route half is pinned independently by `ถัดไป follows the route` above, which
-     * reads `deal-stage-next` and does not consult `auto` at all — that is the test to trust for
-     * route behaviour, and the one to fix first if this pair ever disagrees.
+     * ⚠️ This test passes for TWO independent reasons: S4 is off the owner-direct route AND S4 is
+     * `auto`, either of which alone makes `canAdvance` false. A regression that broke the off-route
+     * check would still leave it green. The route half is pinned independently by `ถัดไป follows the
+     * route` above, which reads `deal-stage-next` and does not consult `auto`: trust that one for
+     * route behaviour, and fix it first if this pair ever disagrees.
      */
     it('openAdvance() does not move to S4 on an owner-direct deal even if the server listed ADVANCE_STAGE for it', () => {
       noopHandlers.onUpdateStage.mockClear();
@@ -1036,10 +1015,9 @@ describe('DealStagePanel route awareness', () => {
     });
 
     /**
-     * The POSITIVE control for the refusal above — without it, a panel that refused every advance
-     * would pass the whole block. Re-based from S3→S5 to S5→S6 by the 2026-10-16 ruling: S5 is now
-     * `auto`, so it can no longer serve as the "one click does work" example, while S6
-     * (OWNER_SIGNOFF) is on the owner route and still a manual move.
+     * The POSITIVE control for the refusal above: without it, a panel that refused every advance
+     * would pass the whole block. S5 is `auto`, so it can't be the "one click does work" example;
+     * S6 (OWNER_SIGNOFF) is on the owner route and still a manual move.
      */
     it('openAdvance() moves to the ON-route S6 when that is the stage the server offers', () => {
       noopHandlers.onUpdateStage.mockClear();
@@ -1053,11 +1031,10 @@ describe('DealStagePanel route awareness', () => {
     });
 
     /**
-     * THE NEW RULE at the click seam (owner ruling 2026-10-16, D-2/D-4): an ON-ROUTE quote stage the
-     * server even listed `ADVANCE_STAGE` for is still not one click away, because the way into it is
-     * a quotation addressed to that party. Distinct from the off-route refusal above — here the
-     * route permits the stage and `auto` alone is what refuses, so this is the assertion that goes
-     * red if `auto` is dropped from the quote stages while the backend keeps 409-ing the manual move.
+     * The click seam: an ON-ROUTE quote stage the server listed `ADVANCE_STAGE` for is still not one
+     * click away, because the way into it is a quotation addressed to that party. Distinct from the
+     * off-route refusal above: here the route permits the stage and `auto` alone refuses, so this
+     * goes red if `auto` is dropped from the quote stages while the backend keeps 409-ing the move.
      */
     it('openAdvance() does not move into an ON-route quote stage, even when the server offers it', () => {
       noopHandlers.onUpdateStage.mockClear();
@@ -1121,11 +1098,10 @@ describe('DealStagePanel route awareness', () => {
 });
 
 /**
- * แก้ช่องทางดีล — the remedy for the route gate's own refusal ("… — แก้ช่องทางดีลก่อน"). GLA-156 took
- * the standing ช่องทางรับงาน row off this panel on purpose and that stays true: nothing renders on
- * the default view. The remedy is threaded down to where the refusal is READ — the stepper's
- * off-route rows and UpdateStageModal's blocked list — and only when the server advertised
- * SET_ENTRY_CHANNEL. `onRoute` is built by hand (mockApi does not emit it).
+ * แก้ช่องทางดีล: the remedy for the route gate's own refusal ("… — แก้ช่องทางดีลก่อน"). Nothing
+ * renders on the default view; the remedy is threaded down to where the refusal is READ (the
+ * stepper's off-route rows and UpdateStageModal's blocked list), and only when the server
+ * advertised SET_ENTRY_CHANNEL. `onRoute` is built by hand (mockApi does not emit it).
  */
 describe('DealStagePanel แก้ช่องทางดีล wiring', () => {
   const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];

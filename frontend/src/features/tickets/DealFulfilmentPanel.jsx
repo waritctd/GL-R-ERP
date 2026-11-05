@@ -16,10 +16,11 @@ import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { ImportRequestFactoryCard } from './ImportRequestFactoryCard.jsx';
 import { procurementPath } from './stageMeta.js';
+import { isOwnerOrKeyer } from './dealOwnership.js';
 
 const MISSING_COUNTRY_PREFIX = 'กรุณาระบุประเทศให้กับโรงงานใหม่: ';
-// 409 prefix of ImportRequestService#MISSING_LEAD_TIME_PREFIX: the factories listed after it have no lead
-// time from the quotation or the country default (owner ruling 10-29).
+// 409 prefix of ImportRequestService#MISSING_LEAD_TIME_PREFIX: the factories listed after it have
+// no lead time from the quotation or the country default.
 const MISSING_LEAD_TIME_PREFIX = 'กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ';
 
 function parseFactoryNames(message, prefix) {
@@ -28,9 +29,9 @@ function parseFactoryNames(message, prefix) {
     .filter(Boolean);
 }
 
-// One factory NAME's country pick, for the createDrafts auto-create path (owner decision 09-18):
-// a real country, or 'ZZ' อื่นๆ with a required typed name — same pairing rule
-// PriceImportService/ImportRequestService enforce server-side.
+// One factory NAME's country pick, for the createDrafts auto-create path: a real country, or 'ZZ'
+// อื่นๆ with a required typed name (same pairing rule PriceImportService/ImportRequestService
+// enforce server-side).
 function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClose, onSubmit, submitting }) {
   const [entries, setEntries] = useState(() => Object.fromEntries(
     factoryNames.map((name) => [name, { countryCode: '', countryOther: '' }]),
@@ -58,10 +59,8 @@ function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClo
         </>
       )}
     >
-      {/* PR-B REVIEW ROUND 1, S5: a failed countries fetch must say so — an empty select with no
-          explanation reads as "no countries exist", not as "this request failed", and the submit
-          button above is disabled via `ready` rather than silently letting an empty countryCode
-          through. */}
+      {/* A failed countries fetch must say so: an empty select reads as "no countries exist". The
+          submit button above is disabled via `ready` so an empty countryCode can't go through. */}
       {countriesError ? (
         <p className="mb-2 text-xs font-bold text-danger" data-testid="new-factory-country-error">
           โหลดรายชื่อประเทศไม่สำเร็จ — {countriesError.message || 'ลองปิดหน้าต่างนี้แล้วเปิดใหม่'}
@@ -164,9 +163,8 @@ const STEP_TITLE = 'text-md font-extrabold text-text';
 
 const STEP_ROLE_TH = { import: 'ฝ่ายนำเข้า', ceo: 'CEO', sales: 'ฝ่ายขาย', account: 'ฝ่ายบัญชี' };
 
-// Same small presentational helpers DealDepositPanel introduced (Phase 3
-// Slice S3) — duplicated here rather than imported since neither panel
-// exports them and this is the only other place that needs them so far.
+// Small presentational helpers duplicated from DealDepositPanel; neither panel exports them and
+// this is the only other place that needs them.
 function StepRoleTag({ owners, viewerRole }) {
   const mine = owners.includes(viewerRole);
   return (
@@ -186,20 +184,14 @@ function StepNumber({ no }) {
   );
 }
 
-// Compact glance strip reusing DealStagePanel's own PROCUREMENT_SUBSTEPS
-// labels (stageMeta.js) so the two panels never drift on what each
-// fulfillmentStatus code is called — DealStagePanel keeps its own copy of
-// this rendering (read-only, inside its "inner journey" chip strip) per the
-// same precedent Slice S3 set for the deposit-policy chip; this is the
-// action-bearing version.
+// Compact glance strip reusing DealStagePanel's PROCUREMENT_SUBSTEPS labels (stageMeta.js) so the
+// two panels never drift on what each fulfillmentStatus code is called. DealStagePanel keeps its
+// own read-only copy in its "inner journey" chip strip; this is the action-bearing version.
 function SubstepChips({ currentCode, fromStock = null }) {
-  // Issue #730: this used to walk the flat PROCUREMENT_SUBSTEPS list and mark everything before
-  // the current code "done". That list is a lookup table, not a path — FROM_STOCK sits at index 4,
-  // so a from-stock deal rendered IR-issued / ordered / shipping / goods-received in green, four
-  // milestones it never performed and, per issueImportRequest's own guard, never could have.
-  // procurementPath() returns the journey this deal is actually on, so index-as-progress is true
-  // again. Same defect PR #715 fixed for PICKED_UP/CUSTOMS_CLEARANCE — but FROM_STOCK is written
-  // by reserveStock, so this instance was live, and PR #706 made it more common.
+  // procurementPath() returns the journey this deal is actually on, so index-as-progress holds.
+  // PROCUREMENT_SUBSTEPS is a lookup table, not a path: FROM_STOCK sits at index 4, so walking the
+  // flat list marked IR-issued / ordered / shipping / goods-received done for a from-stock deal
+  // that never performed them (FROM_STOCK is written by reserveStock).
   const steps = procurementPath(currentCode, fromStock);
   const currentIdx = steps.findIndex((s) => s.code === currentCode);
   return (
@@ -225,31 +217,20 @@ function SubstepChips({ currentCode, fromStock = null }) {
 }
 
 /**
- * "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
- * docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md): one
- * role-shaped section walking the deal-level fulfilment chain as two ordered
- * steps —
- *   1. นำเข้าสินค้า (import/CEO): Import Request → ส่งแล้ว → เดินทาง →
- *      รับสินค้าแล้ว, or the from-stock path via reserveStock.
- *   2. ส่งมอบสินค้า (import/CEO): record/complete delivery against the
- *      deal's own items, with the running progress bar + history.
+ * "การส่งมอบ / นำเข้า": one role-shaped section walking the deal-level fulfilment chain as two
+ * ordered steps:
+ *   1. นำเข้าสินค้า (import/CEO): Import Request → ส่งแล้ว → เดินทาง → รับสินค้าแล้ว, or the
+ *      from-stock path via reserveStock.
+ *   2. ส่งมอบสินค้า: record/complete delivery against the deal's own items, with the running
+ *      progress bar + history.
  *
- * There used to be an optional third "ใบสั่งซื้อโรงงาน" block here (import/CEO
- * only, listing per-factory purchase orders for the deal's order-confirmed
- * PricingRequest). Removed 2026-08-11, owner ruling: factory purchase orders
- * are not part of the current business requirement, and the block had never
- * shown a row in production (0 POs ever created). The backend
- * ProcurementController and sales.factory_purchase_order survive, dormant and
- * with no frontend caller, for whenever the requirement does land.
+ * There is no "ใบสั่งซื้อโรงงาน" block: factory purchase orders are not a current business
+ * requirement. The backend ProcurementController and sales.factory_purchase_order survive,
+ * dormant, with no frontend caller.
  *
- * Replaces the "การส่งมอบสินค้า" panel, the docActions Import Request button,
- * and the delivery/stock-reservation modals that used to live directly on
- * TicketDetailPage. Every mutation here reuses an existing hrApi method
- * verbatim (tickets.issueImportRequest/markIrSent/markShipping/
- * markGoodsReceived/reserveStock/recordDelivery/completeDelivery) — none of
- * that surface changed shape or
- * gate for this slice; the `can.*` predicates below are moved out of
- * TicketDetailPage byte-for-byte.
+ * Every mutation reuses an existing hrApi method verbatim (tickets.issueImportRequest/markIrSent/
+ * markShipping/markGoodsReceived/reserveStock/recordDelivery/completeDelivery); the `can.*`
+ * predicates below are the same status+role checks that used to live in TicketDetailPage.
  */
 export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   user, ticketId, summary, items = [], availableActions = [], showToast,
@@ -258,11 +239,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const role = user?.role;
   const isImport = ROLE_PERMISSIONS.canPickupTickets.includes(role);
   const isFulfilment = isImport || role === 'ceo';
-  // Stored ใบขอซื้อ (V184, PR-B) role shape — mirrors ImportRequestService, see that class's own
-  // Javadoc for the authoritative matrix. Distinct from `isFulfilment` above (the LEGACY
-  // deal-level chain's import/ceo pair) because the stored aggregate's write gate is the deal's
-  // OWNING sales rep + CEO, not import.
-  const isOwner = role === 'sales' && summary?.createdById === user?.id;
+  // Stored ใบขอซื้อ role shape: mirrors ImportRequestService, see that class's Javadoc for the
+  // matrix. Distinct from `isFulfilment` above (the legacy deal-level chain's import/ceo pair)
+  // because the stored aggregate's write gate is the deal's OWNING sales rep + CEO, not import.
+  const isOwner = role === 'sales' && isOwnerOrKeyer(summary, user?.id);
   const canReadStoredIr = isFulfilment || role === 'sales_manager' || isOwner;
   const canFullWriteStoredIr = role === 'ceo' || isOwner;
   const canFooterWriteStoredIr = role === 'ceo';
@@ -287,22 +267,20 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const totalDelivered = items.reduce((sum, item) => sum + Number(item.qtyDelivered || 0), 0);
   const totalFromStock = items.reduce((sum, item) => sum + Number(item.qtyFromStock || 0), 0);
   const deliveryProgress = totalOrdered > 0 ? Math.min(100, Math.round((totalDelivered / totalOrdered) * 100)) : 0;
-  // Which journey this deal walked, for SubstepChips (issue #730). Once the deal reaches a
-  // DELIVERY state its fulfillmentStatus no longer says, but the declaration itself survives on
-  // the lines: confirmOrder writes qtyFromStock for stock lines, and only FULL coverage sets FROM_STOCK. So full
-  // coverage => the from-stock branch; anything less => the import sequence really did run for
-  // the remainder. `null` (no items loaded yet) means "don't guess", not "import".
+  // Which journey this deal walked, for SubstepChips. Once the deal reaches a DELIVERY state its
+  // fulfillmentStatus no longer says, but the lines do: confirmOrder writes qtyFromStock for stock
+  // lines, and only FULL coverage sets FROM_STOCK. Full coverage => the from-stock branch; less =>
+  // the import sequence ran for the remainder. `null` (items not loaded) means "don't guess".
   const fromStock = totalOrdered > 0 ? totalFromStock >= totalOrdered : null;
   // Every line covered from stock (non-empty): nothing is ordered from a factory, so no IR can be created.
   const allLinesFromStock = items.length > 0
     && items.every((i) => Number(i.qtyFromStock ?? 0) >= Number(i.qty ?? 0));
 
-  // ── ใบขอซื้อรายโรงงาน (V184, PR-B) ────────────────────────────────────────────────────────────
-  // The STORED aggregate — one row per (deal, factory). Supersedes the legacy per-brand PREVIEW
-  // block below once the deal has any stored row: that block's own PDF is now superseded by each
-  // card's own download buttons (internal + factory copy), and the four legacy deal-level buttons
-  // in Step 1 above already 409 once any factory here is ISSUED (canIssueImportRequest /
-  // hasLiveImportRequests — see importActions.js's own comment).
+  // ── ใบขอซื้อรายโรงงาน ────────────────────────────────────────────────────────────
+  // The STORED aggregate, one row per (deal, factory). Once the deal has any stored row it
+  // supersedes the legacy per-brand PREVIEW block below (each card has its own download buttons),
+  // and the four legacy deal-level buttons in Step 1 409 once any factory here is ISSUED
+  // (canIssueImportRequest / hasLiveImportRequests; see importActions.js).
   const storedIrQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
@@ -321,12 +299,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
     .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
-  // PR-B REVIEW ROUND 1, S5: a FAILED fetch must not read as "this deal has zero stored IRs" — an
-  // empty `?? []` on error used to (a) show "ยังไม่มีใบขอซื้อสำหรับดีลนี้" ("no IR yet") where an
-  // error message belonged, and (b) via `hasStoredIrs` being false, resurrect the legacy per-brand
-  // block below, which V184-tracked deals must never show again once the stored aggregate exists.
-  // Treating an ERROR as "has stored IRs" (rather than as "does not") is the safe direction here:
-  // it keeps the legacy block hidden and shows the real error instead of guessing.
+  // A FAILED fetch must not read as "this deal has zero stored IRs": an empty `?? []` on error
+  // would show "ยังไม่มีใบขอซื้อสำหรับดีลนี้" where an error belongs, and (via `hasStoredIrs` false)
+  // resurrect the legacy per-brand block. Treating an ERROR as "has stored IRs" is the safe
+  // direction: the legacy block stays hidden and the real error shows.
   const hasStoredIrs = storedIrRows.length > 0 || storedIrQuery.isError;
   // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel,
   // "ถึงไทย X/N โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather
@@ -336,21 +312,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
   const arrivedIrCount = issuedIrRows
     .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
-  // The rollup chip now lives in the shared ImportStatusStrip (same strip import's own per-deal page
-  // renders) — the counters above are unchanged, only their presentation moved.
+  // The rollup chip is the shared ImportStatusStrip (also rendered on import's per-deal page).
 
   const [newFactoryNames, setNewFactoryNames] = useState(null); // string[] | null
-  // PR-B REVIEW ROUND 1, S7: the 409's message is parsed for factory names because the backend
-  // doesn't (and per this pass's backend scope, may not) return a structured list — but that
-  // string is not a contract, so this is made as robust as a string-parse can be:
-  //   - names are normalized (trim + collapse internal whitespace) before they're shown or keyed,
-  //     matching ImportRequestService's own normalizeFactoryName casing-insensitivity in spirit;
+  // The 409's message is parsed for factory names because the backend returns no structured list,
+  // and that string is not a contract, so the parse is defensive:
+  //   - names are normalized (trim + collapse whitespace) before they're shown or keyed;
   //   - a retry that comes back with the SAME missing-name set (case/space-insensitively) does NOT
-  //     reopen the modal again — that would loop forever if the server's message format or this
-  //     parse ever drift — it surfaces a plain error instead and lets the rep press "สร้างใบขอซื้อ"
-  //     again deliberately.
+  //     reopen the modal (it would loop forever if the message format drifted); it surfaces a plain
+  //     error and lets the rep press "สร้างใบขอซื้อ" again deliberately.
   const [missingFactoryRetryKey, setMissingFactoryRetryKey] = useState(null);
-  // Same loop guard for the lead-time popup (10-29). `leadTimeCountries` remembers the country picks
+  // Same loop guard for the lead-time popup. `leadTimeCountries` remembers the country picks
   // already made, so the lead-time retry still carries them when country came first.
   const [leadTimeNames, setLeadTimeNames] = useState(null); // string[] | null
   const [leadTimeRetryKey, setLeadTimeRetryKey] = useState(null);
@@ -360,10 +332,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryFn: () => api.priceImport.countries(),
     enabled: newFactoryNames != null,
   });
-  // CR-1 (R6 / R9): sales presses ออกใบขอซื้อ (IR), one IR per factory is created, and each PDF downloads
-  // straight away so sales can hand it over (import downloads the same IR from /fulfilment). A failed
-  // download never undoes the create — the IRs exist, the toast says so, the cards below still carry
-  // their own PDF buttons.
+  // Sales presses ออกใบขอซื้อ (IR), one IR per factory is created, and each PDF downloads straight
+  // away so sales can hand it over (import downloads the same IR from /fulfilment). A failed
+  // download never undoes the create: the toast says so, and the cards below keep their PDF buttons.
   async function downloadCreatedIrs(rows) {
     if (rows.length === 0) return;
     const outcomes = await Promise.allSettled(rows.map(async (row) => {
@@ -374,11 +345,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       showToast?.('error', 'ออกใบขอซื้อ (IR) แล้ว แต่ดาวน์โหลด PDF ไม่สำเร็จ — ดาวน์โหลดได้จากรายการด้านล่าง');
     }
   }
-  // Factory-less lines (W3-03 follow-up, owner ruling 2026-10-29): a free-text line on a direct-
-  // quotation deal has no catalogue item and so no factory — sales picks one when creating the IR.
-  // Only the direct route is checked (liveDirectQuotation): on the pricing-request route a factory
-  // can sit on the request line rather than on the deal line, so "no factory on the line" proves
-  // nothing there. The server ignores a pick for a line that already has one.
+  // Factory-less lines: a free-text line on a direct-quotation deal has no catalogue item and so no
+  // factory; sales picks one when creating the IR. Only the direct route is checked
+  // (liveDirectQuotation): on the pricing-request route a factory can sit on the request line
+  // instead. The server ignores a pick for a line that already has one.
   const factorylessLines = summary?.liveDirectQuotation
     ? items.filter((i) => !String(i.factory ?? '').trim() && !i.catalogPriceId
       // import never orders a line fully reserved from stock (ImportRequestQueryRepository: qty - qty_from_stock > 0)
@@ -402,15 +372,15 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     }
     return Object.keys(body).length > 0 ? body : undefined;
   }
-  // The ONE entry point for creating IR drafts: the panel's ออกใบขอซื้อ (IR) button calls it, and so must
-  // any external caller (PR #1189's imperative handle: createIrDrafts() => requestCreateIrDrafts()).
-  // Returns false (and says why) while a factory-less line still has no factory, so the picker can
-  // never be bypassed.
+  // The ONE entry point for creating IR drafts: the panel's ออกใบขอซื้อ (IR) button calls it, and so
+  // must any external caller (the imperative handle's createIrDrafts() => requestCreateIrDrafts()).
+  // Returns false (and says why) while a factory-less line has no factory, so the picker can't be
+  // bypassed.
   const depositReady = depositReadyForIr(summary);
   const DEPOSIT_HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
-  // ออกใบขอซื้อ (IR) numbers and issues one IR per factory and cannot be undone, so it asks first
-  // (W3-11, owner ruling 2026-10-30). The country / lead-time popup retries are a continuation of this
-  // confirmed create and call the mutation directly.
+  // ออกใบขอซื้อ (IR) numbers and issues one IR per factory and cannot be undone, so it asks first.
+  // The country / lead-time popup retries continue this confirmed create and call the mutation
+  // directly.
   const [confirmingCreate, setConfirmingCreate] = useState(false);
   function requestCreateIrDrafts() {
     if (!depositReady) {
@@ -428,8 +398,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     return true;
   }
   const createDraftsMutation = useMutation({
-    // CR-1 (R6): remember which rows already existed, so only the NEWLY created IRs download — the
-    // endpoint answers with every row of the deal, new and old alike.
+    // Remember which rows already existed, so only the NEWLY created IRs download (the endpoint
+    // answers with every row of the deal).
     mutationFn: async (payload) => {
       const knownIds = new Set(storedIrRows.map((r) => r.id));
       const result = await api.storedImportRequests.createDrafts(ticketId, payload);
@@ -483,18 +453,16 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     },
   });
 
-  // "กำหนดวันที่ต้องการของ" — the DEAL-level value every NEW draft snapshots its own requiredByNote
-  // from (ImportRequestService#setRequiredByNote / #issue's fallback). Write-only from this panel:
-  // there is no GET for it (it lives on ImportRequestQueryRepository's internal TicketSnapshot, not
-  // any ticket DTO the frontend reads), so this is an uncontrolled note a rep types once rather than
-  // an editable display of the current value. Sales (owner) or CEO, from DealStage.ORDER_RECEIVED.
+  // "กำหนดวันที่ต้องการของ": the DEAL-level value every NEW draft snapshots its requiredByNote from
+  // (ImportRequestService#setRequiredByNote / #issue's fallback). Write-only here: no ticket DTO
+  // carries it (it lives on ImportRequestQueryRepository's internal TicketSnapshot), so this is an
+  // uncontrolled note typed once. Sales (owner) or CEO, from DealStage.ORDER_RECEIVED.
   const [dealRequiredByDraft, setDealRequiredByDraft] = useState('');
   const [requiredByOpen, setRequiredByOpen] = useState(false);
-  // Nit: best-effort READ-BACK — there is still no GET for the deal-level value itself (see above),
-  // but once any factory row exists its OWN requiredByNote was snapshotted FROM that deal-level
-  // value (ImportRequestService#insertDraft), so it is the closest available proxy for "what is
-  // currently set" rather than always showing a blank field a rep might overwrite with an empty
-  // save. Seeded once (not on every row change) so it never clobbers an in-progress edit.
+  // Best-effort READ-BACK: with no GET for the deal-level value, a factory row's own
+  // requiredByNote (snapshotted from it in ImportRequestService#insertDraft) is the closest proxy,
+  // so the field doesn't show blank for a rep to overwrite with an empty save. Seeded once, never
+  // on every row change, so it can't clobber an in-progress edit.
   const [requiredByNoteSeeded, setRequiredByNoteSeeded] = useState(false);
   useEffect(() => {
     if (requiredByNoteSeeded || liveStoredIrRows.length === 0) return;
@@ -504,17 +472,15 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   }, [requiredByNoteSeeded, liveStoredIrRows]);
   const setDealRequiredByMutation = useMutation({
     mutationFn: (requiredByNote) => api.storedImportRequests.setRequiredByNote(ticketId, { requiredByNote }),
-    // Nit: does NOT blank the field after a save — the typed value is exactly what is now current
-    // on the deal, so leaving it visible is the correct read-back, not a leftover draft.
+    // Does NOT blank the field after a save: the typed value is what is now current on the deal.
     onSuccess: () => showToast?.('success', 'บันทึกกำหนดวันที่ต้องการของแล้ว'),
     onError,
   });
 
   // ── ใบขอซื้อ (F-SM-001) — legacy PREVIEW, per brand ───────────────────────────────────────────
-  // One form per BRAND on the deal (owner ruling), generated on demand — nothing is stored, so the
-  // ReF. No. is typed here rather than minted. See ImportRequestQueryRepository's Javadoc for why
-  // the stored aggregate is a separate change. Hidden below once `hasStoredIrs` — see that flag's
-  // own comment.
+  // One form per BRAND on the deal, generated on demand. Nothing is stored, so the ReF. No. is
+  // typed here rather than minted (see ImportRequestQueryRepository's Javadoc). Hidden once
+  // `hasStoredIrs`.
   const [irRef, setIrRef] = useState('');
   const brandsQuery = useQuery({
     queryKey: queryKeys.importRequestBrands(ticketId),
@@ -525,11 +491,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   });
   const irBrands = brandsQuery.data ?? [];
 
-  // Sheet count per brand — advisory only, so failures are SWALLOWED rather than surfaced:
-  // F-SM-001 has no continuation variant, and a 2-sheet form is worth knowing about before you
-  // print. allSettled because mockApi refuses this deliberately (it will not reimplement the
-  // renderer's pagination), and a mock-mode tester should still see the brand list and the download
-  // button rather than an error where a hint belongs.
+  // Sheet count per brand is advisory, so failures are SWALLOWED: F-SM-001 has no continuation
+  // variant, and a 2-sheet form is worth knowing about before printing. allSettled because mockApi
+  // refuses this deliberately (it won't reimplement the renderer's pagination), and a mock-mode
+  // tester should still see the brand list and download button.
   const irPagesQuery = useQuery({
     queryKey: [...queryKeys.importRequestBrands(ticketId), 'pages', irBrands],
     queryFn: async () => {
@@ -614,37 +579,29 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onError,
   });
 
-  // Moved out of TicketDetailPage byte-for-byte (Phase 3 Slice S4) — same
-  // status+role permission checks, just no longer routed through this
-  // page's shared actionMutation/doAction.
+  // The can.* checks are the status+role permission checks that used to be routed through
+  // TicketDetailPage's shared actionMutation/doAction.
   //
-  // Role-scoped views (Import build): the status/fulfillmentStatus matching
-  // for the four linear fulfilment-chain steps is now factored into
-  // importActions.js's nextFulfilmentActionCode, shared with ImportOverview's
-  // worklist CTA and ImportFulfilmentPage (งานนำเข้า) — so those surfaces can
-  // never disagree with this panel about which stage a deal is at. (It named
-  // ProcurementFulfilmentPage until ebaf6888 deleted that page.)
-  //
-  // ImportFulfilmentPage now performs the same four transitions from a list row,
-  // so it invalidates the identical query-key set invalidateAfterFulfilmentChange
-  // uses above. Change one and change the other, or a deal advanced on one
-  // surface renders its old stage on the other.
-  // hasAction(...) && isFulfilment still gate whether THIS viewer may act on
-  // it (list rows don't carry availableActions, so that check stays local).
+  // The status/fulfillmentStatus matching for the four linear fulfilment-chain steps is
+  // importActions.js's nextFulfilmentActionCode, shared with ImportOverview's worklist CTA and
+  // ImportFulfilmentPage (งานนำเข้า), so those surfaces never disagree with this panel about which
+  // stage a deal is at. ImportFulfilmentPage performs the same four transitions from a list row,
+  // so it invalidates the same query-key set as invalidateAfterFulfilmentChange above; change one
+  // and change the other, or a deal advanced on one surface renders its old stage on the other.
+  // hasAction(...) && isFulfilment still gate whether THIS viewer may act (list rows don't carry
+  // availableActions, so that check stays local).
   const fulfilmentActionCode = nextFulfilmentActionCode({ status: st, fulfillmentStatus: fs });
   const can = {
     markIrSent:         hasAction('IR_SENT') && fulfilmentActionCode === 'markIrSent' && isFulfilment,
     markShipping:       hasAction('SHIPPING') && fulfilmentActionCode === 'markShipping' && isFulfilment,
     markGoodsReceived:  hasAction('GOODS_RECEIVED') && fulfilmentActionCode === 'markGoodsReceived' && isFulfilment,
-    // (No reserve-from-stock control any more - walk 4: a stock line ends at the CEO's price and waits for delivery.)
-    // Stages 13-14 (ส่งมอบสินค้า) belong to Sales — owner ruling 2026-08-17, additive to import/CEO.
-    // `isFulfilment` is GONE from these two for exactly the reason issue #732 records for
-    // the (since removed) reserve-stock entry: the backend gate is now ownership-aware
-    // (TicketService.canWriteDelivery = FULFILMENT_ROLES ∪ (sales ∧ owner)) and `actions()` advertises
-    // RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off that same predicate. ANDing the server's answer
-    // with the old role set would mean the server offers the action and the frontend throws it away
-    // — the one role the change was made for could not use it, and the capability would be "live but
-    // invisible". hasAction() already carries the ownership rule, because the server computed it.
+    // There is no reserve-from-stock control: a stock line ends at the CEO's price and waits for delivery.
+    // Stages 13-14 (ส่งมอบสินค้า) belong to Sales, additive to import/CEO.
+    // `isFulfilment` is not ANDed in here: the backend gate is ownership-aware
+    // (TicketService.canWriteDelivery = FULFILMENT_ROLES ∪ (sales ∧ owner)) and `actions()`
+    // advertises RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY off that same predicate. ANDing the old
+    // role set would discard the server's answer, leaving the capability "live but invisible" to
+    // the owning rep. hasAction() already carries the ownership rule.
     recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY'),
     completeDelivery:   hasAction('COMPLETE_DELIVERY'),
     // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock
@@ -653,9 +610,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     // (TicketService#ITEM_WEIGHT_ROLES) is sales_manager/ceo, never isFulfilment (import/ceo).
     setItemWeight:      hasAction('SET_ITEM_WEIGHT_MULTIPLIER') && (role === 'sales_manager' || role === 'ceo'),
   };
-  // W3-04 (owner ruling 2026-10-29): the server refuses the deal-level chain once ANY live per-factory
-  // row exists, DRAFT included (TicketRepository#hasLiveImportRequests), so the buttons go with it.
-  // The one-click issue-IR is gone altogether — a deal issues per factory.
+  // The server refuses the deal-level chain once ANY live per-factory row exists, DRAFT included
+  // (TicketRepository#hasLiveImportRequests), so the buttons go with it. There is no one-click
+  // issue-IR: a deal issues per factory.
   const showDealLevelChain = !hasStoredIrs;
 
   function openDeliveryModal() {
@@ -694,7 +651,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     setItemWeightMutation.mutate({ lines });
   }
 
-  // QA-09: the deal page's sticky ขั้น 11 button drives this panel's own create (modal + PDF download stay here).
+  // The deal page's sticky ขั้น 11 button drives this panel's own create (modal + PDF download stay here).
   const showIrSection = () => document.getElementById('deal-fulfilment-stored-ir')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   useImperativeHandle(ref, () => ({
     createIrDrafts: () => { showIrSection(); return requestCreateIrDrafts(); },
@@ -725,8 +682,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   return (
     <Panel flush title="การส่งมอบ / นำเข้า" data-testid="deal-fulfilment-panel">
       <div className="flex flex-col gap-4 p-4 mobile:p-3">
-        {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock). Owner ruling 2026-10-29:
-            not rendered before the first IR (fulfillmentStatus null) — the stored-IR box below leads. */}
+        {/* Step 1: นำเข้าสินค้า (Import Request → รับสินค้า, or from-stock). Not rendered before the
+            first IR (fulfillmentStatus null); the stored-IR box below leads. */}
         {fs ? (
         <div className={STEP_BOX}>
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -746,13 +703,12 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             />
           </div>
 
-          {/* V184 (PR-B): once the deal is tracked per-factory, the old deal-level substep chips
-              and the four legacy buttons below them are dead weight — fulfillmentStatus sits at
-              IR_ISSUED for the whole tracking period (only the rollup moves it again, to
-              GOODS_RECEIVED), and the legacy mutations 409 the moment any factory here is ISSUED
-              (see markIrSent/markShipping/markGoodsReceived's own hasLiveImportRequests guard).
-              The “ใบขอซื้อรายโรงงาน” section below is the per-factory replacement — the rollup
-              chip above already says how far along it is, so this note stays a short pointer. */}
+          {/* Once the deal is tracked per-factory, the deal-level substep chips and the four legacy
+              buttons below are dead weight: fulfillmentStatus sits at IR_ISSUED for the whole
+              tracking period (only the rollup moves it again, to GOODS_RECEIVED), and the legacy
+              mutations 409 once any factory is ISSUED (markIrSent/markShipping/markGoodsReceived's
+              hasLiveImportRequests guard). The “ใบขอซื้อรายโรงงาน” section below replaces them and
+              the rollup chip above says how far along it is, so this stays a short pointer. */}
           {!showDealLevelChain ? (
             <p className="text-xs text-text-muted" data-testid="deal-fulfilment-ir-tracked-note">
               ติดตามการนำเข้าแบบรายโรงงานที่ส่วน “ใบขอซื้อรายโรงงาน” ด้านล่าง
@@ -792,9 +748,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         </div>
         ) : null}
 
-        {/* ใบขอซื้อรายโรงงาน (V184, PR-B) — the STORED aggregate. Visible to CEO/import/
-            sales_manager unrestricted, and to sales only for a deal they own — mirrors
-            ImportRequestService#requireRead exactly (canReadStoredIr above). */}
+        {/* ใบขอซื้อรายโรงงาน — the STORED aggregate. Visible to CEO/import/sales_manager
+            unrestricted, and to sales only for a deal they own (mirrors
+            ImportRequestService#requireRead; canReadStoredIr above). */}
         {canReadStoredIr ? (
           <div className={cn(STEP_BOX, 'border-border-strong')}
             id="deal-fulfilment-stored-ir" data-testid="deal-fulfilment-stored-ir">
@@ -806,11 +762,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock ? (
                 <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady}
                   onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
-                  {/* Nit: once the deal already has rows, "ออกใบขอซื้อ (IR)" read as though it would
-                      create a fresh set for every factory again
-                      — createDrafts actually SKIPS factories already covered (see its own
-                      CONFLICT-on-nothing-new behaviour), so the label now says what it really
-                      does the second time. */}
+                  {/* Once the deal has rows, "ออกใบขอซื้อ (IR)" would read as creating a fresh set
+                      for every factory; createDrafts SKIPS factories already covered, so the label
+                      says what it does the second time. */}
                   {liveStoredIrRows.length > 0 ? 'ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี' : 'ออกใบขอซื้อ (IR)'}
                 </Button>
               ) : null}
@@ -923,7 +877,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         {/* ใบขอซื้อ (F-SM-001) — legacy PREVIEW, one form per BRAND, not a step of its own, so no
             StepNumber. Import/CEO only: ImportRequestService.IR_ROLES is {import, ceo}, so
             rendering this for sales would offer a control that 403s. Hidden once the deal has any
-            STORED row — the section above supersedes it (own download buttons per factory). */}
+            STORED row; the section above supersedes it. */}
         {isFulfilment && !hasStoredIrs ? (
           <div className={STEP_BOX}
             data-testid="deal-fulfilment-import-request">
@@ -944,10 +898,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               </label>
             </div>
 
-            {/* กำหนดวันที่ต้องการของ is SALES's field (owner ruling) and there is nowhere to store it
-                yet — the deal-level column ships with the stored aggregate. Until then it prints
-                blank for handwriting, and this panel deliberately does NOT offer import an input
-                for it: filling in another department's field is worse than leaving it empty. */}
+            {/* กำหนดวันที่ต้องการของ is SALES's field and there is nowhere to store it yet, so it
+                prints blank for handwriting. This panel does NOT offer import an input for it:
+                filling in another department's field is worse than leaving it empty. */}
             <p className="text-2xs text-text-muted">
               หนึ่งใบต่อหนึ่งแบรนด์ · เว้นเลขที่ว่างไว้ได้ แล้วเขียนบนแบบฟอร์ม ·
               ช่อง “กำหนดวันที่ต้องการของ” และช่องลงนามจะเว้นว่างไว้สำหรับเขียนและเซ็นด้วยมือ
@@ -992,13 +945,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           <div className="flex flex-wrap items-center gap-2">
             <StepNumber no={2} />
             <strong className={STEP_TITLE}>ส่งมอบสินค้า</strong>
-            {/* Sales is listed FIRST because stages 13-14 are its ruling (2026-08-17). REVIEW ROUND
-                1, S2 (2026-09-18): import DROPPED from this list -- TicketService#canWriteDelivery
-                (the single source of truth this tag mirrors) is CEO, or the deal's own owning sales
-                rep, ONLY; import's write access to ส่งมอบสินค้า was a transfer to Sales, not an
-                addition, and badging import as a co-owner here would misrepresent who the mutation
-                gate (and the RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY actions below) actually let
-                through. sales_manager is absent on purpose too: read+comment oversight only. */}
+            {/* Sales is listed FIRST because stages 13-14 are its. Import is not listed:
+                TicketService#canWriteDelivery (the source of truth this tag mirrors) is CEO or the
+                deal's own owning sales rep ONLY, so badging import as a co-owner would misrepresent
+                who the mutation gate (and RECORD_PARTIAL_DELIVERY/COMPLETE_DELIVERY below) lets
+                through. sales_manager is absent too: read+comment oversight only. */}
             <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
           </div>
 
@@ -1199,12 +1150,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
       {newFactoryNames ? (
         <NewFactoryCountryModal
-          // Nit: keyed on the retry key so a retry that comes back with a DIFFERENT (e.g. wider)
-          // missing-factory set forces a REMOUNT instead of reusing `entries` state seeded (via
-          // useState's lazy initializer, which only ever runs once) for the OLD `factoryNames`
-          // list — that stale state has no entry for a newly-added name, and the `<select>`'s
-          // `value={entries[name].countryCode}` (no optional chaining) throws reading
-          // `.countryCode` off `undefined`.
+          // Keyed on the retry key so a retry with a DIFFERENT (e.g. wider) missing-factory set
+          // REMOUNTS instead of reusing `entries` state seeded once (lazy useState) for the OLD
+          // `factoryNames`; that state has no entry for a newly-added name, and
+          // `entries[name].countryCode` would throw on `undefined`.
           key={missingFactoryRetryKey}
           factoryNames={newFactoryNames}
           countries={countriesQuery.data ?? []}

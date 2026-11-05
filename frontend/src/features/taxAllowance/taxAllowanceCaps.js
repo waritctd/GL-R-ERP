@@ -39,18 +39,7 @@ export function fieldCapCaption(cap) {
   }
 }
 
-/** SSF (and, if the catalogue ever adds one, any other percent-of-income row) with ownCap=0 means
- * "not deductible this tax year" — mirrors TaxAllowanceCapCatalog's SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR
- * (2025+): the backend returns ownCap 0 / incomeRate 0 rather than a separate boolean flag, so that
- * IS the signal, not a client-side year comparison (which would be exactly the "reimplement the
- * rule" mistake CLAUDE.md warns against).
- */
-export function isCapUnavailableThisYear(cap) {
-  if (!cap || cap.kind !== 'PERCENT_OF_INCOME') return false;
-  return Number(cap.ownCap ?? 0) === 0 && Number(cap.incomeRate ?? 0) === 0;
-}
-
-export const GROUP_LABELS = {
+const GROUP_LABELS = {
   life_health: 'ประกันชีวิต + ประกันสุขภาพ',
   retirement: 'RMF + SSF + บำนาญ',
   donation: 'เงินบริจาคสถานศึกษา + เงินบริจาคทั่วไป',

@@ -53,7 +53,9 @@ public class ImportDealService {
         if (!IMPORT_DEAL_ROLES.contains(actor.role())) {
             throw forbidden();
         }
-        if ("import".equals(actor.role()) && !tickets.isInImportScope(ticketId)) {
+        // Detail read only: also a lost/cancelled deal that still has an issued IR (the link in its notice).
+        if ("import".equals(actor.role()) && !tickets.isInImportScope(ticketId)
+                && !tickets.isDeadDealWithIssuedImportRequest(ticketId)) {
             throw forbidden();
         }
         TicketDto ticket = tickets.findById(ticketId)

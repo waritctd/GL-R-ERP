@@ -26,74 +26,47 @@ import { LEAVE_PURPOSE_OPTIONS } from './leaveRequestTable.jsx';
 import { formatDate, formatDays, todayIso, yearFrom } from './leaveFormatting.js';
 import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
-// Leave-request composer, Phase A2 (#485). The owner's own framing of the problem this closes:
-// "employee if rejected, or when requesting, the rules should also be restated to them so they
-// won't have cognitive overload." Before this page, all 17 §5 rules (LeaveService#autoRejectNote)
-// were enforced only at submit time -- an employee filled in sixteen fields, submitted, and was
-// auto-rejected, which is how they learned a rule existed at all. This page runs the SAME gate
-// chain as a dry-run (POST /api/leave/preview, LeaveService#preview) at three checkpoints instead
-// of one: a categorical eligibility check the moment a type is picked (step 1, before any date
-// exists to be wrong), a debounced as-you-type check once dates/details are entered (step 2,
-// QUICK depth -- skips the department-coverage fan-out), and one full re-check right before
-// submission (step 3, FULL depth -- the only point department coverage actually runs). Every rule
-// threshold shown here is the backend's own verdict; this file only decides WHERE and WHEN to ask
-// for it -- see CLAUDE.md's "do not reimplement any of the 17 rules in JavaScript".
+// Leave-request composer. The same gate chain as submit runs as a dry-run
+// (POST /api/leave/preview, LeaveService#preview) at three checkpoints, so rules are shown before
+// an employee fills in every field: eligibility when a type is picked (step 1), a debounced QUICK
+// check while dates/details are entered (step 2, skips the department-coverage fan-out), and one
+// FULL re-check before submit (step 3, the only point department coverage runs). Every rule
+// threshold shown is the backend's verdict; this file only decides WHERE and WHEN to ask (see
+// CLAUDE.md: do not reimplement the 17 rules in JavaScript).
 //
-// Route: `/leave/new`, deep-linkable with `?type=&start=&end=` (a rejected request's own "ยื่น
-// คำขอใหม่" retry link -- MyLeaveTab.jsx's `retryLeaveRequestHref` -- and the auto-rejection
-// notification both point here) and `?returnTab=` (which LeaveSurfacePage.jsx tab to land back on
-// after cancel/back/submit).
+// Route: `/leave/new`, deep-linkable with `?type=&start=&end=` (the retry link of a rejected
+// request, and the auto-rejection notification) and `?returnTab=` (which LeaveSurfacePage.jsx tab
+// to return to after cancel/back/submit).
 
 const LEAVE_START_PAST_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้';
 const LEAVE_START_PAST_PERSONAL_MESSAGE = 'วันที่เริ่มลาต้องไม่ก่อนวันนี้ หากเป็นลากิจฉุกเฉิน ให้เลือก “ลากิจฉุกเฉิน” ด้านล่างก่อน';
 const LEAVE_TIME_ORDER_MESSAGE = 'เวลาสิ้นสุดต้องหลังเวลาเริ่ม';
 
-// Owner ruling (2026-09-09): "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้" -- SICK, and only SICK, is
-// exempt from the "start date must not be before today" block below. Deliberately unlimited: there
-// is no retroactive window on it, unlike OT (OT_RETROACTIVE_WINDOW_DAYS in
-// features/overtime/OvertimePanel.jsx). It is also not HR-only -- an employee filing for themselves
-// gets the same exemption, which is the case that prompted the ruling (paper F-HR-020 sick forms
-// were reaching HR days late and could not be entered through this form at all). Every OTHER type
-// keeps the block, EXCEPT PERSONAL filed as ลากิจฉุกเฉิน -- see the second ruling below -- so a
-// widening to all types unconditionally was considered on the same day and explicitly dropped.
+// SICK, and only SICK, is exempt from the "start date must not be before today" block below
+// ("ลาป่วยย้อนหลังได้ตลอด"): there is no retroactive window, unlike OT, and employees filing for
+// themselves get it too (paper F-HR-020 sick forms reach HR days late).
 //
-// The backend applies its own §5.1 gates, which this exemption does not touch and which surface in
-// the preview response at BOTH step 2 and step 3 (step2FieldTarget below already routes the SICK
-// certificate codes to the attachment field): LeaveService#sickCertificateRuleOutcome returns
-// SICK_CERTIFICATE_WINDOW when an attachment IS present and today falls more than
-// certificate_filing_window_days (3, as seeded) WORKING days after startDate.
+// The backend's own §5.1 gates still surface in the preview at steps 2 and 3
+// (step2FieldTarget routes the SICK certificate codes to the attachment field):
+// LeaveService#sickCertificateRuleOutcome returns SICK_CERTIFICATE_WINDOW when an attachment is
+// present and today is more than certificate_filing_window_days working days after startDate. That
+// gate is a WARNING (WARN_UNPAID_ALL): a late sick leave submits, carries the warning, and is
+// unpaid if approved.
 //
-// UPDATED 2026-09-10 (V164): that gate is now a WARNING, not a rejection. An earlier draft of this
-// comment said a paper form arriving after the window "still auto-rejects", and flagged it as the
-// one part of "ได้ตลอด" this change could not deliver. That is no longer true --
-// SICK_CERTIFICATE_WINDOW's LeaveRuleEnforcement is WARN_UNPAID_ALL, so a late-filed sick leave now
-// SUBMITS, carries the warning, and is unpaid if approved rather than being refused outright. So
-// unblocking the form here genuinely does deliver the owner's "ได้ตลอด" end to end: the employee can
-// file it, and a manager decides. Do not restore the old wording.
-//
-// SICK-only here is the OWNER'S POLICY CHOICE, not a limit the backend imposes. Do not restate it
-// as one: the advance-notice gate is `if (noticeDays > 0)`, and advance_notice_days is 0 for SICK,
-// LEAVE_WITHOUT_PAY, MATERNITY, MILITARY and ORDINATION alike (PERSONAL 1 / VACATION 3 are the only
-// non-zero ones), so the backend would accept a backdated request for any of those five.
+// SICK-only is a policy choice, not a backend limit. advance_notice_days is 0 for SICK,
+// LEAVE_WITHOUT_PAY, MATERNITY, MILITARY and ORDINATION alike, so the backend would accept a
+// backdated request for any of those.
 const BACKDATE_ALLOWED_LEAVE_TYPE_CODES = new Set(['SICK']);
 
-// Owner ruling (2026-09-28): "ลากิจฉุกเฉิน" -- PERSONAL filed with the ลากิจฉุกเฉิน checkbox ticked
-// (`requestedAsEmergency === true`) -- gets the SAME exemption as SICK above: no retroactive window,
-// and not HR-only (an employee filing for themselves is the whole point, e.g. filed on the 28th for
-// leave taken on the 26th). The backend already accepts this shape with no frontend change:
-// LeaveService#autoRejectNote's §5.2 emergency branch treats a backdated PERSONAL request
-// (fewer than advanceNoticeDays working days after today up to the leave's first working day, true
-// for PERSONAL since advance_notice_days=1)
-// as an emergency exception when requestedAsEmergency is set and the monthly tolerance (3
-// occurrences) has not been exhausted -- approved with emergencyFilingApplied=true. Once that
-// tolerance is exhausted the outcome becomes EMERGENCY_TOLERANCE_EXHAUSTED, which since V164 is
-// WARN_UNPAID_ALL (submits, unpaid if approved), not a rejection -- so there is no backend window to
-// mirror here, same as SICK. No backend change ships with this frontend fix.
+// "ลากิจฉุกเฉิน" (PERSONAL with `requestedAsEmergency === true`) gets the same exemption as SICK:
+// no retroactive window. The backend already accepts it: LeaveService#autoRejectNote's §5.2
+// emergency branch treats a backdated PERSONAL request as an emergency exception while the
+// monthly tolerance (3) lasts; past that it is EMERGENCY_TOLERANCE_EXHAUSTED (WARN_UNPAID_ALL,
+// submits unpaid), not a rejection.
 //
-// A backdated PERSONAL request WITHOUT the box ticked stays blocked here: the backend would only
-// ever raise ADVANCE_NOTICE for that shape (a WARN_UNPAID_* outcome, not the emergency exception),
-// so the client-side block is a UX choice -- steering the employee to tick the box when that is what
-// they mean -- not a mirror of a backend rejection.
+// A backdated PERSONAL request without the box ticked stays blocked here. The backend would only
+// raise ADVANCE_NOTICE (a WARN_UNPAID_* outcome), so this block is UX: it steers the employee to
+// tick the box when that is what they mean.
 const EMERGENCY_BACKDATE_LEAVE_TYPE_CODES = new Set(['PERSONAL']);
 
 // Single source of truth for the past-start-date rule -- both the zod schema and the render-time
@@ -133,19 +106,14 @@ function typeGatingConditionText(leaveType) {
   return parts.length > 0 ? parts.join(' · ') : 'ไม่มีเงื่อนไขพิเศษ';
 }
 
-// Maps a blocking LeaveRuleOutcome to the step-2 field it should attach beneath -- "per-field
-// placement, not one banner". Only one outcome is ever blocking at a time (LeaveService#preview
-// returns the FIRST gate hit, same as #submit), so this only ever picks one target per response.
+// Maps a blocking LeaveRuleOutcome to the step-2 field it attaches beneath (per-field placement,
+// not one banner). Only one outcome blocks at a time (LeaveService#preview returns the FIRST gate
+// hit, same as #submit).
 //
-// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the three SICK_* codes and
-// EMERGENCY_TOLERANCE_EXHAUSTED this function special-cases are no longer LeaveRuleEnforcement.BLOCK
-// -- see LeaveRuleCode.java's enforcement() column -- so `preview.blocking` can never actually carry
-// one of them any more, and this function's only real caller (`step2BlockingTarget` below) never
-// reaches those two branches in practice today. Left in place rather than pruned: this function's
-// contract is "map ANY code to its field", the mapping itself is still correct if the backend's
-// enforcement column ever changes again, and step2Warnings/step3Warnings (below) render every
-// warning as one list rather than per-field, so there is no live per-field WARN routing to build
-// here instead.
+// The SICK_* codes and EMERGENCY_TOLERANCE_EXHAUSTED are WARN gates now (LeaveRuleCode
+// enforcement()), so `preview.blocking` never carries them and those branches are not reached
+// today. They stay because the contract is "map ANY code to its field" and warnings render as one
+// list, not per field.
 function step2FieldTarget(code) {
   if (['SICK_CERTIFICATE_WINDOW', 'SICK_CERTIFICATE_REQUIRED', 'SICK_NO_CERT_TOLERANCE_EXHAUSTED'].includes(code)) {
     return 'attachment';
@@ -165,9 +133,8 @@ function defaultForm({
     startDate: start,
     endDate: endDate || start,
     reason: '',
-    // Partial-day span (V166, 2026-09-10): ticked by default (Teams-shaped: "all day" is the
-    // common case) -- unticking reveals startTime/endTime, which may now span more than one
-    // calendar day (replaces the old subDay field, which forced a single date). See
+    // Partial-day span: ticked by default ("all day" is the common case); unticking reveals
+    // startTime/endTime, which may span more than one calendar day. See
     // handleAllDayToggle/createLeaveFormSchema below.
     allDay: true,
     startTime: '',
@@ -218,12 +185,10 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     if (isStartDateBlockedAsPast(data.leaveTypeCode, data.startDate, minStartDate, data.requestedAsEmergency)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['startDate'], message: pastStartMessage(data.leaveTypeCode) });
     }
-    // Partial-day span (V166, 2026-09-10): `allDay === false` (not merely falsy -- the default is
-    // `true`) is when times are required. A timed span may now cross calendar days, so the
-    // end-after-start ordering check below only applies when start/end fall on the SAME date --
-    // mirrors LeaveService#validateSubDayTimes/V166's chk_leave_time_order exactly (a multi-day
-    // span has no same-clock-time ordering constraint at all; the backend's own row-wise
-    // (end_date, end_time) > (start_date, start_time) check is what actually guards it).
+    // Partial-day span: times are required only when `allDay === false` (the default is `true`). The
+    // end-after-start ordering check applies only when start and end fall on the SAME date; a
+    // multi-day span is guarded by the backend's (end_date, end_time) > (start_date, start_time) check
+    // (LeaveService#validateSubDayTimes, chk_leave_time_order).
     if (data.allDay === false) {
       if (!data.startTime) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['startTime'], message: 'กรุณาระบุเวลาเริ่ม' });
@@ -238,7 +203,7 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
   });
 }
 
-/** Debounces `value` by `delayMs` -- used only for the step-2 QUICK preview's input. */
+/** Debounces `value` by `delayMs`; used only for the step-2 QUICK preview's input. */
 function useDebouncedValue(value, delayMs) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -320,18 +285,14 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
   );
 }
 
-// §5.3.5 pool choice (V161): which of the employee's two quota pools -- last year's unused amount
-// carried into this one, or this year's own annual grant -- a request should draw down FIRST. Only
-// ever rendered when the caller (LeaveRequestPage's showQuotaPoolSelector) has already confirmed
-// BOTH `carriesForward` (the TYPE can have a second pool at all) AND `carriedInRemainingDays > 0`
-// (THIS employee's balance actually has one right now) -- this component itself does not re-check
-// either, it only ever receives a `balance` it is safe to render a real choice for.
+// Which of the employee's two quota pools (last year's carry-in, or this year's own grant) a
+// request should draw down FIRST. Rendered only when the caller (showQuotaPoolSelector) has
+// confirmed BOTH `carriesForward` AND `carriedInRemainingDays > 0`; this component does not
+// re-check.
 //
-// NOT to be confused with the "ปี {split.quotaYear}" line step 3 renders from quotaYearSplits
-// below: that is the V118 CALENDAR split (which year a request's own [startDate, endDate] dates
-// fall in, for a request that happens to straddle 31 Dec) -- a different axis entirely from which
-// POOL within one year's balance gets charged first. Neither option label here ever leads with a
-// bare "ปี {number}" for that reason; each names WHAT the pool is (สะสม / ปีนี้) before its year.
+// Not the "ปี {split.quotaYear}" line step 3 renders from quotaYearSplits: that is the CALENDAR
+// split of a request straddling 31 Dec, a different axis. Option labels therefore never lead with a
+// bare "ปี {number}"; each names the pool (สะสม / ปีนี้) first.
 function QuotaPoolPreferenceField({ register, balance }) {
   // Both years are derived from carriedInFromYear alone (never "today"): the Javadoc on
   // LeaveBalanceDto ties carriedInExpiresOn to `31 Dec of carriedInFromYear + 1` by construction
@@ -442,10 +403,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       'requestedAsEmergency', 'quotaPoolPreference',
     ],
   });
-  // Not memoised on purpose: `leaveTypeCode` is watched, so this recomputes on a type switch.
-  // That alone only clears the DERIVED half (this flag, and with it the button's disabled state);
-  // a message already written into `errors.startDate` by the previous type is cleared by
-  // selectType's explicit trigger('startDate') below. Both halves are needed -- see that comment.
+  // Not memoised: `leaveTypeCode` is watched, so this recomputes on a type switch. That clears only
+  // the derived half (this flag, and the button's disabled state); the message already in
+  // `errors.startDate` is cleared by selectType's trigger('startDate') below.
   const startDateInPast = isStartDateBlockedAsPast(leaveTypeCode, startDate, todayIso(), requestedAsEmergency);
   const startDateError = startDateInPast ? pastStartMessage(leaveTypeCode) : errors.startDate?.message;
 
@@ -483,19 +443,17 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   function selectType(code) {
     setValue('leaveTypeCode', code, { shouldValidate: true });
-    // `shouldValidate` re-runs the whole schema but writes back ONLY the named field's error, so a
-    // past-date error raised under the previous type would otherwise still be rendered after
-    // switching to a backdate-exempt one (ลาพักร้อน -> ลาป่วย). Re-validate startDate explicitly --
-    // but only once it holds a value, or an empty field would answer a type click with its own
-    // "กรุณาเลือกวันที่เริ่ม" required error before the user has reached step 2.
+    // `shouldValidate` re-runs the schema but writes back only the named field's error, so a
+    // past-date error from the previous type would persist after switching to a backdate-exempt one.
+    // Re-validate startDate, but only once it has a value, or the empty field would show its required
+    // error before the user reaches step 2.
     if (getValues('startDate')) trigger('startDate');
 
     // A different type invalidates whatever purpose/emergency choice belonged to the old one.
     setValue('purposeCode', '', { shouldValidate: true });
     setValue('requestedAsEmergency', false, { shouldValidate: true });
-    // Same reasoning for §5.3.5's pool choice (V161): a different type has its own (possibly
-    // absent) carry-in balance, so a leftover OWN_FIRST pick from a previous type must not silently
-    // carry over as this type's answer to a question it may not even ask.
+    // A different type has its own (possibly absent) carry-in balance, so a leftover OWN_FIRST pick
+    // must not carry over.
     setValue('quotaPoolPreference', 'CARRIED_IN_FIRST', { shouldValidate: true });
   }
 
@@ -527,12 +485,10 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     () => balances.find((b) => b.leaveTypeCode === leaveTypeCode),
     [balances, leaveTypeCode],
   );
-  // The render gate itself: BOTH the type's own metadata (carriesForward -- can this type ever
-  // have a second pool) AND this employee's actual balance (carriedInRemainingDays > 0 -- does one
-  // exist right now). carriesForward alone is not enough -- it is true for every VACATION request
-  // regardless of whether this employee has anything left in the carry-in pool (already spent, or
-  // this is their first year) -- and showing the control anyway would ask a choice with only one
-  // honest answer. See CLAUDE.md's "no dead control" instruction for this exact feature.
+  // Render gate: the type must be able to have a second pool (carriesForward) AND this employee
+  // must have carry-in left (carriedInRemainingDays > 0). carriesForward alone is true for every
+  // VACATION request even when the pool is spent, and the control would ask a one-answer question
+  // (CLAUDE.md: no dead control).
   const showQuotaPoolSelector = Boolean(selectedLeaveType?.carriesForward)
     && Number(selectedTypeBalance?.carriedInRemainingDays || 0) > 0;
 
@@ -544,8 +500,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       employeeId: Number(employeeId),
       leaveTypeCode,
       startDate,
-      // Partial-day span (V166): endDate is sent AS-IS -- no longer forced back to startDate when
-      // timed, since a timed span may now cover more than one calendar day.
+      // A timed span may cover more than one calendar day, so endDate is sent as chosen.
       endDate,
       // Partial-day span (V166): widened from "no sub-day times in this shape at all" -- see
       // LeavePreviewRequest's own Javadoc on the backend. undefined (not sent) when allDay, exactly
@@ -575,13 +530,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const step2Preview = step2PreviewQuery.data ?? null;
   const step2Blocking = step2Preview?.blocking ?? null;
   const step2BlockingTarget = step2Blocking ? step2FieldTarget(step2Blocking.code) : null;
-  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): non-blocking -- the request still submits
-  // -- so these never gate `canAdvanceStep1`/advanceFromStep2 the way step2Blocking does. Read only
-  // when nothing is blocking (LeavePreviewDto's own contract: a non-null `blocking` always pairs
-  // with an EMPTY ruleWarnings, so this guard is defensive, not load-bearing) and never fabricated
-  // for a dateless call -- `step2Preview.ruleWarnings` is `[]` there by the DTO's own design (see
-  // LeavePreviewDto's Javadoc), which already reads correctly as "nothing to show" with no extra
-  // branching here.
+  // WARN_UNPAID_* gates are non-blocking, so they never gate `canAdvanceStep1`/advanceFromStep2.
+  // Read only when nothing blocks (LeavePreviewDto pairs a non-null `blocking` with an empty
+  // ruleWarnings); a dateless call returns `[]`, which already reads as "nothing to show".
   const step2Warnings = !step2Blocking ? (step2Preview?.ruleWarnings ?? []) : [];
   const step2Fetching = step2PreviewQuery.isFetching;
   // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see
@@ -593,11 +544,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     ?? null;
 
   // --- Step 2: calendar context (holidays + resolved schedule), so "why is this N days and not
-  // the full calendar span" is answered next to the date fields instead of only showing up as a
-  // smaller totalDays number. WINDOW CHOICE: exactly the currently-selected [startDate, endDate]
-  // -- not a fixed lookahead -- because the note only needs to explain the range the employee has
-  // actually picked; a wider window would show non-working days the request never touches. Debounced
-  // same as step2Params so a date still being typed doesn't fire one request per keystroke.
+  // the full calendar span" is answered next to the date fields. The window is exactly the selected
+  // [startDate, endDate], since a wider one would show non-working days the request never touches.
+  // Debounced like step2Params so typing a date doesn't fire a request per keystroke.
   const calendarContextParams = useMemo(() => {
     if (!startDate || !endDate || endDate < startDate) return null;
     return { from: startDate, to: endDate };
@@ -668,12 +617,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   // keep the submit button disabled exactly like a real `blocking` verdict would, not silently
   // read as a clean pass because `step3Blocking` happens to be null on an errored query.
   const step3Error = step3PreviewQuery.isError ? previewErrorMessage(step3PreviewQuery.error) : null;
-  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the SAME "never both non-null blocking and
-  // non-empty ruleWarnings" contract step2Warnings reads on -- see that constant's own comment.
-  // THIS is the figure that decides the submit button's own label below (owner ruling: "ส่งคำขอ
-  // (ไม่รับค่าจ้าง)" once any warning is present) -- step 3 is the terminal FULL preview immediately
-  // before the real submit, so it is the authoritative source for that decision, not step 2's own
-  // QUICK snapshot.
+  // Same "blocking and ruleWarnings are never both set" contract as step2Warnings. This decides the
+  // submit button's label ("ส่งคำขอ (ไม่รับค่าจ้าง)" once any warning exists): step 3 is the
+  // terminal FULL preview right before submit, so it is authoritative, not step 2's QUICK snapshot.
   const step3Warnings = !step3Blocking ? (step3Preview?.ruleWarnings ?? []) : [];
 
   const balance = useMemo(() => {
@@ -687,10 +633,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
       throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
     }
-    // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
-    // through, so the FormData part built from it defaults to the literal filename "blob" per the
-    // Fetch/FormData spec. Re-wrapping in a File restores the original name. PDFs skip
-    // compression entirely and never hit this path. See #498/#504 for the reference fix.
+    // imageCompression() returns a plain Blob without `file.name`, so the FormData part would get the
+    // filename "blob". Re-wrapping in a File restores the original name. PDFs skip compression.
     if (!file.type.startsWith('image/')) return file;
     return new File(
       [await imageCompression(file, { maxSizeMB: 2, maxWidthOrHeight: 1600, useWebWorker: true })],
@@ -706,9 +650,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       if (created?.status === 'AUTO_REJECTED') {
         showToast('error', created.systemNote || 'คำขอลาไม่ผ่านเงื่อนไข');
       } else {
-        // Leave requires approval (2026-08-05): a rule-passing request now lands SUBMITTED and
-        // waits for a human, so the old "อนุมัติอัตโนมัติแล้ว" copy was actively misleading --
-        // it told the employee their leave was granted when it is only pending.
+        // A rule-passing request lands SUBMITTED and waits for a human, so the copy must not say the
+        // leave was granted.
         showToast('success', 'ส่งคำขอลาแล้ว รอผู้อนุมัติพิจารณา');
       }
       goBackToSurface(true);
@@ -728,8 +671,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       leaveTypeCode: values.leaveTypeCode,
       startDate: values.startDate,
-      // Partial-day span (V166): endDate goes out AS CHOSEN -- no longer collapsed to startDate
-      // when timed, since a timed request may now span more than one calendar day.
+      // A timed request may span several days, so endDate is sent as chosen.
       endDate: values.endDate,
       reason: values.reason.trim(),
       startTime: !values.allDay && values.startTime ? values.startTime : null,
@@ -761,11 +703,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     }
   }
 
-  // Partial-day span (V166): unticking "ลาทั้งวัน" reveals the time fields, prefilled to the
-  // seeded standard workday (08:30-17:30) so the control starts looking like a full day -- the
-  // requester then narrows either end to make it partial. Re-ticking clears both times (back to
-  // the whole-day null/null convention) but leaves startDate/endDate exactly as chosen -- a
-  // multi-day whole-day request is unaffected either way.
+  // Unticking "ลาทั้งวัน" reveals the time fields, prefilled to the standard workday (08:30-17:30)
+  // so the control starts looking like a full day. Re-ticking clears both times (whole-day
+  // null/null) and leaves startDate/endDate as chosen.
   function handleAllDayToggle(event) {
     if (event.target.checked) {
       setValue('startTime', '', { shouldDirty: true, shouldValidate: true });
@@ -787,39 +727,19 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   const showTimedFields = !allDay;
 
-  // Upcoming-holidays panel (composer follow-up to #ot-holiday-visibility, PR 2): a fixed ~90-day
-  // forward window from today, independent of whatever startDate/endDate is (or is not yet)
-  // chosen -- same window OvertimePanel.jsx's own UpcomingHolidays call uses, so "what's coming
-  // up" reads identically everywhere it appears. NOT the same thing as `calendarContextParams`
-  // below, which is scoped to the employee's own SELECTED range and answers "what did I just
-  // pick", not "what's ahead" -- see that block's own comment.
+  // Upcoming-holidays panel: a fixed ~90-day forward window from today, independent of the chosen
+  // dates, same as OvertimePanel.jsx's UpcomingHolidays. Not `calendarContextParams` below, which
+  // is scoped to the SELECTED range.
   const holidayWindowFrom = todayIso();
   const holidayWindowTo = addDaysIso(holidayWindowFrom, 90);
 
-  // HARDENING, not a fix for a live bug (HTML implicit submission, fix/form-enter-submits-real-
-  // records; migrated to SafeForm's `canSubmit` under #safe-form-primitive): this <form> wraps all
-  // 3 steps and was, before this gate, safe today only because three facts happened to stack up,
-  // none of them load-bearing by design. Step 1's choices are all `<button type="button">` (zero
-  // fields that block implicit submission). Step 2 always renders at least two blocking fields
-  // (startDate + endDate, always both mounted and enabled -- partial-day span V166 dropped the old
-  // `disabled` toggle on `endDate`, but the count this gate relies on was always "at least 2",
-  // never dependent on that attribute) plus two more (startTime/endTime) once ลาทั้งวัน is
-  // unticked. Step 3 always renders the one real `<Button type="submit">` in this form. Change
-  // startDate/endDate to ever unmount (rather than just staying enabled) and Enter in whatever
-  // single text field remained would silently file a real leave request, the same as the
-  // tax-allowance bug this gate shape was copied from (TaxAllowanceForm.jsx,
-  // #tax-allowance-ia-hub-review), and jsdom would not catch it
-  // — it does not implement implicit submission at all (see LeaveRequestPage.test.jsx's
-  // `fireEvent.submit(form)` cases, which exercise the same 'submit' event a real Enter keypress
-  // produces). `canSubmit={step === 3}` removes the dependency on those three accidents continuing
-  // to hold, exactly like the old bespoke `handleFormSubmit` did — and additionally, every OTHER
-  // step now also gets SafeForm's own submitter guard for free should this ever stop being a
-  // `canSubmit`-gated form. `canSubmit` is a RESTRICTION and never a permission (see SafeForm.jsx's
-  // header): it narrows submission to step 3, and SafeForm's submitter guard still applies on top,
-  // so BOTH must pass. Step 3's real submit button is always rendered — only ever `disabled` — so
-  // that AND costs this form nothing in production. It does mean a test proving step 3 submits has
-  // to carry a real submitter rather than dispatching a bare `fireEvent.submit(form)`; see
-  // `submitWithSubmitter` in LeaveRequestPage.test.jsx.
+  // This <form> wraps all 3 steps; `canSubmit={step === 3}` is a restriction (never a permission)
+  // on top of SafeForm's submitter guard, so BOTH must pass. Without it Enter in a single remaining
+  // text field could silently file a real request: step 1 has only `type="button"` choices, step 2
+  // would have just the date fields, and jsdom does not implement implicit submission, so tests
+  // would not catch it. Step 3's submit button is always rendered (only ever `disabled`). A test
+  // proving step 3 submits must carry a real submitter; see `submitWithSubmitter` in
+  // LeaveRequestPage.test.jsx.
 
   return (
     <PageStack className="relative">
@@ -829,14 +749,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
         breadcrumbs={[{ label: 'การลา', onClick: () => goBackToSurface(false) }, { label: 'ยื่นคำขอลา' }]}
       />
 
-      {/* Holiday answer arrives BEFORE the date is picked, not just after (the gap this PR
-          closes): sits above the whole step-2 panel rather than nested inside it -- same
-          "no nested cards" shape OvertimePanel.jsx's own placement uses (a Panel is a bordered
-          card; UpcomingHolidays renders its own, so nesting it inside step 2's Panel would be a
-          card-in-a-card). Gated on step === 2 only: step 1 has no type chosen yet for this to be
-          useful context for, and step 3 already has its own answer to "which of MY selected dates
-          are holidays" via the reactive note further down -- this panel's job is only the
-          "before you've even opened the date field" moment step 2 owns. */}
+      {/* The holiday answer arrives before the date is picked: this sits above the step-2 panel, not
+          inside it (UpcomingHolidays renders its own card; no card-in-a-card), and only on step 2
+          (step 3 has its own reactive note for the selected dates). */}
       {step === 2 ? (
         <UpcomingHolidays from={holidayWindowFrom} to={holidayWindowTo} />
       ) : null}
@@ -977,16 +892,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                         ช่วงที่เลือกมี {nonWorkingDates.length} วันที่ไม่นับเป็นวันทำงาน (วันหยุดบริษัท/วันหยุดประจำสัปดาห์
                         ตามตารางเวลาทำงานของคุณ): {nonWorkingDates.map((date) => formatDate(date)).join(', ')}
                       </p>
-                      {/* Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in
-                          mockApi.js is now a verbatim copy of production's hr.holiday, V129's own
-                          reason for widening name_th from VARCHAR(120) to TEXT). This used to
-                          interpolate `${formatDate(...)} (${nameTh})` straight into the sentence
-                          above, comma-joined with every other holiday in range -- fine at the old
-                          fixture's 9-17 chars, an unreadable wall of text at production length with
-                          two or three holidays in one selected range. Same fix shape as the OT
-                          verdict pill (#ot-holiday-visibility): each holiday gets its OWN line
-                          below instead of being crammed inline, so a 149-char name only ever
-                          affects the one row it belongs to. */}
+                      {/* Real วันหยุดบริษัท names run up to 149 chars, so each holiday gets its own line rather than
+                          being comma-joined into the sentence above. */}
                       {holidaysInRange.length > 0 ? (
                         <div className="mt-2 border-t border-warning-border pt-2">
                           <p className="m-0 font-semibold">วันหยุดบริษัทในช่วงนี้</p>
@@ -1007,14 +914,10 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              {/* Partial-day span (V166, 2026-09-10): Teams-shaped time control -- ticked by
-                  default (the common whole-day case, matching defaultForm's allDay: true), and
-                  unticking reveals a start TIME + end TIME pair that apply to the start/end DATE
-                  fields directly above, which may now differ (a timed request is no longer forced
-                  to a single date -- see handleAllDayToggle). Grouped in its own bordered panel,
-                  same visual pattern QuotaPoolPreferenceField below uses for "a related cluster of
-                  fields", so the toggle and the fields it reveals read as one unit rather than two
-                  independent controls. */}
+              {/* Partial-day span: ticked by default (whole-day, matching defaultForm's allDay: true);
+                  unticking reveals a start TIME + end TIME pair for the start/end DATE fields above, which may
+                  differ (see handleAllDayToggle). Grouped in a bordered panel like QuotaPoolPreferenceField so
+                  the toggle and the fields it reveals read as one unit. */}
               <div className={`${formGridSpan2} grid gap-3 rounded-md border border-border-input bg-surface p-3`}>
                 <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-text">
                   <input
@@ -1074,8 +977,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              {/* Field-order fix (Phase A2 brief): เหตุผลการลา is required and used to sit last,
-                  after eight optional fields -- moved directly under the dates it belongs with. */}
+              {/* เหตุผลการลา is required, so it sits directly under the dates rather than after the optional
+                  fields. */}
               <div className={formGridSpan2}>
                 <FormField label="เหตุผลการลา" htmlFor="leave-reason" error={errors.reason?.message} required>
                   <textarea
@@ -1145,13 +1048,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 ) : null}
               </div>
 
-              {/* Also suppressed when a §5 WARN gate fired (V164 follow-up), not only when a
-                  BLOCK did. This green "ผ่านเงื่อนไขแล้ว" used to render directly ABOVE the amber
-                  "…วันลา N วันจะไม่ได้รับค่าจ้าง" panel below, which reads as a contradiction: the
-                  request does pass (nothing stops submission), but telling someone their leave
-                  CLEARED the checks immediately before telling them it will be unpaid is the wrong
-                  thing for them to take away. The warning panel is the whole message in that case;
-                  a "passed" line only belongs here when there is genuinely nothing to flag. */}
+              {/* Also suppressed when a WARN gate fired, not only a BLOCK: a green "ผ่านเงื่อนไขแล้ว" directly
+                  above the amber "…จะไม่ได้รับค่าจ้าง" panel contradicts it. A "passed" line belongs here only
+                  when there is nothing to flag. */}
               {!step2Blocking && step2Warnings.length === 0 && step2Preview ? (
                 <div className={formGridSpan2}>
                   <p className="m-0 text-sm font-semibold text-success-dark">
@@ -1251,31 +1150,19 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
               {balance?.type ? (
                 <div className="grid gap-1.5">
-                  {/* MILITARY's annualQuotaDays is a 366 sentinel ("no annual ceiling; the 60-day
-                      paid cap is the real rule", V120) -- QuotaBar returns null when cap == null,
-                      exactly right for it. The paid cap itself is rendered by hand below instead. */}
-                  {/* `formatValue={formatDays}` (2026-08-31): see MyLeaveTab.jsx's matching
-                      QuotaBar -- the values carry their own unit as a duration now, so the caption
-                      drops the "(วัน)" it used to supply for a bare decimal. */}
-                  {/* §5.3.5 carry-forward (V161 wiring, 2026-09-03): `cap` used to be the bare
-                      balance.type.annualQuotaDays, so a request legitimately drawing on BOTH the
-                      carry-in pool and this year's own quota -- exactly what the quota-pool
-                      preference above makes possible -- could have `step3Preview.totalDays` (one
-                      request's own day count) exceed the flat annual figure alone even though it
-                      never touched the combined pool. The bar then pinned at 100% red and fired a
-                      false "เกินโควตาประจำปี" warning for a request well inside it. Same fix as
-                      MyLeaveTab.jsx's own PrimaryLeaveBalanceCard (`cap = annualQuotaDays +
-                      carriedInDays`) -- folding carriedInDays in makes the bar's cap mean
-                      "everything actually available this year", not "this year's flat figure
-                      alone". Reads `selectedTypeBalance` (the employee's real per-type balance
-                      from balancesQuery, above), NOT `balance` here -- `balance` is only `{ type
-                      }`, the flat leave-type record, and carries no carriedInDays field at all.
-                      Uses carriedInDays (the year's full grant), not carriedInRemainingDays
-                      (what's left to spend) -- same choice MyLeaveTab makes, keeping this bar's
-                      existing semantics of "measured against the year's entitlement". The MILITARY
-                      branch stays untouched: every type but VACATION (the only carriesForward:true
-                      type) has carriedInDays === 0 anyway, but the guard is kept structural rather
-                      than resting on that incidentally. */}
+                  {/* MILITARY's annualQuotaDays is a 366 sentinel ("no annual ceiling; the 60-day paid cap is the
+                      real rule"), for which QuotaBar returns null (cap == null). The paid cap is rendered by hand
+                      below. */}
+                  {/* `formatValue={formatDays}`: see MyLeaveTab.jsx's matching QuotaBar; values carry their own
+                      unit, so the caption drops "(วัน)". */}
+                  {/* §5.3.5 carry-forward: `cap` folds in carriedInDays (same as MyLeaveTab.jsx's
+                      PrimaryLeaveBalanceCard) so a request drawing on BOTH the carry-in pool and this year's quota
+                      can exceed the flat annual figure without pinning the bar at 100% red and firing a false
+                      "เกินโควตาประจำปี". Reads `selectedTypeBalance` (the per-type balance from balancesQuery),
+                      not `balance`, which is only the flat `{ type }` record with no carriedInDays. Uses
+                      carriedInDays (the full grant), not carriedInRemainingDays, so the bar stays measured against
+                      the year's entitlement. The MILITARY branch is untouched; the guard is structural, not
+                      resting on only VACATION having carriedInDays. */}
                   <QuotaBar
                     label={balance.type.nameTh}
                     caption={`โควตา${balance.type.nameTh}`}
@@ -1332,11 +1219,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 disabled={createMutation.isPending || Boolean(step3Blocking) || Boolean(step3Error) || step3PreviewQuery.isFetching}
               >
                 <Icon name="plus" />
-                {/* Owner-approved copy (V164 follow-up): a warning never disables submit -- the
-                    BLOCK path above is unchanged -- but nobody should submit without seeing the
-                    pay consequence spelled out on the button itself, not only in the panel above
-                    it. Keyed off step3Warnings (the terminal FULL preview), never step2Warnings'
-                    own QUICK snapshot. */}
+                {/* A warning never disables submit, but the pay consequence is spelled out on the button itself.
+                    Keyed off step3Warnings (the terminal FULL preview), never step2Warnings. */}
                 {step3Warnings.length > 0 ? 'ส่งคำขอ (ไม่รับค่าจ้าง)' : 'ส่งคำขอ'}
               </Button>
             </div>

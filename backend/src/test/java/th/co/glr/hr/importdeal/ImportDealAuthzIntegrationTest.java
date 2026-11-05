@@ -111,7 +111,7 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
         importRequestService = new ImportRequestService(
             new ImportRequestQueryRepository(jdbc), new ImportRequestRenderer(),
-            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService);
+            new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc), tickets, ticketService, notifications);
         service = new ImportDealService(tickets, importRequestService);
 
         ownerId = insertEmployee("IMPDEAL-OWN");
@@ -237,6 +237,40 @@ class ImportDealAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
             Map.of("id", cancelled));
 
         assertForbidden(() -> service.get(cancelled, importUser));
+    }
+
+    // ── dead deals (owner ruling 2026-11-04): import may OPEN a lost/cancelled deal that has an ISSUED IR (the
+    // link in its notification), but never write to it; with no issued IR the two refusals above still hold ──
+
+    @Test
+    void importCanReadALostDeal_thatHasAnIssuedImportRequest() {
+        issueOneImportRequest();
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", ticketId));
+        assertThat(tickets.isInImportScope(ticketId)).as("fixture: outside the LIST scope").isFalse();
+
+        assertThat(service.get(ticketId, importUser).id()).isEqualTo(ticketId);
+    }
+
+    @Test
+    void importCanReadACancelledDeal_thatHasAnIssuedImportRequest() {
+        issueOneImportRequest();
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled' WHERE ticket_id = :id",
+            Map.of("id", ticketId));
+
+        assertThat(service.get(ticketId, importUser).id()).isEqualTo(ticketId);
+    }
+
+    /** Reading is widened, writing is not: advancing the IR and commenting on the lost deal stay refused. */
+    @Test
+    void importStillCannotWriteToALostDeal_evenWithAnIssuedImportRequest() {
+        ImportRequestDto ir = issueOneImportRequest();
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", ticketId));
+
+        assertThatThrownBy(() -> importRequestService.advanceStep(ir.id(),
+            new th.co.glr.hr.importrequest.ImportRequestRequests.AdvanceImportStepRequest(
+                th.co.glr.hr.importrequest.ImportRequestStep.IN_TRANSIT, null, null), importUser))
+            .isInstanceOf(ApiException.class);
+        assertForbidden(() -> ticketService.comment(ticketId, new CommentRequest("ความเห็นหลังดีลหลุด"), importUser));
     }
 
     /** No existence oracle: a missing deal is indistinguishable from an out-of-scope one to import. */

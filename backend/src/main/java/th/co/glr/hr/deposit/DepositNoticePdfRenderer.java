@@ -156,7 +156,6 @@ public class DepositNoticePdfRenderer {
     }
 
     private static String thaiDate(LocalDate d) { return DocumentSheet.thaiDate(d); }
-    private static String nullSafe(String s) { return s != null ? s : ""; }
     private static String nullSafe(String s, String fallback) { return (s != null && !s.isBlank()) ? s : fallback; }
     private static String fmt2(BigDecimal v) {
         if (v == null) return "-";

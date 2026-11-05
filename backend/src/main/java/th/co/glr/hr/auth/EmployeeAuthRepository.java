@@ -87,10 +87,9 @@ public class EmployeeAuthRepository {
     }
 
     /**
-     * Whether this employee holds the per-employee "can create quotations" capability (owner
-     * ruling, Ploy 2026-09-09 — ภิญญดา, employee 144, QC&amp;ISO, needs to create deal quotations
-     * from outside ฝ่ายขาย; since 2026-10-14 {@code DivisionAccessPolicy#roleFor} also gives an
-     * employee/qc/warehouse holder the {@code sales} role).
+     * Whether this employee holds the per-employee "can create quotations" capability (lets
+     * someone outside ฝ่ายขาย create deal quotations; {@code DivisionAccessPolicy#roleFor} also
+     * gives an employee/qc/warehouse holder the {@code sales} role).
      *
      * <p>Same shape and same discipline as {@link #isAdmin}: a live read against
      * {@code hr.employee.can_create_quotation}, restricted to active rows, decided fresh on every
@@ -112,18 +111,15 @@ public class EmployeeAuthRepository {
     }
 
     /**
-     * Whether this employee holds the {@code hr.employee.can_issue_billing_note} grant (GLA-99
-     * step 3, V189, owner ruling 2026-09-19) — the per-employee capability that lets a caller in
+     * Whether this employee holds the {@code hr.employee.can_issue_billing_note} grant — the per-employee capability that lets a caller in
      * ANY role create/update/issue/revise/cancel/mark-received a ใบวางบิล (billing note) without
      * being handed the {@code account} role wholesale. Same shape and same discipline as {@link
      * #canCreateQuotation}/{@link #isAdmin}: a live read against {@code hr.employee}, restricted to
      * active rows, decided fresh on every call rather than trusted from the session principal.
      *
-     * <p>Named holders on record (2026-09-19 read-only check, see the GLA-99 design-rulings memory):
-     * วิมลรัตน์ (role {@code sales}), จินตนา (role {@code sales_manager}), ปรางค์เนตร (role
-     * {@code sales}), ภิญญดา (role {@code employee}, QC&amp;ISO) — none holds {@code account}, so
-     * the grant must genuinely work for a plain {@code employee} row, not merely widen an existing
-     * sales-shaped gate. {@link th.co.glr.hr.billing.BillingNoteService} is the caller; see its own
+     * <p>Holders include plain {@code employee} rows (QC&amp;ISO) and sales roles, none holding
+     * {@code account}, so the grant must genuinely work for a plain {@code employee} row, not
+     * merely widen an existing sales-shaped gate. {@link th.co.glr.hr.billing.BillingNoteService} is the caller; see its own
      * Javadoc for the full write/read gate this grant participates in.
      */
     public boolean canIssueBillingNote(long employeeId) {

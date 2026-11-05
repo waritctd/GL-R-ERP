@@ -130,9 +130,8 @@ class DepositNoticeServiceTest {
     }
 
     /**
-     * Rule from the payment-track redesign (site 2): re-issuing FROM DEPOSIT_NOTICE_ISSUED
-     * itself — a revision — is now a legal self-loop, where it used to be refused with the same
-     * CONFLICT as any other non-CUSTOMER_CONFIRMED status. See {@code PaymentTrackIntegrationTest}
+     * Re-issuing FROM DEPOSIT_NOTICE_ISSUED itself — a revision — is a legal self-loop, unlike
+     * any other non-CUSTOMER_CONFIRMED status, which is refused with CONFLICT. See {@code PaymentTrackIntegrationTest}
      * for the real-DB proof (new doc number minted, old one SUPERSEDED, payment_status unchanged).
      */
     @Test
@@ -148,9 +147,9 @@ class DepositNoticeServiceTest {
     }
 
     // ── sales_manager oversight (read only, zero write actions) ─────────────
-    // Product decision (2026-07-16): sales_manager is a read+comment-only follow-up
-    // role for the sales team on tickets; the same rule extends to deposit notices
-    // (money-adjacent customer documents). Added to VIEWER_ROLES only.
+    // sales_manager is a read+comment-only follow-up role for the sales team on tickets; the
+    // same rule extends to deposit notices (money-adjacent customer documents). It is in
+    // VIEWER_ROLES only.
 
     @Test
     void listByTicket_salesManagerCanViewAnyTicketsNotices() {
@@ -192,12 +191,11 @@ class DepositNoticeServiceTest {
         assertForbidden(() -> service.getById(99L, importActor));
     }
 
-    // downloadRemainingInvoice_importDenied removed (O1, GLA-99 step 2 review-round-1): the
-    // stateless GET .../remaining-invoice/file endpoint and DepositNoticeService#getRemainingInvoiceXlsx
-    // it called are gone — every write/read path now goes through RemainingInvoiceService, whose
-    // own viewer gate is proven forbidden-for-import by RemainingInvoiceServiceIntegrationTest
-    // #read_import_isRefused_onIssuedDocument (real DB). remainingInvoiceOptions_importDenied below
-    // still pins requireTicketViewer's import-denial on the surviving stateless /options preview.
+    // The remaining-invoice file download has no stateless endpoint: every write/read path goes
+    // through RemainingInvoiceService, whose own viewer gate is proven forbidden-for-import by
+    // RemainingInvoiceServiceIntegrationTest#read_import_isRefused_onIssuedDocument (real DB).
+    // remainingInvoiceOptions_importDenied below pins requireTicketViewer's import-denial on the
+    // stateless /options preview.
 
     @Test
     void remainingInvoiceOptions_importDenied() {
@@ -226,7 +224,7 @@ class DepositNoticeServiceTest {
     @Test
     void remainingInvoiceXlsx_sourcesItemsFromAcceptedQuotationUsingStoredLineSubtotal() throws Exception {
         // Bypass policy (WAIVED): an ACCEPTED quotation qualifies with NO deposit notice needed at
-        // all (owner ruling A's exception) — deliberately used here so THIS test can isolate
+        // all (the exception to quotation selection rule A) — deliberately used here so THIS test can isolate
         // "stored lineSubtotal used verbatim" from the separate deposit-matching rules (B/C),
         // which have their own dedicated tests below.
         stubTicketWithDepositPolicy(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", DepositPolicy.WAIVED);
@@ -239,9 +237,9 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(
             List.of(quotation(1L, 10L, "ACCEPTED", 1, List.of(item))));
 
-        // O1 (GLA-99 step 2 review-round-1): getRemainingInvoiceXlsx is gone — asserted via the
-        // SAME package-private resolveRemainingInvoiceSnapshot RemainingInvoiceService itself
-        // freezes off of, so this still pins resolveRemainingInvoice's own item-sourcing logic.
+        // Asserted via the SAME package-private resolveRemainingInvoiceSnapshot
+        // RemainingInvoiceService itself freezes off of, so this pins resolveRemainingInvoice's
+        // own item-sourcing logic.
         DepositNoticeService.RemainingInvoiceSnapshot snap =
             service.resolveRemainingInvoiceSnapshot(10L, null, owner);
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
@@ -282,12 +280,11 @@ class DepositNoticeServiceTest {
         // unlike DepositNoticeRepository#findGoverningQuotation (deposit notice creation), which
         // DOES fall back to ISSUED. See resolveRemainingInvoice's own Javadoc for why these differ.
         //
-        // Finding 1 (vacuous test): this test used to only assert itemCount/depositAmount, which
-        // stayed green even under the mutation "let ISSUED quotations qualify too" — that mutation
-        // would source items from the ISSUED quotation's "Ignored"/amount=10 line instead of the
-        // notice's own "จากใบแจ้งยอดมัดจำ"/amount=100 line, but itemCount would still read 2 (1 item
-        // + 1 deposit row) either way. Asserting the actual description and itemsTotal below makes
-        // that mutation observable and kills it.
+        // itemCount/depositAmount alone would stay green under the mutation "let ISSUED quotations
+        // qualify too" — that mutation would source items from the ISSUED quotation's
+        // "Ignored"/amount=10 line instead of the notice's own "จากใบแจ้งยอดมัดจำ"/amount=100 line,
+        // but itemCount would still read 2 (1 item + 1 deposit row) either way. Asserting the
+        // actual description and itemsTotal below makes that mutation turn this test red.
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ISSUED", 1, List.of(quotationItem("Ignored", BigDecimal.ONE, "PER_PIECE",
                 BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
@@ -310,7 +307,7 @@ class DepositNoticeServiceTest {
         // doc number as the deposit-reference default.
         assertThat(options.defaultDepositReference()).isEqualTo("GLRD69001");
         // Legacy path (no accepted quotation): the reference defaults to the ISSUED deposit notice's own
-        // reference (the helper's "REF-1"), not null -- fresh-engine ruling 3.
+        // reference (the helper's "REF-1"), not null.
         assertThat(options.defaultReference()).isEqualTo("REF-1");
     }
 
@@ -335,8 +332,8 @@ class DepositNoticeServiceTest {
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
                 BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
         // reference = "QT-2026-1" (the quotation's own number, from the `quotation()` fixture's
-        // "QT-2026-" + id convention) — the match rule this branch adds (deposit_notice.reference
-        // == quotation.number). Notice's OWN items (ruling D11: items are notice-sourced, not
+        // "QT-2026-" + id convention) — the match rule (deposit_notice.reference
+        // == quotation.number). Notice's OWN items (items are notice-sourced, not
         // quotation-sourced) total 10, deposit = 4 (<= the 10 item total) so rule C's negative-net
         // refusal does not fire — this test is about deposit-reference precedence, not the amount
         // rules (which have their own dedicated tests).
@@ -359,31 +356,27 @@ class DepositNoticeServiceTest {
             .contains("AI2600145", "GLRD69001", "");
     }
 
-    // remainingInvoiceXlsx_explicitParamsPassThroughToRenderer removed (O1): reference/deposit-
-    // reference/issueDate/notes pass-through was the deleted stateless /file endpoint's own query-
-    // param semantics, which has no successor — RemainingInvoiceService's createDraft/updateDraft
-    // own field-override semantics (req.reference()/req.depositReference()/req.docDate()/
-    // req.notes(), each falling back to a resolved/existing default when omitted) are exercised by
-    // RemainingInvoiceServiceIntegrationTest instead.
+    // RemainingInvoiceService's createDraft/updateDraft field-override semantics
+    // (req.reference()/req.depositReference()/req.docDate()/req.notes(), each falling back to a
+    // resolved/existing default when omitted) are exercised by
+    // RemainingInvoiceServiceIntegrationTest, not here.
 
-    // createDraft_overCapacityThrowsConflict_viaRemainingInvoiceServicesOwnGate and
-    // remainingInvoiceOptions_neverThrowsForOverCapacityOnlyReportsIt were REMOVED (fresh PDF engine,
-    // 2026-10-28): the renderer now flows any number of items onto extra rows/pages, so there is no
-    // item-row capacity to refuse or report. See RemainingInvoicePdfRendererTest (40 items).
+    // There is no over-capacity case to test: the renderer flows any number of items onto extra
+    // rows/pages, so there is no item-row capacity to refuse or report. See
+    // RemainingInvoicePdfRendererTest (40 items).
 
     @Test
     void remainingInvoiceXlsx_noAcceptedQuotationNoIssuedNoticeNoLegacyThrowsConflict() throws Exception {
         // stubTicket's items are always List.of() (no legacy approved_price), and both repos are
         // unstubbed (Mockito default: empty list) -> nothing this document could possibly price.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
-        // O1: getRemainingInvoiceXlsx is gone; this exact "truly nothing to price" terminal case
-        // (no accepted quotation at all -> resolveLegacy -> no issued notice AND no legacy
-        // approved_price items either) is the ONE branch resolveRemainingInvoice/resolveLegacy
-        // itself still throws 409 for, regardless of caller — see resolveLegacy's own Javadoc.
-        // Every OTHER blocking case (negative net, empty matched-notice snapshot, deposit>items)
-        // reports via blockingReason instead (see the sibling tests converted to
-        // resolveRemainingInvoiceSnapshot elsewhere in this file), which only createDraft/
-        // getRemainingInvoiceXlsx (now gone) used to turn into a 409.
+        // This exact "truly nothing to price" terminal case (no accepted quotation at all ->
+        // resolveLegacy -> no issued notice AND no legacy approved_price items either) is the ONE
+        // branch resolveRemainingInvoice/resolveLegacy itself throws 409 for, regardless of caller
+        // — see resolveLegacy's own Javadoc. Every OTHER blocking case (negative net, empty
+        // matched-notice snapshot, deposit>items) reports via blockingReason instead (see the
+        // sibling tests on resolveRemainingInvoiceSnapshot elsewhere in this file), which only
+        // createDraft turns into a 409.
         assertConflict(() -> service.resolveRemainingInvoiceSnapshot(10L, null, owner));
     }
 
@@ -400,7 +393,7 @@ class DepositNoticeServiceTest {
         assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("300"); // 150*2
     }
 
-    // ── Owner ruling A-D: quotation selection, subtotal match, negative-net refusal ─────────
+    // ── Rules A-D: quotation selection, subtotal match, negative-net refusal ────────────────
 
     @Test
     void remainingInvoiceXlsx_designerQuotationExcludedBuyerQuotationChosenAutomatically() throws Exception {
@@ -415,7 +408,7 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(designerItem)),
             quotation(2L, 10L, "ACCEPTED", 1, List.of(buyerItem))));
-        // Ruling D11: items come from the MATCHED NOTICE's own snapshot, never the quotation's —
+        // Rule D11: items come from the MATCHED NOTICE's own snapshot, never the quotation's —
         // this notice item's description ("From matched notice") is deliberately unlike EITHER
         // quotation's own item text, so a passing assertion below proves sourcing switched to the
         // notice, not merely that "the buyer's quotation" (vs the designer's) was correctly chosen.
@@ -431,7 +424,7 @@ class DepositNoticeServiceTest {
         assertThat(resolved.items()).hasSize(1);
         assertThat(resolved.items().get(0).description()).isEqualTo("From matched notice");
         // reference still identifies WHICH quotation was chosen (the buyer's, not the designer's) —
-        // that selection logic is unchanged by D11, only the item/deduction SOURCE is.
+        // that selection logic is independent of D11, which only governs the item/deduction SOURCE.
         assertThat(resolved.defaultReference()).isEqualTo("QT-2026-2");
         assertThat(resolved.depositAmount()).isEqualByComparingTo("5");
     }
@@ -483,14 +476,14 @@ class DepositNoticeServiceTest {
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.TEN, BigDecimal.ZERO, depositNoticeItems(1))));
 
-        // O1: getRemainingInvoiceXlsx is gone; the 400 gate lives in resolveRemainingInvoice
-        // itself (shared by every caller, including resolveRemainingInvoiceSnapshot below).
+        // The 400 gate lives in resolveRemainingInvoice itself (shared by every caller,
+        // including resolveRemainingInvoiceSnapshot below).
         assertThatThrownBy(() -> service.resolveRemainingInvoiceSnapshot(10L, 999L, owner))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    /** Finding 1 (Opus review, mutation coverage gap): findQualifyingQuotations gates on
+    /** findQualifyingQuotations gates on
      * {@code QuotationStatus.ACCEPTED} only — an ISSUED-but-not-yet-accepted quotation must NOT
      * qualify as the final quotation, even when a matching ISSUED deposit notice exists for it.
      * Mutating that gate to also accept ISSUED left every pre-existing test green, because
@@ -500,10 +493,10 @@ class DepositNoticeServiceTest {
      * from "fell through to legacy" is {@code defaultReference}/{@code referenceOptions}:
      * resolveFromQuotation sets defaultReference to the quotation's own number and populates
      * referenceOptions from buildQuotationReferenceOptions, while resolveLegacy hard-codes referenceOptions to
-     * empty (and, since the fresh-engine ruling, defaultReference to the notice's reference) (see resolveRemainingInvoice's own Javadoc) — that is what this test pins.
-     * Mutation-checked: widening the ACCEPTED check to `|| QuotationStatus.ISSUED.equals(...)`
-     * turns this one test red (defaultReference becomes "QT-2026-1", referenceOptions non-empty)
-     * and every other test in this file stays green; reverted after confirming. */
+     * empty (and defaultReference to the notice's reference) (see resolveRemainingInvoice's own
+     * Javadoc) — that is what this test pins.
+     * Mutation: widening the ACCEPTED check to `|| QuotationStatus.ISSUED.equals(...)`
+     * turns this one test red (defaultReference becomes "QT-2026-1", referenceOptions non-empty). */
     @Test
     void remainingInvoiceOptions_issuedButNotAcceptedQuotationDoesNotQualifyAsFinalQuotation() {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
@@ -522,9 +515,9 @@ class DepositNoticeServiceTest {
         assertThat(options.blockingReason()).isNull(); // resolveLegacy still prices it, via the notice
         assertThat(options.itemsTotal()).isEqualByComparingTo("100"); // sourced from the notice regardless
         // The discriminator: an ISSUED (not ACCEPTED) quotation must never be treated as a
-        // "qualifying final quotation" — referenceOptions/defaultQuotationId stay legacy-empty. (Fresh-engine
-        // ruling 3: the legacy path's defaultReference is no longer null -- it is the ISSUED notice's own
-        // reference, which here happens to equal the quotation's number, so it can no longer discriminate.)
+        // "qualifying final quotation" — referenceOptions/defaultQuotationId stay legacy-empty. (The
+        // legacy path's defaultReference is not null -- it is the ISSUED notice's own
+        // reference, which here happens to equal the quotation's number, so it cannot discriminate.)
         assertThat(options.defaultReference()).isEqualTo("QT-2026-1");
         assertThat(options.referenceOptions()).isEmpty();
         assertThat(options.defaultQuotationId()).isNull();
@@ -544,10 +537,9 @@ class DepositNoticeServiceTest {
         assertThat(options.itemCount()).isZero();
     }
 
-    // remainingInvoiceXlsx_acceptedQuotationWithoutIssuedNoticeThrowsConflict removed (O1):
-    // duplicate of remainingInvoiceOptions_acceptedQuotationWithoutIssuedNoticeIsBlockedUnderRequiredPolicy
-    // above, which pins the identical fixture's blockingReason via the surviving /options entry
-    // point — resolveRemainingInvoice never actually throws for this case (see that method).
+    // An accepted quotation without an issued notice is pinned above by
+    // remainingInvoiceOptions_acceptedQuotationWithoutIssuedNoticeIsBlockedUnderRequiredPolicy
+    // via blockingReason — resolveRemainingInvoice never actually throws for this case.
 
     @Test
     void remainingInvoiceXlsx_bypassPolicyQualifiesAcceptedQuotationWithoutNoticeAndNoDeductionRow() throws Exception {
@@ -561,9 +553,9 @@ class DepositNoticeServiceTest {
         assertThat(resolved.depositAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // ── Ruling D11 (2026-09-17): items/deduction come from the matched deposit notice's OWN
-    // item snapshot, and a subtotal difference between that notice and its quotation no longer
-    // blocks anything — supersedes the old "subtotal must match" rule these tests used to pin.
+    // ── Rule D11: items/deduction come from the matched deposit notice's OWN
+    // item snapshot, and a subtotal difference between that notice and its quotation does not
+    // block anything.
 
     @Test
     void remainingInvoiceOptions_itemsComeFromMatchedNoticeNotQuotationEvenWhenSubtotalsDiffer() {
@@ -573,7 +565,7 @@ class DepositNoticeServiceTest {
                 "PER_PIECE", BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN))))); // quotation item total = 10
         // Notice subtotal (99) does NOT match the quotation's own item total (10) — e.g. the
         // notice was edited/re-issued at a different amount after the quotation was accepted.
-        // Under D11 this is no longer a mismatch to block on: the notice's own items/amount ARE
+        // Under D11 this is not a mismatch to block on: the notice's own items/amount ARE
         // the agreed figure now.
         DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
             1L, 1, "Notice item", new BigDecimal("3"), "แผ่น",
@@ -610,13 +602,13 @@ class DepositNoticeServiceTest {
         assertThat(resolved.items().get(0).amount()).isEqualByComparingTo("99");
     }
 
-    /** Proves the D11 ruling's "no caching" property end to end: the SAME quotation/notice pairing
+    /** Proves the D11 rule's "no caching" property end to end: the SAME quotation/notice pairing
      * is read twice, but the second read simulates the notice having been edited/re-issued at a
      * different amount in between (a fresh {@code docs.findByTicket} stub, exactly like a new DB
      * read would return) — the remaining invoice on that NEXT read must reflect the edit, not the
      * first read's cached figures, because {@code resolveRemainingInvoiceSnapshot}/{@code
      * getRemainingInvoiceOptions} recompute everything fresh from the repositories on every call
-     * (see this section's own "stateless by owner decision" header comment). */
+     * (see this section's own "stateless" header comment). */
     @Test
     void remainingInvoiceXlsx_editingDepositNoticeChangesTheNextReadNoCaching() throws Exception {
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
@@ -660,7 +652,7 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
                 BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        // Ruling D11: itemsTotal must come from the NOTICE's own items (10 here), not the
+        // Rule D11: itemsTotal must come from the NOTICE's own items (10 here), not the
         // quotation's — deposit (15) exceeds it, so rule C's negative-net refusal fires.
         DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
             1L, 1, "From notice", BigDecimal.ONE, "แผ่น", BigDecimal.TEN, null, BigDecimal.TEN, BigDecimal.TEN);
@@ -673,14 +665,14 @@ class DepositNoticeServiceTest {
         assertThat(options.blockingReason()).contains("ติดลบ");
     }
 
-    // remainingInvoiceXlsx_depositGreaterThanItemsThrowsConflict removed (O1): duplicate of
-    // remainingInvoiceOptions_depositGreaterThanItemsIsBlocked above (identical fixture, same
-    // blockingReason assertion) — resolveRemainingInvoice never throws for this case itself.
+    // A deposit greater than the items is pinned above by
+    // remainingInvoiceOptions_depositGreaterThanItemsIsBlocked via blockingReason —
+    // resolveRemainingInvoice never throws for this case itself.
 
     @Test
     void remainingInvoiceXlsx_netEqualsZeroIsAllowed() throws Exception {
         // deposit == item total exactly -> net = 0, which must be ALLOWED (only < 0 is refused).
-        // Ruling D11: item total must come from the NOTICE's own items, not the quotation's.
+        // Rule D11: item total must come from the NOTICE's own items, not the quotation's.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
@@ -696,7 +688,7 @@ class DepositNoticeServiceTest {
         assertThat(resolved.blockingReason()).isNull();
     }
 
-    // ── D11 finding 1 (2026-09-18): the matched notice's own discountLabel is authored in the
+    // ── D11: the matched notice's own discountLabel is authored in the
     // LONG form ("ส่วนลด X ต่อหน่วย" — see itemsFromQuotation, used by both createDraft and
     // OrderConfirmationService.createDepositNoticeFromQuotation), which clips in the renderer's
     // narrow column G. itemsFromDepositNoticeForRemainingInvoice must normalize it into the SAME
@@ -728,11 +720,11 @@ class DepositNoticeServiceTest {
         assertThat(resolved.items().get(0).discountLabel()).isEqualTo("ลด 43.17");
     }
 
-    // ── D11 finding 2 (2026-09-18): once a quotation is matched to a notice, that notice's own
+    // ── D11: once a quotation is matched to a notice, that notice's own
     // item snapshot is the SOLE source of items (see resolveFromQuotation's own header comment) —
     // an empty/null snapshot must refuse the document outright, never silently render a
     // zero-total invoice and never fall back to the quotation's own items (that would resurrect
-    // exactly the sourcing ambiguity D11 removed).
+    // exactly the sourcing ambiguity D11 rules out).
 
     @Test
     void remainingInvoiceOptions_matchedNoticeWithEmptyItemsIsBlocked() {
@@ -766,8 +758,8 @@ class DepositNoticeServiceTest {
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.ZERO, BigDecimal.ZERO,
                 List.of())));
 
-        // O1: resolveRemainingInvoice itself never throws (RemainingInvoiceService#createDraft is
-        // what turns a non-null blockingReason into the 409 today) — the emptiness guard itself,
+        // resolveRemainingInvoice itself never throws (RemainingInvoiceService#createDraft is
+        // what turns a non-null blockingReason into the 409) — the emptiness guard itself,
         // which this test pins, is proven by the blockingReason being set at all (never silently
         // falling through to a fabricated zero-total render).
         DepositNoticeService.ResolvedRemainingInvoice resolved =
@@ -937,8 +929,7 @@ class DepositNoticeServiceTest {
         verify(docs, never()).findDealQuotationItems(anyLong());
     }
 
-    // ── Deposit percent = what the source quotation's PDF printed (owner rulings 2026-09-29,
-    // 2026-10-23) ────
+    // ── Deposit percent = what the source quotation's PDF printed ────
     // The governing quotation's percent (DepositNoticeRepository#findGoverningQuotation: legacy
     // 50, new-engine its own, blank 30); a caller-supplied percent is never read on create, and
     // 0.50 applies only when the ticket has no live quotation. update() then lets sales change it
@@ -979,8 +970,8 @@ class DepositNoticeServiceTest {
     }
 
     /**
-     * Lines, percent and reference all come from the ONE governing quotation (owner ruling
-     * 2026-10-23), here a new-engine one: its lines via {@code docs.findDealQuotationItems}, its
+     * Lines, percent and reference all come from the ONE governing quotation,
+     * here a new-engine one: its lines via {@code docs.findDealQuotationItems}, its
      * percent, and its number as the reference. The sentinel item ("V2 deal quotation item", unit
      * price 999) and the 0.40 are deliberately unlike anything else in this file, so a draft that
      * took its lines or percent from elsewhere shows up as the wrong value, not merely "some value".
@@ -1080,7 +1071,7 @@ class DepositNoticeServiceTest {
             .containsExactly("0.333", "0.4");
     }
 
-    // DepositNoticeRepository#foldAdjustments (owner rulings 2026-10-23, "2 decimals for all"): the
+    // DepositNoticeRepository#foldAdjustments ("2 decimals for all"): the
     // ส่วนลดพิเศษ amount is spread by line amount, each share HALF_UP to 2 dp, each new net price
     // 2 dp. There is no remainder trick: the notice total is the sum of its own 2 dp lines (here
     // 200.01, a cent over the quotation's 200.00). A line keeps the quotation's own discount wording
@@ -1156,7 +1147,7 @@ class DepositNoticeServiceTest {
         stubTicketWithDepositPolicy(ticketId, status, paymentStatus, DepositPolicy.REQUIRED, lifecycle);
     }
 
-    // Remaining-invoice quotation-selection fixture (owner ruling A): a deposit policy other than
+    // Remaining-invoice quotation-selection fixture (rule A): a deposit policy other than
     // REQUIRED changes whether an ACCEPTED quotation qualifies WITHOUT a matching issued deposit
     // notice — see DepositPolicy.bypassesDepositNotice.
     private void stubTicketWithDepositPolicy(long ticketId, String status, String paymentStatus, String depositPolicy) {
@@ -1222,9 +1213,9 @@ class DepositNoticeServiceTest {
             null, lineSubtotal, BigDecimal.ZERO, lineSubtotal);
     }
 
-    // Ruling D11: a matched deposit notice's OWN item snapshot drives the remaining invoice's rows
-    // (and its capacity check) — this builds `count` such rows, each worth 10, for tests that used
-    // to size a QUOTATION's item list for capacity/total purposes before that ruling.
+    // Rule D11: a matched deposit notice's OWN item snapshot drives the remaining invoice's rows
+    // (and its capacity check) — this builds `count` such rows, each worth 10, so a test sizes
+    // the NOTICE's items (not a QUOTATION's item list) for capacity/total purposes.
     private List<DepositNoticeItemDto> depositNoticeItems(int count) {
         List<DepositNoticeItemDto> items = new java.util.ArrayList<>();
         for (int i = 1; i <= count; i++) {
@@ -1317,7 +1308,7 @@ class DepositNoticeServiceTest {
         when(storedMock.findById(7L)).thenReturn(Optional.of(doc));
         when(remainingRenderer.toXls(any())).thenReturn(new byte[] {1});
 
-        new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer).file(7L, owner);
+        new RemainingInvoiceService(storedMock, service, ticketRepo, remainingRenderer, notifications).file(7L, owner);
 
         org.mockito.ArgumentCaptor<RemainingInvoiceRenderModel> model =
             org.mockito.ArgumentCaptor.forClass(RemainingInvoiceRenderModel.class);
@@ -1348,7 +1339,7 @@ class DepositNoticeServiceTest {
         verify(renderer).toPreviewHtml(any(), org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 3, 15)));
     }
 
-    // SK-07 (owner ruling 2026-10-28, final): each tax invoice's VAT is round2(its own net x 7%). Deal 11
+    // Each tax invoice's VAT is round2(its own net x 7%). Deal 11
     // (PR-2026-0006): net 119,745.00 - 35,923.50 = 83,821.50 -> VAT 5,867.505 -> 5,867.51 -> grand 89,689.01.
     // The 1-satang gap against the deal payable (128,127.15 - 38,438.15 = 89,689.00) is normal.
     @Test

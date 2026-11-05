@@ -8,9 +8,8 @@ import { listDrafts, loadDraft, saveDraft } from './dealDrafts.js';
 
 globalThis.React = React;
 
-// UX-03: every invalid field gets its own aria-invalid + aria-describedby +
-// inline role="alert" message, and the first invalid field is focused on submit
-// (opening whichever accordion section owns it).
+// Every invalid field gets its own aria-invalid + aria-describedby + inline role="alert" message,
+// and the first invalid field is focused on submit (opening whichever accordion section owns it).
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -29,18 +28,28 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn(),
       },
-      // FX rates back the "≈ x บาท" companion shown beside a catalog price. Fetched via
-      // react-query inside the modal, so every render() needs a QueryClientProvider (see
-      // renderModal() below). The CEO markup multiplier used to be fetched here too, for the
-      // ราคาตั้ง (ประมาณการ) estimate; that whole feature was removed on the owner's instruction
-      // after UAT, so `api.dealEstimateMarkup` is deliberately NOT mocked — if the modal ever
-      // starts calling it again these tests will fail loudly rather than silently re-enable it.
+      // เจ้าของงาน picker: the people who may OWN a deal (sales / sales_manager / quotation grant).
+      // Same eligible-people list the quotation editor's print-name selectors already read.
+      dealQuotations: {
+        displayNameOptions: vi.fn(),
+      },
+      // FX rates back the "≈ x บาท" companion beside a catalog price. Fetched via react-query inside
+      // the modal, so every render() needs a QueryClientProvider (see renderModal() below).
+      // `api.dealEstimateMarkup` is deliberately NOT mocked: if the modal calls it again these tests
+      // fail loudly instead of silently re-enabling the removed ราคาตั้ง estimate.
       fxRates: {
         list: vi.fn(),
       },
     },
   };
 });
+
+// The signed-in rep is id 6; id 9 is a colleague the admin keys the deal for.
+const currentUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+const OWNER_OPTIONS = [
+  { id: 6, name: 'คุณสมหมาย ขายดี' },
+  { id: 9, name: 'คุณวิมล ขายเก่ง' },
+];
 
 const mockCustomer = { id: 1, name: 'บริษัท ทดสอบ จำกัด', taxId: null };
 const mockProject = { id: 10, name: 'โครงการ A' };
@@ -69,16 +78,13 @@ function catalogItem(overrides = {}) {
   });
 }
 
-// Deliberately NOT fireEvent.submit(form): that dispatches a plain synthetic Event with no
-// `.submitter` property at all under jsdom, and SafeForm's canSubmit gate is a RESTRICTION on
-// top of its submitter guard, not a replacement for it (#safe-form-primitive review round) -- a
-// submitterless dispatch is blocked on EVERY view regardless of canSubmit, which would make every
-// "does NOT submit" test below pass for the wrong reason (no submitter in the DOM at all, not
-// because the view gate rejected it -- this repo's own documented vacuous-test shape) and every
-// "submits" test fail outright. A manually constructed SubmitEvent with an explicit `submitter`
-// is picked up by React's onSubmit exactly like a real click (verified), so every call site below
-// now exercises `canSubmit` specifically: the one-page form lets it through, the draft picker
-// still blocks it even though a submitter is present.
+// Deliberately NOT fireEvent.submit(form): under jsdom that dispatches a plain synthetic Event with
+// no `.submitter`, and SafeForm's canSubmit gate is a RESTRICTION on top of its submitter guard, so
+// a submitterless dispatch is blocked on EVERY view regardless of canSubmit. That would make every
+// "does NOT submit" test pass for the wrong reason (vacuous) and every "submits" test fail. A
+// manually constructed SubmitEvent with an explicit `submitter` is picked up by React's onSubmit
+// like a real click, so each call site exercises `canSubmit`: the one-page form lets it through, the
+// draft picker blocks it even though a submitter is present.
 function submitForm() {
   const form = document.getElementById('ticket-create-form');
   form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
@@ -131,23 +137,20 @@ function chooseEntryChannel(name = /ผู้ออกแบบนำ/) {
   fireEvent.click(screen.getByRole('radio', { name }));
 }
 
-/** Real wall-clock wait, for the handful of GLA-20 autosave tests where mixing fake timers with
- * an already-in-flight real one (scheduled by an earlier real-timer interaction in the same test)
- * would be non-deterministic — see those tests' own comments. */
+/** Real wall-clock wait, for the GLA-20 autosave tests where mixing fake timers with an
+ * already-in-flight real one would be non-deterministic (see those tests' comments). */
 function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
 /**
- * A real, full Storage implementation (getItem/setItem/removeItem/clear/key/length), not a
- * partial mock. Some Node versions ship a broken built-in global `localStorage` where
- * `typeof localStorage === 'object'` but the methods are not functions at all (needs
- * `--localstorage-file`, which this repo's engines range doesn't target) — a version of the
- * "restored draft" test below that merely try/catch-guarded a broken localStorage passed even with
- * draft restoration deleted outright (mutation-checked — it asserted nothing; see git history).
- * Every draft/autosave test in this file now gets a WORKING store via the beforeEach below, so
- * assertions about what got persisted are real. `.key`/`.length` matter here specifically because
- * dealDrafts.js's listDrafts() rebuild path scans them when the index is missing/corrupt.
+ * A real, full Storage implementation (getItem/setItem/removeItem/clear/key/length), not a partial
+ * mock. Some Node versions ship a broken built-in global `localStorage` (`typeof localStorage ===
+ * 'object'` but the methods aren't functions; needs `--localstorage-file`), under which a
+ * try/catch-guarded "restored draft" test passed even with draft restoration deleted. Every
+ * draft/autosave test gets a WORKING store via the beforeEach below, so persistence assertions are
+ * real. `.key`/`.length` matter because dealDrafts.js's listDrafts() rebuild path scans them when
+ * the index is missing/corrupt.
  */
 function createMemoryStorage() {
   const store = new Map();
@@ -167,6 +170,7 @@ beforeEach(() => {
   api.customers.search.mockResolvedValue({ customers: [mockCustomer] });
   api.customers.projects.mockResolvedValue({ projects: [mockProject] });
   api.tickets.list.mockResolvedValue({ tickets: [] });
+  api.dealQuotations.displayNameOptions.mockResolvedValue({ items: OWNER_OPTIONS });
   // FX rates covering the catalogItem() fixture's EUR price. Individual tests override this to
   // exercise the "no rate for this currency" path.
   api.fxRates.list.mockResolvedValue({
@@ -210,8 +214,8 @@ describe('TicketCreateModal validation', () => {
     try {
       submitForm();
       await waitFor(() => expect(document.activeElement?.id).toBe('item-0-size'));
-      // Header first, then the field: the other way round, the header's instant scroll would
-      // cancel the field's smooth one and could leave the focused field off screen.
+      // Header first, then the field: the other way round, the header's instant scroll would cancel
+      // the field's smooth one and could leave the focused field off screen.
       expect(scrolled).toEqual(['deal-section-items-header', 'item-0-size']);
     } finally {
       delete Element.prototype.scrollIntoView;
@@ -224,17 +228,16 @@ describe('TicketCreateModal validation', () => {
     expect(sizeInput.getAttribute('aria-describedby')).toBe('item-0-size-error');
     expect(screen.getByText('กรุณากรอกขนาด')).toBeTruthy();
 
-    // The old generic string must not appear — the whole point of the fix.
+    // The old generic string must not appear.
     expect(screen.queryByText(/กรุณากรอกข้อมูลสินค้าให้ครบทุกช่องในรายการที่/)).toBeNull();
     // Other fields in the same row stay untouched.
     expect(document.getElementById('item-0-brand').getAttribute('aria-invalid')).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  // The live price catalog fills `color` on 21% of its active rows and `surface` on 22%, so
-  // requiring either made a rep invent a value on most catalog picks. Asserted wrong-way-round:
-  // what matters is that a blank สี/เนื้อผิว does NOT block, and that it reaches the payload as
-  // null rather than as an empty string someone appears to have typed.
+  // The live price catalog fills `color` on 21% of its active rows and `surface` on 22%, so requiring
+  // either made a rep invent a value on most catalog picks. Wrong-way-round: a blank สี/เนื้อผิว does
+  // NOT block, and reaches the payload as null rather than an empty string.
   it('creates a deal with สี and เนื้อผิว left blank, sending them as null', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit, initialItems: [validItem({ color: '', texture: '' })] });
@@ -317,7 +320,7 @@ describe('TicketCreateModal validation', () => {
         color: 'ขาว',
         texture: 'ด้าน',
         size: '60x60',
-        // ยี่ห้อ and โรงงาน are one field now, so factory follows brand rather than staying null.
+        // ยี่ห้อ and โรงงาน are one field, so factory follows brand rather than staying null.
         factory: 'SCG',
         unitBasis: 'PIECE',
         qty: 5,
@@ -384,9 +387,9 @@ describe('TicketCreateModal validation', () => {
     expect(onSubmit.mock.calls[0][0].items).toEqual([]);
   });
 
-  // The bug this branch fixes: the picker used to arrive pre-selected as DESIGNER_LED, so a rep
-  // who never opened this section silently recorded "designer-led". A value was ALWAYS sent, so
-  // no backend default could tell that apart from a real choice.
+  // The picker must not arrive pre-selected as DESIGNER_LED: a rep who never opened this section
+  // would silently record "designer-led", and since a value was ALWAYS sent no backend default could
+  // tell that apart from a real choice.
   it('does not submit when the rep never touched the entry-channel picker', async () => {
     const onSubmit = vi.fn();
     renderModal({ onSubmit });
@@ -480,9 +483,8 @@ describe('TicketCreateModal validation', () => {
   });
 
   // A create request can resolve after the rep has moved on; its auto-advance must judge what is on
-  // screen by then, not what was there at click time: a section finished meanwhile is not reopened.
-  // (Walk 4: the old Phase 2 - an item editor held open by a จากสต็อก row with no price - went with the
-  // sales-typed stock price; leaving the item editor no longer validates anything.)
+  // screen by then, not at click time: a section finished meanwhile is not reopened. (Leaving the
+  // item editor validates nothing.)
   it('a project created late does not reopen a section the rep finished meanwhile', async () => {
     const resolveCreate = [];
     api.customers.createProject.mockImplementation(() => new Promise((resolve) => { resolveCreate.push(resolve); }));
@@ -532,10 +534,9 @@ describe('TicketCreateModal validation', () => {
     expect(onSubmit.mock.calls[0][0].entryChannel).toBe('BUYER_DIRECT');
   });
 
-  // Restoring a draft is NOT the same as creating fresh: a channel the rep already stated must
-  // come back selected, or the no-default rule above would quietly discard their answer. Updated
-  // for GLA-19's multi-draft picker: a saved draft no longer auto-restores on open — the modal
-  // shows the picker first, and "เปิดต่อ" is what applies it onto the form.
+  // Restoring a draft is NOT the same as creating fresh: a channel the rep already stated must come
+  // back selected, or the no-default rule above would discard their answer. A saved draft doesn't
+  // auto-restore on open: the modal shows the picker first, and "เปิดต่อ" applies it onto the form.
   it('pre-fills the channel from a restored draft, via the draft picker', async () => {
     saveDraft(null, { entryChannel: 'OWNER_DIRECT', dealTitle: 'ดีลค้างไว้' });
     renderModal({ onSubmit: vi.fn() });
@@ -546,6 +547,89 @@ describe('TicketCreateModal validation', () => {
 
     openSection('entryChannel');
     expect(screen.getByRole('radio', { name: /เจ้าของตรง/ }).getAttribute('aria-checked')).toBe('true');
+  });
+});
+
+// Deal OWNER vs KEYER (Ploy 2026-11-05): admin staff key deals for other reps, so the create form
+// carries a เจ้าของงาน picker. It defaults to the signed-in user (today's behaviour) and its choice
+// travels as `ownerEmployeeId`. Assumes a native <select> labelled เจ้าของงาน, fed by
+// api.dealQuotations.displayNameOptions, with the signed-in user passed as the `user` prop.
+describe('TicketCreateModal เจ้าของงาน (deal owner) picker', () => {
+  async function ownerSelect() {
+    openSection('details');
+    return screen.findByLabelText(/เจ้าของงาน/);
+  }
+
+  it('shows a เจ้าของงาน picker listing the eligible people, defaulting to the current user', async () => {
+    renderModal({ user: currentUser, onSubmit: vi.fn() });
+
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').map((o) => o.value))
+      .toEqual(expect.arrayContaining(['6', '9'])));
+    expect(select.value).toBe('6');
+  });
+
+  it("sends the chosen colleague's id as ownerEmployeeId", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').length).toBeGreaterThan(1));
+    fireEvent.change(select, { target: { value: '9' } });
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId).toBe(9);
+  });
+
+  it('left untouched, the deal is still the current user\'s own (ownerEmployeeId omitted or = current user)', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    await ownerSelect();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId ?? currentUser.id).toBe(currentUser.id);
+  });
+
+  // Review finding (11-06): a resumed draft must not fall back to the keyer as owner, or the
+  // deal lands under the admin again.
+  it('autosaves the chosen owner into the draft', async () => {
+    renderModal({ user: currentUser, onSubmit: vi.fn() });
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').length).toBeGreaterThan(1));
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText(/ชื่อดีล/), { target: { value: 'ดีลคีย์แทน' } });
+      fireEvent.change(select, { target: { value: '9' } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+    } finally {
+      vi.useRealTimers();
+    }
+    const [draft] = listDrafts();
+    expect(loadDraft(draft.id).ownerEmployeeId).toBe('9');
+  });
+
+  it('a restored draft brings its owner back and submits it as ownerEmployeeId', async () => {
+    saveDraft(null, { dealTitle: 'ดีลคีย์แทน', ownerEmployeeId: '9' });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดต่อ' }));
+
+    const select = await ownerSelect();
+    await waitFor(() => expect(select.value).toBe('9'));
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId).toBe(9);
   });
 });
 
@@ -616,10 +700,10 @@ describe('TicketCreateModal draft picker (GLA-19)', () => {
   });
 });
 
-// Walk 4 (W4-09, owner ruling 2026-10-29): sales may still flag a deal line "จากสต็อก" (from
-// warehouse), but no longer types a selling price for it - the deal shows the CEO-approved price.
-// Ticking the box shows no price input, never blocks leaving the item editor or submitting, and the
-// create request carries sourcedFromStock with no stockSalePrice.
+// Sales may flag a deal line "จากสต็อก" (from warehouse) but does not type a selling price for it:
+// the deal shows the CEO-approved price. Ticking the box shows no price input, never blocks leaving
+// the item editor or submitting, and the create request carries sourcedFromStock with no
+// stockSalePrice.
 describe('TicketCreateModal stock-sourced lines (no sales-typed price)', () => {
   it('ticking จากสต็อก shows no price input, and the create request carries sourcedFromStock with no stockSalePrice', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
@@ -740,15 +824,13 @@ describe('TicketCreateModal implicit submission (Enter-key) safety', () => {
   });
 });
 
-// V110: the catalog product picked here is persisted as catalogPriceId/catalogProductCode so
+// The catalog product picked here is persisted as catalogPriceId/catalogProductCode so
 // PricingRequestCreateModal need not re-search it.
 //
-// The brand mapping was rewritten on 2026-08-10 after UAT. It used to read the catalog's `grade`
-// as the brand; the live catalog shows `grade` holds only 'A01'/'A02' and only for factory Padana
-// (9,076 of 22,455 active rows), so that rule wrote a quality code into ยี่ห้อ or, for the other
-// 60%, left it blank — reported as "รายการสินค้า doesn't autofill everything". ยี่ห้อ and โรงงาน
-// are now one field carrying the factory name, which is what a rep means by the brand here
-// (Padana, Vives, LEA, Bode…).
+// The brand mapping does not read the catalog's `grade`: it holds only 'A01'/'A02' and only for
+// factory Padana (9,076 of 22,455 active rows), so that wrote a quality code into ยี่ห้อ or left it
+// blank. ยี่ห้อ and โรงงาน are one field carrying the factory name, which is what a rep means by the
+// brand here (Padana, Vives, LEA, Bode…).
 describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapping)', () => {
   function mockCatalogProduct(overrides = {}) {
     return {
@@ -770,8 +852,8 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
   }
 
   // Opens the item editor for a fresh row and types into the ยี่ห้อ/โรงงาน field to trigger the
-  // (debounced, real-timer) catalog search — the actual user flow, not a shortcut around it, since
-  // the mapping under test lives inside applyCatalogItem and is reached only via a real pick.
+  // (debounced, real-timer) catalog search: the actual user flow, since the mapping under test lives
+  // inside applyCatalogItem and is reached only via a real pick.
   async function addItemAndSearchBrand(query) {
     openSection('items');
     fireEvent.click(screen.getByRole('button', { name: /^เพิ่มรายการสินค้า/ }));
@@ -815,7 +897,7 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     });
   });
 
-  // The regression that motivated the rewrite: a Padana row's grade is 'A01'.
+  // The regression the brand mapping exists for: a Padana row's grade is 'A01'.
   it('never writes the catalog grade into ยี่ห้อ, showing it as a เกรด badge instead', async () => {
     api.catalog.prices.mockResolvedValue({
       items: [mockCatalogProduct({ factoryName: 'Padana', grade: 'A01', collection: 'Nuances' })],
@@ -870,11 +952,10 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     });
   });
 
-  // Review round 2: onFocusSearch used to call the SAME mutating path a real keystroke does
-  // (onBrandInput/onModelInput -> updateItem), so merely re-focusing an already-picked ยี่ห้อ/รุ่น
-  // box — no retyping, value unchanged — silently re-ran the brand->factory lockstep and cleared
-  // the catalog link, exactly as if the rep had hand-edited it. Proved with a real pick then a
-  // real focus event, not a shortcut around either.
+  // onFocusSearch must not call the SAME mutating path a real keystroke does
+  // (onBrandInput/onModelInput -> updateItem): merely re-focusing an already-picked ยี่ห้อ/รุ่น box
+  // (no retyping, value unchanged) would re-run the brand->factory lockstep and clear the catalog
+  // link as if the rep had hand-edited it. Driven with a real pick then a real focus event.
   it('re-focusing ยี่ห้อ/รุ่น after a catalog pick does NOT clear the catalog link (search-only focus, no row mutation)', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
@@ -903,9 +984,8 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     });
   });
 
-  // Owner ruling 2026-09-12 ("แก้ด้วย — ใช้ catalog เหมือนกัน"): resolves ตร.ม./แผ่น the same way
-  // the quotation item editor does (resolveTileSqmPerPiece) — the catalog's own sqm_per_piece,
-  // nothing guessed from the free-text size.
+  // Resolves ตร.ม./แผ่น like the quotation item editor (resolveTileSqmPerPiece): the catalog's own
+  // sqm_per_piece, nothing guessed from the free-text size.
   it('fills ตร.ม./แผ่น straight from the catalog row when one is present', async () => {
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct({ sqmPerPiece: 0.72 })] });
     renderModal({ onSubmit: vi.fn() });
@@ -921,13 +1001,12 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     expect(screen.getByPlaceholderText('เช่น 120.500').value).toBe('7.200');
   });
 
-  // REGRESSION (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง"): this modal used to carry its own
-  // deriveSqmPerPiece(sizeRaw), which read "600x1200" as MILLIMETRES (both dimensions >= 100) and
-  // silently resolved 0.72 ตร.ม./แผ่น. All 215 Bode rows are priced per_sqm yet carry no
-  // sqm_per_piece of their own, which is exactly the shape that used to trigger the guess. The
-  // owner's ruling forbids inferring a unit from the free-text size at all: with no catalog
-  // sqm_per_piece, nothing may be invented, so the rep enters both quantities by hand instead —
-  // the SAME "no factor" state as any other catalog row with nothing to resolve from.
+  // REGRESSION: this modal once carried its own deriveSqmPerPiece(sizeRaw), which read "600x1200" as
+  // MILLIMETRES (both dimensions >= 100) and silently resolved 0.72 ตร.ม./แผ่น. All 215 Bode rows are
+  // priced per_sqm yet carry no sqm_per_piece, the shape that triggered the guess. A unit is never
+  // inferred from the free-text size: with no catalog sqm_per_piece nothing is invented and the rep
+  // enters both quantities by hand, the same "no factor" state as any other catalog row with nothing
+  // to resolve from.
   it('never derives ตร.ม./แผ่น from the size string, even one the deleted heuristic read as millimetres', async () => {
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct({ sqmPerPiece: null })] });
     renderModal({ onSubmit: vi.fn() });
@@ -976,10 +1055,9 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
   });
 });
 
-// The catalog's own price, shown in the currency it is quoted in with a baht companion. This
-// replaced the ราคาตั้ง (ประมาณการ) estimate (catalog price × FX × a CEO markup), removed on the
-// owner's instruction after UAT because reps read its output as a selling price. Nothing here
-// multiplies by anything except an exchange rate — see catalogPriceDisplay.js.
+// The catalog's own price, shown in the currency it is quoted in with a baht companion. Nothing
+// here multiplies by anything except an exchange rate (see catalogPriceDisplay.js); there is no
+// ราคาตั้ง (ประมาณการ) estimate.
 describe('TicketCreateModal catalog price display', () => {
   it('shows the catalog price in its own currency and in baht, with the price unit', async () => {
     const item = catalogItem({ catalogPrice: 8.8, catalogCurrency: 'USD', catalogPriceUnit: 'per_sqm' });
@@ -1163,12 +1241,12 @@ describe('TicketCreateModal beforeunload guard (GLA-20)', () => {
 });
 
 describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
-  // Real timers throughout (not fake): the customer/project/channel selection just before this
-  // schedules a REAL setTimeout via the component's own debounce effect, and vi.useFakeTimers()
-  // does not retroactively adopt an already-scheduled real timer -- mixing the two here would make
-  // the "does it resurrect" assertion depend on incidental wall-clock timing rather than on the
-  // guard actually under test. See dealDrafts.test.js for the pure-storage-layer coverage of the
-  // same guarantee and this file's other GLA-20 describe blocks for the fake-timer-only cases.
+  // Real timers throughout: the customer/project/channel selection just before this schedules a REAL
+  // setTimeout via the component's debounce effect, and vi.useFakeTimers() doesn't adopt an
+  // already-scheduled real timer, so mixing them would make the "does it resurrect" assertion
+  // depend on wall-clock timing rather than the guard under test. See dealDrafts.test.js for the
+  // storage-layer coverage of the same guarantee and this file's other GLA-20 describe blocks for the
+  // fake-timer cases.
   it('deletes the current draft on submit success, and a still-pending autosave timer cannot resurrect it', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit });
@@ -1180,8 +1258,8 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
     await act(async () => { await sleep(1100); });
     expect(listDrafts()).toHaveLength(1);
 
-    // A late edit right before submitting -- its own debounce timer is still pending (not yet
-    // 1000ms old) at the moment submit() runs.
+    // A late edit right before submitting: its debounce timer is still pending (not yet 1000ms old)
+    // when submit() runs.
     openSection('details');
     fireEvent.change(screen.getByPlaceholderText(mockCustomer.name), { target: { value: 'แก้ไขล่าสุด' } });
 
@@ -1199,15 +1277,14 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
   }, 10000);
 
   it('a stale debounce callback invoked directly after submit success cannot resurrect the draft', async () => {
-    // React's own effect cleanup (debounce effect depends on `loading`, which submit() flips
-    // synchronously) already cancels a pending timer in the ordinary case -- so waiting out the
-    // clock (previous test) cannot, by itself, prove submit()'s OWN guard does anything. This test
-    // isolates that guard deterministically: capture the exact callback the debounce effect hands
-    // to setTimeout, let submit() succeed, then invoke that captured callback directly -- exactly
-    // what a timer would do if it fired in the tightest possible race, a millisecond before
-    // React's cleanup runs. Mutation-check target: remove `submittedRef.current = true` in
-    // submit()'s success branch (frontend/src/features/tickets/TicketCreateModal.jsx) and this
-    // goes red -- saveDraft(null, ...) recreates the just-deleted draft under a fresh id.
+    // React's effect cleanup (the debounce effect depends on `loading`, which submit() flips
+    // synchronously) already cancels a pending timer in the ordinary case, so waiting out the clock
+    // (previous test) can't prove submit()'s OWN guard does anything. This test isolates it:
+    // capture the callback the debounce effect hands to setTimeout, let submit() succeed, then
+    // invoke it directly (a timer firing in the tightest race, before React's cleanup).
+    // Mutation-check target: remove `submittedRef.current = true` in submit()'s success branch
+    // (TicketCreateModal.jsx) and this goes red: saveDraft(null, ...) recreates the just-deleted
+    // draft under a fresh id.
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit });
 
@@ -1249,11 +1326,11 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
     expect(listDrafts()).toHaveLength(1); // still there -- submit() only deletes on success
   }, 10000);
 
-  // Review fix: onSubmit succeeding does not itself unmount the modal (that is the caller's own
-  // choice -- e.g. QuotationEditorPage's inline-deal-creation flow keeps going after tickets.create
-  // succeeds). Before this fix, handleRequestClose ignored submittedRef entirely, so Escape/close
-  // right after a successful submit read the still-populated form fields as "meaningful data" and
-  // wrote a brand-new draft OF THE DEAL THAT WAS JUST CREATED.
+  // onSubmit succeeding does not itself unmount the modal (that is the caller's choice, e.g.
+  // QuotationEditorPage's inline-deal-creation flow keeps going after tickets.create). So
+  // handleRequestClose must honour submittedRef: otherwise Escape/close right after a successful
+  // submit reads the still-populated fields as "meaningful data" and writes a brand-new draft OF THE
+  // DEAL JUST CREATED.
   it('submit success then Escape, with the modal still mounted, closes cleanly without writing a new draft', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined); // never unmounts the tree itself
     const onClose = vi.fn();
@@ -1283,7 +1360,7 @@ describe('TicketCreateModal restore baseline (review fix, GLA-19/20)', () => {
 
     expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull(); // no confirm -- nothing changed
     expect(onClose).toHaveBeenCalledTimes(1);
-    // Still there, untouched -- same savedAt as when it was seeded (not deleted, not re-saved).
+    // Still there, untouched: same savedAt as when it was seeded (not deleted, not re-saved).
     expect(loadDraft(seeded.id)).not.toBeNull();
     expect(loadDraft(seeded.id).savedAt).toBe(seeded.savedAt);
   });
@@ -1292,11 +1369,9 @@ describe('TicketCreateModal restore baseline (review fix, GLA-19/20)', () => {
     const seeded = saveDraft(null, { dealTitle: 'ดีลค้างไว้' });
     renderModal({ onSubmit: vi.fn() });
 
-    // Fake timers BEFORE the เปิดต่อ click -- the debounce effect's (would-be) setTimeout must be
-    // scheduled against the fake clock, or advancing it below can never touch a real one. Review
-    // fix: this used to call useFakeTimers() AFTER the click, so a real timer -- had the baseline
-    // fix from the previous review round been reverted -- would have been immune to the advance
-    // below, making this test pass regardless of whether the bug it targets was present.
+    // Fake timers BEFORE the เปิดต่อ click: the debounce effect's (would-be) setTimeout must be
+    // scheduled against the fake clock, or advancing it below can't touch a real one (a real timer
+    // would be immune to the advance, so the test would pass whether or not the bug was present).
     vi.useFakeTimers();
     try {
       fireEvent.click(screen.getByRole('button', { name: 'เปิดต่อ' }));
@@ -1304,10 +1379,9 @@ describe('TicketCreateModal restore baseline (review fix, GLA-19/20)', () => {
     } finally {
       vi.useRealTimers();
     }
-    // Still exactly the one draft, and its savedAt is UNCHANGED from what it was seeded with -- an
-    // autosave firing here would still leave count=1 but WOULD rewrite savedAt (reordering the
-    // picker), so this is the assertion that actually distinguishes "no timer ran" from "a no-op
-    // timer ran".
+    // Still exactly the one draft, and its savedAt is UNCHANGED: an autosave here would still leave
+    // count=1 but WOULD rewrite savedAt (reordering the picker), so this is the assertion that
+    // distinguishes "no timer ran" from "a no-op timer ran".
     expect(listDrafts()).toHaveLength(1);
     expect(loadDraft(seeded.id).savedAt).toBe(seeded.savedAt);
   });
@@ -1410,14 +1484,12 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
     expect(loadDraft(seeded.id)).toBeNull();
   });
 
-  // Review fix: ConfirmDialog.jsx's own `open` effect always focuses `confirmButtonRef`
-  // unconditionally (confirmed by reading it -- no initial-focus prop exists), so whichever label
-  // is bound to `confirmLabel` gets focus. Before this fix `confirmLabel` was ALWAYS the
-  // destructive "ปิดโดยไม่บันทึก" whenever the flush failed, so a bare Enter on an unsaveable
-  // close lost the rep's typed data. jsdom does not implement the browser's native "Enter
-  // activates the focused <button>" behaviour (no fireEvent for it), so this asserts the two
-  // halves of that behaviour directly: the safe action IS the focused element, and activating
-  // the currently-focused element keeps the modal open rather than discarding anything.
+  // ConfirmDialog.jsx's `open` effect always focuses `confirmButtonRef` (no initial-focus prop), so
+  // whichever label is bound to `confirmLabel` gets focus. When the flush fails, `confirmLabel` must
+  // NOT be the destructive "ปิดโดยไม่บันทึก", or a bare Enter on an unsaveable close loses the rep's
+  // data. jsdom doesn't implement "Enter activates the focused <button>", so this asserts the two
+  // halves directly: the safe action IS the focused element, and activating the focused element
+  // keeps the modal open rather than discarding anything.
   it('when the flush fails, the SAFE action is focused (not the destructive one) and stays open', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => { throw new Error('nope'); },
@@ -1449,13 +1521,11 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
     }
   });
 
-  // Opus final-final review: every other test in this describe block that reaches the
-  // closeFlushFailed dialog either dismisses it (Escape/backdrop/กลับไปแก้ต่อ) or checks focus --
-  // none of them actually CLICK "ปิดโดยไม่บันทึก" itself. Reviewer proved that gap by neutering the
-  // button's handler (swapping it for the same no-op as กลับไปแก้ต่อ) and watching all 66 tests in
-  // this file stay green. This is the missing other half: the destructive button, actually clicked,
-  // must still close the modal and must not resurrect/keep the draft it was trying (and failing) to
-  // persist.
+  // Every other test reaching the closeFlushFailed dialog either dismisses it
+  // (Escape/backdrop/กลับไปแก้ต่อ) or checks focus; none CLICKS "ปิดโดยไม่บันทึก" itself (neutering
+  // that handler to the same no-op as กลับไปแก้ต่อ left all 66 tests green). This is the other half:
+  // the destructive button, actually clicked, must close the modal and must not resurrect/keep the
+  // draft it was trying (and failing) to persist.
   it('ปิดโดยไม่บันทึก (clicked, not just focused) closes the modal and does not keep the draft', () => {
     vi.stubGlobal('localStorage', {
       getItem: () => { throw new Error('nope'); },
@@ -1476,22 +1546,19 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
 
       expect(onClose).toHaveBeenCalledTimes(1);
       expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull();
-      // localStorage was broken throughout, so there is nothing to have persisted -- but the
-      // point of this test is that the button's own onClick ran handleCloseWithoutSaving (which
-      // sets submittedRef and calls onClose), not that it was neutered into a no-op like
-      // กลับไปแก้ต่อ's handler.
+      // localStorage was broken throughout, so nothing was persisted; the point is that the button's
+      // own onClick ran handleCloseWithoutSaving (sets submittedRef and calls onClose), not that it
+      // was neutered into a no-op like กลับไปแก้ต่อ's handler.
     } finally {
       vi.stubGlobal('localStorage', createMemoryStorage());
     }
   });
 
-  // Regression probes (Opus final review): in the closeFlushFailed branch, cancelLabel is bound
-  // to the DESTRUCTIVE "ปิดโดยไม่บันทึก" action. Before onDismiss existed, ConfirmDialog wired its
-  // Modal's onClose to that same onCancel unconditionally, so Escape/backdrop/header-✕ -- which
-  // Modal treats as "just dismiss", not "press the labeled cancel button" -- silently discarded
-  // the unsaved draft instead of just closing the confirm. Reachable via the at-cap scenario alone
-  // (no broken storage needed): saving at MAX_DRAFTS returns reason 'limit', which is still a
-  // "flush failed" case.
+  // Regression probes: in the closeFlushFailed branch, cancelLabel is bound to the DESTRUCTIVE
+  // "ปิดโดยไม่บันทึก" action. Without onDismiss, ConfirmDialog wired its Modal's onClose to that same
+  // onCancel, so Escape/backdrop/header-✕ (which Modal treats as "just dismiss") silently discarded
+  // the unsaved draft. Reachable via the at-cap scenario alone (no broken storage): saving at
+  // MAX_DRAFTS returns reason 'limit', still a "flush failed" case.
   it('regression probe: Escape on the closeFlushFailed dialog dismisses only the confirm, never discards', () => {
     for (let i = 0; i < 10; i += 1) saveDraft(null, { dealTitle: `ดีลเดิม ${i}` });
     vi.useFakeTimers();
@@ -1597,17 +1664,14 @@ describe('TicketCreateModal with broken localStorage (GLA-19/20)', () => {
   });
 });
 
-// Review fix (P1-P5): the behaviour these test already existed (the `closeConfirmOpen ||
-// draftDeleteTarget` guard at the top of handleRequestClose, and the close/cap/migration paths
-// exercised by other describe blocks in this file), but had no DIRECT test -- a reviewer removing
-// that guard entirely left all other tests in this file green. Mutation-checked below.
+// These cover the `closeConfirmOpen || draftDeleteTarget` guard at the top of handleRequestClose
+// directly (removing it left every other test green). Mutation-checked below.
 describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)', () => {
   // Fake timers around every test that makes a meaningful edit: that schedules the debounce
-  // effect's real setTimeout, and these tests (synchronous, no `await`) never let it fire or
-  // clear it via unmount before the NEXT test starts -- observed cross-test pollution where an
-  // earlier test's orphaned timer fired mid-way through a LATER test and wrote an extra draft
-  // into its (by-then-current) storage stub. Fake timers make that scheduling inert: nothing here
-  // advances the clock, so the timer is simply discarded when vi.useRealTimers() runs.
+  // effect's real setTimeout, and these synchronous tests never let it fire or clear it via unmount
+  // before the NEXT test starts, so an orphaned timer fired mid-way through a LATER test and wrote an
+  // extra draft into its storage stub. Nothing here advances the clock, so the timer is discarded
+  // when vi.useRealTimers() runs.
   function typeMeaningfulTitle() {
     openSection('details');
     fireEvent.change(screen.getByPlaceholderText('ชื่อดีล'), { target: { value: 'ดีลค้างไว้' } });

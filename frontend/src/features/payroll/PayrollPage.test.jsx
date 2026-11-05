@@ -9,10 +9,8 @@ import { bangkokMonthStartIso } from '../../utils/format.js';
 import { useToast } from '../../hooks/useToast.js';
 import { Toast } from '../../components/common/Toast.jsx';
 
-// Issue #422 B1: PayrollPage now reads/writes through react-query (useQuery for the period,
-// useQueryClient for the preview/process cache-seed), so every render below needs a real
-// QueryClient in context -- retry: false so a mocked rejection surfaces on the first attempt
-// instead of the default single retry silently swallowing an extra tick.
+// PayrollPage reads/writes through react-query, so every render needs a real QueryClient;
+// retry: false so a mocked rejection surfaces on the first attempt.
 function renderWithClient(ui) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -20,11 +18,9 @@ function renderWithClient(ui) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
-// Mirrors App.jsx's real wiring (App.jsx:99): useToast() hands back a `showToast` function that
-// is re-created (a new identity) on every render of whatever owns it -- unlike a test's `vi.fn()`,
-// which never changes identity and so cannot reproduce the infinite-render-loop hazard this
-// harness exists to catch (issue #422 adversarial review, BLOCKING 1). `onShowToast` is called
-// once per actual invocation, independent of the (unstable) function identity itself.
+// Mirrors App.jsx's wiring: useToast() hands back a `showToast` that is re-created on every render
+// of its owner, unlike a test's `vi.fn()`, so it can reproduce the infinite-render-loop hazard.
+// `onShowToast` is called once per actual invocation, independent of the function's identity.
 function AppShapedHarness({ children, onShowToast }) {
   const { toast, showToast, dismissToast } = useToast();
   function wrappedShowToast(kind, message) {
@@ -55,8 +51,7 @@ vi.mock('../../api/index.js', () => ({
       suggestedInputs: vi.fn(),
       getInputDraft: vi.fn(),
       saveInputDraft: vi.fn(),
-      // P0 fix (Opus review, 2026-07-30): the tax-treatment matrix section PayrollPage now renders
-      // calls this on mount.
+      // The tax-treatment matrix section calls this on mount.
       getComponentTaxTreatments: vi.fn(),
       saveComponentTaxTreatments: vi.fn(),
     },
@@ -93,8 +88,7 @@ const payrollLine = {
   studentLoanDeduction: 0,
   legalExecutionDeduction: 0,
   otherPostTaxDeductions: 0,
-  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay/garnishmentType/
-  // customerReturnAlreadyEarned had backend columns and no frontend field at all.
+  // bonusPay/otherOneOffPay/garnishmentType/customerReturnAlreadyEarned inputs.
   bonusPay: 0,
   otherOneOffPay: 0,
   customerReturnDeduction: 0,
@@ -118,10 +112,9 @@ function previewPeriod(overrides = {}) {
   };
 }
 
-// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 review
-// fix -- canManage is now an allowlist off ROLE_PERMISSIONS, not a `role !== 'ceo'` denylist), so
-// every render below must pass a real user explicitly or these tests would exercise the read-only
-// (CEO-shaped) page instead of the full HR management view they intend to cover.
+// hasPermission(user?.role, 'canManagePayroll') is false for an absent user (canManage is an
+// allowlist off ROLE_PERMISSIONS), so every render must pass a real user or these tests would
+// exercise the read-only (CEO-shaped) page.
 const hrUser = { role: 'hr', employeeId: 10 };
 
 function renderPayrollPage() {
@@ -187,8 +180,8 @@ describe('PayrollPage adjustment inputs', () => {
     expect(costOfLiving.parentElement.querySelector('.currency-input-symbol').textContent).toBe('฿');
   });
 
-  // Code review of #1196: the HR landing asks for the Bangkok month, so this page must open the
-  // same one. 2026-10-31T18:00Z is already 1 Nov in Bangkok.
+  // The HR landing asks for the Bangkok month, so this page must open the same one.
+  // 2026-10-31T18:00Z is already 1 Nov in Bangkok.
   it('opens on the current Bangkok month, not the UTC month', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-31T18:00:00Z'));
@@ -227,9 +220,8 @@ describe('PayrollPage adjustment inputs', () => {
     renderPayrollPage();
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
-    // Issue #422 owner decision (one button, not two): the บันทึกร่าง button is now the SAME
-    // command that used to be labelled คำนวณตัวอย่าง, not an additional one -- present for HR from
-    // the very first render, not conditional on the form being dirty.
+    // One button, not two: บันทึกร่าง is the same command as คำนวณตัวอย่าง, present for HR from the
+    // first render, not conditional on the form being dirty.
     expect(screen.getByRole('button', { name: /บันทึกร่าง/i })).toBeTruthy();
     expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
 
@@ -373,8 +365,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     const { container } = renderPayrollPage();
 
-    // Issue #422 B1: wait for the actual row, not just the always-rendered (but disabled-while-
-    // loading) บันทึกร่าง button -- the row only exists once the period query has resolved.
+    // Wait for the actual row: the (disabled-while-loading) บันทึกร่าง button always renders.
     await waitFor(() => expect(container.querySelector('tr.data-row:not([aria-hidden="true"])')).not.toBeNull());
     const firstRow = container.querySelector('tr.data-row:not([aria-hidden="true"])');
     const employeeCell = firstRow.querySelector('td[data-label="พนักงาน"]');
@@ -396,11 +387,8 @@ describe('PayrollPage adjustment inputs', () => {
   it('marks preview status in the stat strip and folds ภาษี/ปกส. into the deductions readout', async () => {
     renderPayrollPage();
 
-    // Issue #394 fix: PayrollPage now wires its own `loading` state into
-    // CompactStatRow, so the strip briefly renders as a loading skeleton
-    // (same testid, `aria-busy="true"`, no <dt>s) before the real period
-    // data lands -- wait past that instead of grabbing whichever renders
-    // first.
+    // The strip first renders as a loading skeleton (same testid, `aria-busy="true"`, no <dt>s);
+    // wait past it for the real data.
     await waitFor(() => {
       expect(screen.getByTestId('compact-stat-row').getAttribute('aria-busy')).not.toBe('true');
     });
@@ -413,11 +401,9 @@ describe('PayrollPage adjustment inputs', () => {
     expect(statStrip.textContent).toContain('ภาษี/ปกส. ฿750.00');
   });
 
-  // Issue #394 fix: the real mockApi.js's `payroll.current()` always resolves
-  // `{ period: null }` (payroll preview/process is intentionally unsupported
-  // in mock mode) -- this used to leave all four KPI tiles rendering a bare
-  // "-" with no explanation. Once loading settles with no period at all, a
-  // real empty state should explain what would populate the strip instead.
+  // The real mockApi.js `payroll.current()` always resolves `{ period: null }` (preview/process are
+  // unsupported in mock mode); once loading settles with no period, an empty state must explain
+  // what would populate the strip instead of four bare "-" tiles.
   it('shows an explanatory empty state instead of four bare dashes when no period ever loads', async () => {
     api.payroll.current.mockResolvedValue({ period: null });
 
@@ -446,16 +432,13 @@ describe('PayrollPage adjustment inputs', () => {
 
     const { container } = renderPayrollPage();
 
-    // Issue #422 B1: wait for both rows, not just the always-rendered (but disabled-while-
-    // loading) บันทึกร่าง button -- the rows only exist once the period query has resolved.
+    // Wait for both rows: they only exist once the period query has resolved.
     await waitFor(() => expect(container.querySelectorAll('tr.data-row:not([aria-hidden="true"])').length).toBe(2));
     const [, secondRow] = container.querySelectorAll('tr.data-row:not([aria-hidden="true"])');
     expect(secondRow.getAttribute('role')).toBe('row');
     expect(secondRow.getAttribute('tabindex')).toBe('-1');
-    // Item 4d fix (Opus review, 2026-07-31): `aria-current`, not `aria-selected` -- see
-    // DataTable.jsx's own comment on the render for why (`aria-selected` is only valid ARIA inside a
-    // `grid`/`treegrid`, and this is a plain table). The visible "เลือกอยู่" badge checked below is
-    // unaffected and remains the primary cue.
+    // `aria-current`, not `aria-selected` (only valid inside a `grid`/`treegrid`; see DataTable.jsx).
+    // The visible "เลือกอยู่" badge checked below remains the primary cue.
     expect(secondRow.getAttribute('aria-current')).toBe('false');
 
     fireEvent.click(secondRow);
@@ -468,14 +451,11 @@ describe('PayrollPage adjustment inputs', () => {
     expect(container.querySelector('.payroll-detail-panel h2').textContent).toBe('พนักงาน ข');
   });
 
-  // Defect 1 regression guard (Opus review, 2026-07-31): the selected row's `เลือกอยู่` badge used to
-  // paint on top of the employee name because `min-w-0` on the name block only allows the flex item
-  // to SHRINK -- it does nothing to the text once shrunk, so an overlong name simply overflowed its
-  // own box and rendered underneath the badge (a later sibling, so it paints on top). jsdom has no
-  // layout engine, so this can't assert the actual pixel overlap is gone -- it pins down the classes
-  // that prevent it: `<strong>`/`<small>` must each be `block truncate` so they clip with an ellipsis
-  // at their own width, on BOTH the selected row (where the badge is competing for space) and an
-  // unselected one (so the fix isn't accidentally conditioned on `selected`).
+  // Regression guard: the selected row's `เลือกอยู่` badge painted over the employee name because
+  // `min-w-0` only lets the flex item shrink, so an overlong name overflowed under the badge. jsdom
+  // has no layout, so this pins the classes that prevent it: `<strong>`/`<small>` must each be
+  // `block truncate`, on BOTH the selected row and an unselected one (the fix must not depend on
+  // `selected`).
   it('truncates the employee name/code independently instead of letting them overflow under the เลือกอยู่ badge', async () => {
     const lines = [
       { ...payrollLine, employeeId: 1, employeeName: 'พนักงานที่มีชื่อยาวมากเกินกว่าจะแสดงในคอลัมน์นี้ได้ทั้งหมด' },
@@ -494,12 +474,9 @@ describe('PayrollPage adjustment inputs', () => {
 
     const { container } = renderPayrollPage();
 
-    // Not `screen.findByText(lines[0].employeeName)`: the first line is auto-selected on first
-    // render, so its name is ALSO already showing in the always-mounted detail panel's own
-    // heading -- an ambiguous match. Grab the rows directly by their DataTable `.data-row` class
-    // (see the `openDetailPanel` helper above for the same reasoning) instead. Issue #422 B1:
-    // wait for both rows themselves (not the always-rendered but disabled-while-loading button)
-    // -- the rows only exist once the period query has resolved.
+    // Not `screen.findByText(lines[0].employeeName)`: the first line is auto-selected, so its name
+    // is also in the always-mounted detail panel heading (ambiguous). Grab the rows by their
+    // DataTable `.data-row` class (see `openDetailPanel`) and wait for them.
     await waitFor(() => expect(container.querySelectorAll('tr.data-row:not([aria-hidden="true"])').length).toBe(2));
     const [firstRow, secondRow] = container.querySelectorAll('tr.data-row:not([aria-hidden="true"])');
     fireEvent.click(firstRow);
@@ -520,15 +497,11 @@ describe('PayrollPage adjustment inputs', () => {
     expect(container.querySelectorAll('.data-row')).toHaveLength(2);
   });
 
-  // B1/B2 fix (Opus review, 2026-07-31): the detail panel has exactly two presentations --
-  // >=1366px is a persistent side panel (no dialog semantics, since the rest of the page beside it
-  // is not hidden), <1366px is a true overlay dialog (focus trap, Escape, role="dialog"). These
-  // tests mock `window.matchMedia` for the `(min-width: 1366px)` query PayrollPage.jsx's
-  // `useMediaQuery` reads (see useIsMobile.js) to pin down each mode independently.
-  //
-  // Item 1 fix (2026-07-31): raised from 1280px -- real-browser measurement showed the side-by-side
-  // track didn't actually fit (money columns hidden behind a scrollbar) until ~1400px; see
-  // index.css's `payroll-wide` custom-variant comment for the full measurement.
+  // The detail panel has two presentations: >=1366px is a persistent side panel (no dialog
+  // semantics), <1366px is a true overlay dialog (focus trap, Escape, role="dialog"). These tests
+  // mock `window.matchMedia` for the `(min-width: 1366px)` query PayrollPage's `useMediaQuery`
+  // reads (see useIsMobile.js). The threshold is 1366px because the side-by-side track did not fit
+  // at 1280px; see index.css's `payroll-wide` custom-variant comment.
   describe('detail panel: side panel vs. overlay dialog', () => {
     afterEach(() => {
       delete window.matchMedia;
@@ -545,8 +518,7 @@ describe('PayrollPage adjustment inputs', () => {
     // button instead (proof the period finished loading), then grab the row via `.data-row` --
     // DataTable's own class for a genuine data row (see DataTable.jsx) -- and click it directly.
     async function openDetailPanel(container) {
-      // Issue #422 B1: wait for the row itself, not the always-rendered (but disabled-while-
-      // loading) บันทึกร่าง button -- the row only exists once the period query has resolved.
+      // Wait for the row itself: it only exists once the period query has resolved.
       await waitFor(() => expect(container.querySelector('tr.data-row:not([aria-hidden="true"])')).not.toBeNull());
       const row = container.querySelector('tr.data-row:not([aria-hidden="true"])');
       fireEvent.click(row);
@@ -577,13 +549,11 @@ describe('PayrollPage adjustment inputs', () => {
       expect(document.getElementById(labelledBy).textContent).toBe(payrollLine.employeeName);
     });
 
-    // Regression guard: the dismiss control used to be hidden by a `.payroll-detail-close`
-    // `display` toggle in styles.css, which never applied -- Button.jsx's own `inline-flex`
-    // utility sits in `layer(utilities)` and always beats `layer(legacy)`. So the button rendered
-    // at every width, including the >=1366px side panel where clicking it is inert (that panel's
-    // visibility is not gated by `detailOpen`). Asserting on presence/absence in the DOM, not on
-    // computed `display`: jsdom applies no stylesheets, so a CSS-only fix would pass this test
-    // while still being dead in the browser.
+    // Regression guard: the dismiss control was hidden by a styles.css `display` toggle that never
+    // applied (Button.jsx's `inline-flex` utility beats `layer(legacy)`), so it rendered at every
+    // width, including the >=1366px panel where clicking it is inert. Asserts DOM presence/absence,
+    // not computed `display`: jsdom applies no stylesheets, so a CSS-only fix would pass here while
+    // still dead in the browser.
     it('renders the close button only in the overlay presentation', async () => {
       mockPanelViewport(false);
       const overlay = renderPayrollPage();
@@ -636,8 +606,7 @@ describe('PayrollPage adjustment inputs', () => {
     it('does not trap focus or steal it for the >=1366px persistent side panel', async () => {
       mockPanelViewport(true);
       const { container } = renderPayrollPage();
-      // Issue #422 B1: wait for the row (real data loaded) before focusing the button -- while
-      // the period query is still loading, the button is `disabled` and cannot take focus at all.
+      // Wait for the row (real data) before focusing: the button is `disabled` while loading.
       await waitFor(() => expect(container.querySelector('tr.data-row:not([aria-hidden="true"])')).not.toBeNull());
       const previewButton = screen.getByRole('button', { name: /บันทึกร่าง/i });
       previewButton.focus();
@@ -645,8 +614,7 @@ describe('PayrollPage adjustment inputs', () => {
 
       fireEvent.click(container.querySelector('tr.data-row:not([aria-hidden="true"])'));
 
-      // A side panel beside the table must never steal focus from what the user was doing --
-      // unlike the overlay case above, where opening moves focus into the panel immediately.
+      // A side panel must never steal focus from what the user was doing, unlike the overlay.
       expect(document.activeElement).toBe(previewButton);
     });
   });
@@ -740,8 +708,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    // Issue #422 B1: wait for real data first -- the ส่งอีเมลสลิปเงินเดือน menu item is `disabled`
-    // until `period.id` is loaded, so opening the menu before then makes the click below a no-op.
+    // Wait for real data: the ส่งอีเมลสลิปเงินเดือน item is `disabled` until `period.id` loads.
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await openDocumentsMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: /ส่งอีเมลสลิปเงินเดือน/i }));
@@ -750,15 +717,14 @@ describe('PayrollPage adjustment inputs', () => {
   });
 
   it('Preview recomputes a processed month live, never committing', async () => {
-    // A month that was already Processed loads from its saved snapshot (api.payroll.current) — which
-    // freezes commission/OT/etc. from when it ran. Clicking Preview must pull the latest via a live
-    // recompute (api.payroll.preview) and must NOT process/commit the month.
+    // A month already Processed loads from its saved snapshot (api.payroll.current), which freezes
+    // commission/OT/etc. Preview must pull the latest via a live recompute (api.payroll.preview) and
+    // must NOT process/commit the month.
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
 
     renderPayrollPage();
 
-    // Issue #422 B1: wait for real data first -- the บันทึกร่าง button is `disabled` while the
-    // period query is still loading, so clicking it immediately after render is a no-op.
+    // Wait for real data: the บันทึกร่าง button is `disabled` while loading.
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     const previewButton = screen.getByRole('button', { name: /บันทึกร่าง/ });
     expect(api.payroll.preview).not.toHaveBeenCalled();
@@ -770,10 +736,9 @@ describe('PayrollPage adjustment inputs', () => {
     expect(api.payroll.process).not.toHaveBeenCalled();
   });
 
-  // Leave -> payroll unpaid-day deduction (2026-07-23). The unpaidLeaveDays field lives inside the
-  // "รายการหักรายบุคคล" CollapsibleSection, which defaults to collapsed -- and CollapsibleSection
-  // unmounts its body entirely (not CSS-hidden) while collapsed, so every test here must expand it
-  // before the field exists in the DOM.
+  // Leave -> payroll unpaid-day deduction. The unpaidLeaveDays field is inside the
+  // "รายการหักรายบุคคล" CollapsibleSection, which unmounts its body while collapsed, so tests must
+  // expand it first.
   async function expandUnpaidLeaveSection() {
     fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));
     // The `selector: 'input'` filter is needed because the field's InfoTip button carries the same
@@ -846,10 +811,9 @@ describe('PayrollPage adjustment inputs', () => {
       await screen.findByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/);
     });
 
-    // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the backend now applies the correction
-    // itself (PayrollService#preview/#process) rather than only surfacing a "please adjust manually"
-    // suggestion -- these two fields (leaveRefundDays/leaveDeductionRefund) live on the CALCULATED
-    // line the API returns, not on the suggestion or the HR-editable adjustment form.
+    // Cancel-after-close reversal is AUTO-REFUND: the backend applies the correction itself
+    // (PayrollService#preview/#process). leaveRefundDays/leaveDeductionRefund live on the CALCULATED
+    // line the API returns, not on the suggestion or the HR-editable form.
     it('shows the auto-applied refund on a line that already includes one, and drops the stale manual-entry hint', async () => {
       api.payroll.current.mockResolvedValue({
         period: previewPeriod({
@@ -866,8 +830,8 @@ describe('PayrollPage adjustment inputs', () => {
 
       // The new auto-applied hint appears...
       await screen.findByText(/ระบบคืนเครดิตวันลาไม่รับค่าจ้างค้างคืน 1 วัน/);
-      // ...and the old "please adjust manually, not automatic yet" wording is gone -- that claim is no
-      // longer true and would risk HR double-entering the credit into unpaidLeaveDays by hand.
+      // ...and the old "please adjust manually" wording is gone: it would risk HR double-entering
+      // the credit into unpaidLeaveDays.
       expect(screen.queryByText(/กรุณาปรับตัวเลขด้านบนด้วยตนเอง/)).toBeNull();
       // The breakdown panel also shows the refund amount as its own line.
       await screen.findByText(/คืนเครดิตวันลาไม่รับค่าจ้าง \(1 วัน\)/);
@@ -882,9 +846,8 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
-  // Leave requires approval (2026-08-05, F1): pendingSubmittedLeaveCount rides on the SAME
-  // suggestedInputs() response as the unpaidLeaveDays suggestion above -- see PayrollPage.jsx's own
-  // comment on why it shares that call, gate, and try/catch.
+  // pendingSubmittedLeaveCount rides on the same suggestedInputs() response as the unpaidLeaveDays
+  // suggestion (see PayrollPage.jsx).
   describe('pending-approval leave advisory (F1)', () => {
     it('shows the warning with the count when leave requests are still pending approval for the month', async () => {
       api.payroll.suggestedInputs.mockResolvedValue({
@@ -974,11 +937,10 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
-  // F2 (Opus review, 2026-07-30): HR could type a per-diem amount with no basis selector at all --
-  // Preview always succeeded (it never writes a row), then Process 500'd on V97's
-  // chk_payroll_line_per_diem_basis_present CHECK. Fixed by adding the missing amount inputs AND the
-  // basis selector (shown only once an amount is entered), plus a server-side 400 as a second line of
-  // defence (PayrollService#calculateLine).
+  // Guards against HR typing a per-diem amount with no basis: Preview succeeds (never writes), then
+  // Process would 500 on chk_payroll_line_per_diem_basis_present. The amount inputs plus a basis
+  // selector (shown once an amount is entered) prevent it; the server also 400s
+  // (PayrollService#calculateLine).
   describe('per-diem basis selector (V97 / F2)', () => {
     async function openPerDiemSection() {
       fireEvent.click(await screen.findByRole('button', { name: /ค่าอาหาร \/ เบี้ยเลี้ยง/ }));
@@ -1039,9 +1001,8 @@ describe('PayrollPage adjustment inputs', () => {
       expect(submitted.perDiemBasis).toBeNull();
     });
 
-    // The backend now rejects this before the INSERT (see PayrollService#calculateLine's F2 fix) with
-    // a 400 naming the employee and the missing basis, instead of the DB CHECK constraint turning it
-    // into a bare 500. This proves the page surfaces that rejection cleanly rather than swallowing it.
+    // The backend rejects this before the INSERT with a 400 naming the employee and the missing
+    // basis (not a bare 500); the page must surface that rejection rather than swallow it.
     it('surfaces the backend rejection cleanly when Process is attempted without a chosen basis', async () => {
       const showToast = vi.fn();
       api.payroll.process.mockRejectedValue(new Error(
@@ -1065,8 +1026,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderPayrollPage();
 
-    // Issue #422 B1: wait for real data first -- statutory export items are disabled until the
-    // period query resolves with a real saved period id.
+    // Wait for real data: statutory exports are disabled until a saved period id loads.
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await openDocumentsMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: /ดาวน์โหลด ภ\.ง\.ด\.1/ }));
@@ -1087,8 +1047,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderWithClient(<PayrollPage user={hrUser} showToast={showToast} />);
 
-    // Issue #422 B1: wait for real data first -- this menu item is disabled until the period
-    // query resolves with a real saved period id.
+    // Wait for real data: this menu item is disabled until a saved period id loads.
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await openDocumentsMenu();
     fireEvent.click(screen.getByRole('menuitem', { name: /รายละเอียดเงินเดือนรายเดือน/ }));
@@ -1098,11 +1057,9 @@ describe('PayrollPage adjustment inputs', () => {
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รายละเอียดเงินเดือนรายเดือน')));
   });
 
-  // Owner requirement (2026-07-30): "July 2026 is live and still unprocessed... HR's whole reason
-  // to want this file is to review the month BEFORE committing it." Unlike KBank/PND1/SSO, the
-  // detail export button must work with NO persisted period (id === null) -- it POSTs the same
-  // payrollMonth/inputs payload Preview/Process already send, so the workbook always matches
-  // whatever the on-screen preview shows for those inputs.
+  // HR wants to review the month BEFORE committing it, so unlike KBank/PND1/SSO the detail export
+  // must work with NO persisted period (id === null). It POSTs the same payrollMonth/inputs payload
+  // as Preview/Process, so the workbook matches the on-screen preview.
   it('downloads the detail xlsx for an unprocessed preview (period.id === null) via the preview-export endpoint', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, status: 'PREVIEW', lineCount: 1 }) });
     api.payroll.exportPreviewFile.mockResolvedValue(new Blob(['PK'], {
@@ -1112,9 +1069,7 @@ describe('PayrollPage adjustment inputs', () => {
 
     renderWithClient(<PayrollPage user={hrUser} showToast={showToast} />);
 
-    // Issue #422 B1: wait for real data first -- this menu item is disabled until the period
-    // query resolves with a real lineCount, so opening the menu before then makes the click below
-    // a no-op.
+    // Wait for real data: this item is disabled until a real lineCount loads.
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     await openDocumentsMenu();
     const detailItem = screen.getByRole('menuitem', { name: /รายละเอียดเงินเดือนรายเดือน/ });
@@ -1140,10 +1095,8 @@ describe('PayrollPage adjustment inputs', () => {
     expect(kbankItem.textContent).toContain('ต้องมีรอบเงินเดือนที่บันทึกแล้วก่อน');
   });
 
-  // Bulk payslip ZIP (owner requirement, 2026-07-30): "hr should be able to bulk download payslip
-  // before emailing to all employee for recheck". It now lives in the เอกสาร menu with the email
-  // action, and -- unlike the detail xlsx export -- only works for a
-  // genuinely PROCESSED period.
+  // Bulk payslip ZIP (HR rechecks before emailing everyone). It lives in the เอกสาร menu with the
+  // email action and, unlike the detail xlsx export, only works for a genuinely PROCESSED period.
   describe('Bulk payslip ZIP download', () => {
     it('renders next to the email button and hits the payslips.zip endpoint for a processed period', async () => {
       api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
@@ -1152,8 +1105,7 @@ describe('PayrollPage adjustment inputs', () => {
 
       renderWithClient(<PayrollPage user={hrUser} showToast={showToast} />);
 
-      // Issue #422 B1: wait for real data first -- this menu item is disabled until the period
-      // query resolves with a real PROCESSED period.
+      // Wait for real data: this item is disabled until a real PROCESSED period loads.
       await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
       await openDocumentsMenu();
       const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
@@ -1180,9 +1132,8 @@ describe('PayrollPage adjustment inputs', () => {
 
       renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
-      // Issue #422 B1: wait for the real (VOID) period to load first -- otherwise the menu may
-      // open while `period` is still null, where the disabled reason reads identically to the
-      // "no saved period at all" case this test must distinguish from.
+      // Wait for the real (VOID) period: otherwise the menu may open while `period` is null, where
+      // the disabled reason reads like the "no saved period at all" case this must distinguish.
       await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
       await openDocumentsMenu();
       const zipItem = screen.getByRole('menuitem', { name: /ดาวน์โหลดสลิปเงินเดือนทั้งหมด/ });
@@ -1206,9 +1157,8 @@ describe('PayrollPage adjustment inputs', () => {
     });
 
     // Regression guard against "simplifying" the check to `!period?.id`: PayrollService#preview
-    // returns id=null for every month that has never been processed, so id===null does NOT imply
-    // an empty period -- it's the normal shape of a fresh, never-run month with real lines to
-    // process. Guarding on id instead of lineCount would make first-time processing impossible.
+    // returns id=null for every never-processed month, so id===null does not imply an empty period.
+    // Guarding on id would make first-time processing impossible.
     it('enables Process Payroll for a fresh (never-processed) period with lineCount > 0 and id === null', async () => {
       api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: null, lineCount: 1 }) });
 
@@ -1229,9 +1179,8 @@ describe('PayrollPage adjustment inputs', () => {
       expect(processButton.getAttribute('aria-describedby')).toBe(reason.id);
     });
 
-    // Issue #394 fix: the process region's border used to be danger-red
-    // unconditionally, so an unmet precondition (no data loaded yet) looked
-    // like a failure rather than a disabled control waiting on data.
+    // The process region's border must not be danger-red when a precondition is unmet (no data
+    // yet): that is a disabled control waiting on data, not a failure.
     it('borders the process region neutral, not danger, while blocked on an empty period', async () => {
       api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 0, lines: [] }) });
       renderPayrollPage();
@@ -1259,8 +1208,8 @@ describe('PayrollPage adjustment inputs', () => {
       const previewButton = await screen.findByRole('button', { name: /บันทึกร่าง/i });
       const documentsButton = screen.getByRole('button', { name: 'เอกสาร' });
       const processButton = screen.getByRole('button', { name: /ประมวลผลเงินเดือน/i });
-      // Issue #422 B1: wait for real data (Process only enables once the period has loaded and
-      // has lines) before reading the region's headcount text below.
+      // Wait for real data (Process enables only once the period has lines) before reading the
+      // region's headcount text.
       await waitFor(() => expect(processButton.disabled).toBe(false));
       const processRegion = processButton.closest('.payroll-process-region');
 
@@ -1283,8 +1232,7 @@ describe('PayrollPage adjustment inputs', () => {
       renderPayrollPage();
 
       const processButton = await screen.findByRole('button', { name: /ประมวลผลเงินเดือน/i });
-      // Issue #422 B1: wait for it to actually become enabled -- it starts `disabled` while the
-      // period query is still loading (emptyPeriod), so clicking immediately is a no-op.
+      // Wait for it to become enabled: it starts `disabled` while the period query loads.
       await waitFor(() => expect(processButton.disabled).toBe(false));
       fireEvent.click(processButton);
 
@@ -1323,8 +1271,7 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
-  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay/garnishmentType/
-  // customerReturnAlreadyEarned existed end-to-end on the backend with no input anywhere on this page.
+  // bonusPay/otherOneOffPay/garnishmentType/customerReturnAlreadyEarned inputs.
   describe('one-off pay, garnishment type, and customer-return-earned flag (P1)', () => {
     it('submits bonusPay and otherOneOffPay from the "เงินก้อนพิเศษ" section', async () => {
       renderPayrollPage();
@@ -1414,11 +1361,10 @@ describe('PayrollPage adjustment inputs', () => {
       expect(submitted.customerReturnAlreadyEarned).toBe(true);
     });
 
-    // D1 fix (fourth reachability audit, 2026-07-30): a processed line's customerReturnDeduction is
-    // the POST-TAX bookkeeping figure -- 0 in the unearned path, where the amount was instead netted
-    // pre-tax out of commission. Hydrating the form from THAT field (the pre-fix bug) silently wiped
-    // both the amount and the checkbox (which only renders once the field is > 0) on every reload.
-    // customerReturnRequested always carries what HR actually typed, regardless of the earned flag.
+    // A processed line's customerReturnDeduction is the POST-TAX figure (0 in the unearned path,
+    // where the amount is netted pre-tax out of commission). Hydrating the form from it wiped both
+    // the amount and the checkbox (rendered only once > 0) on reload. customerReturnRequested always
+    // carries what HR typed.
     it('hydrates the entered amount (and keeps the checkbox visible) from customerReturnRequested on reload, not the zeroed post-tax figure', async () => {
       api.payroll.current.mockResolvedValue({
         period: previewPeriod({
@@ -1446,9 +1392,8 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
-  // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen. Without a
-  // real screen, HR had no way to satisfy PayrollCalculator#calculateClassified's classification
-  // gate for any component beyond the V100 backfill defaults.
+  // The withholding-tax classification matrix screen: HR needs it to satisfy
+  // PayrollCalculator#calculateClassified's classification gate beyond the backfill defaults.
   describe('withholding-tax classification matrix (P0)', () => {
     it('loads the matrix on mount and shows an unclassified count per employee', async () => {
       api.payroll.getComponentTaxTreatments.mockResolvedValue({
@@ -1488,13 +1433,11 @@ describe('PayrollPage adjustment inputs', () => {
       ]));
     });
 
-    // Sixth Opus review, 2026-07-30: `byComponent` now carries the EFFECTIVE classification
-    // (server-synthesized defaults merged in), so every cell renders non-blank and the section badge
-    // reads "จัดประเภทครบแล้ว" even when nobody has chosen anything. The per-cell
-    // "ค่าเริ่มต้นของระบบ" hint, keyed off `explicitlyClassifiedComponents`, is the ONLY thing left
-    // that tells HR "the system is defaulting this" from "someone chose this" — the branch's own
-    // stated back-loading-risk mitigation. It shipped with no test; this is it, written wrong-way-round
-    // (the explicitly-classified cell must NOT carry the hint).
+    // `byComponent` carries the EFFECTIVE classification (server-synthesized defaults), so every cell
+    // renders non-blank and the badge reads "จัดประเภทครบแล้ว" even if nobody chose anything. The
+    // per-cell "ค่าเริ่มต้นของระบบ" hint, keyed off `explicitlyClassifiedComponents`, is the only thing
+    // telling HR "the system is defaulting this" from "someone chose this". Written wrong-way-round:
+    // the explicitly-classified cell must NOT carry the hint.
     it('flags a synthesized default but not a cell HR actually classified', async () => {
       api.payroll.getComponentTaxTreatments.mockResolvedValue({
         taxYear: 2026,
@@ -1525,10 +1468,9 @@ describe('PayrollPage adjustment inputs', () => {
   });
 });
 
-// Issue #422 Parts A4/A5/B1: month-change draft flush, client-side negative rejection, and the
-// background-refetch-must-not-clobber-typing governing constraint. A separate top-level describe
-// (not nested in "PayrollPage adjustment inputs" above) so each test can own its own QueryClient
-// instance directly, rather than going through the shared renderPayrollPage()/beforeEach setup.
+// Month-change draft flush, client-side negative rejection, and the
+// background-refetch-must-not-clobber-typing constraint. A separate top-level describe so each
+// test owns its QueryClient instead of using the shared renderPayrollPage()/beforeEach setup.
 describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1538,18 +1480,11 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     api.payroll.getComponentTaxTreatments.mockResolvedValue({ taxYear: 2026, items: [] });
   });
 
-  // A4: a dirty draft must be flushed (not silently dropped) when HR switches the month picker
-  // before an autosave fired.
-  //
-  // Adversarial-review correction: this test used to also assert
-  // `.not.toBe(`${incomingMonth}-01`)`, on the premise that the flush could plausibly write under
-  // the WRONG (incoming) month. The reviewer mutation-tested that premise and found it false for
-  // the current closure-based implementation (see draftPayload's own comment in PayrollPage.jsx)
-  // -- there is no code path left that could produce the incoming month here, so a `.not.toBe`
-  // against it can never go red and was dead weight. The `.toBe(thisMonth...)` assertion below
-  // already implies it (thisMonth and incomingMonth are constructed to differ) and is the one
-  // assertion that can actually fail, e.g. if the flush payload's month were ever read from the
-  // wrong source.
+  // A dirty draft must be flushed (not silently dropped) when HR switches the month picker before
+  // an autosave fired. The `.toBe(thisMonth...)` assertion is the one that can fail (e.g. if the
+  // flush payload's month were read from the wrong source); a `.not.toBe` against the incoming
+  // month can never go red with the closure-based implementation (see draftPayload in
+  // PayrollPage.jsx), so it is omitted.
   it('flushes a dirty draft under the outgoing month when HR switches the month picker', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod() });
     renderPayrollPage();
@@ -1560,10 +1495,8 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
 
     api.payroll.saveInputDraft.mockClear();
     const monthInput = screen.getByLabelText(/รอบเดือน/, { selector: 'input' });
-    // Computed, not hardcoded: a literal "2026-08" would coincidentally equal `thisMonth` itself
-    // depending on when this suite runs, making `fireEvent.change` below a same-value no-op that
-    // React bails out of (no re-render, no effect, test passes for the wrong reason -- or, as
-    // here, times out because nothing fires at all).
+    // Computed, not hardcoded: a literal "2026-08" could equal `thisMonth` depending on when the
+    // suite runs, making `fireEvent.change` a same-value no-op React bails out of.
     const [year, monthNum] = thisMonth.split('-').map(Number);
     const incomingMonth = monthNum === 1 ? `${year - 1}-12` : `${year}-${String(monthNum - 1).padStart(2, '0')}`;
     fireEvent.change(monthInput, { target: { value: incomingMonth } });
@@ -1593,20 +1526,13 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     expect(submitted.unpaidLeaveDays).toBe(0);
   });
 
-  // B1 governing constraint: a background refetch (the query's own poll/focus refetch machinery)
-  // must never clobber what HR is currently typing. Drives the refetch directly via the test's
-  // own QueryClient rather than waiting out the real 60s interval.
-  // Adversarial-review correction: the original version of this test awaited
-  // `act(async () => queryClient.refetchQueries(...))` and asserted immediately afterward. The
-  // reviewer mutation-tested it and found the assertion passed identically whether the dirty
-  // guard in PayrollPage.jsx (`:956`) was present or deleted -- the refetched data never actually
-  // reached a re-render before the assertion ran, so the test was vacuous (green regardless of
-  // the guard). Fixed by waiting for a READ-ONLY, period-derived value (the stat strip's total
-  // gross, sourced straight from `period.totalGross`, never from the `adjustments` state the form
-  // reads) to actually change to the refetched figure first -- that is real proof the new data
-  // landed and re-rendered -- and only THEN asserting the dirty field. Verified with the same
-  // mutation the reviewer used: deleting the guard turns this one test red (costOfLiving reads
-  // '42', the refetched figure, instead of '999') and nothing else in the suite.
+  // A background refetch (the query's own poll/focus machinery) must never clobber what HR is
+  // typing. Drives the refetch directly via the test's own QueryClient rather than waiting 60s.
+  // Waits for a READ-ONLY, period-derived value (the stat strip's total gross, from
+  // `period.totalGross`, never from the `adjustments` state) to change to the refetched figure
+  // first, which proves the new data re-rendered; only THEN asserts the dirty field. Asserting
+  // immediately after the refetch is vacuous (green with or without the dirty guard). Deleting the
+  // guard turns this test red (costOfLiving reads '42' instead of '999').
   it('does not overwrite a dirty field when a background refetch resolves with different line data (B1)', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     api.payroll.current.mockResolvedValueOnce({ period: previewPeriod() });
@@ -1620,9 +1546,9 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     fireEvent.change(costOfLiving, { target: { value: '999' } });
     expect(costOfLiving.value).toBe('999');
 
-    // The background refetch resolves with DIFFERENT figures: a distinct totalGross (read-only,
-    // period-derived -- proves the new data actually landed) and a distinct specialPay1 (42,
-    // what a broken/removed guard would show instead of HR's still-unsaved 999).
+    // The refetch resolves with DIFFERENT figures: a distinct totalGross (read-only, proves the new
+    // data landed) and a distinct specialPay1 (42, what a removed guard would show instead of HR's
+    // unsaved 999).
     api.payroll.current.mockResolvedValueOnce({
       period: previewPeriod({
         totalGross: 55555,
@@ -1646,19 +1572,15 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('999');
   });
 
-  // FIX BEFORE MERGE 5 / P2 (adversarial review, round 2): a save that FAILS after HR has both
-  // switched months AND switched BACK to the original month must not paint an error badge/toast
-  // onto the freshly reloaded month now on screen. This is the round-trip the reviewer's own
-  // reproduction pinned: July -> June -> July makes `month === monthAtStart` true again by pure
-  // coincidence, so a VALUE-based guard lets a save from the abandoned FIRST July visit slip
-  // through as if it belonged to the fresh SECOND one. Distinguishable via the rendered badge
-  // text (`draftSaveStatus === 'error'` is the only branch of `draftStatusLabel` that reads
-  // differently from "saved"). Sequence: HR types in July visit #1 (autosave fires, PUT left
-  // pending), switches to June before it settles (fires the A4 flush -- an independent
-  // saveInputDraft call #2 for the outgoing July visit -- and resets state for June), switches
-  // BACK to July before ever touching June (no June flush fires -- nothing was dirty there),
-  // landing on a fresh July visit #2 with a clean badge, and only THEN does PUT #1 (from visit
-  // #1) finally reject.
+  // A save that FAILS after HR switched months AND back to the original month must not paint an
+  // error badge/toast onto the freshly reloaded month. July -> June -> July makes
+  // `month === monthAtStart` true by coincidence, so a VALUE-based guard would let a save from the
+  // abandoned first July visit through. Distinguishable via the badge text
+  // (`draftSaveStatus === 'error'` is the only branch of `draftStatusLabel` that differs from
+  // "saved"). Sequence: HR types in visit #1 (autosave PUT left pending), switches to June (the
+  // month-change flush is an independent saveInputDraft call #2 for the outgoing July), switches
+  // BACK to July before touching June (nothing dirty, no flush), landing on visit #2 with a clean
+  // badge; only then does PUT #1 reject.
   it('a save that fails after a month round trip does not paint a stale error badge/toast onto the fresh re-visit', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod() });
     const settlers = [];
@@ -1694,7 +1616,7 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(2); // still just #1 and #2
 
     showToast.mockClear();
-    // PUT #1 -- from the ABANDONED first July visit -- finally rejects now, after the round trip.
+    // PUT #1, from the abandoned first July visit, rejects now, after the round trip.
     await act(async () => {
       settlers[0].reject(new Error('เครือข่ายขัดข้อง'));
     });
@@ -1709,12 +1631,10 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     settlers[1]?.resolve({ payrollMonth: `${otherMonth}-01`, drafts: [] });
   });
 
-  // P2, success-path variant: a stale SUCCESS resolving after HR has both switched months AND
-  // already started typing again on the NEW month must not clear the new month's own genuine
-  // dirty state. Without the same visit-token guard on the success branch, the stale resolution's
-  // `draftDirtyRef.current = false; setDraftDirty(false); setDraftSaveStatus('saved')` would wipe
-  // out the new month's real unsaved edit and hide its "รอบันทึกอัตโนมัติ" badge -- a false
-  // "saved" signal over data that was never actually sent.
+  // Success-path variant: a stale SUCCESS resolving after HR switched months and started typing
+  // again must not clear the new month's genuine dirty state. Without the visit-token guard on the
+  // success branch, the stale resolution would reset `draftDirtyRef`/status to 'saved' and hide the
+  // "รอบันทึกอัตโนมัติ" badge: a false "saved" over data never sent.
   it('a save that succeeds after HR has switched months does not clear the new month\'s own dirty state', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod() });
     const settlers = [];
@@ -1738,7 +1658,7 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     fireEvent.change(newCostOfLiving, { target: { value: '456' } });
     expect(screen.getByRole('status').textContent).toContain('รอบันทึกอัตโนมัติ');
 
-    // The ORIGINAL (outgoing-month) PUT #1 now succeeds, after both the switch and the new typing.
+    // The outgoing-month PUT #1 now succeeds, after both the switch and the new typing.
     await act(async () => {
       settlers[0].resolve({ payrollMonth: `${thisMonth}-01`, drafts: [] });
     });
@@ -1751,20 +1671,14 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     settlers[1]?.resolve({ payrollMonth: `${otherMonth}-01`, drafts: [] });
   });
 
-  // BLOCKING 1 (P0, adversarial review): a query-error toast effect that puts an unstable
-  // `showToast` in its dependency array re-fires every time `showToast` is called -- calling it
-  // re-renders whatever owns the toast state, which hands back a NEW `showToast` identity, which
-  // re-fires the effect for as long as the query's error stays non-null. Every other test in this
-  // file misses this because it passes `vi.fn()`, which never changes identity -- `showToast`
-  // being stable everywhere else in this suite is therefore not evidence this is safe.
-  // `AppShapedHarness` above reproduces App.jsx's actual (unstable) wiring.
+  // A query-error toast effect with an unstable `showToast` in its deps re-fires every time
+  // `showToast` is called (re-render -> new identity -> re-fire) while the query error stays
+  // non-null. Other tests pass a stable `vi.fn()` and miss it; `AppShapedHarness` above reproduces
+  // App.jsx's unstable wiring.
   //
-  // `onShowToast` throws once it is called more than once -- a trip wire, not a passive counter:
-  // an earlier version of this test waited an extra real tick before checking the count, and
-  // that extra real wall-clock time let the pre-fix cascade run long enough to hang the whole
-  // test process instead of failing it. Throwing from inside the SAME synchronous callback the
-  // cascade is calling aborts it immediately (confirmed by mutation-testing the fix away: this
-  // exact test goes red fast, not the suite hanging).
+  // `onShowToast` throws once called more than once: a trip wire, not a passive counter. Waiting an
+  // extra real tick before counting let the pre-fix cascade run long enough to hang the test process
+  // instead of failing it; throwing inside the same synchronous callback aborts the cascade at once.
   it('does not call showToast more than once when the period query fails, driven by an App-shaped (unstable) showToast', async () => {
     api.payroll.current.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1791,16 +1705,12 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
   });
 });
 
-// Split (issue #390): PayrollController grants CEO the same read access as HR (every GET, plus
-// the non-persisting POST /preview and /preview/export/{kind}, is
-// @PreAuthorize("hasAnyRole('HR','CEO')")) but keeps every write hasRole('HR') only (process, PUT
-// input-draft, PUT component-tax-treatments, POST distribute). `PayrollPage` now takes a `user`
-// prop and derives `canManage = hasPermission(user?.role, 'canManagePayroll')` from it -- an
-// ALLOWLIST read off ROLE_PERMISSIONS, not a `role !== 'ceo'` denylist, so an absent/unknown user
-// reads as NO management access (hasPermission(undefined, ...) is false). These tests pin down
-// the negative case (CEO cannot reach or see the mutating controls), which is the one that
-// actually matters; the positive "HR still has them" case is the pre-existing suite above, which
-// now passes the module-level `hrUser` explicitly through `renderPayrollPage()`.
+// CEO has the same read access as HR (every GET, plus the non-persisting POST /preview and
+// /preview/export/{kind}: hasAnyRole('HR','CEO')) but every write is hasRole('HR') only (process,
+// PUT input-draft, PUT component-tax-treatments, POST distribute). `PayrollPage` derives
+// `canManage = hasPermission(user?.role, 'canManagePayroll')`, an ALLOWLIST off ROLE_PERMISSIONS, so
+// an absent/unknown user has NO management access. These tests pin the negative case (CEO cannot
+// reach the mutating controls); the positive HR case is the suite above.
 describe('PayrollPage read-only CEO view (issue #390)', () => {
   const ceoUser = { role: 'ceo', employeeId: 99 };
 
@@ -1834,7 +1744,7 @@ describe('PayrollPage read-only CEO view (issue #390)', () => {
     unmount();
 
     renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
-    // HR sees บันทึกร่าง (issue #422 A2), not the original CEO-only คำนวณตัวอย่าง label.
+    // HR sees บันทึกร่าง, not the CEO-only คำนวณตัวอย่าง label.
     await screen.findByRole('button', { name: /บันทึกร่าง/i });
     expect(screen.queryByText('มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว')).toBeNull();
   });
@@ -1846,12 +1756,9 @@ describe('PayrollPage read-only CEO view (issue #390)', () => {
     const { unmount } = renderWithClient(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
     await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });
     expect(screen.queryByRole('button', { name: /ประมวลผลเงินเดือน/i })).toBeNull();
-    // The read-only replacement still surfaces the period status/headcount as plain text, scoped
-    // to its own labelled region (the table's footer row also renders "N คน", so an unscoped text
-    // query would ambiguously match both). Issue #422 B1: the period now arrives via react-query,
-    // so the "N คน" text is not guaranteed to reflect loaded data on the very first synchronous
-    // check the way the always-renderedคำนวณตัวอย่าง button is -- `findByText` (not `getByText`)
-    // waits for it.
+    // The read-only replacement still shows period status/headcount as plain text, scoped to its own
+    // labelled region (the table's footer row also renders "N คน"). The period arrives via
+    // react-query, so use `findByText` (not `getByText`) to wait for it.
     const statusRegion = screen.getByRole('region', { name: 'สถานะรอบเงินเดือน' });
     expect(await within(statusRegion).findByText(`${previewPeriod().lineCount} คน`)).toBeTruthy();
     unmount();
@@ -1895,9 +1802,8 @@ describe('PayrollPage read-only CEO view (issue #390)', () => {
     expect(withholdingOverride.disabled).toBe(true);
   });
 
-  // canSaveDraft now requires canManage -- PUT /input-draft is hasRole('HR') only, so the
-  // autosave status badge (and the autosave itself, since the inputs it would fire from are
-  // disabled above) must not appear for a CEO session at all.
+  // canSaveDraft requires canManage (PUT /input-draft is hasRole('HR') only), so the autosave badge
+  // must not appear for a CEO session at all.
   it('never shows the draft-autosave status badge for CEO', async () => {
     renderWithClient(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);

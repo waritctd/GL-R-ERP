@@ -1,6 +1,7 @@
 package th.co.glr.hr.pricingdecision;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,7 +19,6 @@ import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricing.FxRateDto;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.FxResolver;
-import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
@@ -54,9 +54,9 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * Step 3 of the sales pricing redesign: CEO Selling Price Decision. Turns a frozen SUBMITTED
  * costing into an approved, customer-facing selling price.
  *
- * <p>V141 ("CEO owns costing"): {@link #startReview} now COMPUTES the costing itself (via {@link
- * LandedCostCalculator}), in the same transaction that creates the decision — Import no longer
- * submits one ({@code th.co.glr.hr.pricingcosting.PricingCostingService} is read-only). The CEO
+ * <p>The CEO owns costing: {@link #startReview} COMPUTES the costing itself (via {@link
+ * LandedCostCalculator}), in the same transaction that creates the decision — Import does not
+ * submit one ({@code th.co.glr.hr.pricingcosting.PricingCostingService} is read-only). The CEO
  * may {@link #recalculateCost} the bound costing in place, or {@link #overrideItemCost} a single
  * line — both preserve any existing override; {@link #approve} refuses while any line's override
  * is stale (its FX rate or calc-config version moved since the override was entered).
@@ -69,7 +69,7 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * </pre>
  *
  * <p>Deliberately does NOT create a customer quotation, touch legacy {@code sales.ticket_item}
- * price fields, or change the deal stage — see the class-level scope note in the branch handoff.
+ * price fields, or change the deal stage.
  */
 @Service
 public class PricingDecisionService {
@@ -167,7 +167,7 @@ public class PricingDecisionService {
         String currency = firstText(request.currency(), firstText(summary.targetCurrency(), "THB")).toUpperCase();
         FxRateDto fx = FxResolver.resolve(fxRates, currency);
         BigDecimal defaultMarginPct = request.defaultMarginPct();
-        // Opus review minor #3 (2026-09-19): the SAME bound applyItemUpdates' marginPct branch
+        // The SAME bound applyItemUpdates' marginPct branch
         // enforces (requireValidMargin) — a huge defaultMarginPct here would otherwise overflow
         // proposed_margin_pct/list_unit_price at INSERT time (insertItems below), as a raw 500
         // instead of a clean 400, before the CEO ever gets a chance to fix it through update().
@@ -203,11 +203,11 @@ public class PricingDecisionService {
             BigDecimal proposedSellingPrice = defaultMarginPct != null && frozenPerRequestedUnit != null
                 ? computeSellingPrice(frozenPerRequestedUnit, defaultMarginPct, fx.rateToThb(), currency)
                 : null;
-            // Owner ruling A (2026-09-19): the auto-calculated formula price becomes the NET
+            // The auto-calculated formula price becomes the NET
             // mode's starting list price (ราคาตั้ง) — a REAL stored value, not a UI placeholder,
             // so a CEO who picks NET and types nothing still has a computable, approvable net
             // (net = list x (1 - 0/100) = list). Rounded to money2, matching
-            // pricing_decision_item.list_unit_price's NUMERIC(14,2) scale (V187) — see
+            // pricing_decision_item.list_unit_price's NUMERIC(14,2) scale — see
             // computeNetUnitPrice's own "round to column scale before deriving" rule.
             BigDecimal listUnitPrice = proposedSellingPrice == null ? null : money2(proposedSellingPrice);
             writeItems.add(new WriteItem(item.pricingRequestItemId(), item.id(), item.requestedUnitBasis(),
@@ -256,19 +256,18 @@ public class PricingDecisionService {
         boolean modeChanging = request.priceMode() != null && !request.priceMode().equals(decision.priceMode());
         if (request.priceMode() != null) {
             requireValidPriceMode(request.priceMode());
-            // Phase 2 (owner rulings 2026-09-18/19): the mode picker only ever applies to a
-            // new-form decision (Phase 1 / V185 PER_PIECE + sqm_per_piece items) — a legacy
+            // The mode picker only ever applies to a
+            // new-form decision (PER_PIECE + sqm_per_piece items) — a legacy
             // decision keeps the margin/"ปรับราคาเอง" formula path untouched, so setting a mode on
             // one is refused rather than silently accepted and then never consulted.
             requireNewFormEligible(decision);
         }
 
-        // Review finding #3 (2026-09-19): a call that touches NOTHING (no ceoNote, no priceMode
+        // A call that touches NOTHING (no ceoNote, no priceMode
         // change, no items, or an items list whose every entry itself touches nothing — see
         // applyItemUpdates' own per-item no-op skip) must not bump updated_at, must not log
-        // PRICING_DECISION_UPDATED, and must return the decision UNCHANGED — "saving with nothing
-        // changed" was previously a silent-success no-op at the DB level that still looked like a
-        // real save to the event trail and the caller.
+        // PRICING_DECISION_UPDATED, and must return the decision UNCHANGED, so "saving with
+        // nothing changed" does not look like a real save to the event trail and the caller.
         boolean headerTouched = request.ceoNote() != null || modeChanging;
         if (headerTouched) {
             decisions.updateDecisionHeader(decisionId, request.ceoNote(), request.priceMode());
@@ -277,12 +276,12 @@ public class PricingDecisionService {
         String effectivePriceMode = request.priceMode() != null ? request.priceMode() : decision.priceMode();
         boolean itemsTouched = false;
         if (modeChanging) {
-            // Review finding #2 (2026-09-19): switching the mode must not leave stale nets from
+            // Switching the mode must not leave stale nets from
             // the OLD mode sitting in net_unit_price as if they were still valid under the NEW
             // one — recompute every item's net from ITS OWN stored inputs for the new mode,
             // ignoring whatever the old mode's inputs were, and going NULL where the item lacks
             // the new mode's required input (never silently freezing an old NET total under
-            // DIRECT_NET, the review's own probe scenario).
+            // DIRECT_NET).
             recomputeNetsForModeSwitch(decision, effectivePriceMode);
             itemsTouched = true;
         }
@@ -298,14 +297,14 @@ public class PricingDecisionService {
     }
 
     /**
-     * Review finding #2: recomputes EVERY item's {@code net_unit_price} for {@code newPriceMode}
+     * Recomputes EVERY item's {@code net_unit_price} for {@code newPriceMode}
      * from that item's own already-stored inputs — never reusing whatever the item happened to
      * compute under the PREVIOUS mode. An item that lacks the new mode's required input (e.g. no
      * {@code special_price_sqm} yet, right after switching TO {@code SPECIAL_SQM}) goes to NULL,
      * not to whatever stale figure the old mode left behind — {@link #computeNetUnitPriceOrNull}
      * is the null-instead-of-throw sibling of {@link #computeNetUnitPrice} that makes that safe to
      * do in bulk, across items that may each be in a different state of "filled in". The manual
-     * "ปรับราคาเอง" override (owner ruling B) still applies as NET's effective list price here,
+     * "ปรับราคาเอง" override still applies as NET's effective list price here,
      * exactly as it does in {@link #applyItemUpdates} — a switch to NET right after setting an
      * override must not forget it.
      */
@@ -340,12 +339,11 @@ public class PricingDecisionService {
     }
 
     /**
-     * Phase 2 eligibility (owner rulings 2026-09-18/19): the CEO price-mode picker is offered only
-     * for a decision whose EVERY item comes from a Phase 1 (V185) new-form pricing-request item —
+     * Eligibility: the CEO price-mode picker is offered only
+     * for a decision whose EVERY item comes from a new-form pricing-request item —
      * {@code requestedUnitBasis == PER_PIECE} and a non-null {@code sqmPerPiece}. A legacy decision
-     * (any item missing either) keeps today's margin/"ปรับราคาเอง" behaviour, unchanged, forever —
-     * this is the server-side backstop for the same rule the UI enforces by hiding/disabling the
-     * mode picker (rule 6 of the phase's spec).
+     * (any item missing either) keeps the margin/"ปรับราคาเอง" behaviour — this is the
+     * server-side backstop for the same rule the UI enforces by hiding/disabling the mode picker.
      */
     private void requireNewFormEligible(PricingDecisionDto decision) {
         if (!isNewFormEligible(decision)) {
@@ -399,9 +397,9 @@ public class PricingDecisionService {
         if (manualCost != null && manualCost.compareTo(BigDecimal.ZERO) < 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้นทุนที่ปรับต้องไม่ติดลบ");
         }
-        // Opus review minor #3 (2026-09-19): reject an overflowing override BEFORE it ever reaches
-        // costings.applyOverride — probe was manualLandedCostPerUnitThb=1e15, which used to 500 on
-        // the manual_landed_cost_per_unit_thb column write itself.
+        // Reject an overflowing override BEFORE it ever reaches costings.applyOverride — e.g.
+        // manualLandedCostPerUnitThb=1e15 would 500 on the manual_landed_cost_per_unit_thb column
+        // write itself.
         if (manualCost != null && manualCost.compareTo(MAX_COST_18_4) > 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ต้นทุนที่ปรับเกินขอบเขตที่ระบบรองรับ (สูงสุด " + MAX_COST_18_4 + ")");
@@ -512,22 +510,22 @@ public class PricingDecisionService {
                     + "— รายการที่ล้าสมัย: " + staleItemIds);
         }
 
-        // V156: a line whose freight could not be computed (no thickness or no origin country on
-        // the catalogue row) now REACHES this screen with a null frozen cost, instead of aborting
+        // A line whose freight could not be computed (no thickness or no origin country on
+        // the catalogue row) REACHES this screen with a null frozen cost, instead of aborting
         // costing at startReview. Here is where it must be resolved: the CEO either supplies the
         // landed cost (overrideItemCost) or fixes the price outright ("ปรับราคาเอง"). Approving
         // with neither would issue a quotation whose freight was silently omitted — the single
         // outcome the whole uncostable path exists to prevent. Checked BEFORE the margin gate
         // because a line with no cost has nothing for a margin to apply to.
         //
-        // Opus review minor #1 (2026-09-19): "ปรับราคาเอง" clears this gate ONLY for the legacy
+        // "ปรับราคาเอง" clears this gate ONLY for the legacy
         // margin path and for a new-form NET-mode item — those are the two cases where the
-        // override actually IS (or replaces) the price the item approves at (ruling B: for NET it
+        // override actually IS (or replaces) the price the item approves at (for NET it
         // becomes the effective list price the discount applies to). For a new-form DIRECT_NET or
         // SPECIAL_SQM item, computeNetUnitPrice never even LOOKS at manualSellingPricePerRequestedUnit
         // — the approved price comes entirely from directNetPrice/specialPriceSqm — so letting the
-        // override satisfy this gate let an item with ZERO real cost approve anyway (probe: an
-        // uncosted DIRECT_NET item with directNetPrice=100 and an override of 300 approved at 100
+        // override satisfy this gate would let an item with ZERO real cost approve anyway (e.g. an
+        // uncosted DIRECT_NET item with directNetPrice=100 and an override of 300 approving at 100
         // with no cost backing it at all). Those two modes must clear this gate with a REAL cost.
         boolean overrideCanClearUncostedGate = decision.priceMode() == null
             || WastageCalculator.PRICE_MODE_NET.equals(decision.priceMode());
@@ -544,18 +542,18 @@ public class PricingDecisionService {
                     + uncosted);
         }
 
-        // Stock lines (V194, R6): exempt from the cost gate above (they have no cost), but each must
+        // Stock lines: exempt from the cost gate above (they have no cost), but each must
         // carry a ราคาตั้ง > 0 - the CEO's own number is all the price a stock line has. And since
         // that price only means something through the request's single price mode, a decision that
         // contains a stock line must have a mode picked: the LEGACY margin engine (priceMode null)
-        // is not supported for stock lines (owner-default decision, slice 1 - see the PR body).
+        // is not supported for stock lines.
         List<PricingDecisionItemDto> stockLines = decision.items().stream()
             .filter(item -> item.stockSource() != null).toList();
         if (!stockLines.isEmpty() && decision.priceMode() == null) {
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "รายการจากสต็อกต้องเลือกวิธีกรอกราคา (NET, SPECIAL_SQM หรือ DIRECT_NET) ก่อนอนุมัติ");
         }
-        // W5-03 (Ploy 2026-10-30): the ราคาตั้ง is required in NET mode only. Under SPECIAL_SQM /
+        // The ราคาตั้ง is required in NET mode only. Under SPECIAL_SQM /
         // DIRECT_NET the quotation prints the net as its ราคา, so a stock line needs no list price.
         List<Long> stockWithoutListPrice = !WastageCalculator.PRICE_MODE_NET.equals(decision.priceMode()) ? List.<Long>of() : stockLines.stream()
             .filter(item -> item.listUnitPrice() == null || item.listUnitPrice().signum() <= 0)
@@ -567,7 +565,7 @@ public class PricingDecisionService {
                     + stockWithoutListPrice);
         }
 
-        // Phase 2 (owner rulings 2026-09-18/19): a new-form decision (non-null priceMode) is
+        // A new-form decision (non-null priceMode) is
         // driven entirely by the CEO's price-mode inputs — margin/"ปรับราคาเอง" are meaningless
         // for it, so the margin gate below is skipped, and this gate takes its place: every item
         // must carry a server-derived netUnitPrice (set the moment update() successfully resolves
@@ -596,36 +594,35 @@ public class PricingDecisionService {
             }
         }
 
-        // Design correction 7: never trust a stored/client-supplied selling price at approval —
+        // Never trust a stored/client-supplied selling price at approval —
         // always recompute fresh from the frozen cost and the margin being frozen in. The ONE
-        // deliberate exception is an active "ปรับราคาเอง" override (Phase 1 UI simplification):
+        // deliberate exception is an active "ปรับราคาเอง" override:
         // there the CEO's own fixed value freezes in verbatim and the formula is not consulted at
         // all for that line, exactly as overrideItemCost already does for the cost side.
         //
-        // ราคาขั้นต่ำ ("ราคาขั้นต่ำ") is no longer a CEO input in the UI (Phase 1 UI
-        // simplification, owner ruling 2026-08-16) — the per-item text field is gone. Left unset,
+        // ราคาขั้นต่ำ is not a CEO input in the UI. Left unset,
         // minimum_selling_price_per_requested_unit would stay NULL forever, and
         // CustomerQuotationService's three below-minimum 422 guards are each explicitly
         // null-guarded (`item.minimumSellingPricePerRequestedUnit() != null && ...`), so a NULL
         // minimum does not merely fail open on ONE check — it silently disarms all three,
         // un-guarding every future discount on this request. Auto-populating it here with the
         // approved selling price itself closes that hole by construction: the CEO types nothing,
-        // and — because floor == price — today's "any discount refused" outcome (Discount Policy
-        // B's zero-width case) holds for every new decision without any special-casing downstream.
+        // and — because floor == price — "any discount refused" (the zero-width discount policy)
+        // holds for every new decision without any special-casing downstream.
         // An explicitly-set LOWER floor is honoured, not overwritten, if one is already on the row
-        // (still settable through PUT /pricing-decisions/{id}, which is unchanged) — only a still-
-        // NULL minimum falls back to the approved price. See PricingDecisionCostOverrideValidation-
-        // IntegrationTest's sibling in PricingDecisionMinimumPriceAutoPopulationIntegrationTest for
-        // the wrong-way-round proof that a discounted quotation line is still refused.
+        // (still settable through PUT /pricing-decisions/{id}) — only a still-
+        // NULL minimum falls back to the approved price. See
+        // PricingDecisionMinimumPriceAutoPopulationIntegrationTest for
+        // the proof that a discounted quotation line is still refused.
         List<ApprovedItem> approvedItems = new ArrayList<>();
         for (PricingDecisionItemDto item : decision.items()) {
             BigDecimal approvedSellingPrice;
             BigDecimal minimumSellingPrice;
             BigDecimal approvedMarginPct;
             if (newForm) {
-                // Owner ruling: the CEO's own discount is PRE-approved — approved and minimum
+                // The CEO's own discount is PRE-approved — approved and minimum
                 // freeze to the SAME net price (never a lower explicit floor, unlike the legacy
-                // path below), so it can never trip the V155 per-line discount-approval gate on
+                // path below), so it can never trip the per-line discount-approval gate on
                 // the later customer quotation. No margin concept applies to a new-form line.
                 approvedSellingPrice = item.netUnitPrice();
                 minimumSellingPrice = item.netUnitPrice();
@@ -728,7 +725,7 @@ public class PricingDecisionService {
     public PricingDecisionSalesViewDto salesView(long pricingRequestId, UserPrincipal actor) {
         requireRole(actor, SALES_VIEW_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
-        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return decisions.findApprovedSalesView(pricingRequestId)
@@ -738,15 +735,14 @@ public class PricingDecisionService {
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** NUMERIC(14,2) upper bound — {@code list_unit_price}/{@code direct_net_price}. A value at or
-     * above this overflows the column as a raw 500 instead of a clean 400 (review finding #4). */
+     * above this overflows the column as a raw 500 instead of a clean 400. */
     private static final BigDecimal MAX_PRICE_14_2 = new BigDecimal("999999999999.99");
     /** NUMERIC(12,2) upper bound — {@code special_price_sqm}. */
     private static final BigDecimal MAX_PRICE_12_2 = new BigDecimal("9999999999.99");
-    /** NUMERIC(18,4) upper bound — {@code manual_landed_cost_per_unit_thb} (V141). Opus review
-     * minor #3 (2026-09-19): an override this large (or a huge margin, see {@link
-     * #MAX_MARGIN_PCT}) previously reached the DB as a raw numeric-overflow 500 instead of a clean
-     * 400 — reproduced with an override of {@code 1e15}, which exceeds even this column's own
-     * bound before the derived selling price is ever computed. */
+    /** NUMERIC(18,4) upper bound — {@code manual_landed_cost_per_unit_thb}. An override this
+     * large (or a huge margin, see {@link #MAX_MARGIN_PCT}) would reach the DB as a raw
+     * numeric-overflow 500 instead of a clean 400 — e.g. {@code 1e15} exceeds even this column's
+     * own bound before the derived selling price is ever computed. */
     private static final BigDecimal MAX_COST_18_4 = new BigDecimal("99999999999999.9999");
     /** NUMERIC(9,6) upper bound — {@code proposed_margin_pct}/{@code approved_margin_pct} (V72). A
      * margin this large produces a derived selling price that overflows {@code list_unit_price}'s
@@ -756,8 +752,8 @@ public class PricingDecisionService {
     private static final BigDecimal MAX_MARGIN_PCT = new BigDecimal("999.999999");
 
     /**
-     * Returns whether anything was actually persisted for at least one item (review finding #3:
-     * a caller that sends only untouched/no-op item entries must not count as a real change, so
+     * Returns whether anything was actually persisted for at least one item (a caller
+     * that sends only untouched/no-op item entries must not count as a real change, so
      * {@link #update} can skip the event log and the "success" the frontend would otherwise toast
      * for a save that changed nothing).
      */
@@ -781,7 +777,7 @@ public class PricingDecisionService {
             boolean touchesListPrice = req.listUnitPrice() != null;
             boolean touchesAnything = touchesPriceOverride || touchesPriceModeValue || touchesListPrice
                 || req.marginPct() != null || req.minimumSellingPrice() != null || req.decisionNote() != null;
-            // Review finding #3: an item entry that touches NOTHING (the CEO clicked "save" on a
+            // An item entry that touches NOTHING (the CEO clicked "save" on a
             // row they never edited) is a true no-op — skip it entirely rather than writing an
             // identical row and letting the caller believe something was saved.
             if (!touchesAnything) {
@@ -806,7 +802,7 @@ public class PricingDecisionService {
             BigDecimal stockListPrice = null;
             if (touchesListPrice) {
                 if (item.stockSource() == null) {
-                    // A costed line's list price stays server-maintained (owner correction 2026-09-19).
+                    // A costed line's list price stays server-maintained.
                     throw new ApiException(HttpStatus.BAD_REQUEST,
                         "กรอกราคาตั้งได้เฉพาะรายการจากสต็อกเท่านั้น (รายการสั่งนำเข้าคำนวณจากต้นทุน)");
                 }
@@ -838,7 +834,7 @@ public class PricingDecisionService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ราคาขายขั้นต่ำต้องไม่ติดลบ");
             }
 
-            // Owner correction (2026-09-19): a marginPct edit on the LEGACY path recomputes the
+            // A marginPct edit on the LEGACY path recomputes the
             // formula reference (sellingPrice) exactly like overrideItemCost/recomputeCostingInPlace
             // do — so list_unit_price (never a client input, see UpdatePricingDecisionItemRequest's
             // own Javadoc) must move with it here too, via the SAME deriveListAndNet helper those
@@ -850,8 +846,8 @@ public class PricingDecisionService {
             boolean clearListUnitPrice = marginTouched && marginListAndNet.listUnitPrice() == null;
             boolean listUnitPriceTouched = marginTouched || touchesListPrice;
 
-            // ── Phase 2 (owner rulings 2026-09-18/19): the CEO price-mode inputs ─────────────
-            // Review finding #6: set + clear mutually exclusive, per field, same shape as the
+            // ── The CEO price-mode inputs ─────────────
+            // Set + clear are mutually exclusive, per field, same shape as the
             // legacy override check above.
             requireNotSetAndCleared(req.discountPct(), req.clearDiscountPct(), "ส่วนลด %");
             requireNotSetAndCleared(req.specialPriceSqm(), req.clearSpecialPriceSqm(), "ราคาพิเศษ บาท/ตร.ม.");
@@ -860,7 +856,7 @@ public class PricingDecisionService {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "กรุณาเลือกวิธีกรอกราคา (priceMode) ก่อนกรอกราคาของรายการ");
             }
-            // Review finding #4/#5: bound + round EVERY price-mode value to its column's scale
+            // Bound + round EVERY price-mode value to its column's scale
             // BEFORE it is stored or fed into the net derivation, so (a) an oversized value 400s
             // here instead of overflowing the NUMERIC column as a raw 500, and (b) the stored
             // input and the stored net can always be reproduced from each other — a >2dp value
@@ -872,7 +868,7 @@ public class PricingDecisionService {
 
             BigDecimal netUnitPrice = null;
             boolean netUnitPriceComputed = false;
-            // Owner ruling B (2026-09-19): "ปรับราคาเอง" REPLACES the auto-calculated formula
+            // "ปรับราคาเอง" REPLACES the auto-calculated formula
             // price as NET's list price (ราคาตั้ง) when it is active — the discount then still
             // applies on top of it. A touch to the override, a price-mode value, OR marginPct
             // (which just moved list_unit_price itself, see above) means the net must be
@@ -955,7 +951,7 @@ public class PricingDecisionService {
     }
 
     /**
-     * Phase 2 (owner rulings 2026-09-18/19): derives the net price per requested unit (per แผ่น)
+     * Derives the net price per requested unit (per แผ่น)
      * for whichever {@code priceMode} the decision uses — NEVER reimplements the arithmetic,
      * always routes through {@link WastageCalculator}, exactly as the direct-deal quotation editor
      * does for the identical three modes.
@@ -971,12 +967,10 @@ public class PricingDecisionService {
                                            BigDecimal sqmPerPiece) {
         if (WastageCalculator.PRICE_MODE_NET.equals(priceMode)) {
             if (listUnitPrice == null) {
-                // Opus review minor #2 (2026-09-19): listUnitPrice is NEVER a field the CEO can
-                // type any more (owner correction, same date) — it is null here only when the item
-                // has no frozen cost yet AND no "ปรับราคาเอง" override (see deriveListAndNet's own
-                // effectiveListPrice fallback). The old message ("กรุณาระบุราคา/หน่วย") pointed at
-                // a field that no longer exists in the UI at all; point at the two REAL fixes
-                // instead — supply a cost (ปรับต้นทุนเอง) or set the price directly (ปรับราคาตั้งเอง).
+                // listUnitPrice is NEVER a field the CEO can type — it is null here only when the
+                // item has no frozen cost yet AND no "ปรับราคาเอง" override (see deriveListAndNet's
+                // own effectiveListPrice fallback). The message therefore points at the two REAL
+                // fixes — supply a cost (ปรับต้นทุนเอง) or set the price directly (ปรับราคาตั้งเอง).
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "รายการนี้ยังไม่มีราคาตั้ง (ยังไม่มีต้นทุน) กรุณาระบุต้นทุนเอง (ปรับต้นทุนเอง) "
                         + "หรือปรับราคาตั้งเอง ก่อนกรอกส่วนลด");
@@ -1016,7 +1010,7 @@ public class PricingDecisionService {
 
     /**
      * The null-instead-of-throw sibling of {@link #computeNetUnitPrice}, used ONLY by the
-     * mode-switch recompute ({@link #recomputeNetsForModeSwitch}, review finding #2): a bulk
+     * mode-switch recompute ({@link #recomputeNetsForModeSwitch}): a bulk
      * recompute across every item on the decision cannot afford to throw the moment ONE item
      * lacks the new mode's required input — that item's net should simply become NULL (the item
      * is not price-complete under the new mode yet, and {@code approve()}'s missing-price gate
@@ -1036,9 +1030,8 @@ public class PricingDecisionService {
         if (marginPct.compareTo(MINUS_ONE) <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "marginPct ต้องมากกว่า -1 (ราคาขายต้องไม่ติดลบ)");
         }
-        // Opus review minor #3 (2026-09-19): a huge margin (the review's own probe) previously
-        // produced a derived selling price that overflowed a NUMERIC column as a raw 500 — this
-        // bounds the RAW margin itself; deriveListAndNet's own check catches the multiplicative
+        // A huge margin would produce a derived selling price that overflows a NUMERIC column as
+        // a raw 500 — this bounds the RAW margin itself; deriveListAndNet's own check catches the multiplicative
         // (cost × margin) overflow case even when this bound alone would not.
         if (marginPct.compareTo(MAX_MARGIN_PCT) > 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "marginPct เกินขอบเขตที่ระบบรองรับ (สูงสุด " + MAX_MARGIN_PCT + ")");
@@ -1046,18 +1039,16 @@ public class PricingDecisionService {
     }
 
     /**
-     * Selling price is always PER REQUESTED UNIT (design correction 1), computed fresh from the
+     * Selling price is always PER REQUESTED UNIT, computed fresh from the
      * frozen per-requested-unit cost and a margin fraction, converted through the decision's
-     * pinned FX rate (design correction 6) — never taken verbatim from client input.
+     * pinned FX rate — never taken verbatim from client input.
      *
-     * <p>V109 engine wiring (V152), rounding changed by owner ruling 2026-09-19 (Phase 2 CEO
-     * pricing): the formula is {@code SP = cost x (1+margin) x selling_buffer}, rounded HALF_UP to
-     * 2dp — see {@link PricingFormulaEngine#sellingPrice}. No longer rounds UP to the nearest
-     * {@code selling_price_round_up_to} (that column is now dead — see that method's own Javadoc).
-     * Previously this was a bare {@code cost x (1+margin)}, with no buffer and no rounding rule at
-     * all; {@code selling_buffer} is a deliberate COST BUFFER (not VAT — VAT stays untouched, added
-     * separately at quotation time). The rounding happens in THB (landed cost is always THB, V72's
-     * own comment), BEFORE any FX conversion to a non-THB decision currency.
+     * <p>The formula is {@code SP = cost x (1+margin) x selling_buffer}, rounded HALF_UP to
+     * 2dp — see {@link PricingFormulaEngine#sellingPrice}. It does not round UP to the nearest
+     * {@code selling_price_round_up_to} (that column is dead — see that method's own Javadoc).
+     * {@code selling_buffer} is a deliberate COST BUFFER (not VAT — VAT stays untouched, added
+     * separately at quotation time). The rounding happens in THB (landed cost is always THB),
+     * BEFORE any FX conversion to a non-THB decision currency.
      */
     private BigDecimal computeSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct,
                                            BigDecimal fxRateUsed, String currency) {
@@ -1071,8 +1062,7 @@ public class PricingDecisionService {
     }
 
     /**
-     * V152 (V109 engine wiring), owner ruling 2026-08-16: {@code product_type} has no source in
-     * deal data today, so {@link LandedCostCalculator} defaults every item to TILE (30% duty). This
+     * {@code product_type} has no source in deal data, so {@link LandedCostCalculator} defaults every item to TILE (30% duty). This
      * is the CEO's per-item escape hatch — e.g. โมเสคแก้ว, which must be taxed at 10%, not TILE's
      * 30% — reachable from the pricing-decision review screen (mirrors {@link #overrideItemCost}'s
      * shape: CEO-only, DRAFT-decision-only, then immediately recomputes so the CEO sees the new
@@ -1157,22 +1147,21 @@ public class PricingDecisionService {
     private record ListAndNet(BigDecimal listUnitPrice, BigDecimal netUnitPrice) {}
 
     /**
-     * Owner correction (2026-09-19), fixing a gap the review's Blocker #1 fix left open: whenever
-     * the formula reference ({@code proposedSellingPricePerRequestedUnit}, i.e. {@code
+     * Whenever the formula reference ({@code proposedSellingPricePerRequestedUnit}, i.e. {@code
      * sellingPrice} here) is recomputed by a cost-driven path — {@link #overrideItemCost} directly,
      * or {@link #recomputeCostingInPlace} (shared by {@link #recalculateCost} and
-     * {@link #overrideItemProductType}) — Phase 2's {@code list_unit_price} must move WITH it, and
+     * {@link #overrideItemProductType}) — {@code list_unit_price} must move WITH it, and
      * the item's {@code net_unit_price} must be re-derived from the FRESH list price for the
-     * decision's current mode. Ruling A: the CEO never types {@code list_unit_price} — it is always
+     * decision's current mode. The CEO never types {@code list_unit_price} — it is always
      * {@code money2(sellingPrice)} (or null, when the line just became/stayed uncostable) — so
-     * freezing it once at {@code startReview} and never refreshing it (the original design) meant
-     * an item that starts uncostable could become costable via {@code overrideItemCost} yet stay
+     * freezing it once at {@code startReview} and never refreshing it would leave
+     * an item that starts uncostable, then becomes costable via {@code overrideItemCost},
      * permanently unapprovable under NET mode, since {@code list_unit_price} never left null. This
      * is the single place that gap is closed, reused by both cost-recompute call sites so neither
      * can drift from the other.
      *
-     * <p>Ruling B still applies exactly as {@link #recomputeNetsForModeSwitch}/
-     * {@link #applyItemUpdates} apply it: an active "ปรับราคาเอง" override REPLACES the fresh list
+     * <p>As in {@link #recomputeNetsForModeSwitch}/
+     * {@link #applyItemUpdates}: an active "ปรับราคาเอง" override REPLACES the fresh list
      * price as NET's effective list price — a cost recompute must not silently re-surface the
      * formula price underneath an override the CEO deliberately set. {@link
      * #computeNetUnitPriceOrNull} (not the throwing sibling) is used because this call cannot
@@ -1180,12 +1169,11 @@ public class PricingDecisionService {
      * SPECIAL_SQM item that has never had {@code special_price_sqm} typed yet) — that item's net
      * simply stays/becomes null, exactly like every other bulk recompute in this class. For a
      * legacy decision ({@code decision.priceMode() == null}), {@code net_unit_price} always comes
-     * back null (there is no mode to compute a net under) — matching today's untouched behaviour
-     * for the margin/"ปรับราคาเอง" path. */
+     * back null (there is no mode to compute a net under), as on the margin/"ปรับราคาเอง" path. */
     private ListAndNet deriveListAndNet(PricingDecisionDto decision, PricingDecisionItemDto item,
                                         BigDecimal sellingPrice) {
         BigDecimal listUnitPrice = sellingPrice == null ? null : money2(sellingPrice);
-        // Opus review minor #3 (2026-09-19): cost x margin x buffer can overflow list_unit_price's
+        // cost x margin x buffer can overflow list_unit_price's
         // NUMERIC(14,2) column even when the cost and margin inputs each individually passed their
         // OWN bound (overrideItemCost's manualCost bound, requireValidMargin's margin bound) --
         // this is the one place that catches the MULTIPLICATIVE case, shared by every caller
@@ -1284,7 +1272,7 @@ public class PricingDecisionService {
     }
 
     /**
-     * Phase 2, CEO-only field stripping (owner rulings 2026-09-18/19): {@code get}/{@code list}
+     * CEO-only field stripping: {@code get}/{@code list}
      * are the only entry points {@link #RAW_DECISION_ROLES} shares between {@code ceo} and
      * {@code import} — every mutation on this aggregate is already {@link #CEO_ROLES}-gated, so a
      * caller that reaches one of those already IS the ceo and needs no stripping. This nulls the
@@ -1307,7 +1295,7 @@ public class PricingDecisionService {
                 item.decisionNote(), item.createdAt(), item.updatedAt(), item.manualSellingPricePerRequestedUnit(),
                 item.effectiveSellingPricePerRequestedUnit(), item.sqmPerPiece(),
                 null, null, null, null, null,
-                // Not price-shaped, so import may see them (slice 1 scaffolding, V194).
+                // Not price-shaped, so import may see them.
                 item.stockSource(), item.expectedArrivalDate()))
             .toList();
         return new PricingDecisionDto(

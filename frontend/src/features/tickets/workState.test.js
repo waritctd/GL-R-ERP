@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { resolveWorkState, secondaryWorkActions } from './workState.js';
 
-// There is no waiting-on-department fallback any more (GLA-156) — see workState.js.
-// `catalog` is the same canned payload mockApi serves, pinned against DealStage.java
-// by stageCatalog.test.js.
+// There is no waiting-on-department fallback (see workState.js). `catalog` is the same canned
+// payload mockApi serves, pinned against DealStage.java by stageCatalog.test.js.
 const catalog = DEAL_STAGE_CATALOG;
 import { nextSalesAction } from './salesActions.js';
 
@@ -48,11 +47,10 @@ describe('resolveWorkState', () => {
     expect(result.action).toMatchObject({ key: 'create_pcr' });
   });
 
-  // Stages 13-14 (ส่งมอบสินค้า) handoff to sales, owner ruling 2026-08-17: proves the new
-  // RECORD_DELIVERY bucket reaches the sticky bar through the SAME resolveWorkState -> nextSalesAction
-  // path this whole describe block exercises, not just in salesActions.test.js's own isolated unit
-  // tests. Zero pricing requests + a non-null paymentStatus is the "priced outside the PCR chain"
-  // shape (bucket 1's own guard) — the same shape demoData.js tickets 13/14 already have.
+  // Stages 13-14 (ส่งมอบสินค้า) handoff to sales: proves the RECORD_DELIVERY bucket reaches the
+  // sticky bar through the same resolveWorkState -> nextSalesAction path this describe block
+  // exercises. Zero pricing requests + a non-null paymentStatus is the "priced outside the PCR
+  // chain" shape (bucket 1's own guard), like demoData.js tickets 13/14.
   it('sales viewer on a delivery-ready deal falls through to nextSalesAction (RECORD_DELIVERY)', () => {
     const deal = baseDeal({
       status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT',
@@ -63,16 +61,11 @@ describe('resolveWorkState', () => {
   });
 
   it('sales viewer on an import-gated stage with genuinely nothing pending (a live, in-review PR; no stale/follow-up) has nothing to say (no waiting banner any more)', () => {
-    // FIX 1 rewrite: resolveWorkState now calls nextSalesAction FIRST,
-    // unconditionally — it no longer skips the resolver just because the
-    // CURRENT stage (PROCUREMENT: gate 'import', auto: true) isn't sales'.
-    // The realistic reason sales sees the waiting banner here isn't "the
-    // resolver was never asked" any more — it's that nextSalesAction
-    // genuinely has nothing in its 5-bucket cascade: a live PR already past
-    // DRAFT (bucket 1 skipped), not APPROVED_FOR_QUOTATION/QUOTATION_ACCEPTED
-    // (buckets 2/3 skipped), no follow-up due (bucket 4 skipped), and
-    // deal.stale is false (bucket 5 skipped). Only then does the fallback
-    // read the current stage's gate.
+    // resolveWorkState calls nextSalesAction FIRST, unconditionally, so sales sees the waiting
+    // banner here only because nextSalesAction has nothing in its 5-bucket cascade: a live PR
+    // already past DRAFT (bucket 1 skipped), not APPROVED_FOR_QUOTATION/QUOTATION_ACCEPTED (2/3
+    // skipped), no follow-up due (4 skipped), deal.stale false (5 skipped). Only then does the
+    // fallback read the current stage's gate.
     const deal = baseDeal({
       salesStage: 'PROCUREMENT',
       stale: false,
@@ -90,8 +83,8 @@ describe('resolveWorkState', () => {
     expect(result.action).toMatchObject({ code: 'markShipping' });
   });
 
-  // W3-01 (owner ruling 2026-10-29): a confirmed deal with no IR yet is not an import to-do any more
-  // (sales raises the per-factory IR), so import gets no primary action — and still no waiting banner.
+  // A confirmed deal with no IR yet is not an import to-do (sales raises the per-factory IR), so
+  // import gets no primary action, and still no waiting banner.
   it('import viewer at DEPOSIT_RECEIVED with fulfillmentStatus null has no action and no waiting banner', () => {
     const deal = {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED',
@@ -119,12 +112,9 @@ describe('resolveWorkState', () => {
     expect(result.action).toMatchObject({ key: 'confirmDeposit' });
   });
 
-  // FIX 1 rewrite (backend-verified scenario 1, TicketService.java:1029): the
-  // stage only advances to DEPOSIT_RECEIVED once account confirms the
-  // deposit, so while paymentStatus is still DEPOSIT_NOTICE_ISSUED, the deal
-  // sits at ORDER_RECEIVED (gate: 'sales') even though confirming the
-  // deposit is squarely account's own pending action. Before FIX 1 this read
-  // as "รอฝ่ายขาย" with no primary — resolveWorkState must now surface
+  // The stage only advances to DEPOSIT_RECEIVED once account confirms the deposit, so while
+  // paymentStatus is DEPOSIT_NOTICE_ISSUED the deal sits at ORDER_RECEIVED (gate: 'sales') though
+  // confirming the deposit is account's own pending action: resolveWorkState must surface
   // nextAccountAction's real action instead of gating on the stage first.
   it('account viewer at ORDER_RECEIVED (gate: sales) with paymentStatus DEPOSIT_NOTICE_ISSUED still gets confirmDeposit, not a waiting banner', () => {
     const deal = {
@@ -136,10 +126,8 @@ describe('resolveWorkState', () => {
     expect(result.action).toMatchObject({ key: 'confirmDeposit' });
   });
 
-  // Bug report's third example: account's chaseOverdue was "likewise lost on
-  // any sales-gated stage" pre-fix — an overdue outstanding balance is
-  // account's own pending action regardless of which stage the deal
-  // currently sits in.
+  // An overdue outstanding balance (chaseOverdue) is account's own pending action regardless of
+  // which stage the deal sits in.
   it('account viewer on a sales-gated stage with an overdue outstanding balance gets chaseOverdue, not a waiting banner', () => {
     const deal = {
       id: 1, lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED',
@@ -179,14 +167,11 @@ describe('resolveWorkState', () => {
   });
 });
 
-// UAT bug: nextSalesAction's bucket 1 (salesActions.js) used to fire
-// unconditionally on "no live pricing request" — true forever for any
-// legacy/demo deal created before the PricingRequest chain existed (e.g.
-// demoData ticket 12, PR-2026-0012), permanently parking it on "create a
-// pricing request" even once it had a quotation, a deposit, and an import
-// request already in flight. These test nextSalesAction directly (rather
-// than through resolveWorkState) since the bug and the fix both live
-// entirely in its bucket-1 gate.
+// nextSalesAction's bucket 1 (salesActions.js) must not fire unconditionally on "no live pricing
+// request": that is true forever for a legacy/demo deal created before the PricingRequest chain
+// (e.g. demoData ticket 12), parking it on "create a pricing request" even with a quotation, a
+// deposit and an import request in flight. Tested directly (not through resolveWorkState) since
+// the logic lives entirely in its bucket-1 gate.
 describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regression)', () => {
   it('does NOT offer create_pcr for the reported deal — legacy quotation issued, deposit paid, IR issued, zero pricing requests', () => {
     const deal = baseDeal({
@@ -217,7 +202,7 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
   // latter. OrderConfirmationService.confirmOrder sets 'quotation_issued' and
   // confirmCustomer sets paymentStatus under the CURRENT flow too, so a deal
   // that IS in the chain can carry both signals.
-  // QA-11 (Ploy 2026-10-29): that draft is sent, not a second request created beside it.
+  // That draft is sent, not a second request created beside it.
   it('offers to send the draft after a customer-change revision leaves {parent SUPERSEDED, child DRAFT} on an order-confirmed deal — no live PR, but the deal is in the chain', () => {
     const deal = baseDeal({
       status: 'quotation_issued',
@@ -233,7 +218,7 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     });
   });
 
-  // Code review of #1195: an in-chain deal whose requests are all dead still needs a new request.
+  // An in-chain deal whose requests are all dead still needs a new request.
   it('still offers create_pcr on an order-confirmed deal whose requests are all dead ({SUPERSEDED, CANCELLED})', () => {
     const deal = baseDeal({ status: 'quotation_issued', salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED' });
     const prs = [
@@ -243,8 +228,8 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     expect(nextSalesAction(deal, prs)).toMatchObject({ key: 'create_pcr' });
   });
 
-  // Code review of #1195 (finding 3): with a revision draft and a newer blank one (made by the old
-  // สร้างคำขอราคา beside it), the revision — the customer's change — is the one sent.
+  // With a revision draft and a newer blank one beside it (made by the old สร้างคำขอราคา), the
+  // revision (the customer's change) is the one sent.
   it('sends the customer-change revision draft, not a newer blank draft beside it', () => {
     const deal = baseDeal({ salesStage: 'SPEC_APPROVED' });
     const prs = [
@@ -281,15 +266,15 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
   });
 });
 
-// Slice 2 — flow A (SLICE-2-FLOW-A.md §E): the AWAIT_DIRECT_APPROVAL bucket is a WAITING state for
+// The AWAIT_DIRECT_APPROVAL bucket is a WAITING state for
 // the rep (the header's bannerText, never a button), while for sales_manager/ceo — who approve a
 // direct quotation (canApproveDealQuotation) — the same live PENDING_APPROVAL quotation resolves to
 // their OWN action "อนุมัติใบเสนอราคา" -> /quotations/:id. SUBMIT / CONFIRM stay sales actions.
 describe('resolveWorkState — live direct quotation (slice 2)', () => {
   const pending = { id: 77, number: 'QT-2026-0077-1', docStatus: 'PENDING_APPROVAL', recipientType: 'OWNER' };
 
-  // Shapes follow GLA-156 (develop): `{ action }` only, no waitingRoleLabel; slice 2 adds an
-  // optional `bannerText` for the rep's waiting state and nothing else.
+  // Shapes: `{ action }` only, no waitingRoleLabel; an optional `bannerText` for the rep's
+  // waiting state and nothing else.
   it('sales + PENDING_APPROVAL -> no action, a banner naming who it waits on and the number', () => {
     const result = resolveWorkState({ role: 'sales' }, baseDeal({ liveDirectQuotation: pending }), []);
     expect(result).toEqual({ action: null, bannerText: 'รอ ผจก.ขาย/CEO อนุมัติใบเสนอราคา QT-2026-0077-1' });
@@ -326,7 +311,7 @@ describe('resolveWorkState — live direct quotation (slice 2)', () => {
   });
 });
 
-// PR A — แก้ใบเสนอราคา is an ADDITIONAL (secondary) action at the owner/buyer quote stages: the
+// แก้ใบเสนอราคา is an ADDITIONAL (secondary) action at the owner/buyer quote stages: the
 // primary stays บันทึกผลใบเสนอราคา (client accepts the original / asks for changes), because the
 // client may be happy with the original quotation. The caller resolves `reviseTarget`
 // (canReviseDealQuotation); resolveWorkState/secondaryWorkActions are sales-only.
@@ -376,7 +361,7 @@ describe('resolveWorkState / secondaryWorkActions — reviseTarget (PR A)', () =
   });
 });
 
-// Owner ruling 2026-10-27 (PR #1168 made safe to ship): the route choice follows a SENT designer/
+// The route choice follows a SENT designer/
 // owner quotation, and the line beside it names that quotation: "ส่งแล้ว" while it stands, "ไม่ผ่าน"
 // once the party said no (no em dash in either). A PRICING_REQUEST-origin quotation awaiting
 // approval is the same waiting line / approver action a direct quotation gets.
@@ -428,7 +413,7 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
     expect(result.bannerText).toBe(bannerText);
   });
 
-  // Ruling 2026-10-27 (c): whenever a request's newest PRICING_REQUEST-origin quotation awaits
+  // Whenever a request's newest PRICING_REQUEST-origin quotation awaits
   // approval — its first quotation (request APPROVED_FOR_QUOTATION) or a revision of an issued one
   // (request QUOTATION_ISSUED).
   it.each(['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED'])(
@@ -441,7 +426,7 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
     },
   );
 
-  // Owner ruling 2026-10-27 ("always in ⋯"): while a sent designer/owner quotation has no outcome,
+  // While a sent designer/owner quotation has no outcome,
   // the ⋯ menu offers บันทึกผลใบเสนอราคา on its request page, whatever the primary is.
   it.each([
     ['beside the route choice', [], 'ISSUED', true],
@@ -457,7 +442,7 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
       .toEqual(offered ? { label: 'บันทึกผลใบเสนอราคา', pricingRequestId: 5 } : null);
   });
 
-  // Review N-3: cancelling a request leaves its quotation PENDING_APPROVAL on the server; that
+  // Cancelling a request leaves its quotation PENDING_APPROVAL on the server; that
   // quotation is not the deal's to wait on.
   it('a cancelled request\'s quotation still awaiting approval is ignored: the rep gets the route choice', () => {
     const prs = [request(5, 'DESIGNER', 'QUOTATION_ISSUED'), request(6, 'OWNER', 'CANCELLED')];
@@ -468,8 +453,8 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
     expect(resolveWorkState(sales, baseDeal({ status: 'draft' }), prs, opts).action).toMatchObject({ key: 'quote_next_party' });
   });
 
-  // ผจก.ขาย's อนุมัติ only for a quotation they can approve on a deal without its order (N-3, review
-  // G1: a price moved from the CEO's needs the CEO, review V1: nothing is approved after an acceptance).
+  // ผจก.ขาย's อนุมัติ only for a quotation they can approve on a deal without its order (a price
+  // moved from the CEO's needs the CEO; nothing is approved after an acceptance).
   it.each([
     ['is on a cancelled request', [request(6, 'OWNER', 'CANCELLED')], {}],
     ['needs the CEO (its price mode changed from the CEO\'s)', [request(6, 'OWNER', 'APPROVED_FOR_QUOTATION')], { priceModeChangedFromCeo: true }],

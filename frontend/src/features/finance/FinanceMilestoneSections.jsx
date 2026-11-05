@@ -182,7 +182,8 @@ function OrderBody({ deal, onError }) {
               meta={[q.acceptedAt ? `ตกลง ${formatThaiDate(q.acceptedAt)}` : null, q.issuedAt ? `ออก ${formatThaiDate(q.issuedAt)}` : null].filter(Boolean).join(' · ')}
               amount={q.totalAmount}
               basis={q.vatBasis}
-              download={<DownloadButton path={q.downloadPath} name={q.number ?? 'ใบเสนอราคา'} filenameBase={q.number ?? `quotation-${q.id}`} onError={onError} />}
+              // No link on a lost/cancelled deal opened read-only: the PDF would only 403, so no dead button.
+              download={q.downloadPath ? <DownloadButton path={q.downloadPath} name={q.number ?? 'ใบเสนอราคา'} filenameBase={q.number ?? `quotation-${q.id}`} onError={onError} /> : null}
             />
           </ul>
         </SubList>

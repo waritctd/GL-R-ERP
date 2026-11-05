@@ -17,6 +17,7 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
@@ -30,6 +31,7 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
 
     private TicketRepository tickets;
     private RemainingInvoiceService remainingInvoices;
+    private RecordingSalesMailer mailer;
     private long employeeId;
     private UserPrincipal owner;
     private int seq;
@@ -37,12 +39,13 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
     @BeforeEach
     void wire() {
         tickets = new TicketRepository(jdbc);
+        mailer = new RecordingSalesMailer(jdbc);
         CustomerQuotationRepository quotations = new CustomerQuotationRepository(jdbc);
         DepositNoticeService depositNotices = new DepositNoticeService(new DepositNoticeRepository(jdbc), tickets,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), new DepositNoticePdfRenderer(),
             new CustomerRepository(jdbc), quotations);
         remainingInvoices = new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc), depositNotices, tickets,
-            new RemainingInvoicePdfRenderer());
+            new RemainingInvoicePdfRenderer(), new NotificationRepository(jdbc, mailer));
         employeeId = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th)
             VALUES ('RI0-OWN', 'ทดสอบ', 'ใบแจ้งหนี้') RETURNING employee_id
@@ -125,6 +128,26 @@ class RemainingInvoiceNewEngineZeroDepositIntegrationTest extends AbstractPostgr
         var issued = remainingInvoices.issue(draft.id(), owner);
         assertThat(issued.vatAmount()).isEqualByComparingTo("0");
         assertThat(tickets.payableAmount(ticket)).as("payable follows the issued document").isEqualByComparingTo("1000.00");
+    }
+
+    // P1 hand-off notification (A5): a VAT-free (EN) invoice must not tell account the total includes VAT.
+    @Test
+    void zeroPercentEnglishDeal_issuedInvoiceNotice_hasNoVatWording() {
+        long accountId = mailer.seedRoleEmployee("account");
+        long ticket = deal("NOT_REQUIRED");
+        long q = quotation(ticket, "PRICING_REQUEST", "ACCEPTED", "1000.00");
+        jdbc.update("UPDATE sales.quotation SET document_language = 'EN' WHERE quotation_id = :q", Map.of("q", q));
+        line(q, 1, "Tile A", "10", "100.00");
+
+        var issued = remainingInvoices.issue(remainingInvoices.createDraft(ticket, null, owner).id(), owner);
+
+        assertThat(issued.vatAmount()).as("fixture: no VAT").isEqualByComparingTo("0");
+        var s = tickets.findById(ticket).orElseThrow().summary();
+        mailer.assertRoleNotice("account", "REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ",
+            owner.name() + " ออกใบแจ้งหนี้ " + issued.docNumber() + " แล้ว\n"
+                + "ดีล " + s.code() + " · ลูกค้า " + s.customerName() + " · ยอดชำระรวม 1,000 บาท"
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจรับเงินโอนจากลูกค้า แล้วบันทึกรับชำระในระบบ",
+            "/finance/deals/" + ticket, accountId);
     }
 
     // Owner ruling (Ploy): the invoice prints the QUOTATION'S OWN lines - each line's stored amount, the ส่วนลดพิเศษ

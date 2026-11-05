@@ -6,7 +6,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 /**
  * Who may appear as a ผู้พิมพ์/พนักงานขาย print-name — the union of (a) active employees in the
  * sales division and (b) any active employee holding the {@code hr.employee.can_create_quotation}
- * grant (e.g. ภิญญดา, who is {@code qc} role, not sales division).
+ * grant (e.g. a {@code qc}-role employee outside the sales division).
  *
  * <p>Extracted from {@code DealQuotationRepository} (V179, owner feedback #4, 2026-09-14) so a
  * SECOND caller could reuse the exact same predicate rather than copying it. That second caller is

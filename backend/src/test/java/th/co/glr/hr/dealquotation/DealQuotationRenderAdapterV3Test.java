@@ -17,15 +17,15 @@ import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
 /**
- * Quotation v3 (owner feedback pass 3, 2026-09-11) — renderer fidelity for the three line types
+ * Quotation v3 — renderer fidelity for the three line types
  * and the three price entry modes, through the REAL {@link DealQuotationRenderAdapter} and the
  * REAL {@link QuotationRenderer}.
  *
  * <p>Two layers, deliberately. The {@code RenderItem}-level assertions pin the ADAPTER's decisions
  * (which printed lines, which ส่วนลด label, which หน่วย); the workbook-level ones pin that those
  * decisions actually reach the printed cells. The second layer is not redundant: the หน่วย case in
- * particular passes at adapter level and would still have printed "แผ่น" on an ADJUSTMENT row,
- * because {@code QuotationRenderer#fillItemMainRow} used to fall back for a BLANK unit, not only a
+ * particular passes at adapter level and would still print "แผ่น" on an ADJUSTMENT row if
+ * {@code QuotationRenderer#fillItemMainRow} fell back for a BLANK unit, not only a
  * null one. The PDF/HTML path draws this same workbook ({@link QuotationHtmlDocument}), so pinning
  * the XLS cells covers all three output formats.
  *
@@ -53,7 +53,7 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(item.discountLabel()).isEqualTo("12.5%");
     }
 
-    /** S1: SPECIAL_SQM prints ส่วนลด "พิเศษ" and adds the ราคาพิเศษ sub-line. */
+    /** SPECIAL_SQM prints ส่วนลด "พิเศษ" and adds the ราคาพิเศษ sub-line. */
     @Test
     void specialSqmRow_printsPhisetAndTheSubLine() {
         RenderItem item = renderItems(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
@@ -63,7 +63,7 @@ class DealQuotationRenderAdapterV3Test {
             .isEqualTo("(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)");
     }
 
-    /** S1: DIRECT_NET prints "พิเศษ" only when the net actually differs from the list price. */
+    /** DIRECT_NET prints "พิเศษ" only when the net actually differs from the list price. */
     @Test
     void directNetRow_printsPhisetOnlyWhenTheNetDiffersFromTheListPrice() {
         DealQuotationItemDto differs = tileWithPrices(new BigDecimal("2000"), new BigDecimal("777.50"));
@@ -87,7 +87,7 @@ class DealQuotationRenderAdapterV3Test {
             .containsExactly("Transportation Charges from China to Male Port, Maldives");
     }
 
-    /** S3: จำนวน −1, an EMPTY หน่วย, positive ราคา/คงเหลือ, negative เป็นเงิน. */
+    /** ADJUSTMENT row: จำนวน −1, an EMPTY หน่วย, positive ราคา/คงเหลือ, negative เป็นเงิน. */
     @Test
     void adjustmentRow_printsMinusOneAndAnEmptyUnit() {
         RenderItem item = renderItems(WastageCalculator.PRICE_MODE_NET, List.of(adjustment())).get(1);
@@ -100,9 +100,9 @@ class DealQuotationRenderAdapterV3Test {
             .containsExactly("ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
     }
 
-    // ── customer header: Thai document's B6 line (bug fix) ─────────────────────────────────
-    // Owner, 2026-10-13: the phone on this line is the ผู้ติดต่อ phone the rep typed on the
-    // quotation (V192.3) and nothing else — the customer-master phone is NOT a fallback. The
+    // ── customer header: Thai document's B6 line ───────────────────────────────────────────
+    // The phone on this line is the ผู้ติดต่อ phone the rep typed on the
+    // quotation and nothing else — the customer-master phone is NOT a fallback. The
     // address still comes from the customer master. `typedPhone` sets the typed one.
 
     @Test
@@ -116,12 +116,12 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(english.phoneLine()).doesNotContain("Tel.").doesNotContain("+960");
     }
 
-    /** Bug fix: the Thai branch of {@code DealQuotationRenderAdapter#toRenderModel} built "เรียน"/
-     * "โทร." but never read {@code quotation.customerAddress()} at all, so every Thai-form
-     * quotation printed with no address even though it is captured correctly on the DTO. The Thai
+    /** The Thai branch of {@code DealQuotationRenderAdapter#toRenderModel} must read
+     * {@code quotation.customerAddress()}, or every Thai-form quotation prints with no address
+     * even though it is captured on the DTO. The Thai
      * template has no free row of its own for an address (unlike the English branch, whose B6
-     * already folds Address/E/Tel into one cell) — so the fix folds the address into that same
-     * โทร. line rather than leaving it unprinted. */
+     * already folds Address/E/Tel into one cell) — so the address is folded into that same
+     * โทร. line. */
     @Test
     void thaiDocument_printsTheCustomerAddressAlongsideThePhoneNumber() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
@@ -143,12 +143,12 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
     }
 
-    // ── QT-2026-0032-1 (2026-09-15): the customer phone's own label ────────────────────────
+    // ── the customer phone's own label ─────────────────────────────────────────────────────
 
-    /** Production bug: B6 printed "โทร. โทร 02 314 354-2" on QT-2026-0032-1. The customer master
-     * row for บริษัท อุณากรรณ จำกัด stores {@code phone = "โทร 02 314 354-2"} — the imported GL&amp;R
-     * directory kept the Thai label INSIDE the value — and this branch prefixes its own. 299 of
-     * 4320 customer rows are shaped that way. Since 2026-10-13 the line prints the TYPED phone,
+    /** B6 must not print "โทร. โทร 02 314 354-2". Customer master
+     * rows can store {@code phone = "โทร 02 314 354-2"} — the imported GL&amp;R
+     * directory kept the Thai label INSIDE the value — and this branch prefixes its own. About
+     * 7% of customer rows are shaped that way. The line prints the TYPED phone,
      * which a rep copies out of that same directory, so the strip still has to hold. */
     @Test
     void thaiDocument_doesNotPrintThePhoneLabelTwiceWhenTheStoredValueCarriesItsOwn() {
@@ -209,11 +209,10 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.phoneLine()).isEqualTo("ที่อยู่ 99/1 ถนนสุขุมวิท กรุงเทพฯ 10110");
     }
 
-    // ── item #1 (2026-09-14): "คุณ" prefix / contact-customer dedupe / organisation detection ──
+    // ── "คุณ" prefix / contact-customer dedupe / organisation detection ─────────────────────
 
-    /** Bug fix: production printed "เรียน คุณบริษัท นันทวัน จำกัด   /   บริษัท นันทวัน จำกัด" because
-     * the contact snapshot WAS the customer name, and this branch prefixed "คุณ" and duplicated it
-     * unconditionally. Once the contact equals the customer (after collapsing whitespace), the
+    /** The contact snapshot can BE the customer name; printing "เรียน คุณบริษัท นันทวัน จำกัด   /
+     * บริษัท นันทวัน จำกัด" would prefix "คุณ" and duplicate it. Once the contact equals the customer (after collapsing whitespace), the
      * contact part must be omitted entirely -- no duplicate, no "/". */
     @Test
     void thaiDocument_attnLine_omitsTheContactPartWhenItIsTheSameAsTheCustomerName() {
@@ -231,7 +230,7 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.attnLine()).isEqualTo("บริษัท นันทวัน จำกัด");
     }
 
-    /** Opus review nit (2026-09-14): a trailing "."/"," typo must not defeat the dedupe either --
+    /** A trailing "."/"," typo must not defeat the dedupe either --
      * the duplicate-name bug this whole fix targets is exactly this kind of near-miss, not a
      * genuinely different name. */
     @Test
@@ -317,9 +316,9 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("   ")).isFalse();
     }
 
-    /** Opus review nit (2026-09-14): "inc"/"llc" are matched with \b word boundaries specifically
+    /** "inc"/"llc" are matched with \b word boundaries specifically
      * so a person's name that merely CONTAINS those letters is never misread as an organisation --
-     * a bare substring check ("Somchai INchana" contains " inc") would have failed this. */
+     * a bare substring check ("Somchai INchana" contains " inc") would fail this. */
     @Test
     void looksLikeOrganisation_doesNotFalsePositiveOnASurnameContainingAMarkerAsASubstring() {
         assertThat(DealQuotationRenderAdapter.looksLikeOrganisation("Somchai Inchana")).isFalse();
@@ -409,12 +408,11 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(sheet.getRow(adjustmentRow).getCell(3).getStringCellValue()).isEmpty();
         assertThat(sheet.getRow(adjustmentRow).getCell(4).getNumericCellValue()).isEqualTo(38198.21);
         // ส่วนลด is empty for the same reason หน่วย is: neither column means anything for a row that
-        // IS the discount. This printed "Net" until 2026-09-11, on the reasoning that ราคา equals
-        // คงเหลือ here — a plausible inference that the owner's QN6900704-2 contradicts, since its
-        // ส่วนลดพิเศษ row leaves the cell blank. Caught by rendering her document back and comparing.
-        // Column G (index 6) is ส่วนลด — see QuotationRenderer's `setStr(sh, r, 6, …)`. An earlier
-        // version of this assertion read cell 5 and passed whether or not the fix was present,
-        // which the mutation check caught.
+        // IS the discount. Printing "Net" on the reasoning that ราคา equals
+        // คงเหลือ here would be wrong: the business's reference quotation leaves the ส่วนลดพิเศษ
+        // row's cell blank.
+        // Column G (index 6) is ส่วนลด — see QuotationRenderer's `setStr(sh, r, 6, …)`; reading
+        // cell 5 would pass whether or not the behaviour is present.
         assertThat(sheet.getRow(adjustmentRow).getCell(6).getStringCellValue()).isEmpty();
         assertThat(sheet.getRow(adjustmentRow).getCell(7).getNumericCellValue()).isEqualTo(38198.21);
         assertThat(sheet.getRow(adjustmentRow).getCell(8).getNumericCellValue()).isEqualTo(-38198.21);
@@ -453,10 +451,10 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(sumAmounts(without)).isEqualByComparingTo("1000.00");
     }
 
-    // ── item #7 (2026-09-14): Thai remark 3 -- per-item lead-time grouping ──────────────────
+    // ── Thai remark 3 -- per-item lead-time grouping ────────────────────────────────────────
 
-    /** ALWAYS the per-item form now (owner feedback #7), even for a single item/group -- the old
-     * "3.กำหนดส่งมอบสินค้า : ..." header word is also gone. */
+    /** ALWAYS the per-item form, even for a single item/group -- there is no
+     * "3.กำหนดส่งมอบสินค้า : ..." header word. */
     @Test
     void leadTime_aSingleItem_printsThePerItemFormEvenForOneGroup() {
         QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(30, 45)));
@@ -520,10 +518,9 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(m.remarkLines()).hasSize(7).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
     }
 
-    /** No item carries a lead time at all -- owner feedback (2026-09-14) supersedes the earlier
-     * "print a visible blank" behaviour: the line is now dropped ENTIRELY (not left blank), and
-     * every remark after it renumbers down by one -- exactly 7 lines, old line 4 becomes "3.",
-     * old 5->4, 6->5, 7->6, 8->7, with no gap. */
+    /** No item carries a lead time at all -- the line is dropped ENTIRELY (not left blank), and
+     * every remark after it renumbers down by one -- exactly 7 lines, the would-be line 4 becomes
+     * "3.", 5->4, 6->5, 7->6, 8->7, with no gap. */
     @Test
     void leadTime_noItemHasOne_dropsTheLineEntirelyAndRenumbers() {
         QuotationRenderModel m = model(WastageCalculator.PRICE_MODE_NET, List.of(tileWithLeadTime(null, null)));
@@ -601,9 +598,9 @@ class DealQuotationRenderAdapterV3Test {
             .as("row 31 must not carry the subtotal in the 7-line render").isTrue();
     }
 
-    // ── item #3 (2026-09-14): a calculation line that is 66 String.length() chars but only 59
+    // ── a calculation line that is 66 String.length() chars but only 59
     // VISIBLE ones must not wrap at budget 62 -- see QuotationRenderer#visibleLength's Javadoc for
-    // the measured figures. Through the REAL adapter and REAL renderer, per the task's own ask. ─
+    // the measured figures. Through the REAL adapter and REAL renderer. ─────────────────────
 
     /** Production printed this exact calculation line split across two rows -- "(บรรจุ 4" on the
      * head row and "แผ่น/กล่อง)" alone on a continuation row. It must now land on ONE row, intact,
@@ -828,7 +825,7 @@ class DealQuotationRenderAdapterV3Test {
             false, items, Instant.parse("2026-09-11T00:00:00Z"), null);
     }
 
-    // ── V179 (owner feedback #4, 2026-09-14): ผู้พิมพ์/พนักงานขาย print-name override ──────────
+    // ── ผู้พิมพ์/พนักงานขาย print-name override ────────────────────────────────────────────────
 
     @Test
     void printedByName_usesRealCreatedByName_whenDisplayIdIsNull() {
@@ -839,7 +836,8 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(DealQuotationRenderAdapter.printedByName(q, true)).isEqualTo("Jintana");
     }
 
-    /** The owner's own example: "ผู้พิมพ์ อยากให้แสดงเป็นจินตนา ส่วนพนักงานขายอยากให้แสดงเป็น ชนิดา". */
+    /** The ผู้พิมพ์ slot can show a display name different from the real creator, while the
+     * พนักงานขาย slot shows a different person's name. */
     @Test
     void printedByName_usesTheDisplayName_whenDisplayIdIsSet() {
         DealQuotationDto q = quotationWithDisplayNames(
@@ -912,7 +910,7 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.signatories().printedBy()).isEqualTo("แอดมิน");
     }
 
-    /** QA-31 (Ploy 2026-10-30): a rep with no phone on file printed "Sales/{name} T." with nothing
+    /** A rep with no phone on file must not print "Sales/{name} T." with nothing
      * after the T. — the " T." goes when there is no number to follow it. */
     @Test
     void toRenderModel_salesLine_dropsTheDanglingT_whenTheRepHasNoPhone() {
@@ -946,12 +944,12 @@ class DealQuotationRenderAdapterV3Test {
             List.<DealQuotationItemDto>of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
 
-    // ── fix (2026-09-15): "คุณ" is not doubled when the contact name already carries one ────────
+    // ── "คุณ" is not doubled when the contact name already carries one ──────────────────────────
 
-    /** The exact production value: contact_name = "คุณปิยพร เมืองจีน" printed "เรียน
-     * คุณคุณปิยพร เมืองจีน" because #looksLikeOrganisation correctly said this is NOT an
-     * organisation (so the "คุณ" branch fired) but nothing checked whether the name already
-     * carried its own honorific. */
+    /** A contact_name that already starts with "คุณ" must not print "เรียน คุณคุณ…":
+     * #looksLikeOrganisation correctly says it is NOT an organisation (so the "คุณ" branch
+     * fires), so the branch must also check whether the name already carries its own
+     * honorific. */
     @Test
     void thaiDocument_attnLine_doesNotDoublePrefixAnHonorificTheContactNameAlreadyCarries() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
@@ -993,7 +991,7 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("จรินางค์ ใจดี")).isFalse();
     }
 
-    /** Review fix (2026-09-15): a plain {@code startsWith} misread these real Thai given names --
+    /** A plain {@code startsWith} would misread these real Thai given names --
      * each one happens to OPEN with the same letters as an honorific, but the letter right after
      * is a Thai FOLLOWING vowel sign that attaches to the preceding consonant, so the "honorific"
      * is really just the opening syllable of one longer word. These must NOT be read as
@@ -1015,10 +1013,10 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(DealQuotationRenderAdapter.hasThaiHonorificPrefix("คุณเอก")).isTrue();
     }
 
-    /** Review fix (2026-09-15), end-to-end: "คุณากร ใจดี" is a real given name, not an
+    /** End-to-end: "คุณากร ใจดี" is a real given name, not an
      * already-honorific-prefixed one -- the attn line must still gain its OWN "คุณ", the same as
-     * any other honorific-less contact. Before the boundary check this printed with no "คุณ" at
-     * all, having (wrongly) read "คุณากร" as "already has one". */
+     * any other honorific-less contact. Without the boundary check it would print with no "คุณ"
+     * at all, wrongly reading "คุณากร" as "already has one". */
     @Test
     void thaiDocument_attnLine_stillPrefixesKhunForARealNameThatMerelyOpensWithTheSameLetters() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
@@ -1036,9 +1034,9 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.attnLine()).isEqualTo("คุณธนพล ใจดี   /   บริษัท ทดสอบ จำกัด");
     }
 
-    // ── Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ signature slot NEVER
-    // auto-fills from contactName/customerName any more — see
-    // DealQuotationRenderAdapter#orderedByName's own Javadoc for the full history. It prints
+    // ── the ผู้สั่งซื้อ signature slot NEVER
+    // auto-fills from contactName/customerName — see
+    // DealQuotationRenderAdapter#orderedByName's own Javadoc. It prints
     // ONLY a rep's manually-typed DealQuotationDto#orderedByName, or the dotted placeholder when
     // that is blank — regardless of what contactName/customerName carry.
 
@@ -1050,9 +1048,9 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.signatories().orderedBy()).isEqualTo("คุณวิชัย มั่นคง");
     }
 
-    /** F2-reversal regression guard: a contact name AND a customer name are both present, but no
+    /** A contact name AND a customer name are both present, but no
      * manual name was typed — the slot must stay null (the dotted placeholder), NOT silently fall
-     * back to either name the way it did before this reversal. */
+     * back to either name. */
     @Test
     void signatories_orderedBy_staysNullWhenNoManualNameEvenWithContactAndCustomerPresent() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
@@ -1074,7 +1072,7 @@ class DealQuotationRenderAdapterV3Test {
                 .withOrderedByName("  คุณวิชัย มั่นคง  "))).isEqualTo("คุณวิชัย มั่นคง");
     }
 
-    /** F2-reversal regression guard, at the direct-method level: contactName/customerName present,
+    /** The same guard at the direct-method level: contactName/customerName present,
      * orderedByName blank/null -- must return null (never fall back to either), and specifically
      * must never equal the contact or customer name. */
     @Test
@@ -1108,8 +1106,8 @@ class DealQuotationRenderAdapterV3Test {
             .isNotEqualTo("สมหญิง ใจดี");
     }
 
-    /** ⚠️ Owner-directed reversal of V167/F2 (2026-09-26), the full scenario the frontend change
-     * produces on EVERY quotation now that the required contact-picker is gone: contactName is
+    /** ⚠️ The full scenario the frontend produces on EVERY quotation, since the contact-picker
+     * is not required: contactName is
      * null (DealQuotationService#resolveContact's blank snapshot), so the greeting falls back to
      * printing the customer alone -- exactly as {@link #printContactPart} already guarantees for a
      * blank contactName -- while the ผู้สั่งซื้อ signature slot prints whatever the rep typed into
@@ -1135,11 +1133,11 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.signatories().orderedBy()).isNull();
     }
 
-    // ── 2026-09-15 made the contact phone/e-mail a fallback; 2026-10-13 removed every fallback ──
+    // ── no fallback to the customer or contact phone/e-mail ──────────────────────────────────
 
-    /** The 2026-09-15 production example (customer_phone=null, contact_phone="062-328-7555",
-     * contact_email="qs.twcfurline@gmail.com") prints NEITHER again — on purpose now: with nothing
-     * typed under ผู้ติดต่อ the line carries no phone and no e-mail, in either language. */
+    /** A customer with a stored phone and a contact with a stored phone and e-mail prints
+     * NEITHER: with nothing typed under ผู้ติดต่อ the line carries no phone and no e-mail, in
+     * either language. */
     @Test
     void nothingTyped_printsNeitherTheCustomerNorTheContactPhoneNorEmail() {
         for (String language : new String[] {null, WastageCalculator.DOCUMENT_LANGUAGE_EN}) {
@@ -1187,7 +1185,7 @@ class DealQuotationRenderAdapterV3Test {
             false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
 
-    // ── fix (2026-09-15): 0% deposit no longer prints a phantom deposit clause ──────────────────
+    // ── 0% deposit prints no phantom deposit clause ──────────────────────────────────────────
 
     @Test
     void thaiDocument_note2_zeroDeposit_creditVariant_statesFullPaymentOnCredit() {
@@ -1228,9 +1226,9 @@ class DealQuotationRenderAdapterV3Test {
             .isEqualTo("2.บริษัทฯ ขอรับมัดจำ 30% เมื่อสั่งซื้อสินค้า ส่วนที่เหลือเครดิต 30 วัน");
     }
 
-    // ── Wording-scan fix 2 (2026-09-17): 100% deposit is FULL PAYMENT, not "a deposit with a
-    // remainder" -- 6 real quotations printed "...ส่วนที่เหลือขอรับก่อนส่งมอบสินค้าหรือ..." on TOP of
-    // a 100% figure. Deliberately different from the Item 4 (0%) branch above -- 100% is charged
+    // ── 100% deposit is FULL PAYMENT, not "a deposit with a remainder": the
+    // "...ส่วนที่เหลือขอรับก่อนส่งมอบสินค้าหรือ..." text must not print on TOP of
+    // a 100% figure. Deliberately different from the 0% branch above -- 100% is charged
     // UP FRONT, 0% is charged with none up front at all. ──────────────────────────────────────
 
     @Test
@@ -1289,7 +1287,7 @@ class DealQuotationRenderAdapterV3Test {
             false, List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
 
-    // ── Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16): the three fixed payment terms ────
+    // ── "ไม่รับมัดจำ": the three fixed payment terms ────────────────────────────────────────────
 
     @Test
     void thaiDocument_note2_zeroDeposit_beforeDeliveryTerm() {
@@ -1305,8 +1303,8 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.remarkLines().get(1)).isEqualTo("2.บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า");
     }
 
-    /** Owner correction 2026-09-16: "เมื่อ..." FIRST, then "หรือก่อน...", the REVERSE order of the
-     * other two terms' own "ก่อน...หรือเมื่อ..." phrasing (and of the pre-feature legacy fallback
+    /** "เมื่อ..." FIRST, then "หรือก่อน...", the REVERSE order of the
+     * other two terms' own "ก่อน...หรือเมื่อ..." phrasing (and of the legacy fallback
      * text, {@link #thaiDocument_note2_zeroDeposit_deliveryVariant_statesFullPaymentBeforeOrUponDelivery}). */
     @Test
     void thaiDocument_note2_zeroDeposit_onOrBeforeDeliveryTerm() {
@@ -1374,7 +1372,7 @@ class DealQuotationRenderAdapterV3Test {
             List.of(), Instant.parse("2026-09-11T00:00:00Z"), null);
     }
 
-    // ── Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) ─────────────
+    // ── "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ" ─────────────────────────────────────────────────────
 
     /** Ticked: never prefixes "คุณ", whatever {@code #looksLikeOrganisation}/
      * {@code #hasThaiHonorificPrefix} would otherwise decide -- a plain person's name that WOULD

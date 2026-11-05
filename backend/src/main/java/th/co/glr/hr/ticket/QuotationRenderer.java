@@ -45,39 +45,37 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 // Rule: open the real template, write ONLY the cells listed below, never createRow/createCell
 // on rows that already exist in the template, never call setCellType (wipes style).
 //
-// Everything renders through ONE rich model (QuotationRenderModel) now. The legacy/PCR
+// Everything renders through ONE rich model (QuotationRenderModel). The legacy/PCR
 // toXls/toXlsx/toPdf(TicketDto, QuotationDto, CustomerDto) overloads are thin wrappers
-// (#buildLegacyModel) that build that model EXACTLY the way this class used to compute things
-// inline, so their output stays content-equivalent to before this refactor — one description
-// line per item, only the original three dynamic remark lines, blank signatory names, the
-// template's original signature labels. The direct-deal path (V165,
-// th.co.glr.hr.dealquotation.DealQuotationRenderAdapter) builds the same model with multi-line
+// (#buildLegacyModel) that build that model with one description
+// line per item, only the original three dynamic remark lines, blank signatory names, and the
+// template's original signature labels. The direct-deal path
+// (th.co.glr.hr.dealquotation.DealQuotationRenderAdapter) builds the same model with multi-line
 // item descriptions, location headings, all 8 remark lines, real signatory names, and the
 // approver's signature image — see docs/sales/quotation-v2-plan.md's "Printed lines" section.
 //
-// Quotation v2 (2026-09-10): toXls/toXlsx ALWAYS render through this POI/XLS template (both
-// paths, XLS output unchanged). toPdf(QuotationRenderModel) — the direct-deal path — prints that
+// toXls/toXlsx ALWAYS render through this POI/XLS template (both
+// paths). toPdf(QuotationRenderModel) — the direct-deal path — prints that
 // SAME sheet through one of two engines selected by app.quotation.pdf-renderer: LibreOffice
 // (default) or headless Chromium drawing the sheet as HTML (QuotationHtmlDocument /
 // th.co.glr.hr.common.sheet.SheetHtmlRenderer). toPdf(TicketDto, QuotationDto, CustomerDto) — the
-// legacy/PCR path — is untouched: XLS through LibreOffice. See toPdf(QuotationRenderModel).
+// legacy/PCR path — is XLS through LibreOffice. See toPdf(QuotationRenderModel).
 //
-// Terms & conditions page (owner decision 2026-09-14): toPdf(QuotationRenderModel) — the deal
+// Terms & conditions page: toPdf(QuotationRenderModel) — the deal
 // quotation editor's ดาวน์โหลด PDF button, DealQuotationController's GET .../file?format=pdf, the
 // only quotation flow in production use — appends every page of forms/quotation_terms_and_
 // conditions.pdf onto whatever PDF either engine produced, as the document's final page(s). This
 // is the SAME terms page regardless of document_language (TH/EN) — there is no language branch.
-// It applies ONLY to that one PDF method: toXls/toXlsx (Excel output) are byte-for-byte
-// unchanged, and the legacy toPdf(TicketDto, QuotationDto, CustomerDto) and
-// CustomerQuotationController's PDF are untouched. See #appendTermsAndConditionsPage.
+// It applies ONLY to that one PDF method: toXls/toXlsx (Excel output) do not get it,
+// nor does the legacy toPdf(TicketDto, QuotationDto, CustomerDto) or
+// CustomerQuotationController's PDF. See #appendTermsAndConditionsPage.
 @Component
 public class QuotationRenderer {
     private static final Logger log = LoggerFactory.getLogger(QuotationRenderer.class);
 
     /** The deposit percent the legacy PDF prints when its {@code QuotationDto} carries none. A
      * pricing-chain legacy quotation never carries one ({@code CustomerQuotationService
-     * #loadRenderContext}), so its PDF always prints this, and its deposit notice bills it (owner
-     * ruling 2026-10-23). */
+     * #loadRenderContext}), so its PDF always prints this, and its deposit notice bills it. */
     public static final int LEGACY_DEPOSIT_PERCENT = 50;
 
     // Real company XLS template — sheet "Update"
@@ -88,7 +86,7 @@ public class QuotationRenderer {
         "กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"
     };
 
-    // ── quotation v3b (2026-09-11): the ENGLISH document, form F-SM-008 (01) ──────────────────
+    // ── the ENGLISH document, form F-SM-008 (01) ──────────────────────────────────────────────
     //
     // ⚠️ THERE IS NO F-SM-008 TEMPLATE FILE. templates/ holds exactly one quotation template —
     // quotation_template.xls, the Thai F-SM-002 (03) — and this class works by FILLING it. The
@@ -131,11 +129,8 @@ public class QuotationRenderer {
     // The ISO form number each document prints in the form's own tag cell (#writeFormTag) — the
     // last cell of the last printed row, i.e. the bottom-right corner of the page.
     //
-    // ANSWERED 2026-10-06 (was "⚠️ ASK-THE-OWNER" here): the Thai render used to BLANK the F-SM-002
-    // tag ("not customer-facing") while the English one printed F-SM-008 (01). Sales feedback
-    // Admin #6 — "เลขแบบฟอร์มเอกสาร ISO F-SM-002 (03) จำเป็นต้องใส่หรือไม่ // ต้องเพิ่ม" — and the owner the
-    // same day: "just put the ISO F-SM-002 (03) as a footer on the bottom right of the page". Both
-    // documents now print their own number, in the same cell.
+    // Both documents print their own number (Thai F-SM-002 (03), English F-SM-008 (01)) as a
+    // footer on the bottom right of the page, in the same cell.
     //
     // Written from these constants rather than left to whatever the template cell holds: the
     // footer block is captured, cleared and re-placed on two of the three layout branches, and a
@@ -169,25 +164,24 @@ public class QuotationRenderer {
                                                              // the "(name)" row under the signature
                                                              // labels once blanked (see writeSignatureBlock)
     private static final int LABELS_ROW = 44;               // A45 "ผู้พิมพ์___...ผู้สั่งซื้อ___" (all four in ONE cell)
-    // layout-spec §5: S0 (the "ตกลงสั่งซื้อ…" line, one row above the labels) and S3 (the "วันที่…"
-    // line, one row below the names) — S1=LABELS_ROW, S2=SALESPERSON_FORMULA_ROW.
+    // Signature block rows: the "ตกลงสั่งซื้อ…" line sits one row above the labels, the "วันที่…"
+    // line one row below the names (LABELS_ROW and SALESPERSON_FORMULA_ROW).
     private static final int ORDER_LINE_ROW = 42; // D43 "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น"
     private static final int DATE_ROW = 46;        // A47 "วันที่…." (all four in ONE cell, pre-rebuild)
     private static final int FORM_TAG_ROW = 47;             // I48 the ISO form number (#writeFormTag)
     private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
 
     // Header value cells (ฝ่าย / เลขที่อ้างอิง / หน่วยงาน) — found by dumping the template with POI;
-    // see the class Javadoc / PR body for the raw dump. H3/H4/H5 are the template's own LABEL
+    // H3/H4/H5 are the template's own LABEL
     // cells ("ฝ่าย" / "เลขที่อ้างอิง" / "หน่วยงาน"); I3/I4/I5 are their value slots. The labels are
     // the template's text except where #toXls says otherwise: it clears H3 on every document (the
     // next paragraph) and H5 on a v2 document with no unit code, and on an English document
-    // #writeEnglishHeaderLabels rewrites H4 and H5. A prior version of this renderer
-    // mis-attributed I3 as an unused "salesperson code" cell and blanked H5 (the หน่วยงาน LABEL)
-    // to "" — both fixed here: I3 is the ฝ่าย value, and H5 is cleared only in the one case above.
+    // #writeEnglishHeaderLabels rewrites H4 and H5. I3 is the ฝ่าย value (not a "salesperson
+    // code" cell), and H5 (the หน่วยงาน LABEL) is cleared only in the one case above.
     //
-    // 2026-10-06 — the ฝ่าย line is GONE from the printed document. Sales feedback Admin 1d: the
-    // ฝ่าย box was filled wrongly (some reps typed their own name into it) — "ไม่มีดีกว่า"; take it
-    // off the form and the printout. Owner the same day: "remove ฝ่าย field completely". So H3
+    // The ฝ่าย line is removed from the printed document: reps filled the
+    // ฝ่าย box wrongly (some typed their own name into it), so the field is gone from the form
+    // and the printout. So H3
     // (the template's own "ฝ่าย" text; "Dept." on the English form) and I3 (its value) print
     // NOTHING on every document this class renders — Thai, English, v2 and legacy alike, whatever
     // the model's deptCode holds. DEPT_VALUE_ROW is kept only to name the two cells that are
@@ -235,47 +229,44 @@ public class QuotationRenderer {
         REMARK_HEAD_ROWS[REMARK_HEAD_ROWS.length - 1] + 1; // 37 — the always-blank trailing row
     private static final int REMARK_V2_COMPACT_SHIFT =
         -(REMARK_V2_COMPACT_LAST_UNUSED - REMARK_V2_COMPACT_FIRST_UNUSED + 1); // -7
-    // Owner feedback (2026-09-14): DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber may now
+    // DealQuotationRenderAdapter#dropLeadTimeLineAndRenumber may
     // hand this renderer a 7-line v2 remarks list (the lead-time line dropped when nothing on the
-    // document carries one) instead of always exactly 8. A v2/full-remarks render is therefore
+    // document carries one) instead of exactly 8. A v2/full-remarks render is therefore
     // recognised at "8 lines, OR one fewer" — never at the legacy 3-line count, which stays on the
     // untouched continuation-row path below.
     private static final int REMARK_V2_MIN_LINES = REMARK_HEAD_ROWS.length - 1; // 7
-    // html-fidelity-spec §8 (owner, 2026-09-10): the remark block is its OWN closed box inside the
+    // The remark block is its OWN closed box inside the
     // form — "หมายเหตุ :" (FOOTER_START) plus lines 1–8 — spanning columns B..H: a top rule B..H
     // directly under the last item line, the A|B separator as its left edge, the H|I separator as
     // its right edge, no interior column separators, closed at the bottom by the form's own A..I
     // rule under line 8 (#compactRemarksSection). ลำดับ (A) and เป็นเงิน (I) keep their own
     // verticals down to that rule, reading as open columns beside the box. So every remark row —
     // the label row too — is ONE merged B..H cell, not B..I: a merge ending at I swallowed the H|I
-    // separator (a merged region draws no interior edge), which is exactly what the owner's crop
-    // rejected. See #openRemarkBox.
+    // separator (a merged region draws no interior edge). See #openRemarkBox.
     private static final int REMARK_BOX_FIRST_COL = LABEL_VALUE_COL; // B
     private static final int REMARK_BOX_LAST_COL = 7;                // H
     // Width-aware wrap budget for a remark head+continuation row pair (H3): measured in
     // characters against column B's own width at the template's default font — a generous 62 (not
     // the theoretical max the raw pixel width would allow) because Thai glyph clusters render
     // noticeably wider than a fixed-width character estimate would predict; calibrated against
-    // the reviewer's own reference render, whose overflowing line 3 wrapped at roughly this point.
+    // a reference render whose overflowing line 3 wrapped at roughly this point.
     private static final int REMARK_LINE_CHAR_BUDGET = 62;
 
     // Items that fit the template's native item-row budget (rows 9..21) keep the footer anchored
     // at its native rows on a single page — derived from the layout, not a magic number. This is
-    // now a ROW budget (emitted rows: heading rows + item rows + continuation rows), not an item
+    // a ROW budget (emitted rows: heading rows + item rows + continuation rows), not an item
     // count — a legacy render's rows always equal its item count (no headings, one description
-    // line each), so this stays numerically identical to before for that path.
+    // line each).
     private static final int NATIVE_ITEM_CAPACITY = FOOTER_START - ITEM_START_ROW; // = 13
 
     // ── dynamic-layout geometry (all lengths in points; see the layout equations in toXls) ──
     private static final double A4_WIDTH_PT  = 595.3;
     private static final double A4_HEIGHT_PT = 841.9;
     // Below this fraction of natural size a quote paginates instead of shrinking onto one page.
-    // layout-spec §6/§7: the 5-item reference (Linear GLA-57 — real customer document, single
-    // A4 page, form F-SM-002) has EVERY item's calc line wrapping to 2 rows inside column B (see
-    // #wrapDescriptionLines), which the old 0.72 floor — calibrated before that wrap existed —
-    // rejected (its own onePageScale computes ≈0.60 for that exact fixture), paginating a document
-    // the owner rejected specifically for NOT being one page. Lowered to fit that real reference
-    // (with headroom below its ≈0.60) while still correctly paginating a genuinely long quote — a
+    // A 5-item real customer document (single A4 page, form F-SM-002) has EVERY item's calc line
+    // wrapping to 2 rows inside column B (see #wrapDescriptionLines), so its onePageScale
+    // computes ≈0.60; a floor above that would paginate a document that must be one page.
+    // The floor leaves headroom below ≈0.60 while still paginating a genuinely long quote — a
     // 12-item render computes ≈0.40, comfortably under this floor either way.
     private static final double MIN_SCALE = 0.55;
     // Money-column sizing: padding chars + width units per char, calibrated so an 8-figure baht total
@@ -316,10 +307,9 @@ public class QuotationRenderer {
             ? "   เลขที่ผู้เสียภาษี : " + customer.taxId() : "";
         String attnLine = contactPart + nullSafe(s.customerName()) + taxIdPart;
 
-        // KNOWN UNFIXED SIBLING (2026-09-14): this legacy/PCR wrapper has the same gap the direct-
-        // deal path's Thai branch just had fixed — customer.address() is available here too but is
-        // never printed. Left as-is: this is the legacy TicketDto/QuotationDto path (predates the
-        // v2 direct-deal model this class's own Javadoc documents), out of scope for that fix.
+        // KNOWN GAP: unlike the direct-deal path's Thai branch, this legacy/PCR wrapper never
+        // prints customer.address(), though it is available here. Left as-is: this is the legacy
+        // TicketDto/QuotationDto path, which predates the v2 direct-deal model.
         String phonePart = customer != null && customer.phone() != null && !customer.phone().isBlank()
             ? "Phone " + customer.phone() : "";
 
@@ -378,8 +368,8 @@ public class QuotationRenderer {
             // rows still carry the template's own baked tile-oriented text.
             boolean v2CompactRemarks = model.signatureLabelsV2()
                 && (remarkLineCount >= REMARK_V2_MIN_LINES || model.forceCompactRemarks());
-            // Owner feedback (2026-09-14): a 7-line render (the lead-time line dropped) removes ONE
-            // extra row versus today's fixed -7 — see #remarkV2CompactShift/#compactRemarksSection.
+            // A 7-line render (the lead-time line dropped) removes ONE
+            // extra row versus the fixed -7 — see #remarkV2CompactShift/#compactRemarksSection.
             int footerShift = v2CompactRemarks ? remarkV2CompactShift(remarkLineCount) : 0;
             if (v2CompactRemarks) {
                 compactRemarksSection(sh, remarkLineCount);
@@ -412,59 +402,56 @@ public class QuotationRenderer {
             // English month NAME and a COMMON-era year. #englishDate and #thaiDate sit next to each
             // other at the bottom of this class for exactly that reason.
             setStr(sh, 3, 1, english ? englishDate(model.issueDate()) : thaiDate(model.issueDate()));
-            // I3 was ฝ่าย / Dept. — never printed any more (see DEPT_VALUE_ROW). Written as the
-            // empty string, exactly what a blank deptCode has always produced here, so a document
-            // that never had a department renders byte-for-byte as it did; model.deptCode() is
+            // I3 was ฝ่าย / Dept. — never printed (see DEPT_VALUE_ROW). Written as the
+            // empty string, which is what a blank deptCode produces; model.deptCode() is
             // deliberately NOT read.
             setStr(sh, DEPT_VALUE_ROW, VALUE_COL, "");                           // I3 — (ฝ่าย / Dept., removed)
             setStr(sh, NUMBER_VALUE_ROW, VALUE_COL, nullSafe(model.number()));   // I4 — เลขที่อ้างอิง / Ref.
             setStr(sh, UNIT_VALUE_ROW, VALUE_COL, nullSafe(model.unitCode()));   // I5 — หน่วยงาน / D.Co.
             // H3, the ฝ่าย label, is cleared UNCONDITIONALLY — filled or blank, v2 or legacy — because
-            // the line itself was removed from the document ("remove ฝ่าย field completely"; see
+            // the line itself is removed from the document (see
             // DEPT_VALUE_ROW). That deliberately includes the legacy document, which only ever
-            // printed the template's bare "ฝ่าย" with nothing after it: same form, same ruling.
+            // printed the template's bare "ฝ่าย" with nothing after it: same form, same rule.
             clearCell(sh, DEPT_VALUE_ROW, SALES_LINE_COL); // H3 — the ฝ่าย label, on every document
-            // H5, the หน่วยงาน label, follows its value (2026-09-16, when หน่วยงาน / ผู้ออกแบบ became
-            // optional on the deal, commit 3003bd0c). With no unit code the value cell above prints
+            // H5, the หน่วยงาน label, follows its value (หน่วยงาน / ผู้ออกแบบ are
+            // optional on the deal). With no unit code the value cell above prints
             // blank via nullSafe, and the label left on its own — the Thai TEMPLATE's baked-in
             // "หน่วยงาน", or the "D.Co." #writeEnglishHeaderLabels wrote a few lines above — reads as
             // a field the rep forgot to fill rather than one that is genuinely inapplicable.
             // Clearing it here, AFTER both the Thai template's own text and the English overwrite
             // have been decided, handles both languages with the one guard: when filled, the cell
-            // is not touched, so a filled document renders byte-for-byte as before.
+            // is not touched.
             //
-            // Opus review fix (2026-09-16, F1): gated on model.signatureLabelsV2(). unitCode became
+            // Gated on model.signatureLabelsV2(). unitCode is
             // optional on the DEAL aggregate (DealQuotationRenderAdapter's caller), not on the
             // legacy TicketDto/QuotationDto shape: #buildLegacyModel above hands this method
             // unitCode=null UNCONDITIONALLY for every legacy/PCR ticket quotation (there is no such
-            // field on TicketDto/QuotationDto to read), so an ungated guard would have started
-            // clearing H5 on every legacy document ever rendered, not just the ones a rep
-            // deliberately left blank — a silent behaviour change to a document nobody asked to
-            // touch. signatureLabelsV2 is this class's own established discriminator for "is this
+            // field on TicketDto/QuotationDto to read), so an ungated guard would clear
+            // H5 on every legacy document, not just the ones a rep
+            // deliberately left blank. signatureLabelsV2 is this class's own established discriminator for "is this
             // the v2/direct-deal render" (see that field's Javadoc on QuotationRenderModel):
             // DealQuotationRenderAdapter#toRenderModel passes true alongside the real
             // quotation.unitCode(), #buildLegacyModel passes false alongside its hardcoded null.
-            // Legacy documents keep the template's baked-in หน่วยงาน label exactly as they always
-            // have.
+            // Legacy documents keep the template's baked-in หน่วยงาน label.
             if (model.signatureLabelsV2() && (model.unitCode() == null || model.unitCode().isBlank())) {
                 clearCell(sh, UNIT_VALUE_ROW, SALES_LINE_COL); // H5 label
             }
-            // layout-spec §3: SALES_LINE_COL (H) is the SAME physical column #sizeMoneyColumns
-            // sizes for the "net" money figure — a previous version of this fix WIDENED that data
-            // column to fit "Sales/{name} T.{phone}", which made คงเหลือ absurdly wide on every
+            // SALES_LINE_COL (H) is the SAME physical column #sizeMoneyColumns
+            // sizes for the "net" money figure — widening that data
+            // column to fit "Sales/{name} T.{phone}" would make คงเหลือ absurdly wide on every
             // row, not just this header line. Merge H6:I6 only (never widen a DATA column for
             // header-only text) — column G on this row is already claimed by the template's own
             // B6:G6 phone-line merge (#PHONE_ROW is the SAME row), so the merge cannot widen
-            // leftward without colliding with it (confirmed: addMergedRegion throws on the
+            // leftward without colliding with it (addMergedRegion throws on the
             // overlap). H:I alone (≈154px) is too narrow for "Sales/{name} T.{phone}" at the
-            // template's normal font, so the last character clipped at the page's right edge
-            // (reviewer's own reference render) — right-align + shrink-to-fit instead, the same
+            // template's normal font, so the last character would clip at the page's right edge
+            // — right-align + shrink-to-fit instead, the same
             // built-in answer #setCentered already uses for the signature block's narrow ranges.
             mergeIfAbsent(sh, SALES_LINE_ROW, SALES_LINE_ROW, SALES_LINE_COL, SALES_LINE_COL + 1);
             setRightAligned(sh, SALES_LINE_ROW, SALES_LINE_COL, nullSafe(model.salesLine())); // H6:I6
             setStr(sh, ATTN_ROW, LABEL_VALUE_COL, nullSafe(model.attnLine()));       // B5
-            // Opus review of the address-line fix (2026-09-14): B6:G6 is a MERGED cell that clips
-            // overflow rather than wrapping, and #phoneLine now regularly carries an address AND a
+            // B6:G6 is a MERGED cell that clips
+            // overflow rather than wrapping, and #phoneLine regularly carries an address AND a
             // phone number on both languages (ที่อยู่/Address + โทร./Tel, folded onto this one line
             // because neither template has a free row of its own — see DealQuotationRenderAdapter).
             // A real Bangkok office address (building + floor) plus a phone number measures past
@@ -473,18 +460,17 @@ public class QuotationRenderer {
             // #setRightAligned/#setCentered already use for their own narrow ranges.
             setStrShrinkToFit(sh, PHONE_ROW, LABEL_VALUE_COL, nullSafe(model.phoneLine())); // B6
             if (model.hideProjectLine()) {
-                // Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The
+                // The project name can be hidden on the quotation (ไม่แสดงชื่อโครงการ). The
                 // template's B8 is not empty: it holds the literal label "Project  : ", which the
                 // branch below only ever OVERWRITES. Leaving the cell alone would print that bare
                 // label; a hidden project prints nothing there at all. Never true on the legacy
                 // path, nor for a document whose name is merely blank — see
-                // QuotationRenderModel#hideProjectLine for why those keep today's output.
+                // QuotationRenderModel#hideProjectLine for why those keep their output.
                 setStr(sh, PROJECT_ROW, LABEL_VALUE_COL, "");
             } else if (model.projectName() != null && !model.projectName().isBlank()) {
                 if (model.signatureLabelsV2()) {
-                    // layout-spec §2: "Project : {name}" centred in B on the first body row (v2
-                    // only — legacy keeps its original left-aligned template style, see the class
-                    // Javadoc's "stays content-equivalent" guarantee).
+                    // "Project : {name}" centred in B on the first body row (v2
+                    // only — legacy keeps its original left-aligned template style).
                     setCentered(sh, PROJECT_ROW, LABEL_VALUE_COL, "Project  : " + model.projectName());
                 } else {
                     setStr(sh, PROJECT_ROW, LABEL_VALUE_COL, "Project  : " + model.projectName());
@@ -500,10 +486,10 @@ public class QuotationRenderer {
             BigDecimal subtotal = items.stream()
                 .map(RenderItem::amount).filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-            // v3b: the ENGLISH form has NO VAT row at all — no sample shows one — so the VAT here
+            // The ENGLISH form has NO VAT row at all — no sample shows one — so the VAT here
             // is ZERO and the grand total IS the subtotal.
             //
-            // ⚠️ Scope, stated because a mutation check proved it: this LOCAL is not what removes
+            // ⚠️ Scope: this LOCAL is not what removes
             // the VAT row. Its only consumer on the English path is #sizeMoneyColumns below, which
             // sizes column I to the biggest figure the page will show — with a 7% VAT folded in
             // that column comes out over-wide, which is cosmetic, not wrong. #applyEnglishTotals is
@@ -516,14 +502,13 @@ public class QuotationRenderer {
             // ① Size the money columns to the actual numbers so nothing ever clips to "###",
             //    whatever the magnitude. Must run before the width scale below is measured.
             sizeMoneyColumns(sh, items, subtotal.add(vat));
-            // Fix (2026-09-15, production complaint): a revision suffix ("QT-2026-0034-1") was
+            // A revision suffix ("QT-2026-0034-1") would be
             // clipped off เลขที่อ้างอิง / Ref. at I4 -- #sizeMoneyColumns above sizes column I only
-            // from the grand-total FIGURE it also shows there, and never looked at the actual
+            // from the grand-total FIGURE it also shows there, not from the actual
             // TEXT already written at I4 (a few lines above, at NUMBER_VALUE_ROW/VALUE_COL). I is
             // the LAST printed column (right margin 0; SheetHtmlRenderer clips rather than wraps
-            // overflow), so a number whose rendered width exceeds the grand total's silently lost
-            // its tail. Every golden fixture used a suffix-less number ("QT-2026-0099"), which is
-            // why nothing caught this. Must also run before the width scale below is measured, for
+            // overflow), so a number whose rendered width exceeds the grand total's would silently
+            // lose its tail. Must also run before the width scale below is measured, for
             // the same reason #sizeMoneyColumns must.
             fitColumnToText(sh, NUMBER_VALUE_ROW, VALUE_COL, model.number());
 
@@ -532,10 +517,9 @@ public class QuotationRenderer {
             applyMargins(sh);
 
             boolean alwaysShowSeq = model.signatureLabelsV2();
-            // GLA-75: every item's printed lines AND its picture rows, decided ONCE here and read
+            // Every item's printed lines AND its picture rows, decided ONCE here and read
             // by #countEmittedRows, #fillItems and #insertNoSplitPageBreaks alike, so the three
-            // can never disagree about how many rows an item takes (they used to each re-derive
-            // the wrap). Column B's width is final by now (#sizeMoneyColumns touches E/H/I only).
+            // can never disagree about how many rows an item takes. Column B's width is final by now (#sizeMoneyColumns touches E/H/I only).
             List<ItemLayout> layouts = layoutItems(sh, items, alwaysShowSeq);
             int emittedRows = countEmittedRows(items, layouts);
 
@@ -554,28 +538,28 @@ public class QuotationRenderer {
             } else if (onePageScale(sh, emittedRows, footerShift) >= MIN_SCALE) {
                 double scale = onePageScale(sh, emittedRows, footerShift);
                 delta = layoutFlowing(sh, items, layouts, subtotal, alwaysShowSeq, footerShift, english);
-                // H5: the TEMPLATE carries its own fixed print area (A1:I47, dumped from the raw
-                // file) — layoutFlowing relocates the footer to footerEnd + delta, which for any
-                // delta > 0 sits PAST that stale native range, so the relocated
-                // เงื่อนไข/totals/signature block was silently EXCLUDED from print/PDF output
-                // (still "1 page" — nothing paginated, the content was simply clipped by the print
+                // The TEMPLATE carries its own fixed print area (A1:I47) —
+                // layoutFlowing relocates the footer to footerEnd + delta, which for any
+                // delta > 0 sits PAST that native range, so the relocated
+                // เงื่อนไข/totals/signature block would be silently EXCLUDED from print/PDF output
+                // (still "1 page" — nothing paginated, the content simply clipped by the print
                 // area, not shrunk into view). Extend it every time, exactly like the paginate
-                // branch below already has to.
+                // branch below has to.
                 int idxOnePage = sh.getWorkbook().getSheetIndex(sh);
                 sh.getWorkbook().setPrintArea(idxOnePage, 0, 8, 0, footerEnd + delta);
                 fitToOnePageAtScale(sh, scale * 100.0);
             } else {
                 delta = layoutFlowing(sh, items, layouts, subtotal, alwaysShowSeq, footerShift, english);
-                // The box is closed at the bottom of every PAGE, not under the last item row: a
-                // previous version bordered FOOTER_START + delta - 1 unconditionally, which is
+                // The box is closed at the bottom of every PAGE, not under the last item row:
+                // bordering FOOTER_START + delta - 1 unconditionally is
                 // right only when the footer moves to the next page (then that row IS a page
                 // bottom) and is an interior rule between the last item and หมายเหตุ whenever the
-                // footer stays on the same page — layout-spec §1 forbids interior rules.
+                // footer stays on the same page — interior rules are not allowed.
                 // #insertNoSplitPageBreaks knows exactly where the pages end (it sets every break),
                 // so it closes each page fragment itself; the last page closes under remark line 8
-                // (#compactRemarksSection). (Its older LOW-fix history — bordering through
-                // SUBTOTAL_ROW painted a bordered stub at the top of the next page — still holds:
-                // never stripe the remarks rows.)
+                // (#compactRemarksSection). Never border through
+                // SUBTOTAL_ROW (it paints a bordered stub at the top of the next page) and never
+                // stripe the remarks rows.
                 int idx = sh.getWorkbook().getSheetIndex(sh);
                 sh.getWorkbook().setPrintArea(idx, 0, 8, 0, footerEnd + delta);
                 sh.setRepeatingRows(CellRangeAddress.valueOf("A1:I7"));
@@ -583,18 +567,17 @@ public class QuotationRenderer {
                 // (6,4)) has top+left borders only, and on page 1 the rule under ราคา is drawn by
                 // the Project row's (row 8) own TOP border. A repeated title row on page 2+ sits
                 // on an item row instead, so that stretch of the title's bottom rule was simply
-                // missing there (≈12 mm hole, both engines — caught by HtmlXlsFidelityTest's §7
-                // continuity check). Give every title cell its own bottom rule; on page 1 it
+                // missing there (≈12 mm hole, both engines — HtmlXlsFidelityTest's continuity
+                // check covers it). Give every title cell its own bottom rule; on page 1 it
                 // coincides with row 8's top rule, so nothing is double-drawn.
                 closeItemTableBorders(sh, TITLE_ROW, TITLE_ROW);
                 // The page counter follows the document: "Page 2/3" on the English form, never
-                // the Thai "หน้า" (spotted on the owner-ruling 2026-09-13 English render).
+                // the Thai "หน้า".
                 sh.getFooter().setCenter(english ? "Page &P/&N" : "หน้า &P/&N");
-                // layout-spec §6: "never split an item's lines, the remark block, or the signature
-                // block across pages". LOW's own note here used to record a REVERTED attempt at
-                // this (an unconditional break right before LABELS_ROW landed INSIDE the approver
-                // picture's own row span, decoupling the image from its labels) — #insertNoSplitPageBreaks
-                // fixes that by breaking before the WHOLE relocated footer block as one unit
+                // Never split an item's lines, the remark block, or the signature
+                // block across pages. A break right before LABELS_ROW would land INSIDE the approver
+                // picture's own row span, decoupling the image from its labels —
+                // #insertNoSplitPageBreaks instead breaks before the WHOLE relocated footer block as one unit
                 // (remarks+totals+signature together, never just the signature portion), and by
                 // walking the SAME per-item row accounting #fillItems used, so an item's own
                 // heading+lines never straddle either.
@@ -658,7 +641,7 @@ public class QuotationRenderer {
         return appendTermsAndConditionsPage(pdf);
     }
 
-    // ── terms & conditions page (owner decision 2026-09-14) ──────────────────────────────────
+    // ── terms & conditions page ───────────────────────────────────────────────────────────────
 
     /** Classpath location of the company's terms & conditions form — see the class Javadoc's
      * "Terms & conditions page" note. Package-private so the test can assert its own page count
@@ -886,7 +869,7 @@ public class QuotationRenderer {
                 r++;
             }
 
-            // GLA-75: the rows the item's picture needs beyond its text — BELOW: the picture's own
+            // The rows the item's picture needs beyond its text — BELOW: the picture's own
             // rows under the last line; BESIDE: blank rows only when the text is shorter than the
             // thumbnail. Written as EMPTY continuation rows, so the next item starts below the
             // picture and it can never overlap it (or, for the last item, the remark box).
@@ -940,10 +923,10 @@ public class QuotationRenderer {
     private List<String> wrapDescriptionLines(List<String> lines, int budget) {
         List<String> out = new ArrayList<>();
         for (String line : lines) {
-            // Owner feedback #3 (2026-09-14): measure by VISIBLE length, not String.length() — see
+            // Measure by VISIBLE length, not String.length() — see
             // #visibleLength's Javadoc for why 62 still tripped on a line with only 59 real visible
-            // characters. This is the ITEM path only; #writeRemarks' legacy 3-line path keeps
-            // calling #wrapToWidth directly with String.length(), untouched.
+            // characters. This is the ITEM path only; #writeRemarks' legacy 3-line path
+            // calls #wrapToWidth directly with String.length().
             if (line != null && visibleLength(line) > budget) {
                 out.addAll(wrapItemLineToWidth(line, budget));
             } else {
@@ -971,20 +954,15 @@ public class QuotationRenderer {
         for (int c = 2; c <= 8; c++) clearCell(sh, r, c);
     }
 
-    // H1: underlineCache used to be a FIELD on this class — and this class is a Spring
-    // @Component, i.e. a SINGLETON reused across every render. A CellStyle is tied to the
-    // Workbook instance that created it (workbook.createCellStyle()), and every render opens a
-    // FRESH Workbook from the template (see #toXls). So a second render onto a heading-bearing
-    // model, through the SAME renderer instance, hit a style CACHED from the FIRST render's
-    // workbook — and POI throws "This Style does not belong to the supplied Workbook" the moment
-    // that stale style is applied to a cell in the new one. #approve's own PDF re-render
-    // (DealQuotationService#sendApprovalEmail) is exactly a second render on the same instance,
-    // deferred to run after the approving transaction commits — so this silently killed the
-    // approval email on every quotation whose SECOND item onward carried a location heading,
-    // with the failure swallowed by that method's own (now-fixed, see its Javadoc) catch block.
-    // The cache must live for exactly ONE render call — passed in from #fillItems, which creates
-    // a fresh one every time #toXls runs — never on `this`. #closeItemTableBorders already got
-    // this right; this method was the one holdout on the class.
+    // The underline-style cache must live for exactly one render call, never on this class. This
+    // class is a Spring @Component, i.e. a singleton reused across every render, and a CellStyle
+    // belongs to the Workbook that created it (workbook.createCellStyle()). Every render opens a
+    // fresh Workbook from the template (see #toXls), so a cache held on the instance would hand a
+    // second render a style from the first render's workbook, and POI throws "This Style does not
+    // belong to the supplied Workbook" as soon as it is applied. This matters because the approval
+    // email re-renders the quotation PDF on the same renderer instance after the approving
+    // transaction commits. The cache is created in #fillItems on every #toXls run and passed in
+    // here; #closeItemTableBorders follows the same rule.
     private CellStyle underlinedStyle(Workbook wb, CellStyle base, Map<Short, CellStyle> underlineCache) {
         CellStyle cached = underlineCache.get(base.getIndex());
         if (cached != null) return cached;
@@ -1010,10 +988,10 @@ public class QuotationRenderer {
         BigDecimal qty = item.qty() != null ? item.qty() : BigDecimal.ONE;
         setNum(sh, r, 2, qty.doubleValue());                              // C: qty
         if (item.qtyFormat() != null) {
-            // Owner decision 2026-09-13: the English per-sqm quantity is square metres to 2dp. The
-            // template's C column is a whole-number format, which printed 56.43 as "56" — beside a
+            // The English per-sqm quantity is square metres to 2dp. The
+            // template's C column is a whole-number format, which would print 56.43 as "56" — beside a
             // 3,611.52 amount that no longer multiplies out. Only rows that ask for it get a cloned
-            // style; every other row keeps the template's own cell style untouched.
+            // style; every other row keeps the template's own cell style.
             Cell qtyCell = getOrKeep(sh, r, 2);
             CellStyle base = qtyCell.getCellStyle();
             String key = base.getIndex() + ":" + item.qtyFormat();
@@ -1026,15 +1004,15 @@ public class QuotationRenderer {
             }
             qtyCell.setCellStyle(formatted);
         }
-        // Large-quantity fix (2026-09-16, "when the numbers get a lot, like a million pieces, it
-        // renders ###"): จำนวน/Qty (C) has no width-fitting at all — #shrinkToFitIfOverflow's own
-        // Javadoc has the reproduction and the owner ruling to use shrink-to-fit, not widening.
+        // Large quantities (a million pieces) would render "###": จำนวน/Qty (C) has no
+        // width-fitting — #shrinkToFitIfOverflow's own Javadoc has the reproduction and why it
+        // uses shrink-to-fit, not widening.
         shrinkToFitIfOverflow(sh, r, 2, qtyPreview(qty, item.qtyFormat()));
-        // Quotation v3: a NULL unit still falls back to "แผ่น" (no caller has ever passed null,
-        // so nothing changes for them), but an EXPLICITLY EMPTY unit now prints an empty cell.
-        // That distinction is what the ADJUSTMENT row needs: the owner's ส่วนลดพิเศษ line carries
-        // จำนวน −1 and NO หน่วย, and the previous nullSafe(s, fallback) — which treats blank and
-        // null alike — would have stamped "แผ่น" onto it.
+        // A NULL unit falls back to "แผ่น" (no caller passes null), but an EXPLICITLY EMPTY
+        // unit prints an empty cell.
+        // That distinction is what the ADJUSTMENT row needs: the ส่วนลดพิเศษ line carries
+        // จำนวน −1 and NO หน่วย, and nullSafe(s, fallback) — which treats blank and
+        // null alike — would stamp "แผ่น" onto it.
         setStr(sh, r, 3, item.unit() != null ? item.unit() : "แผ่น");     // D: unit
         setNum(sh, r, 4, orZero(item.unitPrice()));                       // E: unit price
         shrinkToFitIfOverflow(sh, r, 4, moneyPreview(item.unitPrice()));
@@ -1061,18 +1039,18 @@ public class QuotationRenderer {
      * address are already in the file, and B3's own "โทรศัพท์ 0-2711-5995" is reproduced here in
      * international form.
      *
-     * <p>⚠️ ASK-THE-OWNER, and this is why the template's number wins: her two English samples
-     * carry DIFFERENT company phone lines — QN6900902-6 has "Tel. +662 711 5995", QN6900933 has
-     * "Tel. +662 392 1494-95 Fax +662 715 0738". Rather than pick one sample over the other (or
-     * invent a third), this prints the number the TEMPLATE ITSELF carries, which happens to agree
-     * with QN6900902-6. Flagged in the PR for her to confirm which line is current.
+     * <p>⚠️ Unconfirmed with the owner, and this is why the template's number wins: her two English
+     * samples carry DIFFERENT company phone lines — QN6900902-6 has "Tel. +662 711 5995",
+     * QN6900933 has "Tel. +662 392 1494-95 Fax +662 715 0738". Rather than pick one sample over
+     * the other (or invent a third), this prints the number the TEMPLATE ITSELF carries, which
+     * agrees with QN6900902-6. Which line is current still needs her confirmation.
      *
      * <p>The leading spaces on B1/B2/B3 are the template's own centring device (the Thai strings
      * carry 26-28 of them) and are preserved so the English block sits in the same place.
      */
     private void writeEnglishHeaderLabels(Sheet sh) {
         // Company name EXACTLY as both of the owner's English samples print it (QN6900902-6,
-        // QN6900933). This used to read "GL & R TAPS AND TILES CO., LTD.", an invented rendering;
+        // QN6900933), not an invented rendering such as "GL & R TAPS AND TILES CO., LTD.";
         // the registered account name on her bank block ("G.L.& R. Taps and Tiles Co., Ltd.")
         // agrees with her form in substance, so there is no legal-name reason to differ from it.
         setStr(sh, 0, 1, "                          " + EN_COMPANY_NAME);
@@ -1158,8 +1136,8 @@ public class QuotationRenderer {
         setRightAligned(sh, totalRow, 4, EN_GRAND_TOTAL_PREFIX + " (" + currency + ")");
         setNum(sh, totalRow, VALUE_COL, subtotal.doubleValue());
 
-        // Owner ruling 2026-09-13 (2): the two emptied rows must not PRINT at all. Clearing their
-        // content (above) left the template's own cell borders behind, so column I showed two
+        // The two emptied rows must not PRINT at all. Clearing their
+        // content (above) leaves the template's own cell borders behind, so column I would show two
         // empty bordered boxes between the table and Grand Total. Both samples put Grand Total
         // directly under the table box, so the rows are removed from the printed page: every
         // border on them is stripped and they are collapsed to zero height. Zero height rather
@@ -1206,8 +1184,7 @@ public class QuotationRenderer {
      * {@link #EN_FORM_TAG} on the English one.
      *
      * <p>The Thai number printing at all is a visible change to EVERY Thai document, made on
-     * purpose on 2026-10-06 (the ruling is told at {@link #TH_FORM_TAG}) — see
-     * {@code QuotationFormTagTest}.
+     * purpose (see {@link #TH_FORM_TAG} and {@code QuotationFormTagTest}).
      *
      * <p>Nothing else moves. Every layout decision already counted this row whether or not it
      * held text ({@link #onePageScale} sums through {@code FOOTER_END}, and
@@ -1276,7 +1253,7 @@ public class QuotationRenderer {
     private void writeRemarks(Sheet sh, List<String> remarkLines, boolean full) {
         if (remarkLines == null) return;
         if (full) {
-            // layout-spec §3: 8 (or, owner feedback 2026-09-14, 7 when the lead-time line was
+            // 8 (or 7 when the lead-time line was
             // dropped) CONSECUTIVE rows starting at REMARK_HEAD_ROWS[0] — the compaction in
             // #compactRemarksSection has already removed the now-unused continuation/trailing rows
             // (plus, in the 7-line case, the now-unused 8th packed slot too), so this range abuts
@@ -1288,10 +1265,10 @@ public class QuotationRenderer {
                 setStr(sh, row, LABEL_VALUE_COL, remarkLines.get(i));
                 mergeRemarkRow(sh, row);
             }
-            // Owner feedback (2026-09-14): the box's bottom edge sits on the LAST line actually
+            // The box's bottom edge sits on the LAST line actually
             // written, not always REMARK_HEAD_ROWS[0] + 7 — a 7-line list would otherwise leave the
             // (unwritten) 8th packed row sitting inside the box as a blank gap. Clamped to
-            // REMARK_HEAD_ROWS.length (Opus review nit, 2026-09-15): a caller that ever handed this
+            // REMARK_HEAD_ROWS.length: a caller that ever handed this
             // MORE than 8 lines would otherwise open the box past the packed slots entirely — see
             // #clampToPackedSlots.
             openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + clampToPackedSlots(remarkLines.size()) - 1);
@@ -1315,18 +1292,17 @@ public class QuotationRenderer {
 
     /**
      * The v2/full-remarks compaction shift for a render whose ACTUAL packed line count is
-     * {@code actualLineCount} (7 or 8 — see {@link #REMARK_V2_MIN_LINES}). Reduces to today's fixed
+     * {@code actualLineCount} (7 or 8 — see {@link #REMARK_V2_MIN_LINES}). Equals the fixed
      * {@code -7} when {@code actualLineCount == REMARK_HEAD_ROWS.length} (8); when it is one fewer
-     * (the lead-time line dropped — owner feedback 2026-09-14), one MORE row (the now-unused 8th
+     * (the lead-time line dropped), one MORE row (the now-unused 8th
      * packed slot) is also removed, so the shift becomes {@code -8}.
      *
-     * <p>Opus review nit (2026-09-15): {@code actualLineCount} is clamped to
-     * {@code REMARK_HEAD_ROWS.length} first — uncapped, a count ABOVE 8 (never produced today, but
+     * <p>{@code actualLineCount} is clamped to
+     * {@code REMARK_HEAD_ROWS.length} first — uncapped, a count ABOVE 8 (never produced, but
      * not otherwise prevented) would make {@code REMARK_HEAD_ROWS.length - actualLineCount}
      * negative and shrink the shift below {@code -7} instead of growing it, leaving a leftover
-     * template row inside the box and mis-siting the totals block below it. Before this whole
-     * feature, a &gt;8 list rendered identically to exactly 8 (a hardcoded {@code -7} either way);
-     * the clamp preserves that instead of making the out-of-range case worse.
+     * template row inside the box and mis-siting the totals block below it. A &gt;8 list renders
+     * identically to exactly 8 (a {@code -7} either way); the clamp preserves that.
      */
     private int remarkV2CompactShift(int actualLineCount) {
         int n = clampToPackedSlots(actualLineCount);
@@ -1350,12 +1326,11 @@ public class QuotationRenderer {
      * bordered "phantom" row. Must run once, immediately after {@link #insertLine3ContinuationRow},
      * before anything else reads a row ≥ {@link #REMARK_V2_COMPACT_FIRST_UNUSED}.
      *
-     * <p>Owner feedback (2026-09-14): when {@code actualLineCount} is 7 (one fewer than the usual
+     * <p>When {@code actualLineCount} is 7 (one fewer than the usual
      * 8 — the lead-time line dropped), the removed range widens by ONE extra row at its START
      * (the now-genuinely-unused 8th packed slot, physical row {@code REMARK_HEAD_ROWS[0] + 7} = 30)
      * rather than a second hardcoded constant — {@code REMARK_HEAD_ROWS.length - actualLineCount}
-     * is 0 for the ordinary 8-line case and 1 for the 7-line case, so this reduces to today's exact
-     * behaviour when nothing changed.
+     * is 0 for the ordinary 8-line case and 1 for the 7-line case.
      */
     private void compactRemarksSection(Sheet sh, int actualLineCount) {
         int lastRow = sh.getLastRowNum();
@@ -1370,13 +1345,13 @@ public class QuotationRenderer {
         // was the row that CLOSED the item+remark box — every cell A..I carries the box's bottom
         // rule (POI dump: `.tt.` A..F, `.t.t` G..I), and รวมเป็นเงิน sits directly under it in the
         // customer's form. Shifting it away left the box open above the totals in BOTH engines
-        // (the HTML draws this sheet's own borders). layout-spec §3 wants the box to close directly
+        // (the HTML draws this sheet's own borders). The box must close directly
         // under the last remark line with no blank row, so the ACTUAL last packed remark row
         // carries that bottom rule instead of re-creating the blank row — across A..I, so a merged
         // B..I remark row draws it whichever cell an engine reads a merged region's bottom edge
-        // from. Owner feedback (2026-09-14): this is {@code actualLineCount} rows past the first
+        // from. This is {@code actualLineCount} rows past the first
         // packed row, NOT always the 8th slot — a 7-line render's box closes on row 29, not 30.
-        // Clamped (Opus review nit, 2026-09-15) for the same reason remarkV2CompactShift is.
+        // Clamped for the same reason remarkV2CompactShift is.
         closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + clampToPackedSlots(actualLineCount) - 1);
     }
 
@@ -1478,24 +1453,24 @@ public class QuotationRenderer {
 
     // A boundary between two parenthesised groups: a ")" followed by whitespace followed by "(" —
     // e.g. the split point in "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4 แผ่น/กล่อง)".
-    // Owner feedback #3 (2026-09-14): {@link #wrapItemLineToWidth} prefers to break HERE, so a
+    // {@link #wrapItemLineToWidth} prefers to break HERE, so a
     // group like "(บรรจุ N แผ่น/กล่อง)" moves to the next physical row whole rather than splitting
     // its own words across two rows.
     private static final java.util.regex.Pattern PAREN_GROUP_BOUNDARY =
         java.util.regex.Pattern.compile("(?<=\\))\\s+(?=\\()");
 
     /**
-     * Owner feedback #3 (2026-09-14): wraps ONE over-budget item description/calculation line for
+     * Wraps ONE over-budget item description/calculation line for
      * {@link #wrapDescriptionLines} — the ITEM path only. {@link #wrapToWidth} (the legacy remark
-     * continuation-row path, called directly from {@link #writeRemarks}) is UNTOUCHED and stays
+     * continuation-row path, called directly from {@link #writeRemarks}) stays
      * measured by {@code String.length()}; this is deliberately its own method rather than a
      * shared one with a width-function parameter threaded through, so the legacy path can never
      * accidentally pick up the visible-width measurement.
      *
      * <p>Prefers breaking at a {@link #PAREN_GROUP_BOUNDARY} — packing whole parenthesised groups
      * onto each physical line — so a group like "(บรรจุ 4 แผ่น/กล่อง)" moves to the next row intact
-     * instead of splitting across rows the way the old character-length wrap did (the bug this
-     * fixes: "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
+     * instead of splitting across rows the way a character-length wrap would (e.g.
+     * "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น) (บรรจุ 4" / "แผ่น/กล่อง)"). Falls back to
      * a plain greedy word wrap ({@link #wrapGreedyByVisibleWidth}) only for a single group that by
      * itself is longer than the budget, or for a line with no parenthesised groups at all.
      */
@@ -1546,31 +1521,27 @@ public class QuotationRenderer {
         return lines.isEmpty() ? List.of(text) : lines;
     }
 
-    // layout-spec §5, REBUILT: columns cannot be split into even quarters (B alone is ~55% of the
-    // page), so S1/S2/S3 are each laid out as ONE merged A:I cell — positioned by TEXT, the way the
-    // template's OWN original row 44 did it ("ผู้พิมพ์____ พนักงานขาย____ ผู้จัดการฝ่ายขาย____
-    // ผู้สั่งซื้อ____", one string) — rather than by column boundaries. The four-discrete-merged-
-    // column-range scheme this replaced (git history) made ผู้พิมพ์ alone fill the left half of the
-    // page (behind column B) while the other three were crammed into the right 45%, with ผู้ตรวจ
-    // shrunk-to-fit to a sliver.
+    // layout-spec §5: columns cannot be split into even quarters (B alone is ~55% of the page), so
+    // S1/S2/S3 are each laid out as ONE merged A:I cell, positioned by TEXT the way the template's
+    // own original row 44 did it ("ผู้พิมพ์____ พนักงานขาย____ ผู้จัดการฝ่ายขาย____ ผู้สั่งซื้อ____",
+    // one string) rather than by column boundaries. Four discrete merged column ranges would make
+    // ผู้พิมพ์ alone fill the left half of the page (behind column B) while the other three were
+    // crammed into the right 45%.
     //
-    // Each row is split into FOUR EQUAL-PIXEL-WIDTH slots ({@link #signatureSlotWidthPixels}) — not
-    // equal CHARACTER-COUNT slots. An earlier version of this rebuild used one shared "average
-    // character width" for all three rows, but S1's padding character (underscore, ~5px) and
-    // S2/S3's (space, ~3px) are NOT the same width in a proportional font — the same unit count
-    // produced visibly different real widths per row, so slot 4's content drifted left of slot 4's
-    // own label as the mismatch compounded across the row (confirmed by rendering
-    // reference-v4/v5.pdf and LOOKING at it). Measuring each row's own real string width via AWT
-    // {@link java.awt.Font#getStringBounds} and padding with THAT row's own padding character's own
-    // measured width keeps all three rows' slot boundaries at the same physical x position.
-    // Quotation v2 owner ruling 2026-09-10: keep the TEMPLATE's OWN original four labels
-    // (ผู้พิมพ์ / พนักงานขาย / ผู้จัดการฝ่ายขาย / ผู้สั่งซื้อ — see the raw row-44 string quoted in
-    // the class comment above) rather than the invented ผู้ตรวจ/ผู้อนุมัติ pair a previous
-    // iteration of this rebuild substituted. Only the LABEL TEXT changed here — the name mapping
-    // below (printedBy → slot 0, checkedBy/sales rep → slot 1, approvedBy → slot 2) and the
-    // approver-signature-image anchor (slot 2, ผู้จัดการฝ่ายขาย = ผึ้ง/sales_manager or ราม/ceo)
-    // are unchanged; every reader that used to look for "ผู้ตรวจ"/"ผู้อนุมัติ" must now look for
-    // "พนักงานขาย"/"ผู้จัดการฝ่ายขาย" instead (QuotationRendererTest, QuotationHtmlDocument).
+    // Each row is split into FOUR EQUAL-PIXEL-WIDTH slots ({@link #signatureSlotWidthPixels}), not
+    // equal CHARACTER-COUNT slots. S1's padding character (underscore, ~5px) and S2/S3's (space,
+    // ~3px) are not the same width in a proportional font, so the same unit count gives visibly
+    // different real widths per row and slot 4's content drifts left of slot 4's own label.
+    // Measuring each row's own real string width via AWT {@link java.awt.Font#getStringBounds} and
+    // padding with THAT row's own padding character's measured width keeps all three rows' slot
+    // boundaries at the same physical x position.
+    //
+    // The labels are the TEMPLATE's own original four (ผู้พิมพ์ / พนักงานขาย / ผู้จัดการฝ่ายขาย /
+    // ผู้สั่งซื้อ, see the raw row-44 string quoted in the class comment above). Name mapping:
+    // printedBy → slot 0, checkedBy/sales rep → slot 1, approvedBy → slot 2; the approver-signature
+    // image anchors on slot 2 (ผู้จัดการฝ่ายขาย = ผึ้ง/sales_manager or ราม/ceo). Readers must look
+    // for "พนักงานขาย"/"ผู้จัดการฝ่ายขาย", not "ผู้ตรวจ"/"ผู้อนุมัติ" (QuotationRendererTest,
+    // QuotationHtmlDocument).
     private static final String[] SIG_LABELS = {"ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ"};
     private static final int SIG_APPROVER_INDEX = 2; // ผู้จัดการฝ่ายขาย — where the signature image anchors
     private static final String BLANK_NAME_PLACEHOLDER = "(..........................)";
@@ -1584,30 +1555,22 @@ public class QuotationRenderer {
     // width, regardless of the slot's actual pixel width, since all four slots are equal.
     private static final double SIGNATURE_APPROVER_SLOT_CENTER_FRACTION =
         (SIG_APPROVER_INDEX + 0.5) / SIG_LABELS.length;
-    // Measured (not guessed), 2026-09-27, via soffice --convert-to pdf + PDFBox on this exact
-    // template/font: AWT's OWN estimate of a SPACE glyph's width is a slightly different fraction
-    // of what LibreOffice actually renders it at than AWT's estimate of an UNDERSCORE glyph's
-    // width is. Isolated by rendering a real quotation and measuring, on the SAME row, (a) the
-    // pixel gap a run of N leading spaces produces before a name block and (b) the pixel length
-    // of the 17-underscore signature line itself: space's real/AWT-estimated ratio came out
-    // ≈0.6634 (four independent slots, all within 0.001 of each other) against underscore's
-    // ≈0.6528 (73.98pt measured / (17 × 6.667px) AWT-estimated) — a small but real and highly
-    // repeatable ~1.6% gap. {@link #appendAtTarget}'s targets ({@code runStart[]}/{@code
-    // runEnd[]}) are computed in units calibrated to the UNDERSCORE scale (they derive from
-    // {@link #padLabelSlotPx}'s own underscore-filled content), so leaving spaceWidthPx at its
-    // raw AWT estimate makes the SPACE-padded names/dates rows drift from that reference by this
-    // same ~1.6% per space character used — worse for a slot further from the row's start, since
-    // more spaces have accumulated by then. This is exactly the "progressively worse toward the
-    // right" shape the owner reported (confirmed by measurement: the un-scaled estimate consistently OVERSHOOTS
-    // rightward, more so the more spaces a slot needed). Scaling spaceWidthPx UP by (space ratio
-    // / underscore ratio) — space renders relatively WIDER than underscore does relative to
-    // AWT's own estimate, so fewer spaces are needed to cover the same real distance than a
-    // naive AWT count implies — makes each space travel the SAME effective real distance, per
-    // AWT pixel, that an underscore does, eliminating the growing gap rather than merely
-    // shrinking it. Like every other constant in this class derived this way, it is a property
-    // of THIS font/LibreOffice build, not a law of nature — recalibrate with the same PDFBox
-    // technique if the licensed fonts or LibreOffice version change and the on-page drift
-    // reappears.
+    // Measured via soffice --convert-to pdf + PDFBox on this exact template/font: AWT's estimate
+    // of a SPACE glyph's width is a slightly different fraction of what LibreOffice actually
+    // renders than AWT's estimate of an UNDERSCORE glyph's width. On the SAME row, (a) the pixel
+    // gap a run of N leading spaces produces before a name block and (b) the pixel length of the
+    // 17-underscore signature line gave: space's real/AWT-estimated ratio ≈0.6634 (four
+    // independent slots, all within 0.001 of each other) against underscore's ≈0.6528 (73.98pt
+    // measured / (17 × 6.667px) AWT-estimated), a repeatable ~1.6% gap. {@link #appendAtTarget}'s
+    // targets ({@code runStart[]}/{@code runEnd[]}) are in units calibrated to the UNDERSCORE
+    // scale (they derive from {@link #padLabelSlotPx}'s own underscore-filled content), so leaving
+    // spaceWidthPx at its raw AWT estimate makes the SPACE-padded names/dates rows overshoot
+    // rightward by ~1.6% per space used, progressively worse for slots further from the row's
+    // start. Scaling spaceWidthPx UP by (space ratio / underscore ratio) makes each space travel
+    // the same effective real distance per AWT pixel as an underscore, which removes the growing
+    // gap rather than merely shrinking it. Like every constant in this class derived this way, it
+    // is a property of THIS font/LibreOffice build: recalibrate with the same PDFBox technique if
+    // the licensed fonts or LibreOffice version change and the drift reappears.
     private static final double SIGNATURE_SPACE_TO_UNDERSCORE_SCALE = 0.6634 / 0.6528;
     // AWT's unscaled Graphics2D#getFontRenderContext() measures glyph advances at ~72 DPI (1 unit =
     // 1/72in), while POI's Sheet#getColumnWidthInPixels — the other pixel figure this class works
@@ -1688,15 +1651,12 @@ public class QuotationRenderer {
         //
         // ⚠️ MUST be LibreOffice's own column-width model (#totalColumnWidthPixelsLibreOffice),
         // NOT POI's #totalColumnWidthPixels — see that method's own Javadoc for the full
-        // derivation. This IS defect 1: padding to 95% of POI's own (unrelated, hardcoded-
-        // constant) figure targets a number that has no connection to what LibreOffice will
-        // actually print the row at, and on this template the two disagree by roughly a third
-        // (measured: POI 659.5pt vs LibreOffice's own model 979.0pt for this exact A..I range) —
-        // padding to 95% of the SMALLER, wrong number is why the owner's export landed at ~65%
-        // of the real page width instead of 95%: 0.95 × (659.5/979.0) ≈ 0.64, matching the
-        // observed defect almost exactly. #fontPixelToAnchorPixelScale already corrects for
-        // exactly this gap for the signature PICTURE's anchor; it was never applied to the row's
-        // own fill target, which is the actual bug.
+        // derivation. POI's figure is an unrelated hardcoded-constant model, and on this template
+        // the two disagree by roughly a third (measured: POI 659.5pt vs LibreOffice's 979.0pt for
+        // this exact A..I range). Padding to 95% of POI's smaller number lands the row at ~65% of
+        // the real page width: 0.95 × (659.5/979.0) ≈ 0.64.
+        // #fontPixelToAnchorPixelScale corrects for the same gap for the signature PICTURE's
+        // anchor.
         double totalWidthPx = totalColumnWidthPixelsLibreOffice(sh, 0, 8);
         double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / labels.length;
         double underscoreWidthPx = charRunWidthPx(fontMetrics, '_');
@@ -1708,13 +1668,12 @@ public class QuotationRenderer {
             sig != null ? sig.printedBy() : null,
             sig != null ? sig.checkedBy() : null,
             sig != null ? sig.approvedBy() : null,
-            // ผู้สั่งซื้อ — the deal's contact (owner feedback F2, 2026-09-10: "use that name to
-            // auto fill in the name for signature"); the placeholder when the model has none.
+            // ผู้สั่งซื้อ — the deal's contact, auto-filled as the name for the signature; the
+            // placeholder when the model has none.
             sig != null ? sig.orderedBy() : null,
         };
-        // Owner feedback F4 ("also autofill in the dates"): ผู้พิมพ์ = created, พนักงานขาย =
-        // submitted, ผู้จัดการฝ่ายขาย = approved; ผู้สั่งซื้อ always the placeholder — the customer
-        // dates their own signature on paper.
+        // Dates auto-fill: ผู้พิมพ์ = created, พนักงานขาย = submitted, ผู้จัดการฝ่ายขาย = approved;
+        // ผู้สั่งซื้อ always the placeholder — the customer dates their own signature on paper.
         LocalDate[] dates = {
             sig != null ? sig.printedOn() : null,
             sig != null ? sig.checkedOn() : null,
@@ -1729,43 +1688,31 @@ public class QuotationRenderer {
         StringBuilder labelsLine = new StringBuilder();
         StringBuilder namesLine = new StringBuilder();
         StringBuilder datesLine = new StringBuilder();
-        // Owner feedback F6-amended-again (2026-09-10 late): the signature picture is centred on
-        // the slot's UNDERSCORE RUN — the blank stretch of rule AFTER the label words — not on the
-        // whole slot, which drew it over the label text itself. The run is derived from the very
-        // string being built here, measured with the SAME AWT metrics that laid it out, so it
-        // tracks the real glyph widths of whatever font the template carries rather than any
-        // hardcoded millimetre figure.
+        // The signature picture is centred on the slot's UNDERSCORE RUN (the blank stretch of rule
+        // AFTER the label words), not on the whole slot, which would draw it over the label text.
+        // The run is derived from the very string being built here, measured with the SAME AWT
+        // metrics that laid it out, so it tracks the real glyph widths of whatever font the
+        // template carries rather than any hardcoded millimetre figure. Every slot's run is
+        // captured the same way, since ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) can draw a picture
+        // too ({@code sig.printedBySignaturePng()}/{@code sig.salesRepSignaturePng()}), not only
+        // the approver ({@link #SIG_APPROVER_INDEX}).
         //
-        // Task 4 (2026-09-26): originally captured ONLY for {@link #SIG_APPROVER_INDEX} (slot 2),
-        // since only the approver's signature ever drew a picture. ผู้พิมพ์ (slot 0) and
-        // พนักงานขาย (slot 1) now can too — see {@code sig.printedBySignaturePng()}/
-        // {@code sig.salesRepSignaturePng()} — so every slot's run is captured the same way; the
-        // approver-index geometry itself (which is what actually got the owner's F6 sign-off) is
-        // untouched.
+        // Each label's underscore run fills to ITS OWN slot's right edge (line LENGTHS vary with
+        // label length, short label -> longer line), with groups sitting CONTIGUOUS, matching the
+        // owner's real reference .xls. A shared fixed-count underscore run cannot fill a short
+        // label's leftover slot width, so it would need LEADING padding to keep the unit centred,
+        // which shows up as a gap between groups. {@link #padLabelSlotPx} therefore writes the label
+        // text first, then underscores filling the REST of the slot's own {@code slotWidthPx},
+        // cumulative, with no leading pad.
         //
-        // Owner feedback round 2 (2026-09-27, real reference .xls supplied): the equal-length-
-        // underscore change above (round 1) was WRONG — the owner's actual template signature
-        // block has each label's underscore run fill to ITS OWN slot's right edge (so line
-        // LENGTHS vary with label length, short label -> longer line), with groups sitting
-        // CONTIGUOUS — no artificial gap between one label and the next. Round 1's shared fixed-
-        // count underscore run couldn't fill a short label's leftover slot width, so it had to
-        // add LEADING padding to keep the unit centred, and that leading padding is exactly the
-        // "gap between groups" the owner is now pointing at. Reverted: {@link #padLabelSlotPx}
-        // is back — label text first, then underscores filling the REST of the slot's own
-        // {@code slotWidthPx}, cumulative (no artificial leading pad), reproducing the
-        // reference's tight, ragged-length-but-grid-ended lines.
-        //
-        // What's KEPT from round 1: names/dates still centre on {@code runStart[i]}/{@code
-        // runEnd[i]} — the ACTUAL underscore run this loop just measured, not an independently
-        // re-derived nominal slot — via #appendAtTarget, so they no longer drift progressively
-        // left the way they did before round 1 (owner feedback round 1, problem 1 + 3: S1's
-        // filler (underscores) and S2/S3's filler (spaces) do not drift from AWT's estimate by
-        // the same amount when LibreOffice actually lays the row out, so independently-nominal-
-        // targeted rows quietly diverged slot by slot). Centring the name/date on the row's own
-        // measured run, using an ABSOLUTE per-slot target rather than a value chained off the
-        // previous slot's own rounding, is what stops that divergence — see #appendAtTarget's
-        // own Javadoc — and is independent of how the underscore run itself is sized, so it
-        // composes cleanly with the reverted per-slot fill.
+        // Names/dates centre on {@code runStart[i]}/{@code runEnd[i]}, the ACTUAL underscore run
+        // this loop just measured, not an independently re-derived nominal slot, via
+        // #appendAtTarget. S1's filler (underscores) and S2/S3's filler (spaces) do not drift from
+        // AWT's estimate by the same amount when LibreOffice lays the row out, so
+        // independently-nominal-targeted rows diverge slot by slot. An ABSOLUTE per-slot target,
+        // rather than a value chained off the previous slot's own rounding, stops that divergence
+        // (see #appendAtTarget's own Javadoc) and is independent of how the underscore run itself
+        // is sized.
         double[] runStart = new double[labels.length];
         double[] runEnd = new double[labels.length];
         double labelCursorPx = 0;
@@ -1817,10 +1764,10 @@ public class QuotationRenderer {
 
     /**
      * The S3 ("วันที่…") slot text for one signatory: {@code "วันที่ d/M/BBBB"} — day and month
-     * unpadded, Buddhist-era year ({@code วันที่ 10/9/2569}, owner feedback F4's own example) —
+     * unpadded, Buddhist-era year ({@code วันที่ 10/9/2569}) —
      * or the dotted placeholder when the date is absent. Deliberately NOT {@link #shortThaiDate}'s
      * zero-padded form: that one is a remark-line date inside a sentence; this one sits on a
-     * signature line the signer would otherwise fill by hand, and the owner's example is unpadded.
+     * signature line the signer would otherwise fill by hand, so it is unpadded.
      */
     static String signatureDateText(LocalDate date) {
         return signatureDateText(date, false);
@@ -1842,24 +1789,22 @@ public class QuotationRenderer {
      * see {@link #anchorSlotSignature}); every caller of an unavailable metrics object falls
      * back to {@link #textUnits} character-counting via {@link #FALLBACK_AVG_CHAR_WIDTH_PX}.
      *
-     * <p><strong>Root cause of the signature row not filling {@link #SIGNATURE_ROW_FILL_FRACTION}
-     * of the A4 width</strong> (owner's approved-quotation export, 2026-09-10 — forensics in the
-     * PR body): this used to build {@code new java.awt.Font(poiFont.getFontName(), ...)} directly
-     * from the template's DECLARED family ("Angsana New" / "Cordia New" — see the class Javadoc).
-     * On a host without those licensed fonts (this deployed image among them, #666), that family
-     * name is not one AWT enumerates, so {@code java.awt.Font}'s OWN fallback silently substitutes
-     * its generic logical "Dialog" font — a DIFFERENT substitution than fontconfig's Thai-aware
-     * alias (Angsana New → Kinnari, Cordia New → Garuda/Umpush), which is what LibreOffice
-     * actually lays the row out with (confirmed: the owner's PDF embeds Kinnari-Bold/Garuda, and
-     * {@code fc-match "Angsana New"} on a host with {@code fonts-thai-tlwg} answers Kinnari, while
-     * plain {@code new Font("Angsana New", ...)} on the SAME host falls back to Dialog). Measuring
-     * with the wrong font's glyph advances under-counts how many underscores are needed to reach
-     * {@code slotWidthPx}, so the padded row comes up short once LibreOffice re-lays it out in the
-     * font it actually uses. {@link FontResolver} already solves exactly this question for
+     * <p><strong>Why the font is resolved through {@link FontResolver}</strong> rather than
+     * {@code new java.awt.Font(poiFont.getFontName(), ...)} from the template's DECLARED family
+     * ("Angsana New" / "Cordia New" — see the class Javadoc): on a host without those licensed
+     * fonts (the deployed image among them), that family name is not one AWT enumerates, so
+     * {@code java.awt.Font}'s own fallback silently substitutes its generic logical "Dialog"
+     * font. That differs from fontconfig's Thai-aware alias (Angsana New → Kinnari, Cordia New →
+     * Garuda/Umpush), which is what LibreOffice actually lays the row out with ({@code fc-match
+     * "Angsana New"} on a host with {@code fonts-thai-tlwg} answers Kinnari, while plain
+     * {@code new Font("Angsana New", ...)} on the SAME host falls back to Dialog). Measuring with
+     * the wrong font's glyph advances under-counts how many underscores are needed to reach
+     * {@code slotWidthPx}, so the padded row comes up short of
+     * {@link #SIGNATURE_ROW_FILL_FRACTION} of the A4 width once LibreOffice re-lays it out.
+     * {@link FontResolver} already answers this question for
      * {@link LibreOfficeMetrics#charWidthTwips} (verified there to ±1/100 mm against LibreOffice's
-     * own PDF vectors) — reusing its answer here, rather than re-deriving font resolution a second
-     * way, is what makes this fix independent of which Thai font happens to be installed: it
-     * measures with whatever font the HOST will actually render, not a name that may not exist.
+     * own PDF vectors); reusing it makes the result independent of which Thai font is installed:
+     * it measures with whatever font the HOST will actually render.
      */
     private SignatureFontMetrics resolveSignatureFontMetrics(Sheet sh, int labelsRow) {
         try {
@@ -1900,8 +1845,8 @@ public class QuotationRenderer {
     /** Counts Thai-combining-mark-aware "character units" (every code point counts as 1 EXCEPT a
      * {@link #THAI_COMBINING_MARK}, which stacks on the previous base character and costs 0) — the
      * layout-spec §5 fallback estimate, used only when {@link #textWidthPx} can't get real AWT font
-     * metrics. Static: uses no instance state, and owner feedback #3 (2026-09-14, see
-     * {@link #visibleLength}) reuses it from the item-wrap path below. */
+     * metrics. Static: uses no instance state, and {@link #visibleLength} reuses it from the
+     * item-wrap path below. */
     private static int textUnits(String s) {
         if (s == null || s.isEmpty()) return 0;
         int units = 0;
@@ -1915,8 +1860,7 @@ public class QuotationRenderer {
     }
 
     /**
-     * Owner feedback #3 (2026-09-14): the number of code points in {@code s} that occupy their own
-     * glyph slot — {@code s.codePointCount()} EXCLUDING a {@link #THAI_COMBINING_MARK} (tone marks
+     * The number of code points in {@code s} that occupy their own glyph slot —{@code s.codePointCount()} EXCLUDING a {@link #THAI_COMBINING_MARK} (tone marks
      * and vowel signs U+0E31, U+0E34-U+0E3A, U+0E47-U+0E4E, which stack on the preceding base
      * character and have zero advance width). {@code String.length()} overcounts a Thai line by
      * roughly its combining-mark count, which is why {@link #REMARK_LINE_CHAR_BUDGET} = 62 still
@@ -1939,7 +1883,7 @@ public class QuotationRenderer {
      * each) to land as close as possible to {@code slotWidthPx} without exceeding it — so the
      * line fills the REST of the slot after the label, ending at (approximately) the slot's own
      * right edge. Label text first, no leading padding: labels flow straight from one into the
-     * next with no artificial gap, reproducing the owner's reference template (line LENGTH
+     * next with no artificial gap, reproducing the reference template (line LENGTH
      * varies with the label's own length; line ENDS land on the same per-slot grid). */
     private String padLabelSlotPx(SignatureFontMetrics metrics, String label, double slotWidthPx,
             double underscorePx) {
@@ -1962,13 +1906,13 @@ public class QuotationRenderer {
      * ABSOLUTE number computed fresh for slot i — never "wherever the previous slot's own
      * rounding happened to leave the cursor". Two calls that both target the same absolute
      * number land at the same place even if an earlier slot's own padding rounded off by half a
-     * space; the error never carries forward into the next slot's target the way it did when
-     * S2/S3 used to re-derive "centre within MY OWN nominal {@code slotWidthPx}" independently
-     * per block (owner feedback 2026-09-27: names drifting progressively left of their slot
-     * centre from slot 1 onward — see the class comment above {@link #SIG_LABELS} and the call
-     * site in {@link #writeSignatureBlock}). A negative gap (this row is already past the
-     * target — e.g. an unusually long name) clamps to zero spaces rather than backing up,
-     * matching every other best-effort width estimate in this class. */
+     * space; the error never carries forward into the next slot's target, as it would if S2/S3
+     * each re-derived "centre within MY OWN nominal {@code slotWidthPx}" independently per block
+     * (names drift progressively left of their slot centre from slot 1 onward — see the class
+     * comment above {@link #SIG_LABELS} and the call site in {@link #writeSignatureBlock}). A
+     * negative gap (this row is already past the target — e.g. an unusually long name) clamps to
+     * zero spaces rather than backing up, matching every other best-effort width estimate in this
+     * class. */
     private double appendAtTarget(SignatureFontMetrics metrics, StringBuilder line, double cursorPx,
             String text, double targetStartPx, double spacePx) {
         int leftSpaces = spacePx > 0 ? (int) Math.round(Math.max(0, targetStartPx - cursorPx) / spacePx) : 0;
@@ -2026,45 +1970,34 @@ public class QuotationRenderer {
      * the dotted-placeholder/name text {@link #writeSignatureBlock} already wrote stands on its
      * own.
      *
-     * <p>Task 4 (slot signatures, 2026-09-26): renamed from {@code anchorApproverSignature} — the
-     * method was never approver-specific internally (it just places whatever image it is given
-     * over whatever run it is handed), only ever CALLED for the approver's slot. It is now called
-     * for ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) too; the geometry below (all of it, including
-     * {@link #placeSignaturePicture}) is untouched — only the caller side changed.
+     * <p>Nothing here is approver-specific: it places whatever image it is given over whatever
+     * run it is handed, and is called for ผู้พิมพ์ (slot 0), พนักงานขาย (slot 1) and
+     * ผู้จัดการฝ่ายขาย (slot 2).
      *
-     * <p>Owner feedback F6 (2026-09-10, seen on the demo), amended twice the same evening: the
-     * picture used to span rows {@code labelsRow-2..labelsRow} with {@code dy2 = 0} — its BOTTOM
-     * edge sat on the TOP edge of the labels row, a whole row (~6.5 mm) above the underscore rule,
-     * and its left edge was fixed at "centre minus half of a 30 mm guess" so a height-capped
-     * (narrower) image drifted left of the slot centre. The first amendment moved the bottom onto
-     * the rule and centred it on the whole slot — which put the ink over the words
-     * "ผู้จัดการฝ่ายขาย" ("still make the line visible but put the signature on top of the line in
-     * the middle and not too high up"). Now {@link #placeSignaturePicture} sets all four anchor
-     * corners from the image's real scaled size and the measured geometry of the label string's
-     * own approver-slot UNDERSCORE RUN ({@code runStartPx}..{@code runEndPx}, absolute pixels from
-     * column A's left edge — see {@link #writeSignatureBlock}): centred on that run, capped at
-     * {@link #SIGNATURE_RUN_WIDTH_FRACTION} of it (and {@link #SIGNATURE_MAX_HEIGHT_MM} tall),
-     * with the bottom edge {@link #SIGNATURE_LIFT_ABOVE_RULE_MM} ABOVE the rule so it rests on the
-     * line the way a real signature does. Nothing is ever painted behind the picture — the PNG's
-     * own alpha is what keeps the rule visible on both sides of the ink.
+     * <p>{@link #placeSignaturePicture} sets all four anchor corners from the image's real scaled
+     * size and the measured geometry of the label string's own slot UNDERSCORE RUN
+     * ({@code runStartPx}..{@code runEndPx}, absolute pixels from column A's left edge — see
+     * {@link #writeSignatureBlock}): centred on that run (centring on the whole slot would put the
+     * ink over the words "ผู้จัดการฝ่ายขาย"), capped at {@link #SIGNATURE_RUN_WIDTH_FRACTION} of
+     * it (and {@link #SIGNATURE_MAX_HEIGHT_MM} tall), with the bottom edge
+     * {@link #SIGNATURE_LIFT_ABOVE_RULE_MM} ABOVE the rule so it rests on the line the way a real
+     * signature does. Nothing is ever painted behind the picture — the PNG's own alpha is what
+     * keeps the rule visible on both sides of the ink.
      *
-     * <p><strong>Root cause of the "signature shows on the chromium path but not this one"
-     * defect</strong> (owner's approved-quotation export, 2026-09-10, LibreOffice 26.2.5.2 —
-     * forensics in the PR body): {@code org.apache.poi.ss.util.ImageUtils#getImageDimension} —
-     * what {@link Picture#getImageDimension()} calls — SWALLOWS an image ImageIO has no reader
-     * for (an unsupported or corrupt format) and returns {@code Dimension(0, 0)} rather than
-     * throwing (confirmed by reading its bytecode, and by reproducing end-to-end: the JVM logs
-     * "ImageIO found no images" and no exception ever reaches this class). The OLD code called
-     * {@link #placeSignaturePicture} anyway, whose {@code natural.width <= 0} guard then bailed
-     * out silently — leaving the picture on the PROVISIONAL anchor below, which is deliberately
-     * ZERO-WIDTH ({@code col1==col2}, {@code dx1==dx2}): a shape POI's own object model keeps
-     * without complaint (so a POI-model-only test finds a "picture" and a plausible-looking
-     * anchor — this is exactly why one didn't catch it), but that LibreOffice's PDF export (and,
-     * by the same mechanism, a real Excel/Calc open of the .xls download) simply does not draw.
-     * Nothing logged the failure either: no exception means the {@code catch} below never ran.
-     * {@link #decodableImageSize} probes decodability BEFORE anything touches the workbook, so an
-     * undecodable image never gets a shape created for it at all — falling back to the text-only
-     * name exactly as this method's own contract promises, with a warning that finally says why.
+     * <p><strong>Why {@link #decodableImageSize} runs first:</strong>
+     * {@code org.apache.poi.ss.util.ImageUtils#getImageDimension} — what
+     * {@link Picture#getImageDimension()} calls — SWALLOWS an image ImageIO has no reader for (an
+     * unsupported or corrupt format) and returns {@code Dimension(0, 0)} rather than throwing (the
+     * JVM logs "ImageIO found no images" and no exception reaches this class). Calling
+     * {@link #placeSignaturePicture} anyway would hit its {@code natural.width <= 0} guard and
+     * bail out silently, leaving the picture on the PROVISIONAL anchor below, which is
+     * deliberately ZERO-WIDTH ({@code col1==col2}, {@code dx1==dx2}). POI's own object model keeps
+     * such a shape without complaint (so a POI-model-only test finds a "picture" and a
+     * plausible-looking anchor), but LibreOffice's PDF export (and, by the same mechanism, a real
+     * Excel/Calc open of the .xls download) does not draw it, and nothing is logged because the
+     * {@code catch} below never runs. Probing decodability BEFORE anything touches the workbook
+     * means an undecodable image never gets a shape created at all: the render falls back to the
+     * text-only name, with a warning that says why.
      */
     private void anchorSlotSignature(Sheet sh, int labelsRow, byte[] png, String mime,
                                      double runStartPx, double runEndPx) {
@@ -2122,12 +2055,11 @@ public class QuotationRenderer {
         return th.co.glr.hr.common.ImageDecodability.size(imageBytes);
     }
 
-    // M6: the signature was never scaled — an employee's uploaded image renders at whatever
-    // pixel size they happened to save it at, which can dwarf or barely mark the ผู้อนุมัติ box.
-    // Scale to a real-world box, preserving aspect. F6-amended-again (owner, 2026-09-10 late,
-    // "scale it more down"): the width cap is no longer a fixed 30 mm guess but a FRACTION of the
-    // approver slot's own measured underscore run — 60% of a ~28 mm run ≈ 16 mm — so the rule
-    // stays visible on both sides of the ink whatever font/column widths the template carries.
+    // An uploaded signature image renders at whatever pixel size the employee saved it at, which
+    // can dwarf or barely mark the signature box, so it is scaled to a real-world box, preserving
+    // aspect. The width cap is a FRACTION of the slot's own measured underscore run (60% of a
+    // ~28 mm run ≈ 16 mm), not a fixed mm figure, so the rule stays visible on both sides of the
+    // ink whatever font/column widths the template carries.
     private static final double SIGNATURE_RUN_WIDTH_FRACTION = 0.60;
     private static final double SIGNATURE_MAX_HEIGHT_MM = 8.0;
     // Only when the run could not be measured at all (AWT font metrics unavailable AND the
@@ -2138,16 +2070,14 @@ public class QuotationRenderer {
     // convention for a raster image with no embedded DPI metadata (PNG signature uploads here
     // are screen-captured or scanned at typical screen resolution, not print resolution).
     private static final double ASSUMED_IMAGE_DPI = 96.0;
-    // F6: the underscore RULE itself sits this far above the labels row's BOTTOM edge — roughly
-    // the 14pt font's descent, i.e. the row's text baseline. Everything vertical is measured from
-    // here rather than from the row edge (the owner's "floats above its line" was the picture
-    // ending a whole row higher than this).
+    // The underscore RULE itself sits this far above the labels row's BOTTOM edge — roughly the
+    // 14pt font's descent, i.e. the row's text baseline. Everything vertical is measured from
+    // here rather than from the row edge.
     private static final double SIGNATURE_BASELINE_LIFT_MM = 1.0;
-    // F6-amended-3 (owner, 2026-09-10 late: "it should sit ABOVE the line, right now it's across
-    // the middle of the line"): the ink's BOTTOM edge rests this far ABOVE the rule, so the
-    // signature sits ON the line without cutting through it. Measured before the change: ink
-    // bottom 264.16 mm against a rule at 262.54 mm — 1.62 mm THROUGH it. Keep this positive; a
-    // negative value would put the ink back across the rule.
+    // The ink's BOTTOM edge rests this far ABOVE the rule, so the signature sits ON the line
+    // without cutting through it (before this lift the ink bottom measured 264.16 mm against a
+    // rule at 262.54 mm, 1.62 mm THROUGH it). Keep this positive; a negative value would put the ink back
+    // across the rule.
     private static final double SIGNATURE_LIFT_ABOVE_RULE_MM = 1.5;
     // Never walk the anchor more than this many rows away from the labels row — a corrupt row
     // height must not send the walk off the sheet.
@@ -2168,13 +2098,13 @@ public class QuotationRenderer {
      *       so the rule shows on both sides of the ink;</li>
      *   <li><strong>horizontal</strong> — centred on the RUN's centre, not the slot's: the run
      *       starts where the label text ends, so the picture can never be drawn over the words
-     *       "ผู้จัดการฝ่ายขาย" (the owner's complaint on the 2026-09-10 demo);</li>
+     *       "ผู้จัดการฝ่ายขาย";</li>
      *   <li><strong>vertical</strong> — the bottom edge lands {@link #SIGNATURE_LIFT_ABOVE_RULE_MM}
      *       ABOVE the rule (itself {@link #SIGNATURE_BASELINE_LIFT_MM} above {@code labelsRow}'s
      *       bottom edge), so the strokes cross the line; the top is the same point minus the
      *       scaled height. Both are converted to (row, dy) by {@link #rowOffsetToAnchor}, which
-     *       walks up OR down as needed — the bottom now deliberately falls past the labels row's
-     *       own bottom edge.</li>
+     *       walks up OR down as needed — the bottom deliberately falls past the labels row's own
+     *       bottom edge.</li>
      * </ul>
      *
      * <p>Column/row offsets go through {@link #absolutePixelToColumn} rather than
@@ -2359,19 +2289,17 @@ public class QuotationRenderer {
      * anchor) rather than {@link #totalColumnWidthPixels}'s POI-native pixel figure — converted to
      * 96dpi px so it lands in the SAME unit space {@link #textWidthPx} already measures in.
      *
-     * <p>This is THE row-width defect, not a refinement of it: {@link #writeSignatureBlock} used
-     * to pad to {@link #SIGNATURE_ROW_FILL_FRACTION} of {@link #totalColumnWidthPixels}'s figure,
-     * which has no relationship to what LibreOffice actually prints the A..I range at. On this
-     * template the two disagree by roughly a third — measured directly (not estimated): POI says
-     * 659.5 pt for A..I, LibreOffice's own model says 979.0 pt, because the WORKBOOK's default
-     * font (index 0, what a raw XLS column-width unit is defined against) is one the host
-     * substitutes to something with a noticeably wider digit than POI's hardcoded constant
-     * assumes. Padding to 95% of the SMALLER, wrong figure is exactly {@code 0.95 × (659.5/979.0)
-     * ≈ 0.64} of the REAL page width — matching the owner's exported PDF (roughly 65%, not 95%)
-     * almost exactly. Reusing {@link #fontPixelToAnchorPixelScale}'s already-verified twips math
-     * here — rather than re-deriving a second way to ask the same question — is what makes the
-     * fix independent of which font the host happens to substitute: it targets whatever
-     * LibreOffice will actually use, not a number POI made up.
+     * <p>{@link #writeSignatureBlock} must pad to {@link #SIGNATURE_ROW_FILL_FRACTION} of THIS
+     * figure, not of {@link #totalColumnWidthPixels}'s, which has no relationship to what
+     * LibreOffice actually prints the A..I range at. On this template the two disagree by roughly
+     * a third — measured directly: POI says 659.5 pt for A..I, LibreOffice's own model says
+     * 979.0 pt, because the WORKBOOK's default font (index 0, what a raw XLS column-width unit is
+     * defined against) is one the host substitutes to something with a noticeably wider digit
+     * than POI's hardcoded constant assumes. Padding to 95% of the SMALLER figure lands at
+     * {@code 0.95 × (659.5/979.0) ≈ 0.64} of the REAL page width. Reusing
+     * {@link #fontPixelToAnchorPixelScale}'s already-verified twips math, rather than re-deriving
+     * a second way to ask the same question, makes this independent of which font the host
+     * substitutes: it targets whatever LibreOffice will actually use.
      */
     private double totalColumnWidthPixelsLibreOffice(Sheet sh, int firstCol, int lastCol) {
         try {
@@ -2389,7 +2317,7 @@ public class QuotationRenderer {
         }
     }
 
-    // ── GLA-75: per-item pictures ─────────────────────────────────────────────────
+    // ── per-item pictures ─────────────────────────────────────────────────────────
 
     /**
      * How one item prints: its physical description {@code lines}, its picture plan (null when it
@@ -2414,8 +2342,7 @@ public class QuotationRenderer {
     private record PicturePlan(ItemPicture source, boolean beside, double leftFraction, double widthFraction,
                                double heightPt, int textBudget) {}
 
-    // Owner, 2026-09-10: "make sure the sizing appropriate like the reference picture". The
-    // references need two sizes, not one:
+    // Sizing follows the reference quotations, which need two sizes, not one:
     //  • BELOW (QN6900902-6's mosaic panel, QN6900782-2's cut drawings) — the full width of the
     //    description column less a small inset, aspect kept, capped at BELOW_MAX_HEIGHT_MM so a
     //    tall portrait image cannot eat a page. ~60 mm is "fairly large": about eight item rows.
@@ -2577,10 +2504,10 @@ public class QuotationRenderer {
     /**
      * Widens column {@code col} so the FULL {@code text} already written at ({@code row}, {@code
      * col}) fits — companion to {@link #fitColumnToNumber}, for a column that (unlike E/H/I's
-     * money figures) carries free text whose length this class does not otherwise predict. Fix
-     * (2026-09-15): เลขที่อ้างอิง / Ref. at I4 can carry a revision suffix ("QT-2026-0034-1") wider
-     * than the grand total {@link #sizeMoneyColumns} already sized column I for, and I is the last
-     * printed column — nothing to its right can absorb the overflow, so the tail silently clips.
+     * money figures) carries free text whose length this class does not otherwise predict.
+     * เลขที่อ้างอิง / Ref. at I4 can carry a revision suffix ("QT-2026-0034-1") wider than the
+     * grand total {@link #sizeMoneyColumns} already sized column I for, and I is the last printed
+     * column — nothing to its right can absorb the overflow, so the tail silently clips.
      *
      * <p>Measured the SAME way {@link #resolveSignatureFontMetrics} measures the signature row:
      * the font the HOST actually resolves the workbook's declared family to (fontconfig's
@@ -2618,23 +2545,19 @@ public class QuotationRenderer {
         }
     }
 
-    // ── shrink-to-fit safety net for numeric cells (2026-09-16, owner report: "when the numbers
-    // get a lot, like a million pieces, it renders ###") ─────────────────────────────────────
+    // ── shrink-to-fit safety net for numeric cells ───────────────────────────────────────────
     //
     // #sizeMoneyColumns/#fitColumnToText already guard E/H/I and I4 by WIDENING the column, but
-    // the จำนวน/Qty column (C) never got that treatment — a large quantity ("a million pieces")
-    // clips to "###" exactly as reported (reproduced with a real LibreOffice render — see the PR
-    // body's reproduction table). Owner ruling (2026-09-16), given when this was flagged as an
-    // open choice: do NOT widen any more columns here — "the column layout [must] stay consistent
-    // across every document, so column widths must not change with the size of the numbers".
-    // Excel/LibreOffice's other built-in answer to overflow is shrink-to-fit (already used
-    // elsewhere on this class for TEXT overflow — #setCentered, #setRightAligned,
-    // #setStrShrinkToFit): auto-shrink the CELL's own font to the column's EXISTING width, never
-    // touching the column itself. Proven to be honoured by LibreOffice's PDF export for a NUMERIC
-    // cell (not just a string one) with a real HSSFWorkbook round-trip identical to this class's
-    // own template format — see the PR body's probe (a narrow column, one cell shrinkToFit=true,
-    // one control cell shrinkToFit=false: the control prints "###", the shrunk cell prints the
-    // full number).
+    // the จำนวน/Qty column (C) has no such guard — a large quantity ("a million pieces") clips to
+    // "###" (reproduced with a real LibreOffice render). Do NOT widen any more columns: the column
+    // layout must stay consistent across every document, so column widths must not change with
+    // the size of the numbers. Excel/LibreOffice's other built-in answer to overflow is
+    // shrink-to-fit (already used elsewhere on this class for TEXT overflow — #setCentered,
+    // #setRightAligned, #setStrShrinkToFit): auto-shrink the CELL's own font to the column's
+    // EXISTING width, never touching the column itself. LibreOffice's PDF export honours it for a
+    // NUMERIC cell (not just a string one), proven with a real HSSFWorkbook round-trip in this
+    // class's own template format: in a narrow column, a cell with shrinkToFit=true prints the
+    // full number while a control cell with shrinkToFit=false prints "###".
     //
     // Conditional, exactly like #fitColumnToText: only swaps in a new CellStyle when the
     // formatted value is actually predicted to overflow the column's CURRENT width (i.e. AFTER
@@ -2722,16 +2645,15 @@ public class QuotationRenderer {
      *
      * <p>html-fidelity-spec §7 ("page 2+: the box closes at the page bottom and re-opens under the
      * repeated title row"): LibreOffice draws nothing at a page break — the template's own borders
-     * simply stop where the page ends (the owner's workbook render, chn1a-2.png, shows exactly
-     * that), so the row above every break inserted here gets the box's bottom rule across A..I
+     * simply stop where the page ends (see the reference workbook render chn1a-2.png), so the row above every break inserted here gets the box's bottom rule across A..I
      * ({@link #closeItemTableBorders}). The re-opening needs nothing: the repeated title row
      * carries its own top and bottom rules.
      *
      * <p>html-fidelity-spec §9 ("seamless page breaks"): the page budget is the page LibreOffice
      * will actually fill, not the unscaled template. {@link #fitToWidthPaginate} prints at the
      * fit-to-width zoom (≈72% on this template), so a page holds 1/zoom more rows than their raw
-     * point heights suggest — measuring the budget in raw points (as this method once did) broke
-     * pages a third early and left every page 20–30% blank. The accounting here is LibreOffice's
+     * point heights suggest — measuring the budget in raw points would break pages a third early
+     * and leave every page 20–30% blank. The accounting here is LibreOffice's
      * own ({@link th.co.glr.hr.common.sheet.LibreOfficeMetrics}, the same arithmetic
      * {@code SheetPlan#paginate} uses to lay the HTML pages, so both engines agree on the
      * break by construction): zoom = {@link #fitWidthZoomPercent}, every row truncated to
@@ -2758,7 +2680,7 @@ public class QuotationRenderer {
             boolean heading = headingNeeded(item.headingLabel(), prevLabel, prevSet);
             prevLabel = item.headingLabel();
             prevSet = true;
-            // GLA-75: the block is the item's text AND its picture rows (ItemLayout#rows), so a
+            // The block is the item's text AND its picture rows (ItemLayout#rows), so a
             // picture moves to the next page WITH its item and is never cut by a page break.
             int blockRows = (heading ? 1 : 0) + layouts.get(i).rows();
             int blockHmm = scaledRowsHmm(sh, r, r + blockRows - 1, zoom);
@@ -2964,9 +2886,8 @@ public class QuotationRenderer {
     //   - values that ALREADY carry their own unit, because that is literally what the product
     //     asks for: TicketDetailPage's ขนาด field placeholder is "เช่น 60x60 ซม.", and the seeded
     //     sales data follows it ("60x60 ซม.", "60x120 cm").
-    // Appending " cm." unconditionally printed the second shape as "ขนาด 60x60 ซม. cm." on a
-    // customer-facing quotation. That was latent for the legacy flow and went live for Step 4
-    // the moment V162 started populating these columns -- see
+    // Appending " cm." unconditionally would print the second shape as "ขนาด 60x60 ซม. cm." on a
+    // customer-facing quotation -- see
     // QuotationRendererTest#descriptionRendersAllAttributes_andSuppliesTheSizeUnitOnlyWhenItIsMissing.
     // Anchored at the end of the trimmed value, so a bare "600x1200" (ends in a digit) can never
     // match and still gets its unit. The unit regex lives in SizeUnit, shared with the IR factory copy.
@@ -3049,7 +2970,7 @@ public class QuotationRenderer {
     /**
      * ⚠️ The English header date: {@code "September 8, 2026"} — an English month NAME and a
      * <b>COMMON-era</b> year, where {@link #thaiDate} directly below prints
-     * {@code "8 กันยายน 2569"} (Buddhist era, +543). The owner's spec names this as the single
+     * {@code "8 กันยายน 2569"} (Buddhist era, +543). The spec names this as the single
      * easiest thing to get wrong on the English form, which is why the two live adjacent rather
      * than one being reused with a locale flag. {@code Locale.US} explicitly, so a JVM running
      * under a Thai default locale cannot make {@code MMMM} come back in Thai.

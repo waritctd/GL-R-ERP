@@ -72,8 +72,8 @@ public class FinanceDealService {
     // ── read ────────────────────────────────────────────────────────────────────────────────
 
     public FinanceDealDto get(long ticketId, UserPrincipal actor) {
-        requireFinanceAccess(ticketId, actor);
-        return build(ticketId, actor);
+        boolean deadDealOnly = requireFinanceAccess(ticketId, actor, true);
+        return build(ticketId, actor, deadDealOnly);
     }
 
     // ── money actions (each delegates, then returns the finance view) ───────────────────────
@@ -122,19 +122,41 @@ public class FinanceDealService {
 
     // ── access + assembly ───────────────────────────────────────────────────────────────────
 
-    /** Role (403), existence (404), then account's row scope (403) -- in that order. */
+    /** Writes: role (403), existence (404), then account's strict list scope (403) -- in that order. */
     private void requireFinanceAccess(long ticketId, UserPrincipal actor) {
+        requireFinanceAccess(ticketId, actor, false);
+    }
+
+    private FinanceDealDto build(long ticketId, UserPrincipal actor) {
+        return build(ticketId, actor, false);
+    }
+
+    /**
+     * {@code readOnly} additionally lets account OPEN a lost/cancelled deal that still has an ISSUED deposit notice
+     * (the link in its notice; owner ruling 2026-11-04). Every money action keeps the strict scope.
+     *
+     * @return true when account was admitted ONLY through that dead-deal branch (outside its list scope)
+     */
+    private boolean requireFinanceAccess(long ticketId, UserPrincipal actor, boolean readOnly) {
         if (actor == null || !ALLOWED_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         tickets.findSummaryById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
         if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
+            if (readOnly && tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
+                return true;
+            }
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
+        return false;
     }
 
-    private FinanceDealDto build(long ticketId, UserPrincipal actor) {
+    /**
+     * @param deadDealOnly account reached this deal only through the dead-deal read branch: the quotation PDF gates
+     *                     stay strict, so no quotation link is offered (it would only 403)
+     */
+    private FinanceDealDto build(long ticketId, UserPrincipal actor, boolean deadDealOnly) {
         TicketSummaryDto s = tickets.findSummaryById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
 
@@ -163,7 +185,7 @@ public class FinanceDealService {
         var documents = new FinanceDealDto.Documents(
             quotation.map(q -> new FinanceDealDto.QuotationDoc(q.id(), q.number(), q.status(), q.totalAmount(),
                 FinanceDealDto.EXCLUDING_VAT, q.currency(), q.issuedAt(), q.acceptedAt(),
-                quotationPath(ticketId, q))).orElse(null),
+                deadDealOnly ? null : quotationPath(ticketId, q))).orElse(null),
             depositNotices.findByTicket(ticketId).stream().filter(d -> !"DRAFT".equals(d.status()))
                 .map(d -> new FinanceDealDto.DepositNoticeDoc(d.id(), d.docNumber(), d.version(), d.status(),
                     d.issueDate(), d.depositAmount(), d.totalPayable(), FinanceDealDto.INCLUDING_VAT,

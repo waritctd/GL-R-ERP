@@ -7,8 +7,7 @@ export function hasPermission(role, key) {
 }
 
 export function defaultRouteFor() {
-  // Everyone now lands on the shared employee dashboard. Role-specific
-  // dashboards (HR overview, ticket overview) live in their own tabs.
+  // Everyone lands on the shared employee dashboard; role dashboards live in their own tabs.
   return 'dashboard';
 }
 
@@ -33,15 +32,14 @@ export function allowedRoute(route, user) {
   if (route === 'employees' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'detail' && !hasPermission(user.role, 'canViewEmployees')) return fallback;
   if (route === 'requests' && !hasPermission(user.role, 'canReviewProfileRequests')) return fallback;
-  // Role-scoped views: 'tickets' is the pipeline BROWSER (canViewDealPipeline
-  // — sales/sales_manager/ceo only), 'ticket-detail' stays the broader
-  // whole-deal DETAIL read (canViewWholeDeal — keeps account; import has its own page).
+  // 'tickets' is the pipeline BROWSER (canViewDealPipeline: sales/sales_manager/ceo only);
+  // 'ticket-detail' is the whole-deal DETAIL read (canViewWholeDeal: keeps account; import has its own page).
   if (route === 'tickets' && !hasPermission(user.role, 'canViewDealPipeline')) return fallback;
   if (route === 'ticket-detail' && !hasPermission(user.role, 'canViewWholeDeal')) return fallback;
   if (route === 'finance' && !hasPermission(user.role, 'canConfirmPayments')) return fallback;
   if (route === 'commissions' && !hasPermission(user.role, 'canViewCommissions')) return fallback;
-  // Split (issue #390): the route itself only needs read access (canViewPayroll, hr+ceo) --
-  // mutating controls inside PayrollPage.jsx gate individually on canManagePayroll (hr-only).
+  // The route only needs read access (canViewPayroll, hr+ceo); mutating controls inside
+  // PayrollPage.jsx gate on canManagePayroll (hr-only).
   if (route === 'payroll' && !hasPermission(user.role, 'canViewPayroll')) return fallback;
   if (route === 'overtime' && !user.employeeId && !hasPermission(user.role, 'canViewAllOvertime')) return fallback;
   if (route === 'leave' && !user.employeeId && !hasPermission(user.role, 'canViewAllLeave')) return fallback;
@@ -49,11 +47,9 @@ export function allowedRoute(route, user) {
   return route;
 }
 
-// URL-path guards for the router (branch 5). These port the `allowedRoute`
-// conditions above to path predicates so `permissions.js` stays the single
-// source of truth. `canAccessPath` returns true when `user` may see `path`.
-// Unguarded paths (`/`, `/attendance`) and unknown paths return true — the
-// route table / `*` fallback handles those.
+// URL-path guards for the router, ported from the `allowedRoute` conditions above.
+// `canAccessPath` returns true when `user` may see `path`; unguarded and unknown paths
+// (`/`, `/attendance`) return true, the route table / `*` fallback handles those.
 // Kept as a named helper so the lockdown exemption below and the guard above can never drift
 // apart — the two must agree on exactly which paths this covers.
 function isActivityLogPath(path) {
@@ -66,20 +62,15 @@ const PATH_GUARDS = [
   // re-reads hr.employee.is_admin on every call, so forging `admin` on the client gains nothing.
   { test: (p) => isActivityLogPath(p), can: (u) => Boolean(u.admin) },
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
-  // Role-scoped views: the bare `/tickets` list is the deal-PIPELINE BROWSER
-  // (canViewDealPipeline — sales/sales_manager/ceo only); `/tickets/:id`
-  // detail is canViewWholeDeal (keeps account; import now has its own /import/deals/:id page).
+  // The bare `/tickets` list is the deal-PIPELINE BROWSER (canViewDealPipeline: sales/sales_manager/ceo);
+  // `/tickets/:id` detail is canViewWholeDeal (keeps account; import has its own /import/deals/:id page).
   // See docs/role-scoped-views.md.
   { test: (p) => p === '/employees' || p.startsWith('/employees/'), can: (u) => hasPermission(u.role, 'canViewEmployees') },
   { test: (p) => p === '/requests', can: (u) => hasPermission(u.role, 'canReviewProfileRequests') },
-  // `/my-requests` is now an alias that redirects to `/profile`, so it has to
-  // gate identically — a stricter guard would 403 an HR user following an old
-  // notification link to a page they are allowed to see.
+  // `/my-requests` is an alias that redirects to `/profile`, so it must gate identically:
+  // a stricter guard would 403 an HR user following an old notification link.
   { test: (p) => p === '/my-requests' || p === '/profile', can: (u) => !!u.employeeId },
-  // Split (role-scoped views program): the deal-pipeline LIST is the
-  // pipeline browser (canViewDealPipeline — sales/sales_manager/ceo only); a
-  // single ticket's DETAIL page is canViewWholeDeal (account keeps it; import is
-  // sent to its own /import/deals/:id page instead).
+  // List = pipeline browser; a single ticket's DETAIL page is canViewWholeDeal.
   { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
   // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the
   // backend 403s it the whole-deal read and deposit notices — and gets its own per-deal page below.
@@ -89,51 +80,41 @@ const PATH_GUARDS = [
   // role would reach /import/deals/:id.
   { test: (p) => p === '/import/deals' || p.startsWith('/import/deals/'), can: (u) => hasPermission(u.role, 'canViewImportDeal') },
   { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
-  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Exact + prefix (the editor's
-  // /quotations/new and /quotations/:id both need to fall under this). Mirrors the plan's
-  // "view/list/download" role set (ROLE_PERMISSIONS.canViewDealQuotations) OR'd with the
-  // per-employee canCreateQuotation capability grant (owner ruling 2026-09-09) — a
-  // grant-holder's role need not be in that role list at all (e.g. `qc`). Per-row "own deals
-  // only" scoping for `sales` is enforced server-side, not by this route guard.
-  // RC-06: the create page gets the editor's own create gate (sales, sales_manager, or the grant),
-  // not the wider view audience below -- ceo/import/account reach the list and detail pages only.
+  // Direct deal quotation. Exact + prefix (the editor's /quotations/new and /quotations/:id both
+  // fall under this). Mirrors ROLE_PERMISSIONS.canViewDealQuotations OR'd with the per-employee
+  // canCreateQuotation grant: a grant-holder's role need not be in that list (e.g. `qc`).
+  // Per-row "own deals only" scoping for `sales` is enforced server-side, not by this guard.
+  // The create page gets the editor's own create gate (sales, sales_manager, or the grant), not
+  // the wider view audience below: ceo/import/account reach the list and detail pages only.
   // Pathname only, so `/quotations/new?ticket=6` is held to it too.
   { test: (p) => p.split(/[?#]/)[0] === '/quotations/new', can: (u) => canCreateDealQuotationStandalone(u) },
   { test: (p) => p === '/quotations' || p.startsWith('/quotations/'), can: (u) => hasPermission(u.role, 'canViewDealQuotations') || Boolean(u.canCreateQuotation) },
   { test: (p) => p === '/commissions', can: (u) => hasPermission(u.role, 'canViewCommissions') },
-  // Account's money-lifecycle worklist (งานการเงิน) — mirrors ROLE_PERMISSIONS
-  // .canConfirmPayments exactly (account/ceo), same audience as the ticket
-  // confirmDepositPaid/confirmFinalPayment/confirmCloseReady actions this
-  // page's rows drive. The prefix arm covers /finance/deals/:id (the per-deal finance page): the
-  // exact match alone would leave it unclaimed, and canAccessPath fails OPEN for an unclaimed path.
-  // Deliberately NOT OR'd with isBillingNoteReleaseUser
-  // (GLA-129) yet — AccountFinancePage.jsx has no internal tab scoping today,
-  // so opening this guard for a can_issue_billing_note grant holder before
-  // that scoping exists would hand a plain `employee` grant holder the WHOLE
-  // finance worklist (payment-confirmation queue, close-ready actions, etc.),
-  // not just ใบวางบิล — caught in review (GLA-129 branch 1, 2026-09-23). The
-  // step-4 UI branch adds this OR at the SAME time it adds the page's own
-  // tab-level gate, so the two land atomically and there is no window where
-  // the page is reachable but unscoped.
+  // Account's money-lifecycle worklist (งานการเงิน): mirrors ROLE_PERMISSIONS.canConfirmPayments
+  // (account/ceo). The prefix arm covers /finance/deals/:id: the exact match alone would leave it
+  // unclaimed, and canAccessPath fails OPEN for an unclaimed path.
+  // Deliberately NOT OR'd with isBillingNoteReleaseUser: AccountFinancePage.jsx has no internal
+  // tab scoping, so opening this guard for a can_issue_billing_note grant holder would hand a
+  // plain `employee` the WHOLE finance worklist, not just ใบวางบิล. Add the OR together with
+  // the page's own tab-level gate.
   { test: (p) => p === '/finance' || p.startsWith('/finance/'), can: (u) => hasPermission(u.role, 'canConfirmPayments') },
-  // Split (issue #390): mirrors PayrollController exactly -- every GET plus the non-persisting
-  // POST /preview and /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays
-  // hr-only and is gated inside PayrollPage.jsx (canManagePayroll), not at the route level.
+  // Mirrors PayrollController exactly: every GET plus the non-persisting POST /preview and
+  // /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays hr-only and is gated
+  // inside PayrollPage.jsx (canManagePayroll), not at the route level.
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canViewPayroll') },
   // Garnishment shortfall ledger. Needs its own entry because the guard above is an EXACT match
   // and canAccessPath fails OPEN for a path no guard claims — a nested path would otherwise be
   // reachable by any authenticated role. canViewPayroll (hr + ceo) mirrors the endpoint's
   // @PreAuthorize("hasAnyRole('HR','CEO')") and PayrollDeductionShortfallService's VIEW_ROLES.
   { test: (p) => p === '/payroll/deduction-shortfalls', can: (u) => hasPermission(u.role, 'canViewPayroll') },
-  // Written-consent register (issue #376's other read surface). Needs its own entry for exactly the
-  // same reason as the sibling above — `/payroll` is an EXACT match and canAccessPath fails OPEN
-  // for a path no guard claims, so without this line any authenticated role reaches it.
+  // Written-consent register. Needs its own entry for the same reason as the sibling above:
+  // `/payroll` is an EXACT match and canAccessPath fails OPEN for a path no guard claims.
   // canViewPayroll (hr + ceo) mirrors the GET's @PreAuthorize("hasAnyRole('HR','CEO')") and
   // DeductionWrittenConsentService.VIEW_ROLES. The narrower WRITE gate (hasRole('HR'), EDIT_ROLES)
-  // is enforced inside the page on canManagePayroll — a route guard cannot express it, since CEO
+  // is enforced inside the page on canManagePayroll: a route guard cannot express it, since CEO
   // must reach the page read-only.
   { test: (p) => p === '/payroll/deduction-consents', can: (u) => hasPermission(u.role, 'canViewPayroll') },
-  // ล.ย.01 tax-allowance declaration (issue #387). `/tax-allowance` is the
+  // ล.ย.01 tax-allowance declaration. `/tax-allowance` is the
   // employee's own declaration form — same "must have an employeeId" shape as
   // `/profile` above, and just as important to guard explicitly: unknown paths
   // fail OPEN in canAccessPath (the `if (!guard) return true` below), so omitting
@@ -151,18 +132,16 @@ const PATH_GUARDS = [
     can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') || hasPermission(u.role, 'canViewAllSpecialMoney'),
   },
   { test: (p) => p === '/leave', can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllLeave') },
-  // /leave/new (Phase A2, #485): the same audience as /leave, minus hr/ceo (RC-05) -- they do not
-  // file leave (LeaveService SELF_SUBMIT_BLOCKED_ROLES), so the composer is refused outright.
+  // /leave/new: the same audience as /leave, minus hr/ceo: they do not file leave
+  // (LeaveService SELF_SUBMIT_BLOCKED_ROLES), so the composer is refused outright.
   // Inlined rather than importing canSubmitOwnLeave: leaveSurfaceTabs.js imports this module.
   { test: (p) => p === '/leave/new', can: (u) => (!!u.employeeId || hasPermission(u.role, 'canViewAllLeave')) && u.role !== 'hr' && u.role !== 'ceo' },
   { test: (p) => p === '/price-import', can: (u) => hasPermission(u.role, 'canManagePriceImport') },
-  // The bare queue (`/pricing-requests`) is Import's work list — canViewPricingRequestQueue
+  // The bare queue (`/pricing-requests`) is Import's work list: canViewPricingRequestQueue
   // only (import/ceo/sales_manager), never sales. Detail sub-paths are a separate rule: a sales
   // rep needs to reach their OWN request's `/pricing-requests/:id` (PICKED_UP/MORE_INFO_REQUIRED
-  // notifications link there — NotificationRepository.notifyEmployeeForPricingRequest), but the
-  // backend's requireViewable ownership check is what actually enforces per-request access; this
-  // guard only decides whether the role belongs on the URL shape at all. Regression-fixed by
-  // COMMIT 6 review remediation: a single combined rule previously let sales reach the queue too.
+  // notifications link there), but the backend's requireViewable ownership check is what
+  // enforces per-request access; this guard only decides whether the role belongs on the URL shape.
   { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') },
   { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
   // งานนำเข้า — Import's cross-deal fulfilment workspace. This entry is MANDATORY,
@@ -174,16 +153,14 @@ const PATH_GUARDS = [
   { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
-  // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD —
-  // PR #480's API, this branch's UI). Mirrors the three controllers' requireAnyRole(user, "hr",
-  // "ceo") exactly. This is frontend gating only — see ROLE_PERMISSIONS.canManageAttendanceCalendar
-  // in routes.js for the same caveat.
+  // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).
+  // Mirrors the three controllers' requireAnyRole(user, "hr", "ceo") exactly. Frontend gating
+  // only: see ROLE_PERMISSIONS.canManageAttendanceCalendar in routes.js for the same caveat.
   { test: (p) => p === '/settings/attendance-calendar', can: (u) => hasPermission(u.role, 'canManageAttendanceCalendar') },
   // §5 announcement PDF upload (LeaveController#uploadPolicyDocument's requireAnyRole(user, "hr",
-  // "ceo") — PR #494's write API, this branch's UI). Its own entry is required, not optional:
-  // canAccessPath fails OPEN for any path no guard claims, and `/settings/attendance-calendar`
-  // above is an EXACT match, so a second `/settings/*` route without its own line would be
-  // reachable by every authenticated role. Frontend gating only — see
+  // "ceo")). Its own entry is required: canAccessPath fails OPEN for any path no guard claims,
+  // and `/settings/attendance-calendar` above is an EXACT match, so a second `/settings/*` route
+  // without its own line would be reachable by every authenticated role. Frontend gating only: see
   // ROLE_PERMISSIONS.canManageLeavePolicyDocument for the same caveat.
   { test: (p) => p === '/settings/leave-policy', can: (u) => hasPermission(u.role, 'canManageLeavePolicyDocument') },
 ];
@@ -192,13 +169,12 @@ const PATH_GUARDS = [
 // full portal: HR runs payroll and works the ล.ย.01 / profile-request
 // registers, and CEO reads them.
 //
-// Sales release (owner ruling, Ploy 2026-10-22): sales and sales_manager are
-// exempt too — they get back exactly what PATH_GUARDS already grants them (the
-// sales stack; never payroll or the HR registers). import and account stay
+// Sales and sales_manager are exempt too: they get back exactly what PATH_GUARDS already grants
+// them (the sales stack; never payroll or the HR registers). import and account stay
 // locked but get a per-role allowlist (RELEASED_PATHS_BY_ROLE below): import
 // sees งานนำเข้า and คิวขอราคา only, account sees การเงิน only. Every other
-// role — warehouse, qc, employee, and a division manager (role `employee` +
-// manager flag) — is confined to self-service.
+// role (warehouse, qc, employee, and a division manager: role `employee` +
+// manager flag) is confined to self-service.
 //
 // A division manager keeps their approval work despite being locked: leave and
 // OT approval live INSIDE /leave and /employee-requests, both self-service
@@ -250,29 +226,24 @@ const SELF_SERVICE_PATHS = [
 ];
 
 export function isSelfServicePath(path) {
-  // Match on the pathname alone. Every caller today passes a bare path
-  // (RequireAccess passes location.pathname; EmployeeDashboard's quickActions
-  // list holds bare paths), but the lock changed the cost of getting this
-  // wrong: an unmatched path used to fall through to PATH_GUARDS and be
-  // ALLOWED, and now it is REFUSED. `/employee-requests?tab=ot` — the exact
-  // shape the /overtime alias and EmployeeSelfService's OT card use — would
-  // otherwise send a user to the access-denied page for their own OT tab.
-  // This can only ever admit a path whose pathname is already on the list, so
-  // it cannot widen the lock.
+  // Match on the pathname alone. Callers pass bare paths, but `/employee-requests?tab=ot` (the
+  // shape the /overtime alias and EmployeeSelfService's OT card use) would otherwise be refused
+  // and send a user to the access-denied page for their own OT tab. This can only admit a path
+  // whose pathname is already on the list, so it cannot widen the lock.
   const pathname = path.split(/[?#]/)[0];
   if (pathname === '/') return true;
   return SELF_SERVICE_PATHS.some((allowed) => pathname === allowed || pathname.startsWith(`${allowed}/`));
 }
 
-// Quotation release (owner, 2026-09-11): the direct-deal QUOTATION pages open through the lock for
-// the people who create and approve quotations — and ONLY those pages; /tickets, /customers,
+// Quotation release: the direct-deal QUOTATION pages open through the lock for
+// the people who create and approve quotations, and ONLY those pages; /tickets, /customers,
 // /catalog, /pricing-requests and the rest of the sales stack stay locked. The audience mirrors
 // DealQuotationService: EDIT_ROLES (sales, sales_manager), APPROVE_ROLES (sales_manager, plus ceo,
 // who is exempt from the lock anyway), and the per-employee can_create_quotation grant (which
 // covers a grantee whose role is none of these, e.g. qc). The service's VIEW-only roles (import,
 // account) are deliberately NOT included: they read quotations, they do not create them.
 // Per-path like the activity-log exemption below, never by exempting roles, which would unlock
-// the whole sales stack as a side effect. Frontend gating only — the backend enforces the rest.
+// the whole sales stack as a side effect. Frontend gating only; the backend enforces the rest.
 const QUOTATION_RELEASE_ROLES = ['sales', 'sales_manager'];
 
 export function isQuotationReleaseUser(user) {
@@ -285,20 +256,17 @@ function isQuotationPath(path) {
   return pathname === '/quotations' || pathname.startsWith('/quotations/');
 }
 
-// Billing-note release predicate (GLA-99/GLA-129, owner ruling, Ploy 2026-09-19): identifies a
-// holder of the per-employee can_issue_billing_note grant (BillingNoteService.hasWriteGrant),
-// which — like canCreateQuotation above — can land on a role none of the other guards would admit
-// (e.g. a plain `employee`). Grant-driven, not role-driven, same shape as isQuotationReleaseUser —
-// and deliberately NOT account/ceo here: `account` is NOT exempt from the self-service lockdown
-// (only hr/ceo are, SELF_SERVICE_EXEMPT_ROLES above), so a caller wiring this predicate into a
-// lockdown exemption must never let it un-hide a path for a plain account role while locked.
+// Billing-note release predicate: identifies a holder of the per-employee can_issue_billing_note
+// grant (BillingNoteService.hasWriteGrant), which, like canCreateQuotation above, can land on a
+// role none of the other guards would admit (e.g. a plain `employee`). Grant-driven, not
+// role-driven, same shape as isQuotationReleaseUser, and deliberately NOT account/ceo here:
+// `account` is NOT exempt from the self-service lockdown (only hr/ceo are,
+// SELF_SERVICE_EXEMPT_ROLES above), so a caller wiring this predicate into a lockdown exemption
+// must never let it un-hide a path for a plain account role while locked.
 //
-// NOT YET WIRED into PATH_GUARDS, the lockdown bypass below, or AppShell's nav — deliberately, per
-// review (GLA-129 branch 1, 2026-09-23): AccountFinancePage.jsx has no internal tab-level scoping
-// today, so opening /finance's route guard for a grant holder before that scoping exists would
-// expose the WHOLE finance worklist, not just ใบวางบิล. The step-4 UI branch wires this predicate
-// into PATH_GUARDS' /finance entry, the lockdown exemption, and AppShell's nav item in the SAME
-// change that adds AccountFinancePage.jsx's own tab gate, so the three always land together.
+// NOT YET WIRED into PATH_GUARDS, the lockdown bypass below, or AppShell's nav: AccountFinancePage.jsx
+// has no internal tab-level scoping, so opening /finance's route guard for a grant holder would
+// expose the WHOLE finance worklist, not just ใบวางบิล. Wire all three together with that tab gate.
 export function isBillingNoteReleaseUser(user) {
   return Boolean(user?.canIssueBillingNote);
 }

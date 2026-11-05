@@ -15,16 +15,14 @@ import java.util.List;
  * Write shapes for the STORED ใบขอซื้อ.
  *
  * <p>Accepted by {@link ImportRequestController}'s PLURAL ({@code /import-requests}) routes — see
- * that class's own Javadoc for the singular/plural split (REVIEW ROUND 2 nit: this used to say "WIP
- * — no controller accepts these yet", true when {@code V154__import_request_document.sql} first
- * designed these shapes but stale since the controller wiring landed).
+ * that class's own Javadoc for the singular/plural split.
  */
 public final class ImportRequestRequests {
     private ImportRequestRequests() {}
 
     /**
      * Mirrors every other step's {@code clientRequestId}-idempotent action request shape, plus
-     * (V184, owner decision 09-18) the country a caller supplies for any factory {@code
+     * the country a caller supplies for any factory {@code
      * createDrafts}'s resolution cascade would otherwise need to auto-create with no country at
      * all. Optional/empty when the deal's lines all resolve to EXISTING factories — the common
      * case, which needs no new-factory country at all.
@@ -48,7 +46,7 @@ public final class ImportRequestRequests {
 
     /**
      * One factory NAME's caller-supplied import lead time, for a new factory whose lead time can be
-     * derived from neither the quotation nor the country default (owner ruling 10-29). Same bounds as
+     * derived from neither the quotation nor the country default. Same bounds as
      * {@link SetLeadTimeRequest}; min must not exceed max.
      */
     public record NewFactoryLeadTimeInput(
@@ -59,7 +57,7 @@ public final class ImportRequestRequests {
 
     /**
      * Sales' factory choice for ONE deal line that has no factory (a free-text line on a direct
-     * quotation — W3-03 follow-up, owner ruling 2026-10-29). Applied only to a line that resolves to
+     * quotation). Applied only to a line that resolves to
      * no factory at all; a line that already has one (catalogue link, PCR factory or typed name) keeps
      * it and the choice is ignored.
      *
@@ -70,8 +68,7 @@ public final class ImportRequestRequests {
 
     /**
      * One factory NAME's caller-supplied country, for {@code createDrafts}'s auto-create path
-     * (owner decision 2, revised 09-18: "Sales should be forced to select country ... if there is
-     * unknown make it อื่นๆ and let the input"). Matched against an unresolved line's typed factory
+     * (Sales must select a country; if unknown, อื่นๆ with a typed value). Matched against an unresolved line's typed factory
      * name by the SAME {@code ImportRequestService#normalizeFactoryName} the resolution cascade
      * itself uses — a caller MUST supply {@code factoryName} exactly (or near-exactly — normalized)
      * as it appears on the deal line(s) it is meant to cover.
@@ -80,7 +77,7 @@ public final class ImportRequestRequests {
      *                     {@code 'ZZ'} (อื่นๆ) is a real, always-valid option here.
      * @param countryOther required (non-blank, ≤100 chars) when {@code countryCode} is {@code 'ZZ'},
      *                     forbidden otherwise — the same pairing {@code
-     *                     price_catalog.factories.country_other}'s CHECK constraints enforce (V184).
+     *                     price_catalog.factories.country_other}'s CHECK constraints enforce.
      */
     public record NewFactoryCountryInput(
         @NotBlank String factoryName,
@@ -113,7 +110,7 @@ public final class ImportRequestRequests {
         LocalDate approvedDate,
         @Valid List<ImportRequestItemInput> items,
         /**
-         * Body field (owner decision 09-18 #2): moves only while DRAFT, same as {@code projectName}
+         * Body field: moves only while DRAFT, same as {@code projectName}
          * etc — the owning rep/CEO edit it here. Sent absent leaves it alone; sent present, {@link
          * #leadTimeMaxDays} MUST be present too (both-or-neither — {@code
          * ImportRequestService#requireValidLeadTimePair}), matching {@code
@@ -139,15 +136,15 @@ public final class ImportRequestRequests {
 
     /**
      * @param note    the printed sub-row — free text, prefilled at creation from {@link #color}/
-     *                {@link #texture} (owner decision 09-18 #3 §A) but independently editable
+     *                {@link #texture} but independently editable
      *                thereafter; a business-typed note is never overwritten by re-deriving it — see
      *                {@code ImportRequestLinePrefill#mergeNote}.
      * @param color   structured colour, prefilled from the deal line — carried separately from
      *                {@link #note} so the order-email draft can show a real Colour/Surface/Size
      *                detail line rather than re-parsing formatted Thai text back out of a free-text
-     *                field. Optional; PR-B is expected to surface it read-only.
+     *                field. Optional.
      * @param texture structured surface/texture — see {@link #color}.
-     * @param brand   (REVIEW ROUND 2, S-A) the deal line's product brand, prefilled from {@code
+     * @param brand   the deal line's product brand, prefilled from {@code
      *                ticket_item.brand} — feeds the order-email draft's per-line header
      *                ("<Brand> <Model>  (Code: X)"). Separate from {@code
      *                sales.import_request.brand}, the FORM-level display snapshot.
@@ -171,8 +168,7 @@ public final class ImportRequestRequests {
     /**
      * Issues a draft: mints {@code IR<yy><nnn>} and freezes the body.
      *
-     * <p>{@link #docNumber} is the owner-requested OVERRIDE ("the ir number should be able to be
-     * overriden too"). When supplied it is used verbatim and the sequence is NOT advanced — so a
+     * <p>{@link #docNumber} is an optional OVERRIDE of the minted number. When supplied it is used verbatim and the sequence is NOT advanced — so a
      * number typed ahead of the counter cannot later be minted a second time by accident, because
      * {@code ux_import_request_doc_number} refuses the duplicate outright. When absent the next
      * sequence value is minted normally.
@@ -184,7 +180,7 @@ public final class ImportRequestRequests {
     /**
      * Sales-owned: "กำหนดวันที่ต้องการของ" on the DEAL, snapshotted onto each IR at issue.
      *
-     * <p>Free text, not a date — the owner's own IR69068 reads "Within 21/5/26", which no date column
+     * <p>Free text, not a date — a real IR reads "Within 21/5/26", which no date column
      * could hold without changing what the customer was told. Nullable so it can be cleared.
      */
     public record SetRequiredByNoteRequest(
@@ -192,12 +188,11 @@ public final class ImportRequestRequests {
     ) {}
 
     /**
-     * Advances an ISSUED row's per-factory progress by one step (V184, GLA-100/S12-S17).
+     * Advances an ISSUED row's per-factory progress by one step (S12-S17).
      *
      * @param targetStep one of {@link ImportRequestStep#ORDER}. Forward-only from the row's current
-     *                   step (skips allowed — the owner accepted "forward skips allowed, never
-     *                   backwards; correct via revision" as a default), enforced by the service, not
-     *                   this record.
+     *                   step (forward skips allowed, never backwards; correct via revision),
+     *                   enforced by the service, not this record.
      * @param eventDate  backdatable — import may log a step after the fact. Null defaults to today
      *                   (Bangkok).
      * @param note       free text, optional.
@@ -209,7 +204,7 @@ public final class ImportRequestRequests {
     ) {}
 
     /**
-     * Sets an ISSUED row's lead time (owner decision 09-18 #2) — import/CEO only (the DRAFT-stage
+     * Sets an ISSUED row's lead time — import/CEO only (the DRAFT-stage
      * edit for the owning rep/CEO goes through {@link UpdateImportRequestRequest} instead, exactly
      * like the other body fields). Both fields REQUIRED, unlike the PATCH-optional pair on {@link
      * UpdateImportRequestRequest}: this route's one job is setting them, so there is no "absent
@@ -222,7 +217,7 @@ public final class ImportRequestRequests {
     ) {}
 
     /**
-     * Edits the drafted order-email (owner decision 09-18 #3 §B) — PATCH semantics like {@link
+     * Edits the drafted order-email — PATCH semantics like {@link
      * UpdateImportRequestRequest}: an absent field is left alone. Refused once the draft has been
      * marked sent — see {@code ImportRequestService#updateEmailDraft}.
      */

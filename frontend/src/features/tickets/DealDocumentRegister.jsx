@@ -24,11 +24,12 @@ import {
   dropLegacyDuplicatedByChain, groupChainQuotations, groupDepositNotices,
   groupDirectQuotations, groupLegacyQuotations, groupRemainingInvoices, sortGroupsNewestFirst,
 } from './dealDocumentVersions.js';
+import { isOwnerOrKeyer } from './dealOwnership.js';
 
 /** Same read gate as ImportRequestService#requireRead: import / CEO / sales_manager, or the OWNING sales rep. */
 export function canReadStoredImportRequests(user, summary) {
   return ['import', 'ceo', 'sales_manager'].includes(user?.role)
-    || (user?.role === 'sales' && summary?.createdById != null && summary.createdById === user?.id);
+    || (user?.role === 'sales' && isOwnerOrKeyer(summary, user?.id));
 }
 
 /**
@@ -129,7 +130,7 @@ export function DealDocumentRegister({
   // requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO
   // carve-out). UI-only convenience for RemainingInvoiceDialog's own button visibility — the
   // backend gate above is what actually enforces this.
-  const canWriteRemainingInvoice = user?.role === 'sales' && user?.id === summary?.createdById;
+  const canWriteRemainingInvoice = user?.role === 'sales' && isOwnerOrKeyer(summary, user?.id);
 
   const eligiblePricingRequests = useMemo(
     () => (canViewQuotations ? pricingRequests.filter((pr) => canViewCustomerQuotation(user, pr)) : []),

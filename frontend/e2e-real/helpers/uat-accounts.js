@@ -50,13 +50,12 @@ export const UAT_SALES_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_mana
 /**
  * Mirrors db/migration-uat/V912__uat_e2e_test_personas.sql on the `uat` branch.
  *
- * NOT V900's @uat.glr personas — those are GONE from the deployed UAT database. Measured
- * 2026-08-15: zero rows match '%@uat.glr' while flyway_schema_history still records V900–V911 as
- * applied, because UAT's hr.employee was rebuilt from PRODUCTION on top of the seed. This table
- * previously named them, and no password could ever have worked.
+ * NOT V900's @uat.glr personas — those are GONE from the deployed UAT database: no rows match
+ * '%@uat.glr' while flyway_schema_history still records V900–V911 as applied, because UAT's
+ * hr.employee was rebuilt from PRODUCTION on top of the seed, so no password could ever work.
  *
- * V912 exists so this suite never logs in as a real employee: UAT now carries 207 production-
- * derived people, personal gmail/hotmail addresses included. `.invalid` is reserved by RFC 2606
+ * V912 exists so this suite never logs in as a real employee: UAT carries production-derived
+ * people, personal gmail/hotmail addresses included. `.invalid` is reserved by RFC 2606
  * and can never receive mail, which is the point.
  */
 export const UAT_PERSONAS = {

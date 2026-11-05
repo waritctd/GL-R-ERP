@@ -59,6 +59,50 @@ describe('DataTable', () => {
     expect(screen.getByText('หน้า 1 / 3')).toBeTruthy();
   });
 
+  // Without gridClassName every `.data-row` is a one-column grid: each cell stacks full-width and
+  // one record fills the screen. #1222 shipped exactly that on the commission approval page, and
+  // the Activity Log page had it too. Fail loudly in dev/tests instead.
+  it('throws in dev when gridClassName is missing, instead of stacking every cell in one column', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => render(
+        <DataTable columns={baseColumns} rows={makeRows(2)} getRowKey={(row) => row.id} />,
+      )).toThrow(/gridClassName/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('a mobile-card-only render still needs gridClassName: the same table renders as a grid above 720px', () => {
+    stubMobile();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => render(
+        <DataTable columns={baseColumns} rows={makeRows(2)} getRowKey={(row) => row.id} mobileCard={(row) => row.name} />,
+      )).toThrow(/gridClassName/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('in production a missing gridClassName logs once, not on every render', async () => {
+    vi.stubEnv('DEV', false);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // fresh module: the once-flag is module state, so this must not depend on test order
+      vi.resetModules();
+      const { DataTable: FreshTable } = await import('./DataTable.jsx');
+      const table = (rows) => <FreshTable columns={baseColumns} rows={rows} getRowKey={(row) => row.id} />;
+      const { rerender } = render(table(makeRows(2)));
+      rerender(table(makeRows(3)));
+      rerender(table(makeRows(4)));
+      expect(consoleError.mock.calls.filter(([message]) => String(message).includes('gridClassName'))).toHaveLength(1);
+    } finally {
+      consoleError.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('uses native desktop table structure with header and body groups', () => {
     const { container } = render(
       <DataTable

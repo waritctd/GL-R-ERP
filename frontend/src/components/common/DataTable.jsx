@@ -224,6 +224,9 @@ function downloadCsv(csv, filename = 'data-table-export.csv') {
   URL.revokeObjectURL(url);
 }
 
+// Production logs the missing-grid misuse once per page load, not on every render.
+let warnedMissingGrid = false;
+
 /**
  * Generic, controlled-data table primitive. Keeps emitting the exact
  * `{gridClassName} table-head` / `{gridClassName} data-row` classes the
@@ -323,6 +326,15 @@ export function DataTable({
   // steal focus from the user's current toolbar/control.
   focusRowOnSelectClick = false,
 }) {
+  // `.data-row` is `display: grid`; with no template every cell stacks full-width in one column.
+  if (!gridClassName) {
+    const message = 'DataTable requires gridClassName (a grid-template-columns class) or every cell stacks in one column.';
+    if (import.meta.env.DEV) throw new Error(message);
+    if (!warnedMissingGrid) {
+      warnedMissingGrid = true;
+      console.error(message);
+    }
+  }
   // Below 720px a dense grid crushes every column into an unreadable stub
   // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
   // that instead of the column cells. Search/sort/pagination act on data, not

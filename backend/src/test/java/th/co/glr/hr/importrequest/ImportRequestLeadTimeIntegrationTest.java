@@ -71,7 +71,7 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
-            tickets, ticketService);
+            tickets, ticketService, notifications);
 
         ownerId = insertEmployee("LT-OWN");
         owner = principal(ownerId, "sales");

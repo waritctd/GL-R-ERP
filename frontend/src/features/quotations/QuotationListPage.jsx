@@ -18,83 +18,68 @@ import {
   filterDealQuotationRows, isDealQuotationReadOnlyViewer,
 } from './quotationMeta.js';
 
-// DataTable's `gridClassName` becomes the desktop `<tr>`'s own class (alongside the shared
-// `.table-head`/`.data-row` base rules in styles.css, which set `display:grid` with no
-// `grid-template-columns` of their own -- see that file's `.table-head, .data-row` rule).
-// Every other DataTable caller supplies that missing piece as a bespoke, page-specific class
-// declared in styles.css (e.g. `.pricing-request-queue-table`) -- the legacy pattern this repo
-// is retiring (CLAUDE.md: "Do not add new page-specific CSS files"). A Tailwind arbitrary-value
-// utility expresses the same `grid-template-columns` without one: เลขที่ / ลูกค้า·โครงการ /
+// DataTable's `gridClassName` becomes the desktop `<tr>`'s own class; the shared
+// `.table-head`/`.data-row` rules in styles.css set `display:grid` with no
+// `grid-template-columns`. A Tailwind arbitrary-value utility supplies it without a page-specific
+// CSS class (CLAUDE.md: "Do not add new page-specific CSS files"): เลขที่ / ลูกค้า·โครงการ /
 // พนักงานขาย / ยอดรวม / สถานะ / วันที่, six columns weighted by how much text they carry.
 //
 // ── Column floors: FIXED, identical in every row ──────────────────────────────────────────────
-// Six `minmax(0, …)` tracks used to be the whole story, and `minmax(0, …)` lets the grid shrink a
-// column BELOW its own text. The cells are `white-space: nowrap` with `overflow: clip`
-// (styles.css's `.data-row > td`), so that loss never appears as overflow — it appears as SILENTLY
-// truncated content. Measured at a 721px viewport (655px row, 559px of content budget after 36px
-// padding and 60px of gaps): เลขที่ lost 28px, ลูกค้า/โครงการ 29px, พนักงานขาย 13px and วันที่ 14px,
-// and `QT-2026-0005-2` rendered `QT-2026-000…` — the `-N` suffix is the ONLY thing distinguishing a
-// revision from the document it replaces, so of everything on this row it is the worst to lose.
+// `minmax(0, …)` lets the grid shrink a column BELOW its own text, and the cells are
+// `white-space: nowrap` with `overflow: clip` (styles.css's `.data-row > td`), so the loss appears
+// as SILENTLY truncated content: at a 721px viewport `QT-2026-0005-2` rendered `QT-2026-000…`, and
+// the `-N` suffix is the ONLY thing distinguishing a revision from the document it replaces.
 //
 // The floors are FIXED lengths, never `min-content`: the head row and each data row are SEPARATE
-// grid containers, so `min-content` sizes every row from ITS OWN content and the columns then
-// stagger row to row (QuotationDocumentView.jsx shipped that by mistake and a review measured 23px
-// of drift — read that file's ITEM_GRID comment, this is the same fix).
+// grid containers, so `min-content` sizes every row from ITS OWN content and the columns stagger
+// row to row (same fix as QuotationDocumentView.jsx's ITEM_GRID).
 //
-// Sized from each column's widest realistic value, measured in the live cell typography and
-// rounded up. Money and dates are sized against the FALLBACK font, not Sarabun: Sarabun arrives
-// from Google Fonts with `display=swap`, so during the swap window — and permanently on the on-prem
-// deployment if that host cannot reach fonts.googleapis.com — `system-ui` renders instead and every
-// figure is ~14% wider.
+// Sized from each column's widest realistic value in the live cell typography, rounded up. Money
+// and dates are sized against the FALLBACK font, not Sarabun: Sarabun arrives from Google Fonts
+// with `display=swap`, and on the on-prem deployment (if fonts.googleapis.com is unreachable)
+// `system-ui` renders permanently, ~14% wider.
 //
 //   เลขที่   6.875rem/110px  `QT-2026-9999-99` = 108.4px in the monospace stack (a system stack, so
 //                            no swap risk). Cannot wrap: breaking a document number mid-token would
-//                            be worse than the truncation this replaces.
+//                            be worse than truncating.
 //   ยอดรวม  8.25rem/132px   `฿99,999,999.99` = 114px in Sarabun but 130.5px in the fallback. The
-//                            same floor QuotationDocumentView.jsx uses for เป็นเงิน, deliberately —
+//                            same floor QuotationDocumentView.jsx uses for เป็นเงิน, deliberately:
 //                            a grand total is at least as large as any line total on it.
 //   สถานะ   4.75rem/76px    the widest badge label, อนุมัติแล้ว, plus the badge's own padding.
-//   วันที่   6.5rem/104px    ALL TWELVE months measured, not one. `เม.ย.` is the widest — four glyph
-//                            clusters, not three — at 100.13px in the fallback, so the 98px this was
-//                            first set to CLIPPED every April date on a host without Sarabun. `พ.ค.`
-//                            96.74 and `ต.ค.` 96.16 had under 2px to spare. Never size a Thai date
-//                            column from one sample month. The cell renders a bare string, so it
-//                            truncates rather than wraps — see the note on พนักงานขาย below for why
-//                            it is deliberately NOT wrapped in a <span>.
+//   วันที่   6.5rem/104px    ALL TWELVE months measured: `เม.ย.` is the widest (four glyph
+//                            clusters) at 100.13px in the fallback; `พ.ค.` 96.74 and `ต.ค.` 96.16
+//                            have under 2px to spare. Never size a Thai date column from one
+//                            sample month. The cell renders a bare string, so it truncates rather
+//                            than wraps (see the note on พนักงานขาย below for why it is NOT wrapped
+//                            in a <span>).
 //   พนักงานขาย —            NO floor, deliberately. It wraps, and the longest real surname
-//                            (`วงศ์ประเสริฐ`, 82.5px) exceeds any floor this budget can afford, so a
-//                            floor could never prevent a mid-word break — its only actual effect
-//                            was taking 64px from the absorber. Both free-text columns now share
-//                            what the four floored columns leave, by their `fr` weights.
+//                            (`วงศ์ประเสริฐ`, 82.5px) exceeds any floor this budget can afford, so
+//                            a floor could never prevent a mid-word break. Both free-text columns
+//                            share what the four floored columns leave, by their `fr` weights.
 //
 // ลูกค้า / โครงการ and พนักงานขาย keep `minmax(0, …)`: they are the two columns of free text, both
 // wrap, and so they are the two that can give up width without losing anything.
 //
-// ⚠️ This string must stay ONE unbroken literal. Splitting it across a `+` concatenation — a
-// natural-looking edit — leaves Tailwind's scanner unable to see the arbitrary value, so the rule is
-// never emitted, `grid-template-columns` goes unset, and the row collapses to a single implicit
-// track (measured: 63.5px tall becomes 242px, cells stacked). Lint, the unit suite and `npm run
-// build` ALL stay green, and the dev server keeps working from its cache, so nothing catches it
-// except reading `dist/assets/*.css`. The guard test asserts this file's own source text for that
-// reason.
+// ⚠️ This string must stay ONE unbroken literal. Splitting it across a `+` concatenation leaves
+// Tailwind's scanner unable to see the arbitrary value, so the rule is never emitted,
+// `grid-template-columns` goes unset, and the row collapses to a single implicit track. Lint, the
+// unit suite and `npm run build` ALL stay green; only reading `dist/assets/*.css` shows it. The
+// guard test asserts this file's own source text for that reason.
 //
 // ⚠️ At a browser root font-size above about 18.6px the floors (30rem total) exceed the 559px the
 // row has at a 721px viewport. The wrapping <section> is `overflow-x-auto`, so that degrades to a
-// horizontal scrollbar rather than losing anything — but it is a state the old all-`minmax(0,…)`
-// grid could not reach.
+// horizontal scrollbar rather than losing anything.
 const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]';
 
-// The tab set itself is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js) — owner feedback F5,
-// 2026-09-10 replaced the old six status chips (ทั้งหมด/รออนุมัติ/ร่าง/อนุมัติแล้ว/ถูกแทนที่/
-// ยกเลิก) with the five the owner asked for. ร่าง and ถูกแทนที่ are deliberately GONE as tabs: a
-// plain untouched draft is the rep's own working copy and never needed a queue of its own, and a
-// superseded document is history. Both statuses still render their own badge on a row reached any
-// other way, so nothing became unreachable — dealQuotationStatusLabel still knows all five.
+// The tab set is DEAL_QUOTATION_STATUS_TABS (quotationMeta.js). ร่าง and ถูกแทนที่ are deliberately
+// NOT tabs: a plain untouched draft is the rep's own working copy and a superseded document is
+// history. Both still render their own badge on a row reached any other way
+// (dealQuotationStatusLabel knows all five).
 //
-// Approvers (sales_manager/ceo) lead with the "รออนุมัติ" queue -- that is the work waiting on
-// THEM. sales/import/account have no approval queue of their own, so they land on "ทั้งหมด".
-// #L7: canApproveDealQuotation (quotationMeta.js) instead of a page-local role set -- same
-// role-only gate, single source of truth with the editor's own อนุมัติ/ไม่อนุมัติ button gate.
+// Approvers (sales_manager/ceo) lead with the "รออนุมัติ" queue, the work waiting on THEM.
+// sales/import/account have no approval queue of their own, so they land on "ทั้งหมด".
+// canApproveDealQuotation (quotationMeta.js) is the single source of truth, shared with the
+// editor's own อนุมัติ/ไม่อนุมัติ button gate.
 
 const COLUMNS = [
   {
@@ -184,21 +169,19 @@ function QuotationCard({ row }) {
 }
 
 /**
- * ใบเสนอราคา list — Quotation v2 (QUOTATION-V2-PLAN.md). Route-guarded by
- * ROLE_PERMISSIONS.canViewDealQuotations; see app/permissions.js PATH_GUARDS for '/quotations'.
- * `sales` receives only its own deals' quotations already scoped server-side (see
- * dealQuotations.list's own doc comment) -- this page adds no client-side ownership filter on
- * top of that.
+ * ใบเสนอราคา list. Route-guarded by ROLE_PERMISSIONS.canViewDealQuotations; see
+ * app/permissions.js PATH_GUARDS for '/quotations'. `sales` receives only its own deals'
+ * quotations already scoped server-side (see dealQuotations.list's doc comment) -- this page adds
+ * no client-side ownership filter.
  */
 export function QuotationListPage({ user }) {
   const queryClient = useQueryClient();
   const isApprover = canApproveDealQuotation(user);
 
-  // The active tab lives in the URL (owner feedback F5: "driven by the URL (`?status=`)"), not in
-  // component state -- so a tab is linkable, survives a refresh and a back button, and an approver
-  // can paste "the รออนุมัติ queue" to a colleague and have them see the same thing. An ABSENT
-  // param means "this role's default tab"; an unrecognised one falls back to the same, rather than
-  // rendering an empty list for a typo'd or retired key.
+  // The active tab lives in the URL (`?status=`), not in component state, so a tab is linkable,
+  // survives a refresh and a back button, and an approver can paste "the รออนุมัติ queue" to a
+  // colleague. An ABSENT param means "this role's default tab"; an unrecognised one falls back to
+  // the same, rather than rendering an empty list for a typo'd or retired key.
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedKey = searchParams.get('status');
   const activeTab = dealQuotationStatusTab(requestedKey)
@@ -220,14 +203,12 @@ export function QuotationListPage({ user }) {
   });
   const rows = useMemo(() => listQuery.data ?? [], [listQuery.data]);
 
-  // Rep filter (owner ruling 2026-09-24): only sales_manager/ceo see every deal on this list, so
-  // only they get a "filter by พนักงานขาย" control — everyone else's rows are already scoped to
-  // their own deals server-side, and a rep filter over a single rep's own rows would be pointless
-  // chrome. Options are derived from the CURRENT rows (quotationMeta.js's own doc explains why),
-  // so switching status tabs can shrink the option set out from under a previously-picked value —
-  // the `repOptions.some(...)` fallback below is what keeps a stale repFilter from silently hiding
-  // every row instead of just resetting the control to "ทั้งหมด".
-  // The อีเมลลูกค้า filter (owner ask 2026-10-13) is not a scope question, so EVERY role gets it.
+  // Rep filter: only sales_manager/ceo see every deal on this list, so only they get a "filter by
+  // พนักงานขาย" control; everyone else's rows are already scoped to their own deals server-side.
+  // Options are derived from the CURRENT rows (quotationMeta.js's doc explains why), so switching
+  // status tabs can shrink the option set out from under a previously-picked value; the
+  // `repOptions.some(...)` fallback below keeps a stale repFilter from silently hiding every row.
+  // The อีเมลลูกค้า filter is not a scope question, so EVERY role gets it.
   const seesAll = dealQuotationListSeesAll(user);
   const repOptions = useMemo(() => (seesAll ? dealQuotationRepOptions(rows) : []), [seesAll, rows]);
   const [repFilter, setRepFilter] = useState('');
@@ -240,10 +221,9 @@ export function QuotationListPage({ user }) {
     [rows, effectiveRepFilter, effectiveAmountFilter, emailFilter],
   );
 
-  // Owner follow-up (2026-09-24, same day as the original ask): the header-embedded filters below
-  // were superseded by a plain filter row ABOVE DataTable's own search input (see the JSX below,
-  // shared by every breakpoint) -- headers stay plain text again at every width, matching every
-  // other column. `columns` no longer diverges by role.
+  // The filters sit in a plain row ABOVE DataTable's own search input (see the JSX below, shared by
+  // every breakpoint), so column headers stay plain text at every width and `columns` does not
+  // diverge by role.
   const columns = COLUMNS;
 
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
@@ -251,11 +231,9 @@ export function QuotationListPage({ user }) {
   // than blocking the list or showing a zero that would read as "nothing here".
   const countsQuery = useQuery({
     queryKey: queryKeys.dealQuotationCounts(),
-    // The BARE DealQuotationCountsDto — DealQuotationController#counts returns the record with no
-    // envelope. This used to read `r?.counts ?? r`, which meant a real disagreement between the
-    // controller, hrApi's comment and the mock could never surface as a failure (review finding
-    // MED-3); the tolerance is gone so the contract test and the mock shape test are the ones that
-    // have to be right.
+    // The BARE DealQuotationCountsDto: DealQuotationController#counts returns the record with no
+    // envelope. No `r?.counts ?? r` tolerance, so a disagreement between the controller, hrApi's
+    // comment and the mock surfaces in the contract test and the mock shape test.
     queryFn: () => api.dealQuotations.counts().then((r) => r ?? null),
   });
   const counts = countsQuery.data ?? null;
@@ -264,10 +242,10 @@ export function QuotationListPage({ user }) {
     <PageStack>
       <PageHeader
         title="ใบเสนอราคา"
-        // "ของคุณ" is only true for the rep whose own rows these are. import/account are
-        // read-only viewers of OTHER people's quotations (isDealQuotationReadOnlyViewer), so the
-        // possessive was simply wrong for them — a third branch rather than a reworded second one,
-        // because the approver line is right as it stands.
+        // "ของคุณ" is only true for the rep whose own rows these are. import/account are read-only
+        // viewers of OTHER people's quotations (isDealQuotationReadOnlyViewer), so the possessive
+        // would be wrong for them: a third branch rather than a reworded second one, because the
+        // approver line is right as it stands.
         subtitle={isApprover
           ? 'ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด'
           : isDealQuotationReadOnlyViewer(user)
@@ -276,9 +254,8 @@ export function QuotationListPage({ user }) {
         actions={(
           <>
             {canCreateDealQuotationStandalone(user) ? (
-              // Owner ask 2026-09-10 ("inline deal creation"): the entry point into
-              // /quotations/new with no ?ticket= -- the same role-only gate the editor page
-              // itself checks before rendering DealCustomerCard for that URL, so this link and
+              // The entry point into /quotations/new with no ?ticket=: the same role-only gate the
+              // editor page checks before rendering DealCustomerCard for that URL, so this link and
               // the page it leads to never disagree about who may land there.
               <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'primary', size: 'sm' }))}>
                 <Icon name="plus" size={14} />
@@ -330,7 +307,7 @@ export function QuotationListPage({ user }) {
       </div>
       <div id="quotation-list-panel" role="tabpanel">
         {/* Filter row: พนักงานขาย/ยอดรวม for see-all roles (sales_manager/ceo), อีเมลลูกค้า for everyone -- moved OUT of the
-            column headers (2026-09-24 owner follow-up) and rendered here, above DataTable's own
+            column headers and rendered here, above DataTable's own
             search input (which renders inside `data-table-toolbar`), at every breakpoint. Not
             via DataTable's `toolbarExtra`: that prop renders INLINE alongside the search field in
             the same flex-wrap row, so on a narrow viewport it wraps BELOW the search box only
@@ -398,12 +375,11 @@ export function QuotationListPage({ user }) {
           mobileCard={(row) => <QuotationCard row={row} />}
           searchable
           searchPlaceholder="ค้นหาลูกค้า / โครงการ"
-          // The filters render outside DataTable now (see above) and are always visible regardless
-          // of this flag, and so is DataTable's own search box (its toolbar is unconditional). What
-          // this keeps is the COLUMN HEADER ROW when a filter narrows the list to zero rows, so the
-          // table keeps its shape under the empty-state line instead of swapping to a bare panel.
-          // See-all roles always (as before); everyone else only while their email filter is set,
-          // so a rep with genuinely no quotations still gets the plain empty-state panel.
+          // The filters render outside DataTable and are always visible regardless of this flag, as
+          // is DataTable's own search box. What this keeps is the COLUMN HEADER ROW when a filter
+          // narrows the list to zero rows, so the table keeps its shape under the empty-state line.
+          // See-all roles always; everyone else only while their email filter is set, so a rep with
+          // genuinely no quotations still gets the plain empty-state panel.
           retainHeaderWhenEmpty={seesAll || emailFilter !== ''}
           loading={listQuery.isLoading}
           emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}

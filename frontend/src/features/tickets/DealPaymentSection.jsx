@@ -22,6 +22,7 @@ import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { depositStatus } from './dealMoneyStatus.js';
 import { EVENT_KIND_LABEL, PAYMENT_TRACK_KINDS } from './DealHistoryPanel.jsx';
 import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
+import { isOwnerOrKeyer } from './dealOwnership.js';
 
 /** `Date.parse`-safe timestamp, or `null`: an unparseable row sorts last rather than floating to the top as `NaN` would. */
 function toTimestamp(value) {
@@ -159,7 +160,7 @@ export function DealPaymentSection({
 }) {
   const queryClient = useQueryClient();
   const role = user?.role;
-  const isOwnerSales = role === 'sales' && user?.id === summary.createdById;
+  const isOwnerSales = role === 'sales' && isOwnerOrKeyer(summary, user?.id);
   const ps = summary.paymentStatus;
   const hasAction = (action) => availableActions.some((item) => item.action === action);
 

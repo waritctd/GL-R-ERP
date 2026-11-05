@@ -11,7 +11,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 import { statuses } from '../../data/referenceData.js';
-import { EmployeeFormModal } from './EmployeeFormModal.jsx';
+import { EmployeeFormModal, uniqueOptions } from './EmployeeFormModal.jsx';
 
 // Employment status is a single axis. `statusId` already carries everything the
 // old boolean `active` select did — the backend derives `active` as
@@ -53,18 +53,6 @@ const SORT_OPTIONS = [
 
 function isKnown(options, value) {
   return options.some((option) => option.value === value);
-}
-
-function uniqueOptions(rows, valueKey, labelKey) {
-  const options = new Map();
-  rows.forEach((row) => {
-    const value = row[valueKey];
-    const label = row[labelKey] || value;
-    if (value && label && !options.has(value)) {
-      options.set(value, { value, label });
-    }
-  });
-  return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
 }
 
 const baseColumns = [

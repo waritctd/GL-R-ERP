@@ -1,6 +1,7 @@
 package th.co.glr.hr.pricingrequest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import th.co.glr.hr.ticket.DealOwnership;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -23,6 +24,7 @@ import th.co.glr.hr.customer.ContactDto;
 import th.co.glr.hr.customer.ContactRepository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.factoryquote.FactoryQuoteCarryForward;
+import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestDetailDto;
@@ -118,7 +120,7 @@ public class PricingRequestService {
     public PricingRequestDetailDto createDraft(long ticketId, CreatePricingRequestRequest request, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         TicketSummaryDto ticket = requireTicket(ticketId);
-        if (ticket.createdById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         String clientRequestId = validateClientRequestId(request.clientRequestId());
@@ -128,12 +130,11 @@ public class PricingRequestService {
         }
         requireActive(ticket);
         requireOrderNotConfirmed(ticket);
-        // Quotation <-> deal linking slice 1 (IA §7, 2026-09-30): a deal with a LIVE direct
-        // (DEAL_DIRECT) quotation is priced by hand on that quotation; a pricing request on top would
-        // make it the mixed-origin deal nobody has ever produced. Keyed on the live quotation, not
-        // on GLA-136's quotation_only flag (provenance only now). Placed after the owner check and
-        // the replay short-circuit, so a non-owner still gets 403 and an idempotent replay still
-        // returns its original result.
+        // A deal with a LIVE direct (DEAL_DIRECT) quotation is priced by hand on that quotation; a
+        // pricing request on top would make it a mixed-origin deal. Keyed on the live quotation, not
+        // on the quotation_only flag (provenance only). Placed after the owner check and the replay
+        // short-circuit, so a non-owner still gets 403 and an idempotent replay still returns its
+        // original result.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotation(tickets, ticketId);
         // Validate BEFORE persisting — an unvalidated value hits a CHECK
         // constraint in the repository and fails closed (500), same reasoning
@@ -144,7 +145,6 @@ public class PricingRequestService {
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateSourceItemsBelongToTicket(ticketId, request.items());
-        // GLA-125 header terms.
         validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
             request.printedByDisplayId(), request.salesRepDisplayId());
         // V185 (direct-deal-form parity): derive requestedQty/requestedQtySqm/requestedUnit/
@@ -178,7 +178,7 @@ public class PricingRequestService {
     public List<PricingRequestSummaryDto> listForTicket(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         TicketSummaryDto ticket = requireTicket(ticketId);
-        if ("sales".equals(actor.role()) && ticket.createdById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         // Separate read path from findSummaries/list — must apply the same DRAFT
@@ -205,7 +205,7 @@ public class PricingRequestService {
     public PricingRequestDetailDto updateDraft(long id, UpdatePricingRequestRequest request, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (summary.ticketCreatedById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
@@ -228,33 +228,27 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "recipientType ต้องไม่เว้นว่าง");
         }
         validateRecipient(request.recipientType());
-        // GLA-102 (part 2): createCustomerChangeRevision refuses a revision child whose
-        // recipientType differs from its parent's — but that guard alone was reachable sideways,
-        // because THIS method could still repoint an already-created child's recipientType after
-        // the fact via a plain PUT, with nothing here comparing it to anything. A revision child
-        // is identified by parentPricingRequestId being non-null (set exactly once, at creation,
-        // by PricingRequestRepository.createCustomerChangeRevision, and never cleared or
-        // reassigned afterward). The comparison is against the ROW'S OWN persisted recipientType
-        // rather than a fresh parent lookup: the creation-time guard already establishes "child's
-        // recipientType == parent's recipientType" as an invariant, and this guard's own job is to
-        // keep that invariant true going forward, so the row's current value already stands in for
-        // "the parent's value" without an extra query.
+        // createCustomerChangeRevision refuses a revision child whose recipientType differs from
+        // its parent's, but that guard alone was reachable sideways: this method could still
+        // repoint an already-created child's recipientType via a plain PUT. A revision child is
+        // identified by parentPricingRequestId being non-null (set exactly once, at creation, by
+        // PricingRequestRepository.createCustomerChangeRevision, and never cleared or reassigned).
+        // The comparison is against the ROW'S OWN persisted recipientType rather than a fresh
+        // parent lookup: the creation-time guard already makes "child's recipientType == parent's"
+        // an invariant, so the row's current value stands in for the parent's without an extra query.
         //
         // A ROOT pricing request (parentPricingRequestId == null) is deliberately EXEMPT: fixing a
-        // mistaken recipient before the request has ever been submitted is legitimate, and it is
-        // also provably safe here specifically, because updateDraft only ever reaches a row whose
-        // status is still DRAFT (checked above), and PricingRequestStatus.ALLOWED does not admit a
-        // DRAFT -> SUPERSEDED edge (DRAFT's only outgoing edges are SUBMITTED/CANCELLED) — so a
-        // root cannot have spawned a customer-change-revision child, and therefore cannot own any
-        // downstream quotation, while it is still in DRAFT. There is nothing yet for a recipient
-        // change to orphan.
+        // mistaken recipient before the request has ever been submitted is legitimate, and safe
+        // because updateDraft only reaches a DRAFT row (checked above), and
+        // PricingRequestStatus.ALLOWED has no DRAFT -> SUPERSEDED edge (DRAFT only goes to
+        // SUBMITTED/CANCELLED) — so a DRAFT root cannot have spawned a revision child or own any
+        // downstream quotation. There is nothing yet for a recipient change to orphan.
         if (summary.parentPricingRequestId() != null) {
             requireUnchangedRecipientType(request.recipientType(), summary.recipientType());
         }
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateCurrency(request.targetCurrency());
-        // GLA-125 header terms.
         validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
             request.printedByDisplayId(), request.salesRepDisplayId());
         if (request.items() != null) {
@@ -278,7 +272,7 @@ public class PricingRequestService {
     public PricingRequestDetailDto submit(long id, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (summary.ticketCreatedById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!PricingRequestStatus.DRAFT.equals(summary.status())) {
@@ -302,12 +296,10 @@ public class PricingRequestService {
         // A thickness Sales typed stays on the item: the shared catalogue is never written from an
         // unreviewed entry. LandedCostCalculator#resolveThicknessMm falls back to it.
         items = requests.findItems(id);
-        // REMOVED 2026-08-11 (owner request): "Finding A" (financial-integrity review, commit 3)
-        // used to require a fully-populated catalog snapshot on EVERY line here, 422-ing with
-        // "ต้องเลือกสินค้าจาก Price Catalog ที่ active ก่อนส่งคำขอราคา" otherwise. That made the
-        // catalogue mandatory, which blocked the case a คำขอราคา exists to serve: asking Import to
-        // price a product that is NOT in the catalogue yet. A free-text line may now be submitted
-        // with a null catalog snapshot, and Import quotes it from scratch.
+        // A line is NOT required to carry a catalog snapshot: the catalogue must not be mandatory,
+        // because a คำขอราคา exists to ask Import to price a product that is NOT in the catalogue
+        // yet. A free-text line may be submitted with a null catalog snapshot, and Import quotes
+        // it from scratch.
         //
         // What still protects the money path, so this is a narrowing rather than a hole:
         //   - findUnresolvableCatalogItemIds above (kept) still rejects a DANGLING reference — an
@@ -391,7 +383,7 @@ public class PricingRequestService {
     }
 
     /**
-     * Reissue-through-CEO-chain (owner ruling 2026-08-13): a customer-change revision that changes
+     * Reissue-through-CEO-chain: a customer-change revision that changes
      * only the commercial terms — same products, same requested quantities — reuses its parent's
      * factory quotes and goes straight to the CEO instead of round-tripping through Import for
      * prices nobody disputed.
@@ -479,16 +471,15 @@ public class PricingRequestService {
     /**
      * Import names the factory on ONE line Sales left blank.
      *
-     * <p><b>Why this exists.</b> Since 2026-08-11 (owner request) a pricing-request line may be
-     * submitted with no catalog product — that is the whole point of asking Import to price
-     * something the catalogue does not carry yet — and such a line gets no factory from
-     * {@code snapshotCatalogSelections} either. The factory check was therefore deferred to
-     * {@code FactoryQuoteService#groupByFactory}, which 422s at the สร้างร่างอีเมล step. But
-     * nothing could then supply the missing value: {@link #updateDraft} is DRAFT-only and
-     * sales-owner-only, the request is past DRAFT by the time Import sees it, and the
-     * MORE_INFO_REQUIRED send-back was deleted in V140. A blank factory was a DEAD END whose only
-     * escape was cancelling the request and asking Sales to raise a new one. This method is that
-     * missing step.
+     * <p><b>Why this exists.</b> A pricing-request line may be submitted with no catalog product —
+     * that is the whole point of asking Import to price something the catalogue does not carry
+     * yet — and such a line gets no factory from {@code snapshotCatalogSelections} either. The
+     * factory check is therefore deferred to {@code FactoryQuoteService#groupByFactory}, which
+     * 422s at the สร้างร่างอีเมล step. Nothing else can supply the missing value: {@link
+     * #updateDraft} is DRAFT-only and sales-owner-only, the request is past DRAFT by the time
+     * Import sees it, and there is no MORE_INFO_REQUIRED send-back. Without this method a blank
+     * factory would be a DEAD END whose only escape is cancelling the request and asking Sales to
+     * raise a new one.
      *
      * <p><b>Why Import and not Sales.</b> Import is the role that talks to factories and the role
      * the 422 blocks; the value being supplied is a routing decision about who to ask for a price,
@@ -498,10 +489,10 @@ public class PricingRequestService {
      * <p><b>Deliberately a gap-FILL, never a re-route.</b> A line that already has a factory —
      * from the catalog snapshot or from Sales's own free text — is refused with a 409, because
      * {@code sales.factory_quote} rows are grouped by factory NAME: moving a line after its quote
-     * exists would strand that quote's item list. Correcting a wrong factory stays what it was
-     * before this method: a new revision, not an edit in place.
+     * exists would strand that quote's item list. Correcting a wrong factory is a new revision,
+     * not an edit in place.
      *
-     * <p><b>The TARGET factory is checked too (BLOCKER 1b, review remediation).</b> Filling a
+     * <p><b>The TARGET factory is checked too.</b> Filling a
      * blank line onto a factory whose current quote has already advanced past {@code DRAFT}
      * (REQUESTED and beyond — sent, or already answered) is refused with a 409 for the identical
      * reason: {@code FactoryQuoteService#generateDrafts} can only safely absorb a newly-resolved
@@ -512,8 +503,8 @@ public class PricingRequestService {
      * and {@code FactoryQuoteService#generateDrafts}'s own Javadoc for the other half of this same
      * invariant.
      *
-     * <p><b>B6 (GLA-135) — factoryId, resolved against the master row.</b> {@code request} now
-     * carries a {@code factoryId} rather than a free-typed name (see
+     * <p><b>factoryId, resolved against the master row.</b> {@code request} carries a
+     * {@code factoryId} rather than a free-typed name (see
      * {@code SetItemFactoryRequest}'s own Javadoc for why). A factoryId that does not exist is a
      * 404: sales/import may only pick from existing factories, so an unresolvable id here means
      * the caller sent something this endpoint never offered, not a value worth silently accepting.
@@ -591,7 +582,7 @@ public class PricingRequestService {
         // extended here with an explicit CEO override (unlike TicketService.cancel,
         // which currently has none) so a manager can unwind an abandoned draft
         // without needing the original sales rep's session.
-        if (!"ceo".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+        if (!"ceo".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!PricingRequestStatus.canTransition(summary.status(), PricingRequestStatus.CANCELLED)) {
@@ -603,27 +594,25 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.cancelOpenChildrenForDeadRequest(id, request.reason(), actor.id());
-        // Cancel cutoff (owner ruling 2026-08-13): this call USED to be dead defensive code, and
-        // the comment here said so — canTransition only reached cancel() from
-        // DRAFT/SUBMITTED/IMPORT_REVIEWING/AWAITING_FACTORY_RESPONSE, none of which can co-exist
-        // with an open pricing_decision (that needs READY_FOR_CEO_REVIEW+) or a quotation (that
-        // needs APPROVED_FOR_QUOTATION). The widened cutoff makes it live on the main path: a
-        // cancel from CEO_REVIEWING retires a DRAFT decision, and one from APPROVED_FOR_QUOTATION
-        // retires an APPROVED decision plus any DRAFT quotation built from it. The prediction the
-        // old comment made — "a future widening of that map cannot silently reintroduce design
-        // correction 1's bug" — is exactly what is being cashed in here.
+        // Live on the main path: a cancel from CEO_REVIEWING retires a DRAFT decision, and one from
+        // APPROVED_FOR_QUOTATION retires an APPROVED decision plus any DRAFT quotation built from
+        // it. (Earlier statuses cannot co-exist with an open pricing_decision, which needs
+        // READY_FOR_CEO_REVIEW+, or a quotation, which needs APPROVED_FOR_QUOTATION.)
         requests.supersedeOpenPricingDecisionAndQuotation(id);
         String metadataJson = toReasonMetadataJson(request.reason());
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
             request.reason(), metadataJson);
-        // QA-13 fallback: a dead revision hands the parent's still-ISSUED offer back.
+        // A dead revision hands the parent's still-ISSUED offer back.
         requests.reviveParentOfCancelledRevision(id).ifPresent(parentId -> requests.addEvent(
             parentId, summary.ticketId(), actor.id(), actor.name(), PricingRequestEventKind.PRICING_REQUEST_REVISED,
             PricingRequestStatus.SUPERSEDED, PricingRequestStatus.QUOTATION_ISSUED,
             "ยกเลิกรอบแก้ไขแล้ว — กลับมาใช้ใบเสนอราคาเดิม", "{}"));
         notifyCeo(summary, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
             "คำขอราคา " + summary.requestCode() + " ถูกยกเลิก");
+        notifyAssignedImport(summary, actor, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
+            actor.name() + " ยกเลิกคำขอราคา " + summary.requestCode() + " — เหตุผล: " + request.reason(),
+            STOP_REQUEST_LINE);
         return detail(id);
     }
 
@@ -632,20 +621,16 @@ public class PricingRequestService {
                                                                 UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto parent = requireViewable(id, actor);
-        if (parent.ticketCreatedById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(parent.ticketCreatedById(), parent.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        // Reissue-through-CEO-chain (owner ruling 2026-08-13): the state machine is now the ONLY
-        // authority on which statuses a customer-change revision may start from, replacing the
-        // hand-maintained {DRAFT, CANCELLED, SUPERSEDED} denylist that used to live here. That
-        // denylist and PricingRequestStatus.ALLOWED had drifted apart in both directions, and
-        // PricingRequestRepository.supersedeForCustomerRevision consulted neither. Deriving the
-        // gate from canTransition means this 409 and the repository's IllegalStateException can
-        // never disagree about what is legal.
+        // The state machine is the ONLY authority on which statuses a customer-change revision may
+        // start from (no separate denylist, which would drift from PricingRequestStatus.ALLOWED).
+        // Deriving the gate from canTransition means this 409 and the repository's
+        // IllegalStateException can never disagree about what is legal.
         //
-        // QUOTATION_ACCEPTED gets its own message because it is the case that CHANGED: it used to
-        // be reachable and is now refused. Once the customer has accepted, changing the deal is an
-        // order amendment, not a quotation revision.
+        // QUOTATION_ACCEPTED gets its own message: once the customer has accepted, changing the
+        // deal is an order amendment, not a quotation revision.
         if (PricingRequestStatus.QUOTATION_ACCEPTED.equals(parent.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ลูกค้ายอมรับใบเสนอราคาแล้ว จึงแก้ไขผ่าน revision ของคำขอราคาไม่ได้ "
@@ -668,9 +653,9 @@ public class PricingRequestService {
             return detail(existing.id());
         }
         validateRecipient(request.recipientType());
-        // GLA-102: a customer-change revision must not be able to change WHO the pricing request
-        // is for. request.recipientType() is @NotBlank on the DTO and already rejected as invalid
-        // by validateRecipient() above if null/unknown, so by this point it is always one of
+        // A customer-change revision must not be able to change WHO the pricing request is for.
+        // request.recipientType() is @NotBlank on the DTO and already rejected as invalid by
+        // validateRecipient() above if null/unknown, so by this point it is always one of
         // PricingRequestRecipient's real values — never "absent" in a way that could mean
         // "unchanged". The only remaining question is whether it EQUALS the parent's own
         // recipientType, and if it does not, this is not a revision at all: it is an attempt to
@@ -686,7 +671,6 @@ public class PricingRequestService {
         validateRecipientIdentifiable(request.recipientContactId(), request.recipientLabel());
         validateRecipientContactBelongsToCustomer(request.recipientContactId(), ticket);
         validateCurrency(request.targetCurrency());
-        // GLA-125 header terms.
         validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
             request.printedByDisplayId(), request.salesRepDisplayId());
         validateItems(request.items());
@@ -707,17 +691,14 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.cancelOpenStep2Children(parent.id(), "Customer change revision created", actor.id());
-        // Step 5 (V75, design correction 1): also supersede any DRAFT/APPROVED pricing_decision
-        // left over from Step 3 — cancelOpenStep2Children above predates it and does not touch it.
+        // Also supersede any DRAFT/APPROVED pricing_decision left over from the pricing steps —
+        // cancelOpenStep2Children above does not touch it.
         //
-        // Reissue-through-CEO-chain (owner ruling 2026-08-13): this deliberately no longer
-        // supersedes the parent's QUOTATION. It used to (the method was
-        // supersedeOpenPricingDecisionAndQuotation, and it flipped an ISSUED quotation to
-        // SUPERSEDED the instant a revision was created), which meant the customer was left with
-        // no live offer for the whole time the new chain ran — and if the CEO ultimately refused
-        // the new price there was nothing to fall back to. The owner's ruling is that the already
-        // issued quotation STAYS ISSUED and valid while the replacement chain runs, and is
-        // superseded only when the replacement quotation is actually issued
+        // This deliberately does NOT supersede the parent's QUOTATION: superseding an ISSUED
+        // quotation the instant a revision is created would leave the customer with no live offer
+        // while the new chain runs, and nothing to fall back to if the CEO refuses the new price.
+        // The already issued quotation STAYS ISSUED and valid while the replacement chain runs, and
+        // is superseded only when the replacement quotation is actually issued
         // (CustomerQuotationService#issue -> supersedeSupersededChainQuotations).
         //
         // The DECISION half stays eager on purpose: it is internal pricing state, not the
@@ -725,12 +706,11 @@ public class PricingRequestService {
         // (sales.quotation_item), so superseding the decision cannot change what the customer was
         // quoted.
         requests.supersedeOpenPricingDecision(parent.id());
-        // MINOR fix (Opus review, 2026-09-20) — see supersedeOpenPricingRequestOriginDraft's own
-        // Javadoc for why this is a SEPARATE, narrower call from the decision supersede just
-        // above, and why it is safe alongside the "legacy ISSUED quotation stays live" ruling
-        // documented in the block comment above: this only ever touches an origin =
-        // 'PRICING_REQUEST' DRAFT, never the legacy (origin IS NULL) quotation that ruling
-        // protects.
+        // See supersedeOpenPricingRequestOriginDraft's own Javadoc for why this is a SEPARATE,
+        // narrower call from the decision supersede just above, and why it is safe alongside the
+        // "legacy ISSUED quotation stays live" rule in the block comment above: this only ever
+        // touches an origin = 'PRICING_REQUEST' DRAFT, never the legacy (origin IS NULL) quotation
+        // that rule protects.
         requests.supersedeOpenPricingRequestOriginDraft(parent.id());
         requests.addEvent(parent.id(), parent.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_REVISED, parent.status(), PricingRequestStatus.SUPERSEDED,
@@ -739,19 +719,20 @@ public class PricingRequestService {
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT,
             request.revisionReason(), toRevisionMetadataJson(parent.id()));
         notifyCeo(parent, PricingRequestEventKind.PRICING_REQUEST_REVISED,
-            "คำขอราคา " + parent.requestCode() + " มี customer-change revision ใหม่");
+            "คำขอราคา " + parent.requestCode() + " มีรอบแก้ไขใหม่ตามที่ลูกค้าขอ");
+        notifyAssignedImport(parent, actor, PricingRequestEventKind.PRICING_REQUEST_REVISED,
+            actor.name() + " เปลี่ยนแปลงคำขอราคา " + parent.requestCode()
+                + " ตามที่ลูกค้าขอ และสร้างรอบแก้ไขใหม่ — เหตุผล: " + request.revisionReason(),
+            "สิ่งที่ต้องทำต่อ: หยุดดำเนินการตามคำขอเดิม แล้วรอรอบแก้ไขใหม่ส่งเข้ามา");
         return detail(newId);
     }
 
-    // --- Pricing Request attachments (V69, review remediation COMMIT 4) ---
+    // --- Pricing Request attachments ---
     //
     // Sales may optionally attach supporting files to the Pricing Request while it is DRAFT
-    // (see ATTACHMENT_EDITABLE_STATUSES, narrowed to DRAFT alone by V140); zero attachments
-    // remains valid (no gate anywhere requires at least
-    // one). Import can mark which of those to include in the factory RFQ — review remediation,
-    // HIGH 4: the old FactoryQuoteService.attemptSend dispatch worker that used to read this flag
-    // at actual-send time is deleted (factory RFQ email is manual-only now); the flag's sole
-    // reader today is FactoryQuoteService.emailBody, at DRAFT-GENERATION time, not here.
+    // (see ATTACHMENT_EDITABLE_STATUSES); zero attachments is valid. Import can mark which of
+    // those to include in the factory RFQ (factory RFQ email is manual-only); the flag's sole
+    // reader is FactoryQuoteService.emailBody, at DRAFT-GENERATION time, not here.
     //
     // Every method below reuses requireViewable, which already carries the pricing-request
     // ownership rule (a "sales" actor may only reach a request on a ticket they created,
@@ -763,7 +744,7 @@ public class PricingRequestService {
     public PricingRequestAttachmentDto uploadAttachment(long id, MultipartFile file, UserPrincipal actor) {
         requireRole(actor, SALES_ROLES);
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        if (summary.ticketCreatedById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
@@ -820,7 +801,7 @@ public class PricingRequestService {
         PricingRequestAttachmentDto attachment = requests.findAttachment(attachmentId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบของคำขอราคานี้"));
         PricingRequestSummaryDto summary = requireViewable(attachment.pricingRequestId(), actor);
-        if (summary.ticketCreatedById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (!ATTACHMENT_EDITABLE_STATUSES.contains(summary.status())) {
@@ -830,15 +811,15 @@ public class PricingRequestService {
         String path = requests.findAttachmentFilePath(attachmentId);
         requests.deleteAttachment(attachmentId);
         // Deferred to commit, not done here: this method is @Transactional, and a disk delete is
-        // not. Removing the bytes inline meant a rollback restored the
+        // not. Removing the bytes inline would let a rollback restore the
         // sales.pricing_request_attachment row while the file it points at stayed gone — a document
-        // the pricing request still lists and nobody can ever download again. Identical to the
-        // hazard PR #719 fixed in AttachmentController#delete, and the mirror of the
-        // deleteOnRollback guard PR #708 added to uploadAttachment just above.
+        // the pricing request still lists and nobody can ever download again. Same hazard as in
+        // AttachmentController#delete, and the mirror of the deleteOnRollback guard in
+        // uploadAttachment just above.
         //
-        // deleteOnCommit also replaces the swallowed-IOException block that used to live here: it
-        // is best-effort and cannot throw either (it logs a WARN instead), so metadata removal
-        // stays authoritative and a file that is already gone still does not fail the workflow.
+        // deleteOnCommit is best-effort and cannot throw (it logs a WARN instead), so metadata
+        // removal stays authoritative and a file that is already gone still does not fail the
+        // workflow.
         fileStorage.deleteOnCommit(path);
     }
 
@@ -909,7 +890,8 @@ public class PricingRequestService {
      *         be settled, so the caller's own deal-terminal transaction still commits.
      */
     @Transactional
-    public CancelOpenForTicketResult cancelOpenForTicket(long ticketId, String reason, UserPrincipal actor) {
+    public CancelOpenForTicketResult cancelOpenForTicket(long ticketId, String reason, DeadDealCause cause,
+                                                         UserPrincipal actor) {
         // Deliberately NO requireTicket/requireActive here: this method exists
         // BECAUSE the deal just left ACTIVE (see the class Javadoc above) — a
         // lifecycle gate would make the one caller that needs this cascade fail
@@ -918,6 +900,8 @@ public class PricingRequestService {
         String metadataJson = toDeadDealMetadataJson(reason);
         int cancelledCount = 0;
         List<Long> abandonedIds = new ArrayList<>();
+        // A deal with an ISSUED IR already tells import via DEAL_LOST / DEAL_CANCELLED: one notice, not two.
+        boolean importToldByDealNotice = tickets.hasIssuedImportRequest(ticketId);
         for (Long id : openIds) {
             boolean settled = false;
             for (int attempt = 1; attempt <= CANCEL_MAX_ATTEMPTS; attempt++) {
@@ -940,21 +924,27 @@ public class PricingRequestService {
                 }
                 int rows = requests.cancelForDeadDeal(id, summary.status(), actor.id());
                 if (rows == 1) {
-                    // Cancel cutoff (owner ruling 2026-08-13): the DEAD-request cascade, same as
-                    // cancel() above. This path needed it even more than cancel() did —
-                    // cancelForDeadDeal bypasses canTransition entirely and cancels from ANY open
-                    // status, so its children have always been reachable at READY_FOR_COSTING (a
-                    // factory quote) and SUBMITTED (a costing), and the old narrow predicates
-                    // missed both. Switching this call is a bug fix independent of the cutoff.
+                    // The DEAD-request cascade, same as cancel() above. cancelForDeadDeal bypasses
+                    // canTransition entirely and cancels from ANY open status, so its children can
+                    // be at READY_FOR_COSTING (a factory quote) or SUBMITTED (a costing); a narrow
+                    // predicate would miss both.
                     requests.cancelOpenChildrenForDeadRequest(id, reason, actor.id());
-                    // Step 5 (V75, review follow-up): same fix as cancel()/createCustomerChangeRevision
-                    // — a deal reaching a terminal lifecycle must also close out an open decision/
-                    // quotation on this pricing request, not just its factory-quote/costing children.
+                    // Same as cancel()/createCustomerChangeRevision: a deal reaching a terminal
+                    // lifecycle must also close out an open decision/quotation on this pricing
+                    // request, not just its factory-quote/costing children.
                     requests.supersedeOpenPricingDecisionAndQuotation(id);
                     requests.addEvent(id, ticketId, actor.id(), actor.name(),
                         PricingRequestEventKind.PRICING_REQUEST_CANCELLED, summary.status(), PricingRequestStatus.CANCELLED,
                         reason, metadataJson);
                     cancelledCount++;
+                    // Only a request Import was still working (decided on the status BEFORE the cascade): a
+                    // superseded parent was already told "รอบแก้ไขใหม่", a quotation-issued one is finished.
+                    if (IMPORT_LIVE_STATUSES.contains(summary.status()) && !importToldByDealNotice) {
+                        notifyAssignedImport(summary, actor, PricingRequestEventKind.PRICING_REQUEST_CANCELLED,
+                            (cause == DeadDealCause.LOST ? "ดีลถูกบันทึกว่าเสียงาน" : "ดีลถูกยกเลิก")
+                                + " — คำขอราคา " + summary.requestCode() + " จึงถูกยกเลิกอัตโนมัติ",
+                            STOP_REQUEST_LINE);
+                    }
                     settled = true;
                     break;
                 }
@@ -1051,7 +1041,7 @@ public class PricingRequestService {
         if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้");
         }
-        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return summary;
@@ -1059,9 +1049,35 @@ public class PricingRequestService {
 
     /** Who may see a request while it is still in DRAFT status — see requireViewable. */
     private boolean canSeeDraft(UserPrincipal actor, PricingRequestSummaryDto summary) {
-        return summary.ticketCreatedById() == actor.id()
+        return DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())
             || "ceo".equals(actor.role())
             || "sales_manager".equals(actor.role());
+    }
+
+    /** Why a deal's open requests are being cascade-cancelled: it was marked lost, or cancelled. */
+    public enum DeadDealCause { LOST, CANCELLED }
+
+    /** Statuses in which Import (or the CEO, on Import's factory work) still has a live request. */
+    private static final Set<String> IMPORT_LIVE_STATUSES = Set.of(
+        PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
+        PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CEO_REVIEWING,
+        PricingRequestStatus.APPROVED_FOR_QUOTATION);
+
+    private static final String STOP_REQUEST_LINE =
+        "สิ่งที่ต้องทำต่อ: หยุดดำเนินการกับคำขอนี้ — หากติดต่อโรงงานไปแล้ว กรุณาแจ้งโรงงาน";
+
+    /**
+     * Tell the import staffer holding this request (nobody if unassigned, nobody if they are the actor).
+     * Three lines: what happened, the deal, what to do.
+     */
+    private void notifyAssignedImport(PricingRequestSummaryDto summary, UserPrincipal actor, String type,
+                                      String line1, String line3) {
+        Long assigned = summary.assignedImportId();
+        if (assigned == null || assigned == actor.id()) {
+            return;
+        }
+        notifications.notifyEmployeeForPricingRequest(assigned, summary.id(), type,
+            line1 + "\n" + DealNoticeText.dealLabel(summary.ticketCode(), summary.customerName()) + "\n" + line3);
     }
 
     private void notifyCeo(PricingRequestSummaryDto summary, String type, String message) {
@@ -1094,7 +1110,7 @@ public class PricingRequestService {
     }
 
     /**
-     * GLA-102 shared guard: a revision child's recipientType must never end up different from the
+     * Shared guard: a revision child's recipientType must never end up different from the
      * reference it descends from. Shared by the two routes that can write recipient_type onto an
      * existing revision child — {@link #createCustomerChangeRevision} (reference: the immediate
      * parent's recipientType) and {@link #updateDraft} (reference: the child row's own persisted
@@ -1113,9 +1129,8 @@ public class PricingRequestService {
         }
     }
 
-    // GLA-125 header terms (owner ruling 2026-09-18): a PricingRequest has no price yet, so
-    // unlike sales.quotation's deposit_percent/remainder_mode/full_payment_term trio (V165/V181),
-    // there is no "deposit percentage" concept here at all — just a plain two-way choice between
+    // Header terms: a PricingRequest has no price yet, so unlike sales.quotation's
+    // deposit_percent/remainder_mode/full_payment_term trio, there is no "deposit percentage" concept here at all — just a plain two-way choice between
     // CREDIT (pairs with a required day count) and ON_DELIVERY (no day count). Validated in Java,
     // not a DB CHECK, matching quantityMode/wastageMode's own posture on the item record.
     private static final Set<String> PAYMENT_TERM_MODES = Set.of("CREDIT", "ON_DELIVERY");
@@ -1130,12 +1145,11 @@ public class PricingRequestService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุจำนวนวันเครดิต");
             }
         }
-        // Second review pass, finding N5 (2026-09-19): this method used to validate
-        // paymentTermMode/creditDays only. printedByDisplayId/salesRepDisplayId went straight to
-        // the repository unchecked, so an unknown id 500'd on the sales.pricing_request FK
-        // constraint instead of a clean 400, and an active-but-ineligible employee (any id at
-        // all, sales division or not, holding no can_create_quotation grant) was silently
-        // accepted. requireEligibleDisplayEmployeeId reuses the exact eligibility predicate
+        // printedByDisplayId/salesRepDisplayId must be checked before the repository: an unknown id
+        // would 500 on the sales.pricing_request FK constraint instead of a clean 400, and an
+        // active-but-ineligible employee (any id at all, sales division or not, holding no
+        // can_create_quotation grant) would be silently accepted.
+        // requireEligibleDisplayEmployeeId reuses the exact eligibility predicate
         // direct-deal's DealQuotationService#requireEligibleDisplayEmployeeId already enforces for
         // the identically-named fields on sales.quotation (see
         // th.co.glr.hr.commission.QuotationDisplayNameEligibility's Javadoc) — never a second,
@@ -1175,7 +1189,7 @@ public class PricingRequestService {
     }
 
     /**
-     * V185 (direct-deal-form parity, owner ruling 2026-09-18): every field the direct-deal
+     * Direct-deal-form parity: every field the direct-deal
      * quotation form (see {@code frontend/src/features/quotations/QuotationItemRow.jsx}) marks required
      * is required here too — model/color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
      * quantity for the item's own quantityMode. Deliberately NOT required (mirrors the direct-deal
@@ -1186,7 +1200,7 @@ public class PricingRequestService {
      * branch (perSqm/unitPrice) that method has and this one never will, and reuses its exact Thai
      * field labels so a rep sees the SAME wording on both forms.
      */
-    // GLA-125 (owner ruling 2026-09-18): ORIGIN_COUNTRY_OPTIONS' own sentinel code (quotationMeta.js)
+    // ORIGIN_COUNTRY_OPTIONS' own sentinel code (quotationMeta.js)
     // for "the rep typed a country not on the fixed list" — a literal Thai string, not an ISO/'ZZ'
     // code (that convention belongs to a DIFFERENT list, price_catalog.factories.country).
     private static final String ORIGIN_COUNTRY_OTHER = "อื่นๆ";
@@ -1204,20 +1218,19 @@ public class PricingRequestService {
         // Stock lines (V194, R7): โรงงาน / ประเทศต้นทาง / ระยะเวลานำเข้า are hidden and NOT required
         // for a stock line - per line, so an import line on the same request is still held to them.
         boolean stockLine = item.stockSource() != null;
-        // GLA-125 item 1: ประเทศต้นทาง is required on the PCR form (unlike the direct-deal
-        // quotation, where it stays optional — DealQuotationRequests.ItemInput is untouched).
+        // ประเทศต้นทาง is required on the PCR form (unlike the direct-deal quotation, where it
+        // stays optional — DealQuotationRequests.ItemInput).
         if (stockLine) {
             // nothing import-only to require
         } else if (!hasText(item.originCountry())) {
             missing.add("ประเทศต้นทาง");
         } else if (ORIGIN_COUNTRY_OTHER.equals(item.originCountry().trim()) && !hasText(item.originCountryOther())) {
-            // GLA-125 item 2: อื่นๆ needs the typed name too.
+            // อื่นๆ needs the typed name too.
             missing.add("ชื่อประเทศต้นทาง (อื่นๆ)");
         }
-        // ระยะเวลานำเข้า is NOT required on a pricing request (owner ruling 2026-10-18, reversing
-        // GLA-125 item 3): import gives the time — the PCR form no longer shows the field, sends the
-        // origin's default when there is one (null for อื่นๆ), and import adjusts it through the
-        // CR-1 lead-time change flow. The quotation still requires it at its own submit
+        // ระยะเวลานำเข้า is NOT required on a pricing request: import gives the time — the PCR form
+        // does not show the field, sends the origin's default when there is one (null for อื่นๆ),
+        // and import adjusts it through the lead-time change flow. The quotation still requires it at its own submit
         // (DealQuotationService#requireEveryTileItemHasALeadTime). min <= max still holds when
         // both are sent, and a half pair (one end only) is refused: both or neither.
         if (!stockLine && (item.leadTimeMinDays() == null) != (item.leadTimeMaxDays() == null)) {
@@ -1254,7 +1267,7 @@ public class PricingRequestService {
     private static final String PIECE_UNIT_LABEL = "แผ่น";
 
     /**
-     * V185 (direct-deal-form parity): validates every item is complete ({@link
+     * Validates every item is complete ({@link
      * #requireItemFieldsComplete}) and DERIVES {@code requestedQty}/{@code requestedQtySqm}/
      * {@code requestedUnit}/{@code requestedUnitBasis} — Sales no longer types a quantity or unit
      * directly, the form only collects the tile fields below, exactly like a direct-deal
@@ -1267,8 +1280,8 @@ public class PricingRequestService {
      * results ({@code piecesFinal}/{@code piecesBeforeWastage}/{@code piecesAfterWastage}/
      * {@code boxes}) back off the {@link WastageCalculator.Result} — the same device {@code
      * DealQuotationService#calculateLine} cannot use for ITS preview (that path unconditionally
-     * REQUIRES a positive price — see this migration's PR body for why the direct-deal
-     * calculate-line preview could not be reused here either).
+     * REQUIRES a positive price, so the direct-deal calculate-line preview cannot be reused here
+     * either).
      *
      * <p>{@code requestedQtySqm} reuses {@link WastageCalculator#sqmQuantityFromPieces} — {@code
      * round2(piecesFinal x sqmPerPiece)} — verbatim.
@@ -1317,10 +1330,10 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "รายการที่ " + (rowNumber + 1) + ": ข้อมูลรายการไม่ถูกต้อง: " + e.getMessage());
         }
-        // Opus review finding #2 (2026-09-18): the calculation can still derive ZERO pieces -- every
-        // fraction of a piece rounds UP, so a positive AREA gives at least 1, but a zero/absent
-        // quantity (or a pieces/ตร.ม. that rounds to 0.00) does not -- and 0 violates
-        // V59's chk_pricing_request_item_qty (requested_qty > 0), which would otherwise reach the
+        // The calculation can still derive ZERO pieces -- every fraction of a piece rounds UP, so
+        // a positive AREA gives at least 1, but a zero/absent quantity (or a pieces/ตร.ม. that
+        // rounds to 0.00) does not -- and 0 violates the
+        // chk_pricing_request_item_qty constraint (requested_qty > 0), which would otherwise reach the
         // repository as a raw DataIntegrityViolationException (500) instead of a caller-fixable
         // 400. Caught here, before that INSERT, with the same per-row Thai message shape as every
         // other requireItemFieldsComplete/WastageCalculator failure in this method.
@@ -1332,7 +1345,7 @@ public class PricingRequestService {
         BigDecimal requestedQtySqm = item.sqmPerPiece() != null && item.sqmPerPiece().signum() > 0
             ? WastageCalculator.sqmQuantityFromPieces(result.piecesFinal(), item.sqmPerPiece())
             : null;
-        // GLA-125 item 2: originCountryOther is only ever meaningful under the "อื่นๆ" sentinel —
+        // originCountryOther is only ever meaningful under the "อื่นๆ" sentinel —
         // requireItemFieldsComplete above already refused a blank one THERE, so the only
         // normalization left is the other direction: a value sent for any OTHER origin_country
         // (or none at all) is cleared rather than persisted, so it can never linger stale under a
@@ -1363,7 +1376,7 @@ public class PricingRequestService {
     }
 
     /**
-     * CR-1 (GLA-167): the currency Sales asks the factory to quote in. Blank = legacy/unspecified
+     * The currency Sales asks the factory to quote in. Blank = legacy/unspecified
      * (null). No shared currency list exists to check against (FX tracks five but any ISO-4217 code
      * can be quoted), so this only enforces the shape: three letters, stored upper-case.
      */
@@ -1397,16 +1410,15 @@ public class PricingRequestService {
             i.requestedCurrency(), i.requestedPriceUnitBasis());
     }
 
-    // ── V185: reconstruct the top-level request record with a RESOLVED items list, so
-    // PricingRequestRepository's create/updateDraft/createCustomerChangeRevision — unchanged,
-    // still reading request.items() themselves — persist the derived quantities instead of
-    // whatever (now-optional, ignored) requestedQty/Unit/Basis the client sent. Kept as three small
+    // ── Reconstruct the top-level request record with a RESOLVED items list, so
+    // PricingRequestRepository's create/updateDraft/createCustomerChangeRevision — which still
+    // read request.items() themselves — persist the derived quantities instead of whatever
+    // (optional, ignored) requestedQty/Unit/Basis the client sent. Kept as three small
     // overloads rather than widening those repository methods' signatures, which would break every
     // existing hand-wired `new PricingRequestRepository(jdbc)` test call site. ──────────────────
-    // GLA-125: every withResolvedItems overload below must pass the header-term fields through
-    // EXPLICITLY (not rely on a compat constructor default) — the exact same bug class as Opus
-    // review finding #1 (factory/variantId), just at the request-header level instead of the item
-    // level. Reconstructing via a compat constructor here would silently NULL out
+    // Every withResolvedItems overload below must pass the header-term fields through
+    // EXPLICITLY (not rely on a compat constructor default), the same trap as the item-level
+    // factory/variantId fields. Reconstructing via a compat constructor here would silently NULL out
     // paymentTermMode/creditDays/validityDays/printedByDisplayId/salesRepDisplayId/deptCode/
     // unitCode/omitContactHonorific on every create/update/customer-change-revision.
     private CreatePricingRequestRequest withResolvedItems(CreatePricingRequestRequest request,

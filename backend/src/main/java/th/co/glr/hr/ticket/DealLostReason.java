@@ -36,5 +36,20 @@ public final class DealLostReason {
         return reason != null && VALID.contains(reason);
     }
 
+    private static final java.util.Map<String, String> LABELS = java.util.Map.of(
+        PRODUCT_FIT, "ไม่มีสินค้าที่ลูกค้าต้องการ",
+        PRICE, "ราคา",
+        LEAD_TIME, "ระยะเวลาส่งมอบ (leadtime)",
+        PAYMENT_TERMS, "เงื่อนไขการชำระเงิน (payment term)",
+        RELATIONSHIP, "ความสัมพันธ์ / connection",
+        PROJECT_ON_HOLD, "โครงการหยุดก่อสร้างชั่วคราว",
+        PROJECT_CANCELLED, "โครงการหยุดก่อสร้างถาวร",
+        ALREADY_PURCHASED, "ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว");
+
+    /** Thai label of a code (same wording as frontend LOST_REASON_LABEL); an unknown code reads as itself. */
+    public static String label(String code) {
+        return LABELS.getOrDefault(code, String.valueOf(code));
+    }
+
     private DealLostReason() {}
 }

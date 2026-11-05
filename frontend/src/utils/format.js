@@ -7,20 +7,12 @@ export function formatThaiDate(value) {
   return `${date.getDate()} ${thaiMonths[date.getMonth()]} ${date.getFullYear() + 543}`;
 }
 
-// Buddhist-era month/year, for a native `<input type="month">` value ("YYYY-MM") — display only,
-// never a value that gets submitted anywhere. Deliberately parses the "YYYY-MM" string directly
-// instead of going through `new Date(value)`: a bare-month ISO string is parsed as UTC midnight,
-// which can roll to the wrong local month/year near a timezone boundary. Reuses the same
-// thaiMonths table and +543 offset as formatThaiDate above rather than a second lookup.
+// Buddhist-era month/year for an `<input type="month">` value ("YYYY-MM"); display only.
+// Parses the string directly: `new Date("YYYY-MM")` is UTC midnight and can roll to the wrong
+// local month near a timezone boundary.
 //
-// Named `...FromMonthInputValue` (not the shorter `formatThaiMonthYear`) because
-// `features/specialmoney/specialMoneyRules.js` already exports a *different* `formatThaiMonthYear`
-// that takes a `Date` and returns a 2-digit BE year — same name, incompatible signature. Autofilling
-// an import from this file into a specialmoney file would pass a `Date` here, the regex below
-// wouldn't match, and it would silently return '-' with no crash and no test. Do not rename this
-// back to `formatThaiMonthYear` without also resolving that collision (ideally consolidating both
-// into one thaiMonths table — this file, `specialMoneyRules.js`, and `formatThaiDate` above all keep
-// their own copy today).
+// Not named `formatThaiMonthYear`: specialMoneyRules.js exports a different function of that name
+// (takes a `Date`), and a mistaken import would silently return '-'.
 function monthYearFrom(value, monthNames) {
   const match = /^(\d{4})-(\d{2})$/.exec(value || '');
   const monthIndex = match ? Number(match[2]) - 1 : -1;
@@ -41,13 +33,9 @@ export function formatThaiMonthYearLongFromMonthInputValue(value) {
 
 export function formatShortDate(value) {
   if (!value) return '-';
-  // A bare "YYYY-MM-DD" (no time component — e.g. a LocalDate field, or an `<input type="date">`
-  // value) is parsed directly rather than via `new Date(value)`: that constructor reads a date-only
-  // ISO string as UTC midnight, so `.getDate()`/`.getMonth()` below then read it back in the local
-  // zone, which rolls to the previous day west of UTC (America/New_York, Pacific/Honolulu, ...).
-  // A full ISO datetime (a real instant, e.g. an attendance punch timestamp with a time/offset) is
-  // NOT matched here and falls through to `new Date()` below, same as before — reading an instant
-  // back in local time is the correct behaviour, not the bug this guards against.
+  // A bare "YYYY-MM-DD" is parsed directly: `new Date(value)` reads it as UTC midnight, which rolls
+  // to the previous day west of UTC. A full ISO datetime (a real instant) falls through to
+  // `new Date()`, where reading it back in local time is correct.
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (dateOnly) {
     const [, year, month, day] = dateOnly;
@@ -96,15 +84,8 @@ export function formatMoney(value) {
 // so it reads clearly alongside its own prefix 'นาง'.
 const THAI_HONORIFICS = ['นางสาว', 'นาง', 'นาย', 'ดร.', 'คุณ'];
 
-// Prepends the "คุณ" salutation used by dashboard greetings, but only when
-// `name` doesn't already start with a Thai honorific. Every greeting used to
-// prepend "คุณ" unconditionally, which doubled up whenever the resolved name
-// already carried one — see issue #395 ("สวัสดี คุณคุณสมหมาย ขายดี"). The
-// doubling traces to inconsistent name data (some `user.name` rows are
-// seeded with "คุณ" already in them; `employee.nameTh` separately bakes in a
-// นาย/นาง/นางสาว title), not to this helper's own logic — detecting an
-// existing honorific here is the fix, not stripping/rewriting the stored
-// name (that's a data concern, out of scope for this helper).
+// Prepends "คุณ" unless `name` already starts with a Thai honorific; stored names are
+// inconsistent (some already carry "คุณ", `employee.nameTh` bakes in นาย/นาง/นางสาว).
 export function greetingName(name) {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return '';
@@ -152,11 +133,7 @@ const ROLE_LABELS = {
   // own comment and referenceData.js's division table) rather than inventing a new English
   // abbreviation to match this map's other entries.
   account: 'ฝ่ายบัญชี',
-  // No `admin` entry: confirmed genuinely underivable (2026-08-16) — DivisionAccessPolicy.roleFor
-  // has no admin branch, ApplicationRoles.priority() does not list it, no division in
-  // referenceData.js codes to it, and no login path (mock or real) ever assigns it. It was dead
-  // copy, the READY_FOR_COSTING fossil shape in the other direction: a frontend key with no
-  // backend source, rather than a backend status with no frontend label.
+  // No `admin` entry: no role derivation or login path ever assigns it.
 };
 export const ROLE_LABEL_KEYS = Object.keys(ROLE_LABELS);
 
@@ -198,47 +175,24 @@ export function ticketStatusLabel(status) {
 const PRICING_REQUEST_STATUS_LABELS = {
     DRAFT: { label: 'แบบร่าง', tone: 'neutral' },
     SUBMITTED: { label: 'รอฝ่ายนำเข้ารับเรื่อง', tone: 'warning' },
-    // Import's workflow was simplified to three meaningful stages (owner ruling,
-    // 2026-08-11): รับเรื่อง -> เจรจาราคากับโรงงาน -> รอ CEO อนุมัติราคา.
+    // Import has three stages: รับเรื่อง -> เจรจาราคากับโรงงาน -> รอ CEO อนุมัติราคา.
     IMPORT_REVIEWING: { label: 'รับเรื่อง', tone: 'info' },
-    // AWAITING_FACTORY_RESPONSE now covers costing too: V140 merged COSTING_IN_PROGRESS
-    // into it and dropped it from the DB constraint. COSTING_IN_PROGRESS is kept here
-    // ON PURPOSE, mapped to the SAME label and tone, for two reasons: rows still sit in
-    // it during the window between deploying this code and V140 running, and historical
-    // pricing_request_event rows keep the old value forever (V140 deliberately does not
-    // rewrite history). Do not re-split them, and do not delete this entry — without it
-    // such a row falls through to the raw enum string below.
+    // COSTING_IN_PROGRESS is kept on purpose, with the same label and tone: rows can still hold it
+    // between deploying this code and the migration running, and historical pricing_request_event
+    // rows keep it. Without the entry such a row falls through to the raw enum string below.
     AWAITING_FACTORY_RESPONSE: { label: 'เจรจาราคากับโรงงาน', tone: 'info' },
     COSTING_IN_PROGRESS: { label: 'เจรจาราคากับโรงงาน', tone: 'info' },
-    // Wording is now "waiting on the CEO", not "Import has sent it" — tone follows
-    // SUBMITTED's (the queue's other waiting-on-someone stage) rather than staying
-    // 'success', which would paint a pending approval green.
+    // Tone follows SUBMITTED (waiting on someone), not 'success', which would paint a pending
+    // approval green.
     READY_FOR_CEO_REVIEW: { label: 'รอ CEO อนุมัติราคา', tone: 'warning' },
     // Step 3 (CEO Selling Price Decision).
     CEO_REVIEWING: { label: 'CEO กำลังพิจารณาราคาขาย', tone: 'info' },
     APPROVED_FOR_QUOTATION: { label: 'อนุมัติราคาขายแล้ว', tone: 'success' },
-    // V141 (db/migration/V141__ceo_owns_pricing_costing.sql) retired this status outright: the
-    // CEO owns costing now, and PricingDecisionService.returnToImport (:438-460) sends the
-    // request straight to AWAITING_FACTORY_RESPONSE, never to a "revise the costing" state.
-    // Kept here for the SAME deploy-before-migration reason as the two neighbours above, and
-    // ONLY that reason: the frontend deploys separately from the backend, so a build can go
-    // live against a backend that still writes this status before V141 has run on the database
-    // it talks to. Delete the entry and such a row falls through to the raw enum string below.
-    //
-    // The OTHER reason one might assume — historical pricing_request_event rows, which V141 §5
-    // deliberately preserves — does NOT currently reach this map: every caller passes a pricing
-    // REQUEST's own status, never an event's from/to status. Verified 2026-08-14:
-    // DealStateHeader.jsx:136, DealQuotationPanel.jsx:299,
-    // PricingRequestQueuePage.jsx:53/98/123, PricingRequestPanel.jsx:134,
-    // PricingRequestDetailPage.jsx:547. If a history view ever renders event statuses through
-    // this function, this entry becomes load-bearing for that too.
-    //
-    // Nothing in mock mode can reach the label either any more: issue #741 stopped mockApi.js's
-    // returnPricingDecisionToImport writing it, and demoSales.js:615 seeds
-    // AWAITING_FACTORY_RESPONSE instead, with a comment explaining why.
+    // Retired status, kept only because the frontend can deploy against a backend that still writes
+    // it before the migration has run. Without the entry such a row falls through to the raw enum
+    // string below. Callers pass a request's own status, never an event's.
     COSTING_REVISION_REQUIRED: { label: 'CEO ตีกลับให้แก้ไขต้นทุน', tone: 'danger' },
-    // Step 4/5 (these two were missing — a pre-existing gap fixed alongside adding
-    // QUOTATION_ACCEPTED; QUOTATION_ISSUED fell back to the raw status string before).
+    // QUOTATION_ISSUED would otherwise fall back to the raw status string.
     QUOTATION_ISSUED: { label: 'ออกใบเสนอราคาลูกค้าแล้ว', tone: 'success' },
     QUOTATION_ACCEPTED: { label: 'ลูกค้ายอมรับใบเสนอราคาแล้ว', tone: 'success' },
     // Retired by V140 along with the ขอข้อมูลเพิ่มเติม feature. Kept for the same two
@@ -261,40 +215,14 @@ const FACTORY_QUOTE_STATUS_LABELS = {
     REQUESTED: { label: 'ส่งขอราคาแล้ว', tone: 'warning' },
     RESPONSE_RECEIVED: { label: 'ได้รับราคาโรงงานแล้ว', tone: 'info' },
     NEGOTIATING: { label: 'กำลังเจรจา', tone: 'warning' },
-    // Relabelled again 2026-08-16 (owner ruling, factory-price-import-ui redesign): "รอ CEO
-    // อนุมัติราคา", not "ส่งให้ CEO แล้ว". The constant's NAME is still a fossil for the same reason
-    // as before — V141 severed the costing aggregate (PricingCostingService's writes all throw 409
-    // COSTING_MOVED_TO_CEO) and the cost is now computed by the CEO at startReview, so there is no
-    // costing step for a quote to be "ready for" any more.
-    //
-    // The PREVIOUS label here ("ส่งให้ CEO แล้ว") was itself a deliberate 2026-08-15 correction of
-    // an even older fossil ("พร้อมคำนวณต้นทุน") and reasoned explicitly against "รอ CEO อนุมัติราคา":
-    // this badge sits on ONE FACTORY QUOTE, not on the request, and a request does not advance to
-    // READY_FOR_CEO_REVIEW until EVERY current quote is marked ready (FactoryQuoteService#
-    // markReadyForCosting, guarded by landedCosts.isFullyResolvable) — so with two factories, one
-    // quote can sit here while another is still being negotiated, and "waiting for the CEO" would be
-    // false for the REQUEST in that window even though it is true for THIS quote either way.
-    //
-    // The owner has now ruled the other way, explicitly requesting exactly one wording for this
-    // state across the app (previously it read "ส่งให้ CEO แล้ว" on this badge but "รอ CEO อนุมัติราคา"
-    // nowhere — there was no actual second wording to unify, just a badge whose copy didn't match
-    // the mental model Import and the CEO both already used talking about it out loud). The
-    // multi-factory caveat above is still true of the mechanism; it is no longer true of the label
-    // the owner wants shown. See docs/api/status-catalog.json / StatusCatalogContractTest — that
-    // guard pins the backend's STATUS KEYS only, never label TEXT (see statusCatalog.test.js's own
-    // header comment), so this text-only rename needed no digest regeneration.
+    // The constant's name is a fossil: costing moved to the CEO, so there is no costing step for a
+    // quote to be "ready for". The label is "รอ CEO อนุมัติราคา", one wording for this state across
+    // the app. Label text is not pinned by the status-catalog guard, only the status keys.
     READY_FOR_COSTING: { label: 'รอ CEO อนุมัติราคา', tone: 'success' },
     CANCELLED: { label: 'ยกเลิกแล้ว', tone: 'danger' },
-    // Both added 2026-08-16, found by statusCatalog.test.js on its first run — the guard's own
-    // KNOWN_UNLABELLED list named them, and that list is self-cleaning, so adding these here is
-    // what removes the exemption.
-    //
-    // SUPERSEDED was rendering the literal English string on a Thai screen, and not rarely:
-    // FactoryQuoteService calls quotes.supersede() on EVERY revised quote, and
-    // PricingRequestDetailPage renders quote history through this function unfiltered. So the
-    // moment Import saved a second round of prices, the first one showed as "SUPERSEDED" beside
-    // its own ครั้งที่ 1 badge. neutral, not danger: a superseded round is ordinary history, not
-    // something that went wrong.
+    // Both were missing (flagged by statusCatalog.test.js's KNOWN_UNLABELLED list).
+    // SUPERSEDED is ordinary history (neutral, not danger): every revised factory quote supersedes
+    // the previous one and quote history renders unfiltered through this function.
     SUPERSEDED: { label: 'รอบเก่า', tone: 'neutral' },
     // danger, matching CANCELLED: for THIS factory the line is a dead end and Import has to source
     // it elsewhere. Names the factory rather than the item ("ไม่มีสินค้า" alone) because several
@@ -403,21 +331,14 @@ export function commissionStatusLabel(status) {
   return COMMISSION_STATUS_LABELS[status] ?? { label: status, tone: 'neutral' };
 }
 
-// Overtime approval status -> StatusBadge tone. Canonical source; do not
-// re-add a page-local `statusInfo`/map for overtime status elsewhere.
+// Overtime approval status -> StatusBadge tone. Canonical source; do not re-add a page-local map.
 //
-// `pendingApproverRole` is an OPTIONAL second argument, so every existing 1-arg call site keeps
-// working. Every SUBMITTED row used to read 'รอผู้จัดการ', even the ones OvertimeService routes
-// straight to the CEO (a manager-less ฝ่าย, or the requester IS a ผู้จัดการ) -- the row then also
-// printed a `ผู้จัดการ: -` audit line that could never fill on that route, so the badge and the
-// audit line named two different, contradictory approvers on the same request.
-// specialMoneyStatusLabel below fixed this identical mislabel for welfare with a single STATIC
-// string, because every welfare request is CEO-only in one stage -- overtime has two real routes
-// PER REQUEST (see OvertimeRepository#resolvePendingApproverRole), so the caller must say which
-// route THIS row took rather than assuming one shape for the whole domain.
-// Mirrors OvertimeStatus (backend overtime/OvertimeStatus.java) — a Java ENUM, not a
-// String-constant class: zero `public static final String` fields, so the backend digest reads
-// it via Class#getEnumConstants() rather than field reflection. See StatusCatalogContractTest.
+// `pendingApproverRole` is an optional second argument: SUBMITTED rows that OvertimeService routes
+// straight to the CEO (manager-less ฝ่าย, or the requester is a ผู้จัดการ) must not read
+// 'รอผู้จัดการ'. The caller says which route this row took (see
+// OvertimeRepository#resolvePendingApproverRole).
+// Mirrors OvertimeStatus (a Java enum, so the backend digest reads it via getEnumConstants()).
+// See StatusCatalogContractTest.
 const OVERTIME_STATUS_LABELS = {
   SUBMITTED: { label: 'รอผู้จัดการ', tone: 'warning' },
   MANAGER_APPROVED: { label: 'รอ CEO', tone: 'info' },
@@ -429,8 +350,7 @@ export const OVERTIME_STATUS_LABEL_KEYS = Object.keys(OVERTIME_STATUS_LABELS);
 
 export function overtimeStatusLabel(status, pendingApproverRole) {
   if (status === 'SUBMITTED' && pendingApproverRole === 'ceo') {
-    // Same label/tone the MANAGER_APPROVED entry below already uses -- from the employee's point
-    // of view both states mean the same thing: the CEO holds this now.
+    // Same as MANAGER_APPROVED below: the CEO holds it now.
     return { label: 'รอ CEO', tone: 'info' };
   }
   return OVERTIME_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
@@ -453,29 +373,16 @@ export function attendanceCorrectionStatusLabel(status) {
   return ATTENDANCE_CORRECTION_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-// Special-money (welfare) request status -> StatusBadge tone. Canonical source;
-// do not re-add a page-local `statusInfo`/map elsewhere.
+// Special-money (welfare) request status -> StatusBadge tone. Canonical source; do not re-add a
+// page-local map.
 //
-// Welfare does NOT share overtime's two-stage shape. Since #482 every welfare
-// request goes straight to the CEO in a single stage, so `SUBMITTED` *is*
-// "waiting for the CEO" — it was previously mislabelled 'รอผู้จัดการ', which
-// told every employee the wrong next holder.
+// Welfare is single-stage: every request goes straight to the CEO, so `SUBMITTED` is "waiting for
+// the CEO". `MANAGER_APPROVED` is retained because `SpecialMoneyStatus` and the `chk_smr_status`
+// constraint still carry it and old rows exist; it is not reachable for new requests and reads the
+// same to the employee.
+// Mirrors SpecialMoneyStatus (a Java enum), see OVERTIME_STATUS_LABELS above.
 //
-// `MANAGER_APPROVED` is retained because `SpecialMoneyStatus` and the
-// `chk_smr_status` check constraint still carry it, and `SpecialMoneyService`
-// still clears rows written before the manager stage was removed. It is not
-// reachable for new requests. It reads the same to the employee — still the
-// CEO's queue — so it is labelled the same, qualified rather than made to look
-// like a distinct step.
-// Mirrors SpecialMoneyStatus (backend specialmoney/SpecialMoneyStatus.java), a Java enum — see
-// OVERTIME_STATUS_LABELS's comment above for why that changes the extraction strategy.
-//
-// SPECIAL_MONEY_STATUSES now DERIVES from the same labels object below (Object.keys) rather than
-// being a second hand-typed literal of the same five codes. It used to be declared independently
-// of specialMoneyStatusLabel's own map — the two happened to still agree, but nothing enforced
-// that, which is the identical unguarded-mirror shape this whole guard exists to close; fixing it
-// here costs nothing (same value, same order) while this function was already being touched for
-// the digest guard.
+// SPECIAL_MONEY_STATUSES derives from the labels object so the two cannot drift.
 const SPECIAL_MONEY_STATUS_LABELS = {
   SUBMITTED: { label: 'รอ CEO อนุมัติ', tone: 'warning' },
   MANAGER_APPROVED: { label: 'รอ CEO อนุมัติ (คำขอเดิม)', tone: 'warning' },
@@ -507,23 +414,19 @@ export function leaveStatusLabel(status) {
   return LEAVE_STATUS_LABELS[status] ?? { label: status || '-', tone: 'neutral' };
 }
 
-// Project sales-pipeline stage -> StatusBadge tone (V50, widened by V143).
+// Project sales-pipeline stage -> StatusBadge tone.
 //
-// Canonical source for the WORDING; do not re-add a page-local map elsewhere. Stage order, phases,
-// gates and the auto-advance flag are NOT here and are not the frontend's to declare — they come
+// Canonical source for the WORDING; stage order, phases, gates and the auto-advance flag come
 // from GET /api/meta/deal-stages (see features/tickets/stageCatalog.js).
 //
-// Completeness against the backend's stage list is enforced twice, because a missing label is how
-// the QUOTE_OWNER regression stayed invisible: at runtime by stageMeta.js's
-// assertStageLabelsComplete (throws in dev/test, console.error in prod), and at build time by
-// features/tickets/stageCatalog.test.js, which reads DealStage.java out of the backend source tree
-// and fails if this map does not cover every constant in DealStage.ORDER.
+// Completeness against the backend's stage list is enforced at runtime by stageMeta.js's
+// assertStageLabelsComplete and at build time by features/tickets/stageCatalog.test.js, which
+// reads DealStage.java.
 const DEAL_STAGE_LABELS = {
   LEAD_APPROACH:       { label: 'เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ', tone: 'neutral' },
   PRESENTATION:        { label: 'นำเสนอสินค้า', tone: 'info' },
   SPEC_APPROVED:       { label: 'ผู้ออกแบบอนุมัติสเปค', tone: 'info' },
-  // V143 narrowed S4 to the DESIGNER only and gave the owner their own S5 below. The wording
-  // follows: this stage no longer covers "เจ้าของ".
+  // The designer stage no longer covers "เจ้าของ" (the owner has their own stage below).
   QUOTE_DESIGN_SIDE:   { label: 'เสนอราคาผู้ออกแบบ', tone: 'info' },
   QUOTE_OWNER:         { label: 'เสนอราคาเจ้าของโครงการ', tone: 'info' },
   OWNER_SIGNOFF:       { label: 'เจ้าของอนุมัติสเปค', tone: 'success' },
@@ -546,20 +449,17 @@ export function hasDealStageLabel(stage) {
 /**
  * Stages whose WORDING follows the deal's entry channel — `stage -> channel -> label`.
  *
- * Two stages qualify, and both for the same reason: their default label in `DEAL_STAGE_LABELS`
- * hedges with a slash because one string had to serve every route. Now that the channel is known,
- * the hedge can be resolved to the party the deal actually involves.
- *   S1 LEAD_APPROACH — "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ" (owner ruling 2026-10-01)
+ * Both default labels hedge with a slash because one string had to serve every route; once the
+ * channel is known the hedge resolves to the party the deal actually involves.
+ *   S1 LEAD_APPROACH — "เข้าถึงเจ้าของ/ผู้ออกแบบโครงการ"
  *   S3 SPEC_APPROVED — not a designer stage; it means "the party who specifies has agreed the spec"
  *
- * A channel not listed here — DESIGNER_LED, UNSPECIFIED, unknown, absent — keeps the
- * DEAL_STAGE_LABELS wording. For UNSPECIFIED that is the point: no channel was entered, so there is
- * no party to name and the hedged label is the honest one.
+ * A channel not listed here (DESIGNER_LED, UNSPECIFIED, unknown, absent) keeps the
+ * DEAL_STAGE_LABELS wording. For UNSPECIFIED no party is known, so the hedged label is honest.
  *
- * ⚠️ NOT every slash is a route hedge, and the others are deliberately left alone:
- * S7 "รอผลประมูล / รอผู้ซื้อ" joins two different SITUATIONS, and S18
- * "นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ" joins two ACTIVITIES. Neither varies by channel, so neither
- * belongs here. A test pins that they stay identical across channels.
+ * Not every slash is a route hedge: S7 "รอผลประมูล / รอผู้ซื้อ" joins two situations and S18
+ * "นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ" joins two activities. Neither varies by channel, and a
+ * test pins that they stay identical.
  *
  * Wording only. WHICH stages a route visits is the backend's (`DealRoute`), served as `onRoute`.
  */
@@ -686,20 +586,18 @@ export function fulfilmentStatusLabel(value) {
 // Step 7: Factory Purchase Order and Import Execution — mirrors
 
 /**
- * The FIELD labels for "who is this offered to" — owner ruling 2026-09-30 (R8).
+ * The FIELD labels for "who is this offered to": เสนอแก่.
  *
- * The deal's entry channel and the quotation's recipient are two different fields that answer the
- * same question, so they share one label: เสนอแก่. Where both appear on the same surface (the
- * new-deal card at /quotations/new) each is qualified; where only one appears, the plain form is
- * used. Kept here, in one place, so the quotation side imports them rather than re-typing the Thai.
+ * The deal's entry channel and the quotation's recipient answer the same question, so they share
+ * one label. Where both appear on one surface (the new-deal card at /quotations/new) each is
+ * qualified; where only one appears, the plain form is used.
  *
- * ⚠️ This renames the FIELD only. The remedy button ("แก้ช่องทางดีล") and the server's own refusal
- * ("… — แก้ช่องทางดีลก่อน", DealRoute.refusalMessage) deliberately keep the old wording — they name
- * the ACTION, not the field, and the owner chose that inconsistency over editing merged server copy.
+ * This renames the FIELD only. The remedy button ("แก้ช่องทางดีล") and the server's refusal
+ * ("… — แก้ช่องทางดีลก่อน", DealRoute.refusalMessage) keep the old wording: they name the ACTION.
  *
- * ⚠️ The channel's OPTION labels below are NOT renamed and deliberately differ from
- * {@link quotationRecipientLabel}'s. Owner ruling: the how-the-deal-arrived nuance ("ผู้ออกแบบนำดีล",
- * "เจ้าของติดต่อโดยตรง") is worth more than symmetry between the two fields. Do not "fix" that.
+ * The channel's OPTION labels below deliberately differ from {@link quotationRecipientLabel}'s:
+ * the how-the-deal-arrived nuance ("ผู้ออกแบบนำดีล", "เจ้าของติดต่อโดยตรง") matters more than
+ * symmetry. Do not "fix" that.
  */
 export const OFFERED_TO_LABEL = 'เสนอแก่';
 export const DEAL_OFFERED_TO_LABEL = 'ดีลนี้เสนอแก่';
@@ -710,7 +608,7 @@ export function entryChannelLabel(value) {
     DESIGNER_LED: 'ผู้ออกแบบนำดีล',
     OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
     BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
-    // Stored-only (V144 default): no channel was ever stated. Never offered as a choice.
+    // Stored-only: no channel was stated. Never offered as a choice.
     UNSPECIFIED: 'ยังไม่ระบุช่องทาง',
   };
   return { label: map[value] ?? value ?? '-', tone: 'neutral' };
@@ -743,20 +641,10 @@ export function quotationStatusLabel(value) {
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }
 
-// GLA-117: central status label for sales.deposit_notice.status, replacing the inline
-// `status === 'ISSUED' ? 'ออกแล้ว' : 'ฉบับร่าง'` ternaries that used to live in
-// DealDocumentRegister.jsx/DealDepositPanel.jsx/DepositNoticePage.jsx — that ternary rendered
-// every non-ISSUED status (including SUPERSEDED, written by
-// DepositNoticeRepository#supersede) as "ฉบับร่าง" (draft), which made a superseded, already-
-// issued document look like an untouched draft. Authoritative status list verified against the
-// backend: `status VARCHAR(20) NOT NULL DEFAULT 'DRAFT'` on `sales.deposit_notice` is a plain
-// varchar with NO CHECK constraint (V12__documents_and_revision.sql's own comment: "DRAFT |
-// ISSUED | SUPERSEDED"); DepositNoticeRepository only ever writes DRAFT (default), ISSUED
-// (#issue), and SUPERSEDED (#supersede) — CANCELLED is never written anywhere in
-// th.co.glr.hr.deposit. docs/api/status-catalog.json does not publish a deposit-notice status
-// group, so there is no digest-coverage guard to satisfy here (unlike quotationStatusLabel).
-// An unmapped value deliberately falls through to the raw status code rather than a fallback
-// label — guessing a fallback is what caused this bug in the first place.
+// Central label for sales.deposit_notice.status. DRAFT | ISSUED | SUPERSEDED; the column has no
+// CHECK constraint and the backend never writes anything else. An unmapped value falls through to
+// the raw status code: a guessed fallback label (e.g. "ฉบับร่าง" for SUPERSEDED) would make a
+// superseded, already-issued document look like an untouched draft.
 export function depositNoticeStatusLabel(value) {
   const map = {
     DRAFT: { label: 'ฉบับร่าง', tone: 'neutral' },
@@ -766,8 +654,7 @@ export function depositNoticeStatusLabel(value) {
   return map[value] ?? { label: value || '-', tone: 'neutral' };
 }
 
-// CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
-// sales.quotation_item_discount_approval.status.
+// CEO discount-approval workflow. Mirrors sales.quotation_item_discount_approval.status.
 export function discountApprovalStatusLabel(value) {
   const map = {
     PENDING: { label: 'รอ CEO อนุมัติส่วนลด', tone: 'warning' },
@@ -810,20 +697,16 @@ export function payrollDeductionKindLabel(kind) {
   return map[kind] ?? kind ?? '-';
 }
 
-// The four PayrollDeductionKind values the written-consent register may record (issue #376,
-// exposed for #744) — the deduction kinds where "did the employee sign a consent letter?" is even
-// a question. Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself
-// V107's `CHECK (deduction_kind IN (...))` constraint on hr.deduction_written_consent.
+// The PayrollDeductionKind values the written-consent register may record: the kinds where "did
+// the employee sign a consent letter?" is a question. Mirrors
+// DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS (V107's CHECK constraint).
 //
-// The other four are excluded by the backend, which 400s on them, so offering them would build a
-// picker whose options the server rejects:
+// The other four are excluded because the backend 400s on them:
 //   WITHHOLDING_TAX / SOCIAL_SECURITY / STUDENT_LOAN — ม.76 item (1); deductible without consent.
 //   LEGAL_EXECUTION_GARNISHMENT                      — a court order; consent is irrelevant to it.
 //
-// mockApi.js keeps its own mirror of this list (it mirrors the Java service independently, by
-// design). The two are pinned to each other by mockApi.deductionConsents.test.js, because a value
-// mirrored into mockApi.js otherwise has NO guard — contract.test.js compares names and parameter
-// counts, never values.
+// mockApi.js keeps its own mirror of this list; mockApi.deductionConsents.test.js pins the two
+// together, since contract.test.js compares names and parameter counts, never values.
 export const CONSENT_APPLICABLE_DEDUCTION_KINDS = [
   'WARNING_LETTER',
   'CUSTOMER_RETURN',
@@ -834,7 +717,7 @@ export const CONSENT_APPLICABLE_DEDUCTION_KINDS = [
 // Bangkok is the business zone for every attendance/leave/overtime date. Deriving "today" from
 // the browser's zone instead makes a late-evening session disagree with the server about which
 // day it is — which matters most on the attendance page, whose primary control is a date stepper.
-export function bangkokDateParts(date = new Date()) {
+function bangkokDateParts(date = new Date()) {
   return Object.fromEntries(
     new Intl.DateTimeFormat('en-US', {
       timeZone: 'Asia/Bangkok',
@@ -852,12 +735,9 @@ export function bangkokTodayIso(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-// `monthsBack` walks calendar months on the Bangkok wall-clock date, not milliseconds -- a
-// millisecond subtraction is the wrong tool for month arithmetic (months aren't a fixed length),
-// and doing it on the Intl-derived {year, month} parts (rather than a naive Date field mutation)
-// keeps this consistent with bangkokTodayIso's pattern above. `Math.floor`/modulo on a flat
-// "months since epoch" count handles the year rollover for free (e.g. Feb minus 3 months lands on
-// the previous November) without any special-casing.
+// `monthsBack` walks calendar months on the Bangkok wall-clock date (months are not a fixed
+// length), using the Intl-derived {year, month} parts like bangkokTodayIso above. Math.floor and
+// modulo on a "months since epoch" count handle the year rollover.
 export function bangkokMonthStartIso(date = new Date(), monthsBack = 0) {
   const parts = bangkokDateParts(date);
   const totalMonths = Number(parts.year) * 12 + (Number(parts.month) - 1) - monthsBack;
@@ -866,14 +746,9 @@ export function bangkokMonthStartIso(date = new Date(), monthsBack = 0) {
   return `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
 }
 
-// Pure calendar-day arithmetic on a YYYY-MM-DD string. Deliberately does NOT round-trip through
-// `Date#toISOString()`: parsing "YYYY-MM-DDT00:00:00+07:00" and reading the date back off
-// `toISOString()` reads the UTC calendar day off a Bangkok-midnight instant, which is always one
-// day behind the Bangkok date that was intended (Bangkok midnight is 17:00 UTC the PREVIOUS day) --
-// that mismatch is what made the attendance date stepper net a 2-day back-step and a stuck
-// forward-step. `Date.UTC` here is used purely as neutral day-count arithmetic on the calendar
-// fields (year/month/day), never as a timezone conversion -- there is no timezone attached to a
-// bare YYYY-MM-DD, so none should be introduced by parsing it as one.
+// Pure calendar-day arithmetic on a YYYY-MM-DD string. Does not round-trip through
+// `Date#toISOString()`: Bangkok midnight is 17:00 UTC the previous day, so that reads a day
+// behind. `Date.UTC` here is day-count arithmetic only; a bare date has no timezone.
 export function addDaysIso(iso, deltaDays) {
   const [year, month, day] = iso.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));

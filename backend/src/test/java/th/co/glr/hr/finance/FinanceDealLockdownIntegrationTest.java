@@ -269,6 +269,79 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
         assertFinanceShape(deal, id);
     }
 
+    // ═══ Dead deals (owner ruling 2026-11-04): account may OPEN a cancelled/lost deal that has an ISSUED deposit
+    // notice (the link in its notification), but may never WRITE to it, and nothing else widens. ═══════════════
+
+    private long deadDealWithPaidDeposit(boolean withIssuedDepositNotice) {
+        long id = createS15Deal("DEPOSIT_PAID");
+        if (withIssuedDepositNotice) {
+            jdbc.update("""
+                INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                    subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+                VALUES (:id, 1, 'ISSUED', 'x', 0.3, 100000.00, 30000.00, 0.07, 2100.00, 32100.00)
+                """, new MapSqlParameterSource("id", id));
+        }
+        sql("UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled' WHERE ticket_id = :id", id);
+        return id;
+    }
+
+    @Test
+    void account_canOpenACancelledDeal_thatHasAnIssuedDepositNotice_evenAfterItWasPaid() throws Exception {
+        long id = deadDealWithPaidDeposit(true);
+        assertThat(tickets.isInAccountScope(id)).as("fixture: outside the LIST scope").isFalse();
+
+        JsonNode deal = okDeal(financeMvc.perform(get("/api/finance/deals/{id}", id).session(session(accountUser))));
+
+        assertFinanceShape(deal, id);
+        // The quotation PDF gates stay strict, so a link to it would only 403: none is offered. And a dead deal
+        // offers no money action.
+        assertThat(deal.get("documents").get("acceptedQuotation").get("downloadPath").isNull()).isTrue();
+        assertThat(deal.get("availableActions").size()).isZero();
+    }
+
+    /** The contrast: on a deal inside account's scope the quotation link is still there. */
+    @Test
+    void account_stillGetsTheQuotationLink_onAnInScopeDeal() throws Exception {
+        long id = createS15Deal("DEPOSIT_PAID");
+
+        JsonNode deal = okDeal(financeMvc.perform(get("/api/finance/deals/{id}", id).session(session(accountUser))));
+
+        assertThat(deal.get("documents").get("acceptedQuotation").get("downloadPath").asText()).isNotBlank();
+    }
+
+    @Test
+    void account_cannotOpenACancelledDeal_withNoIssuedDepositNotice() throws Exception {
+        long id = deadDealWithPaidDeposit(false);
+
+        expectStatus(financeMvc.perform(get("/api/finance/deals/{id}", id).session(session(accountUser))), 403);
+    }
+
+    @Test
+    void account_canOpenALostDeal_withAnIssuedDepositNotice() throws Exception {
+        long id = deadDealWithPaidDeposit(true);
+        sql("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST', status = 'quotation_issued' WHERE ticket_id = :id", id);
+
+        assertFinanceShape(okDeal(financeMvc.perform(get("/api/finance/deals/{id}", id).session(session(accountUser)))), id);
+    }
+
+    /** Reading is widened, writing is not: every money route stays 403 on the dead deal and nothing is written. */
+    @Test
+    void account_stillCannotWriteToThatDeadDeal() throws Exception {
+        long id = deadDealWithPaidDeposit(true);
+
+        for (Route route : routes()) {
+            expectStatus(financeMvc.perform(route.request(id, accountUser)), 403, "account on a dead deal, " + route.name());
+        }
+        assertThat(receiptCount(id)).isZero();
+        assertThat(commentCount(id)).isZero();
+    }
+
+    /** The list scope itself is untouched: the dead deal is still outside it. */
+    @Test
+    void theDeadDealStaysOutsideAccountsListScope() {
+        assertThat(tickets.isInAccountScope(deadDealWithPaidDeposit(true))).isFalse();
+    }
+
     // ═══ B3 design: the shared TicketService money methods enforce scope THEMSELVES ═════════════
 
     /**

@@ -20,9 +20,8 @@ public class CommissionCalculator {
     private static final int ITEM_WEIGHT_SCALE = 6;
     private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal THREE = new BigDecimal("3");
-    // Commission redesign calc-refine: the monthly TIER BASE is computed at this many decimal
-    // places (not 2dp) so the single VAT-strip division doesn't reintroduce the per-receipt
-    // rounding error the whole point of this slice is to remove. "8+" per the workbook
+    // The monthly TIER BASE is computed at this many decimal places (not 2dp) so the single
+    // VAT-strip division doesn't reintroduce per-receipt rounding error. "8+" per the workbook
     // reconciliation; 10 leaves comfortable headroom under progressiveCommission's own internal
     // 8-decimal rate scale without ever being the limiting precision.
     private static final int TIER_BASE_SCALE = 10;
@@ -34,16 +33,16 @@ public class CommissionCalculator {
     private static final BigDecimal MONTHLY_FLOOR = new BigDecimal("50000");
 
     /**
-     * Commission redesign Slice A1 (2026-07-22): the real commission policy Excel has two more
-     * columns than this calculator previously modeled — หัก ณ ที่จ่าย (withholding tax, subtracted
-     * here) and รับเงินเกิน (overpayment received, added back). Both are applied at the same
-     * "actualReceived" stage as the existing five deduction columns.
+     * The real commission policy Excel has two more columns beyond the five deduction columns —
+     * หัก ณ ที่จ่าย (withholding tax, subtracted here) and รับเงินเกิน (overpayment received,
+     * added back). Both are applied at the same "actualReceived" stage as the five deduction
+     * columns.
      *
      * <p>Matches the owner's commission workbooks (L = D-E-F-G-H-I-J+K, the amount received incl. VAT;
      * M = L/1.07).
      *
-     * <p>Backward compatible: when {@code withholdingTax} and {@code overpayment} are both zero
-     * (or null), the result is identical to the pre-Slice-A1 five-column formula.
+     * <p>When {@code withholdingTax} and {@code overpayment} are both zero (or null), the result
+     * is the plain five-column formula.
      */
     public InvoiceCalculation calculateInvoice(
         BigDecimal grossAmount,
@@ -70,12 +69,11 @@ public class CommissionCalculator {
     }
 
     /**
-     * Commission redesign calc-refine (2026-07-22): the monthly TIER BASE is now built from
-     * {@link #monthlyTierBase} at full precision (weighted actual-received summed across every
-     * active receipt in the month, divided by VAT exactly once) rather than by summing each
-     * receipt's already-2dp-rounded {@code commissionable_base} column. This method therefore no
-     * longer rounds its input to 2dp before running the tier brackets -- rounding only happens
-     * once, on the final total, as it always has. Callers that still pass an already-2dp value
+     * The monthly TIER BASE is built from {@link #monthlyTierBase} at full precision (weighted
+     * actual-received summed across every active receipt in the month, divided by VAT exactly
+     * once) rather than by summing each receipt's already-2dp-rounded {@code commissionable_base}
+     * column. This method therefore does not round its input to 2dp before running the tier
+     * brackets -- rounding only happens once, on the final total. Callers that still pass an already-2dp value
      * (e.g. unit tests, or a single invoice's own {@code commissionableBase}) are unaffected,
      * since rounding a value that is already at 2dp is a no-op.
      */
@@ -108,7 +106,7 @@ public class CommissionCalculator {
     }
 
     /**
-     * Commission redesign calc-refine (2026-07-22): {@code monthlyTierBase = SUM(actual_received
+     * {@code monthlyTierBase = SUM(actual_received
      * &times; weight_multiplier) &divide; 1.07}, dividing exactly once at {@link
      * #TIER_BASE_SCALE} decimal places. {@code weightedActualReceived} is the raw, pre-division
      * sum (real cash times each receipt's weight multiplier) -- see {@link
@@ -139,7 +137,7 @@ public class CommissionCalculator {
     }
 
     /**
-     * Issue #405, ข้อ 12: flat monthly INCENTIVE lookup against the rep's FULL-PRECISION monthly
+     * ข้อ 12: flat monthly INCENTIVE lookup against the rep's FULL-PRECISION monthly
      * tier base — the comparison uses {@code monthlyTierBase} as-is, the same "don't pre-round"
      * discipline {@link #progressiveCommission} follows for its own base argument. Highest
      * threshold reached wins; NOT cumulative, NOT pro-rated. ZERO at 2dp when {@code ladder} is
@@ -165,15 +163,15 @@ public class CommissionCalculator {
     }
 
     /**
-     * Issue #405: the STOCK_BONUS (พิเศษขายของในสต๊อค) rule — STEPPED, not a percentage:
+     * The STOCK_BONUS (พิเศษขายของในสต๊อค) rule — STEPPED, not a percentage:
      * {@code floor(stockReceipts / blockAmount)} whole blocks, each worth {@code bonusPerBlock}.
      * A partial block earns nothing — e.g. ฿250,000 at a ฿100,000 block pays ฿2,000 (two whole
      * blocks), NOT ฿2,500 (a naive 1% read of the remainder too). ZERO when {@code config} is
      * null, not {@link StockBonusConfig#enabled()}, or {@code stockReceipts} &le; 0 — this last
      * check is also where the "clamp stockReceipts at &ge; 0 before the floor division" rule
-     * from the issue lives: a negative (e.g. CLAWBACK-only) receipts figure floors to the same
+     * lives: a negative (e.g. CLAWBACK-only) receipts figure floors to the same
      * zero blocks a clamped-to-0 value would, so no separate clamp is needed before this call.
-     * Ships config-gated OFF ({@link StockBonusConfig#disabled()} / the V108 seed row), so this
+     * Ships config-gated OFF ({@link StockBonusConfig#disabled()} / the seed row), so this
      * returns zero for every real payroll run until the CEO enables it.
      */
     public BigDecimal stockSaleBonus(BigDecimal stockReceipts, StockBonusConfig config) {
@@ -209,7 +207,7 @@ public class CommissionCalculator {
     }
 
     /**
-     * V148 (per-item stock-commission weighting). Blends each line's own STOCK-EARNED weight into
+     * Per-item stock-commission weighting. Blends each line's own STOCK-EARNED weight into
      * ONE record-level effective weight, cash-weighted by each item's own share of the deal's
      * total item value -- the model:
      * <pre>
@@ -240,7 +238,7 @@ public class CommissionCalculator {
      * <pre>
      *   itemValue_i * effectiveWeight_i = price_i * (qty_i + (weightMultiplier_i - 1) * qtyFromStock_i)
      * </pre>
-     * -- an EXACT identity, no rounding. For {@code qty_i == 0}: the V54 CHECK ({@code 0 &le;
+     * -- an EXACT identity, no rounding. For {@code qty_i == 0}: the DB CHECK ({@code 0 &le;
      * qty_from_stock &le; qty}) guarantees {@code qtyFromStock_i} is also 0 in that case, so the
      * same formula evaluates to {@code price_i * (0 + (n-1)*0) = 0} -- exactly what {@code
      * itemValue_i (= 0) * effectiveWeight_i (defined as 1 for qty_i = 0)} would also give. No
@@ -248,7 +246,7 @@ public class CommissionCalculator {
      * invariant, which is why {@code weightedContribution} below is computed from this closed form
      * rather than dividing per item.
      *
-     * <p><b>Also algebraically eliminated:</b> the brief's formula routes through {@code
+     * <p><b>Also algebraically eliminated:</b> the spec's formula routes through {@code
      * allocatedCash_i = actualReceived * itemValue_i / totalItemValue} and only then {@code
      * SUM(allocatedCash_i * effectiveWeight_i) / actualReceived}. {@code actualReceived} cancels
      * out of that two-step form exactly (provided it is nonzero), leaving the same {@code
@@ -258,25 +256,22 @@ public class CommissionCalculator {
      * = 0} -- when there is no cash to weight).
      *
      * <p><b>Edge cases, each returning {@link Optional#empty()}</b> (the frozen column stays
-     * {@code null}, and payroll falls back to the record's plain {@code weightMultiplier} exactly
-     * as before this feature -- see {@code sales.commission_record.effective_weight_multiplier}'s
-     * migration comment):
+     * {@code null}, and payroll falls back to the record's plain {@code weightMultiplier} -- see
+     * {@code sales.commission_record.effective_weight_multiplier}'s migration comment):
      * <ul>
      *   <li>{@code items} null/empty -- nothing to derive a weight from (every unlinked/manual
      *       commission never reaches this method at all -- see {@code
      *       CommissionService#computeItemDerivedWeight}).</li>
-     *   <li>{@code actualReceived} null or &le; 0 -- undefined (the brief's own formula divides by
+     *   <li>{@code actualReceived} null or &le; 0 -- undefined (the spec's own formula divides by
      *       it) and operationally moot (a non-positive receipt contributes nothing to the weighted
      *       base regardless of weight).</li>
      *   <li>{@code SUM(itemValue) &le; 0} -- every item has qty 0, or every item's price is null
-     *       on both {@code approvedPrice} and {@code proposedPrice} (the fallback chosen for this
-     *       task: an item with NO price ever set contributes ZERO to both the numerator and
-     *       denominator, as if it did not exist for weighting purposes, rather than being treated
-     *       as an error).</li>
+     *       on both {@code approvedPrice} and {@code proposedPrice} (an item with NO price ever set
+     *       contributes ZERO to both the numerator and denominator, as if it did not exist for
+     *       weighting purposes, rather than being treated as an error).</li>
      *   <li><b>The computed blend equals exactly 1</b> -- i.e. NO item carries genuine stock-earned
      *       credit (every item with positive {@code itemValue} has either {@code weightMultiplier
-     *       = 1} or {@code qtyFromStock = 0}). Reviewer finding (2026-08-16), a real defect that
-     *       shipped and was caught before merge: without this case, an ORDINARY ticket -- every
+     *       = 1} or {@code qtyFromStock = 0}). Without this case, an ORDINARY ticket -- every
      *       item at the column DEFAULT of 1x, the overwhelmingly common case -- still returns a
      *       concrete, non-empty {@code Optional.of(1.000000)} (the loop above computes {@code
      *       weightedContribution == totalItemValue} exactly whenever every item's {@code
@@ -286,11 +281,10 @@ public class CommissionCalculator {
      *       CommissionRepository#sumActiveWeightedActualReceived}'s {@code
      *       COALESCE(effective_weight_multiplier, weight_multiplier)} always prefers a non-null
      *       frozen value -- so the pre-existing, still-rendered {@code weightMultiplier} manager
-     *       control ({@link CommissionService#updateDeductions}, V82) would silently stop
-     *       affecting payroll for any ticket-linked sale, the exact class of dead-control-on-a-
-     *       money-path bug CLAUDE.md exists to prevent. Returning {@link Optional#empty()} here
-     *       instead means an untouched deal freezes NULL, exactly like a pre-V148 row, and the
-     *       manager's existing override goes on working precisely as it did before this feature.
+     *       control ({@link CommissionService#updateDeductions}) would silently stop
+     *       affecting payroll for any ticket-linked sale -- a dead control on a money path.
+     *       Returning {@link Optional#empty()} here instead means an untouched deal freezes NULL,
+     *       and the manager's existing override keeps working.
      *       Mathematically equivalent to "no item has a genuine stock-weighted credit": every
      *       {@code effectiveWeight_i} for an item with positive {@code itemValue_i} is provably
      *       {@code &ge; 1} for well-formed (non-negative) input, so a weighted average of them
@@ -328,10 +322,9 @@ public class CommissionCalculator {
         }
         BigDecimal blended = weightedContribution.divide(totalItemValue, ITEM_WEIGHT_SCALE, RoundingMode.HALF_UP);
         BigDecimal clamped = blended.max(ONE).min(THREE);
-        // Reviewer finding (2026-08-16): exactly 1 means no item carried genuine stock-earned
-        // credit -- freeze nothing, so COALESCE falls back to the still-live weightMultiplier
-        // control instead of a redundant, control-defeating 1.000000. See this method's own
-        // Javadoc for the full defect this closes.
+        // Exactly 1 means no item carried genuine stock-earned credit -- freeze nothing, so
+        // COALESCE falls back to the still-live weightMultiplier control instead of a redundant,
+        // control-defeating 1.000000. See this method's own Javadoc.
         if (clamped.compareTo(ONE) == 0) {
             return Optional.empty();
         }

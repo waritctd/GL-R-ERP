@@ -12,13 +12,13 @@ globalThis.React = React;
 // Whole-editor cases, several of which fill a complete item row and save.
 vi.setConfig({ testTimeout: 15000 });
 
-// ผู้ติดต่อ is a picker over the deal customer's contact records (owner rulings 2026-10-18,
-// .design/quotation-contact/DESIGN.md): the editor sends the picked `contactId`, and the server
+// ผู้ติดต่อ is a picker over the deal customer's contact records
+// (.design/quotation-contact/DESIGN.md): the editor sends the picked `contactId`, and the server
 // writes the ผู้สั่งซื้อ signature name from that contact, so the editor sends no `orderedByName`.
 //
 // Under the picker sit the CUSTOMER's phone and email (`orderedByPhone`, `orderedByEmail`),
-// labelled โทร. / อีเมล. They print on the document's customer contact line when filled (owner ruling
-// 2026-10-13); a blank one prints nothing.
+// labelled โทร. / อีเมล. They print on the document's customer contact line when filled; a blank
+// one prints nothing.
 //
 // Evidence note: every server response here is a vi.fn(). What the server stores, refuses and
 // prints is DealQuotationOrderedByContactIntegrationTest / …RenderTest (Java, real Postgres);
@@ -166,7 +166,7 @@ beforeEach(() => {
       summary: {
         id: 18, createdById: 6, createdByName: 'คุณสมหมาย ขายดี', customerName: CUSTOMER.name, customerId: 5,
         projectId: 3, projectName: 'โครงการ A', contactId: null, contactName: null,
-        // A deal at a quote stage preselects its recipient (slice 2 flow B), so saving is not held back.
+        // A deal at a quote stage preselects its recipient, so saving is not held back.
         salesStage: 'QUOTE_DESIGN_SIDE',
       },
     },
@@ -207,7 +207,7 @@ describe('ผู้ติดต่อ — the customer phone and email, directly
 
   it('a quotation that creates its deal inline: the same two inputs, in the same place', async () => {
     renderEditor('/quotations/new');
-    // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
+    // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
     fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
 
     await screen.findByLabelText(/^ลูกค้า/);
@@ -223,8 +223,8 @@ describe('ผู้ติดต่อ — the customer phone and email, directly
     expect([phone.maxLength, email.maxLength]).toEqual([50, 254]);
   });
 
-  // Owner ask 2026-10-18: the picker's hint is the ONLY explanatory text on the form, so the
-  // line these two used to carry ("…พิมพ์ในใบเสนอราคาเมื่อกรอก") is gone — in both forms.
+  // The picker's hint is the ONLY explanatory text on the form (the old "…พิมพ์ในใบเสนอราคาเมื่อกรอก"
+  // line is gone in both forms).
   it('neither carries a line of its own any more — in both forms', async () => {
     const first = renderEditor('/quotations/new?ticket=18');
     await screen.findByLabelText(/^ผู้ติดต่อ/);
@@ -233,7 +233,7 @@ describe('ผู้ติดต่อ — the customer phone and email, directly
     first.unmount();
 
     renderEditor('/quotations/new');
-    // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
+    // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
     fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
     await screen.findByLabelText(/^ลูกค้า/);
     expect([describedBy(screen.getByLabelText(PHONE_LABEL, BOX)), describedBy(screen.getByLabelText(EMAIL_LABEL, BOX))]).toEqual(['', '']);
@@ -259,7 +259,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     const picked = api.dealQuotations.update.mock.calls[0][1];
     expect(picked).toMatchObject({ contactId: SOMCHAI.id, orderedByPhone: PHONE, orderedByEmail: EMAIL });
-    // The signature name is the server's to write from the contact (ruling 2026-10-18): not sent.
+    // The signature name is the server's to write from the contact: not sent.
     expect(picked).not.toHaveProperty('orderedByName');
     expect(picked).not.toHaveProperty('clearContact');
     picking.unmount();
@@ -299,7 +299,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
   it('the inline form saves them too, with the picked contact, on the quotation it creates with its new deal', async () => {
     api.customers.contacts.mockResolvedValue({ contacts: [SOMCHAI] });
     renderEditor('/quotations/new');
-    // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
+    // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
     fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
 
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
@@ -307,7 +307,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(CUSTOMER.id));
     fireEvent.focus(screen.getByLabelText(/^โครงการ/));
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(PROJECT.name) }));
-    // Slice 2 (S2-B1) + #1085: a new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
+    // A new deal's recipient and a real ช่องทางรับงาน gate บันทึกร่าง.
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
     fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
     // The picker lists the contacts of the customer just chosen, before any deal exists.
@@ -323,7 +323,7 @@ describe('ผู้ติดต่อ — what the editor saves', () => {
     await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
     expect(api.dealQuotations.create.mock.calls[0][0]).toBe(42);
     expect(api.dealQuotations.create.mock.calls[0][1]).toMatchObject({ contactId: SOMCHAI.id, orderedByPhone: PHONE, orderedByEmail: EMAIL });
-    // The deal itself is given no contact (ruling 2026-10-18): the quotation carries it.
+    // The deal itself is given no contact: the quotation carries it.
     expect(api.tickets.create.mock.calls[0][0].contactId).toBeNull();
     expect(JSON.stringify(api.tickets.create.mock.calls[0][0])).not.toContain(EMAIL);
   });

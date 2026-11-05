@@ -115,7 +115,7 @@ public final class ThaiText {
             : String.format(Locale.US, "%,.2f", scaled);
     }
 
-    // ── Thai baht-text (GLA-99 step 3, ใบวางบิล) ──────────────────────────────────────────────
+    // ── Thai baht-text (ใบวางบิล) ──────────────────────────────────────────────
 
     private static final String[] THAI_DIGITS = {
         "ศูนย์", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"
@@ -125,8 +125,8 @@ public final class ThaiText {
 
     /**
      * The amount in Thai baht-text, e.g. {@code หนึ่งแสนสองหมื่นหกพันเก้าร้อยเจ็ดสิบเจ็ดบาทยี่สิบสตางค์}
-     * for 126,977.20 or {@code ศูนย์บาทถ้วน} for zero -- the string a ใบวางบิล (billing note, GLA-99
-     * step 3) prints under its total, matching the style the owner's own reference form
+     * for 126,977.20 or {@code ศูนย์บาทถ้วน} for zero -- the string a ใบวางบิล (billing note)
+     * prints under its total, matching the style the owner's own reference form
      * ({@code ฟอร์มใบวางบิล.xls}) reads via its {@code _xlfn.BAHTTEXT} formula cell. Computed in Java
      * rather than left as a spreadsheet formula so the printed text is correct regardless of which
      * program later opens/recalculates the file -- the same reasoning every other renderer in this
@@ -137,16 +137,16 @@ public final class ThaiText {
      * {@code สิบเอ็ด}, 101 = {@code หนึ่งร้อยเอ็ด}, 1,000,001 = {@code หนึ่งล้านเอ็ด}, 11,000,000 =
      * {@code สิบเอ็ดล้าน} -- decided by whether anything has already been written before that final
      * digit is reached, checked once globally so it is correct both WITHIN a six-digit group and
-     * ACROSS a ล้าน group boundary -- F1's own fix, GLA-99 step 3 round 1 review: the ones-digit
-     * check used to also require being in the number's OWN final group, so a non-final group's own
-     * ones digit -- e.g. the "11" of 11,000,000 -- always read หนึ่ง instead of เอ็ด); the tens
+     * ACROSS a ล้าน group boundary. The ones-digit check must not also require being in the
+     * number's OWN final group, or a non-final group's own ones digit -- e.g. the "11" of
+     * 11,000,000 -- would read หนึ่ง instead of เอ็ด); the tens
      * digit drops its own {@code หนึ่ง} prefix ({@code สิบ}, never {@code หนึ่งสิบ}) and reads
      * {@code ยี่สิบ} instead of {@code สองสิบ}. Magnitudes at or above one million are chunked into
      * groups of six digits, each read the same way and followed by AS MANY {@code ล้าน} as the
      * group's own magnitude level above the base group calls for (one for 10^6..10^11, two for
-     * 10^12..10^17, and so on -- also fixed by F1: a group two or more levels up used to get only
-     * one {@code ล้าน} regardless, dropping one whenever an intervening group was entirely zero,
-     * e.g. 1,000,000,000,000 read {@code หนึ่งล้าน} instead of {@code หนึ่งล้านล้าน}) -- the standard
+     * 10^12..10^17, and so on -- giving a group two or more levels up only one {@code ล้าน}
+     * would drop one whenever an intervening group is entirely zero, e.g. 1,000,000,000,000 would
+     * read {@code หนึ่งล้าน} instead of {@code หนึ่งล้านล้าน}) -- the standard
      * Thai reading for large numbers (never expected in practice for a billing note, but not
      * artificially capped either).
      *
@@ -182,7 +182,7 @@ public final class ThaiText {
      * base (rightmost) one is followed by AS MANY {@code ล้าน} as its own magnitude level calls for
      * -- {@code numChunks - 1 - chunk} of them, so a group representing 10^12 (two levels above the
      * base) gets {@code ล้านล้าน}, not one {@code ล้าน} regardless of how far above the base it
-     * sits (F1's own fix -- see {@link #bahtText}'s own Javadoc) -- shared by the baht and satang
+     * sits (see {@link #bahtText}'s own Javadoc) -- shared by the baht and satang
      * halves of {@link #bahtText}. */
     private static String readNumber(long value) {
         if (value == 0) {
@@ -212,9 +212,8 @@ public final class ThaiText {
      * group's OWN ones digit -- correct both within this group (e.g. the "1" after "สิบ" in
      * 11's own group) and across a ล้าน boundary (e.g. the "1" after a preceding group's own
      * "...ล้าน", as in 1,000,001), because {@code sb} already carries everything read before this
-     * point either way. F1's own fix: this used to only apply within the number's OWN FINAL group,
-     * so a non-final group's ones digit (e.g. the second "1" of 11,000,000's own "000011" group)
-     * always read หนึ่ง instead of เอ็ด. */
+     * point either way. It must apply to non-final groups too, or a non-final group's ones digit
+     * (e.g. the second "1" of 11,000,000's own "000011" group) would read หนึ่ง instead of เอ็ด. */
     private static void appendGroup(StringBuilder sb, String group) {
         for (int i = 0; i < 6; i++) {
             int digit = group.charAt(i) - '0';

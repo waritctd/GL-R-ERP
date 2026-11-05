@@ -374,7 +374,7 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         // reserveStock never calls it. The stub exists only so a future edit routing through
         // markLost/cancel cannot NPE on Mockito's default null.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         return new TicketService(ticketRepository, notificationRepository,
             new ObjectMapper(), new CustomerRepository(jdbc), new QuotationRenderer(), pricingRequests, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),

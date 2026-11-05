@@ -73,7 +73,7 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests,

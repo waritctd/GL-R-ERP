@@ -38,7 +38,7 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationItemDto;
  * WastageCalculator}), no status-machine rules; see {@link DealQuotationService} for all of that.
  * The one exception is {@link CatalogRepository}: {@link #mapItemColumns} calls its {@link
  * CatalogRepository#findSqmBases} to resolve a stored tile row's catalogue width_mm/height_mm for
- * {@code DealQuotationLines#sizeLine} (owner ruling 2026-09-12) — a batched LOOKUP, not arithmetic
+ * {@code DealQuotationLines#sizeLine} — a batched LOOKUP, not arithmetic
  * or a business rule, and the same "follow the established catalogue-basis path" this file's
  * caller ({@code DealQuotationService#resolveSqmPerPiece}) already uses for the identical field.
  */
@@ -60,16 +60,15 @@ public class DealQuotationRepository {
     }
 
     /**
-     * A revision child's number is {@code {base}-{revisionNo}} — INCLUDING revision 1 (owner
-     * feedback 2026-09-11: "มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1").
+     * A revision child's number is {@code {base}-{revisionNo}} — INCLUDING revision 1
+     * (e.g. "QT-2026-0014-1", the first revision carries the suffix from the start).
      *
-     * <p>Delegates to {@link th.co.glr.hr.ticket.QuotationNumbering#baseNumber} (extracted
-     * 2026-09-18 so the customerquotation/PricingRequest-chain quotation flow can share this exact
-     * logic rather than duplicate it — both flows write the same {@code sales.quotation.number}
-     * column under the same UNIQUE constraint). Kept here, at this signature, so every existing
-     * call site in {@code DealQuotationService} needs no change. See that class's Javadoc for the
-     * full reasoning (legacy bare-number handling, the base-recovery invariant, etc.) — this
-     * wrapper does not repeat it.
+     * <p>Delegates to {@link th.co.glr.hr.ticket.QuotationNumbering#baseNumber}, shared with the
+     * customerquotation/PricingRequest-chain flow because both flows write the same
+     * {@code sales.quotation.number} column under the same UNIQUE constraint. Kept here, at this
+     * signature, so every call site in {@code DealQuotationService} needs no change. See that
+     * class's Javadoc for the full reasoning (legacy bare-number handling, the base-recovery
+     * invariant, etc.) — this wrapper does not repeat it.
      */
     static String baseNumber(String sourceNumber, int sourceRevisionNo) {
         return th.co.glr.hr.ticket.QuotationNumbering.baseNumber(sourceNumber, sourceRevisionNo);
@@ -95,8 +94,8 @@ public class DealQuotationRepository {
      * <p>Uses the two-int {@code pg_advisory_xact_lock(classId, id)} form, so its keyspace is
      * separate from the single-bigint locks every pricing-request locker uses
      * (CustomerQuotationRepository, PricingRequestRepository, PricingDecisionRepository,
-     * FactoryQuoteRepository). Ticket ids used to alias pricing-request ids in one shared keyspace,
-     * which deadlocked once a transaction held both with crossed ids. The {@code int} cast of the
+     * FactoryQuoteRepository). Sharing one keyspace would alias ticket ids with pricing-request
+     * ids and deadlock a transaction holding both with crossed ids. The {@code int} cast of the
      * ticket id is safe: ids are in the hundreds.
      */
     public void lockTicket(long ticketId) {
@@ -104,7 +103,7 @@ public class DealQuotationRepository {
             Map.of("classId", TICKET_LOCK_CLASS_ID, "id", ticketId), (rs, rowNum) -> 0);
     }
 
-    /** M3: whether {@code parentQuotationId} already has a child revision sitting open
+    /** Whether {@code parentQuotationId} already has a child revision sitting open
      * (DRAFT/PENDING_APPROVAL) — {@link DealQuotationService#createRevision} calls this, under
      * {@link #lockTicket}, to refuse a second revision with a 409 rather than racing a second
      * caller into the {@code sales.quotation.number} UNIQUE constraint (V6). */
@@ -120,7 +119,7 @@ public class DealQuotationRepository {
         return Boolean.TRUE.equals(found);
     }
 
-    /** GLA-123 slice S1 — the pricing-request/decision-item link for every LINKED row on a
+    /** The pricing-request/decision-item link for every LINKED row on a
      * quotation, keyed by {@code quotation_item_id}. Internal only (never exposed on
      * {@code DealQuotationItemDto} — the API carries the derived {@code priceChangedFromCeo} flag
      * instead, see that field's Javadoc); {@link DealQuotationService#update} uses this to carry a
@@ -139,7 +138,7 @@ public class DealQuotationRepository {
                 rs.getLong("pricing_decision_item_id")));
     }
 
-    /** M4(d) fix (Opus review, 2026-09-20) — every item of THIS quotation's own {@code
+    /** Every item of THIS quotation's own {@code
      * pricing_decision_id} (frozen at create time, the exact same decision {@link
      * DealQuotationService#restoreRemovedItem} reads from) that is NOT currently linked to a live
      * row on this quotation, i.e. what {@code #restoreRemovedItem} can bring back. Gives the
@@ -168,13 +167,13 @@ public class DealQuotationRepository {
                 rs.getString("color"), rs.getString("texture"), rs.getString("size")));
     }
 
-    /** NIT fix (Opus re-review, 2026-09-20) — lets {@link DealQuotationService#restoreRemovedItem}
+    /** Lets {@link DealQuotationService#restoreRemovedItem}
      * match the decision item through the quotation's OWN frozen {@code pricing_decision_id},
      * rather than searching "any APPROVED decision on this pricing request" (which could match a
      * LATER decision — e.g. after a customer-change revision cycles the PR through CEO review
-     * again — whose item ids happen not to collide today, but is the wrong source of truth on
-     * principle: this quotation was created from ONE specific decision, and that is the only one
-     * its restore should ever read from). Empty for a DEAL_DIRECT row (no pricing_decision_id). */
+     * again — and is the wrong source of truth: this quotation was created from ONE specific
+     * decision, and that is the only one its restore should ever read from). Empty for a
+     * DEAL_DIRECT row (no pricing_decision_id). */
     public java.util.Optional<Long> findPricingDecisionId(long quotationId) {
         Long id = jdbc.queryForObject(
             "SELECT pricing_decision_id FROM sales.quotation WHERE quotation_id = :id",
@@ -182,42 +181,32 @@ public class DealQuotationRepository {
         return java.util.Optional.ofNullable(id);
     }
 
-    /** GLA-123 slice S1 fix (Opus review M2, 2026-09-20) — mutual exclusivity, the mirror image
+    /** Mutual exclusivity, the mirror image
      * of {@code CustomerQuotationRepository#hasLiveQuotation}: whether THIS pricing request
      * already has a live (not CANCELLED/SUPERSEDED/EXPIRED) PRICING_REQUEST-origin quotation.
      * Used by {@code CustomerQuotationService#create} to refuse (409) starting the OLD chain when
-     * the new one is already in play, and — since S2 — by {@code DealQuotationService
+     * the new one is already in play, and by {@code DealQuotationService
      * #createFromPricingRequest} itself, to refuse a SECOND live quotation of this SAME engine
-     * (MAJOR-3 fix, Opus re-review 2026-09-20: closes the gap where a rep could otherwise mint a
-     * second live quotation while their first sat PENDING_APPROVAL, since PR status alone does
-     * not move until actual issue). */
+     * (otherwise a rep could mint a second live quotation while their first sat
+     * PENDING_APPROVAL, since PR status alone does not move until actual issue). */
     public boolean hasLivePricingRequestQuotation(long pricingRequestId) {
-        // MINOR-4 fix (owner ruling, confirmed 2026-09-20, second re-review) — REJECTED added to
-        // the non-live set, for CONSISTENCY with CustomerQuotationRepository#hasLiveQuotation's
-        // own identical addition (a rejected quotation has no live offer, so it must not block the
-        // OTHER engine).
-        //
-        // CORRECTION (S3 review round 5, NEW-B, 2026-09-23): this comment used to say REJECTED is
-        // "still never actually written by this origin's own #reject ... kept in the non-live set
-        // anyway for forward-looking consistency" — that stopped being true once S3's own
-        // #recordOutcome shipped: REJECTED is one of RECORDABLE_OUTCOMES, so it IS live, reachable
-        // customer-driven data, not a hedge for a future writer. Its presence here is exactly what
-        // the frontend's recreate gate (PricingRequestDetailPage.jsx, dealQuotationForPr.docStatus
-        // in ['EXPIRED','REVISION_REQUESTED','REJECTED']) depends on: a REJECTED quotation must
+        // REJECTED is in the non-live set, consistent with
+        // CustomerQuotationRepository#hasLiveQuotation (a rejected quotation has no live offer, so
+        // it must not block the OTHER engine). It is real, reachable customer-driven data
+        // (RECORDABLE_OUTCOMES includes it, written by #recordOutcome), and the frontend's
+        // recreate gate (PricingRequestDetailPage.jsx, dealQuotationForPr.docStatus in
+        // ['EXPIRED','REVISION_REQUESTED','REJECTED']) depends on it: a REJECTED quotation must
         // read as non-live so #createFromPricingRequest will accept a replacement, mirroring
-        // EXPIRED and REVISION_REQUESTED immediately below.
+        // EXPIRED and REVISION_REQUESTED.
         //
-        // GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
-        // REVISION_REQUESTED added — this WAS reachable (S3's own recordOutcome writes it) and WAS
-        // missing, so a quotation the customer asked to change was a permanent dead end: create
-        // refused ("a live quotation still exists"), cancel/update refused (not DRAFT),
-        // re-recording an outcome refused (not ISSUED), and the expiry sweep never touches it
-        // (ISSUED-only) — every exit 409'd, proven end to end against real Postgres. This is NOT
-        // D12 (revising an ACCEPTED quotation, out of S3's scope) — REVISION_REQUESTED is an
-        // ISSUED quotation the customer asked to change, squarely R9/S3's own concern. Gives it
-        // the SAME recovery path REJECTED and EXPIRED already have: sales writes a fresh
-        // quotation from the same pricing request (the old REVISION_REQUESTED row stays, kept for
-        // audit, exactly like a REJECTED/EXPIRED one already does).
+        // REVISION_REQUESTED must be here too: #recordOutcome writes it, and without it a
+        // quotation the customer asked to change would be a permanent dead end: create refused
+        // ("a live quotation still exists"), cancel/update refused (not DRAFT), re-recording an
+        // outcome refused (not ISSUED), and the expiry sweep never touches it (ISSUED-only), so
+        // every exit 409s. (Revising an ACCEPTED quotation is a separate case, out of scope.)
+        // It gets the SAME recovery path REJECTED and EXPIRED have: sales writes a fresh
+        // quotation from the same pricing request, and the old REVISION_REQUESTED row stays for
+        // audit like a REJECTED/EXPIRED one.
         Boolean found = jdbc.queryForObject("""
             SELECT EXISTS (
                 SELECT 1 FROM sales.quotation
@@ -228,7 +217,7 @@ public class DealQuotationRepository {
         return Boolean.TRUE.equals(found);
     }
 
-    /** GLA-123 slice S1 M4(c)/(d) fix (Opus review, 2026-09-20) — moves {@code
+    /** Moves {@code
      * items_removed_from_ceo_count} (V191) by {@code delta}: {@code +1} per CEO-linked line
      * dropped in {@link DealQuotationService#update}, {@code -1} per line restored by {@link
      * DealQuotationService#restoreRemovedItem}. {@code GREATEST(0, ...)} floors it at 0 so it can
@@ -242,10 +231,10 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId, "delta", delta));
     }
 
-    /** MAJOR-1 fix (Opus re-review, 2026-09-20) — {@link DealQuotationService#restoreRemovedItem}
-     * inserts a new item row but, unlike {@link DealQuotationService#update}, never rewrote {@code
-     * total_amount} — the column {@link #mapQuotation} reads as the subtotal and from which VAT
-     * and the grand total are derived. Left uncorrected, a restore leaves the document's total
+    /** {@link DealQuotationService#restoreRemovedItem}
+     * inserts a new item row but, unlike {@link DealQuotationService#update}, does not rewrite {@code
+     * total_amount} itself — the column {@link #mapQuotation} reads as the subtotal and from which
+     * VAT and the grand total are derived. Without this call a restore leaves the document's total
      * understated by exactly the restored line's amount until the NEXT full save recomputes it —
      * silently wrong on any render/download in between. Same DRAFT-only, both-origins predicate as
      * {@link #updateHeader}, but touches ONLY {@code total_amount} — a restore has no other header
@@ -259,10 +248,10 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId, "subtotal", subtotal));
     }
 
-    /** GLA-123 slice S1 — idempotent-create guard for {@link
+    /** Idempotent-create guard for {@link
      * DealQuotationService#createFromPricingRequest}: a still-open (DRAFT) PRICING_REQUEST-origin
-     * quotation for this pricing request, if one exists. Scoped to DRAFT only — once submitted
-     * (S2), a second create attempt is a separate question S2 owns, not this method's. */
+     * quotation for this pricing request, if one exists. Scoped to DRAFT only — once submitted,
+     * a second create attempt is a separate question, not this method's. */
     public Optional<Long> findOpenDraftForPricingRequest(long pricingRequestId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
@@ -278,8 +267,7 @@ public class DealQuotationRepository {
     }
 
     /**
-     * MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"): the
-     * most recent PRICING_REQUEST-origin quotation for this pricing request, REGARDLESS of
+     * The most recent PRICING_REQUEST-origin quotation for this pricing request, REGARDLESS of
      * status — used by {@code DealQuotationService#createFromPricingRequest} to continue the SAME
      * {@code {base}-{n}} number family when re-creating after an EXPIRED quotation, rather than
      * minting an unrelated fresh base number. This origin has a revision chain: {@code
@@ -327,27 +315,25 @@ public class DealQuotationRepository {
      * quotation_item.qty} (see {@link #findAcceptedItemQuantitiesByPricingRequest}'s own Javadoc);
      * {@link #sqmPerPiece} is {@code quotation_item.sqm_per_piece} (V165), read from the SAME row
      * so {@code OrderConfirmationService#reconcileTicketItems} can derive {@code qty_sqm} via
-     * {@code WastageCalculator#sqmQuantityFromPieces} — GLA-123 slice S3 MAJOR-B fix — rather than
+     * {@code WastageCalculator#sqmQuantityFromPieces}, rather than
      * leaving it unreconciled (still the PR's stale, pre-edit area) while {@code qty} moves. Null
      * exactly when the row has no sqm/piece basis (should not happen for a TILE row on this
-     * origin, but this origin's own extra-row feature (D7, S1b) is not yet shipped, so this stays
+     * origin, but this origin's extra-row feature is not yet shipped, so this stays
      * nullable defensively rather than assumed). */
     public record AcceptedItemQty(java.math.BigDecimal qty, java.math.BigDecimal sqmPerPiece) {}
 
     /**
-     * GLA-123 slice S3 BLOCKER 2 fix (Opus review against real Postgres, 2026-09-23):
-     * {@code OrderConfirmationService#reconcileTicketItems} used to write {@code
-     * pricing_request_item.requested_qty} onto {@code sales.ticket_item.qty} unconditionally — the
-     * PR-AUTHORED quantity, never what the customer actually ACCEPTED. S1 explicitly lets sales
-     * edit a PRICING_REQUEST-origin quotation line's quantity/เผื่อ (excluded from {@code
-     * requireCeoApprovalIfChanged}, so it needs no CEO re-approval either), so a PR authored at 10
-     * pieces whose quotation line was edited to 25 before issue reconciled back down to 10 —
-     * proven live: stock reservation, delivery and "no open quantities" all ran on the wrong
-     * number.
+     * {@code OrderConfirmationService#reconcileTicketItems} must write what the customer actually
+     * ACCEPTED onto {@code sales.ticket_item.qty}, not the PR-AUTHORED {@code
+     * pricing_request_item.requested_qty}: sales can edit a PRICING_REQUEST-origin quotation
+     * line's quantity/เผื่อ (excluded from {@code requireCeoApprovalIfChanged}, so it needs no
+     * CEO re-approval either), so a PR authored at 10 pieces whose quotation line was edited to
+     * 25 before issue would otherwise reconcile back down to 10, and stock reservation, delivery
+     * and "no open quantities" would all run on the wrong number.
      *
-     * <p>This is the fix's read side: one row per quotation line on the pricing request's own
-     * ACCEPTED PRICING_REQUEST-origin quotation (there is at most one — R8), keyed by the {@code
-     * pricing_request_item_id} each TILE line is still linked to (S1 never lets a line lose that
+     * <p>This is the read side: one row per quotation line on the pricing request's own
+     * ACCEPTED PRICING_REQUEST-origin quotation (there is at most one), keyed by the {@code
+     * pricing_request_item_id} each TILE line is still linked to (a line never loses that
      * link — see {@link DealQuotationDtos.DealQuotationItemDto#priceChangedFromCeo}'s own family
      * of fields, all keyed the same way), value = {@code quotation_item.qty} — the SAME column
      * {@link #itemParams} writes from {@code NewItem#quantity()}, which is {@code piecesFinal} for
@@ -378,7 +364,7 @@ public class DealQuotationRepository {
     }
 
     /**
-     * M3 (found while testing the fix above): the next unused revision number for the chain
+     * The next unused revision number for the chain
      * {@code baseNumber} belongs to — MAX(quotation_revision_no) across every row that has EVER
      * existed under this base (found by exact match on {@code baseNumber} itself, or the {@code
      * {base}-N} suffix pattern {@link #revisionNumber} produces) plus one, rather than the naive
@@ -390,20 +376,20 @@ public class DealQuotationRepository {
      * Cancel a freshly created revision and call {@code createRevision} on the same (still
      * APPROVED) parent again — a legitimate, expected flow, not a race — and the naive formula
      * recomputes the SAME {@code {base}-N} number the cancelled row still holds (cancelling never
-     * frees the UNIQUE {@code number} slot), hitting the identical DuplicateKeyException M3 was
-     * about. {@code DealQuotationService#createRevision}/{@code #createReorder} call this under
+     * frees the UNIQUE {@code number} slot), hitting a DuplicateKeyException.
+     * {@code DealQuotationService#createRevision}/{@code #createReorder} call this under
      * the SAME {@link #lockTicket} advisory lock {@link #hasOpenRevision} already relies on, so
      * those two callers are race-safe against concurrent callers too.
      *
-     * <p>GLA-123 slice S2 review fix (2026-09-20) — widened from {@code origin = 'DEAL_DIRECT'}
-     * to include {@code 'PRICING_REQUEST'}: {@code DealQuotationService#createFromPricingRequest}
+     * <p>The predicate spans both {@code 'DEAL_DIRECT'} and {@code 'PRICING_REQUEST'}:
+     * {@code DealQuotationService#createFromPricingRequest}
      * reuses this SAME method (not a hand-rolled {@code latest.revisionNo() + 1}) to number a
-     * fresh quotation written after the previous one EXPIRED (D9 — "the version never restarts"),
-     * for the identical reason M3 gives above — a cancelled/expired row never frees its own
+     * fresh quotation written after the previous one EXPIRED (the version never restarts),
+     * for the same reason as above — a cancelled/expired row never frees its own
      * {@code number}, so the naive "one more than the latest row" formula has the same latent
-     * collision risk this method was written to close.
+     * collision risk.
      *
-     * <p><b>Owner ruling 2026-10-17:</b> the base number belongs to the DEAL
+     * <p>The base number belongs to the DEAL
      * ({@link #nextNumberOnDeal}), so both origins deliberately SHARE one family and this MAX() is
      * their single counter — which is why the predicate spans both.
      * See {@code .design/quote-stage-gates/VERSIONING.md}.
@@ -430,7 +416,7 @@ public class DealQuotationRepository {
      * "continue the deal's family, else mint" decision is made, so {@code DealQuotationService#create}
      * and {@code #createFromPricingRequest} cannot drift on it. Callers must hold {@link #lockTicket}.
      *
-     * <p>The owner's 2026-10-17 ruling is that the base number belongs to the DEAL. It is read from
+     * <p>The base number belongs to the DEAL. It is read from
      * the NEWEST row by {@code quotation_id} (creation order), via the same {@link #baseNumber}
      * formula every other caller uses, so legacy bare numbers and suffixed ones both resolve with
      * no special-casing. A deal with none gets a freshly minted {@link #nextQuotationCode()}.
@@ -461,8 +447,8 @@ public class DealQuotationRepository {
      * One row about to be written to {@code sales.quotation_item}, with every derived number
      * already computed by {@code DealQuotationService}.
      *
-     * <p>Quotation v3 (2026-09-11) added {@code lineType} and the fields the two non-tile row
-     * types need. Note what is NOT here: {@code piecesBeforeWastage}/{@code piecesAfterWastage}/
+     * <p>{@code lineType} and the fields the two non-tile row
+     * types need are here. Note what is NOT here: {@code piecesBeforeWastage}/{@code piecesAfterWastage}/
      * {@code piecesFinal}/{@code boxes} stay {@code int}/{@code Integer} because they are TILE
      * concepts — a PLAIN or ADJUSTMENT row carries 0/null in them and prints its {@code quantity}
      * instead. {@code quantity} is the ONE printed จำนวน for every row type (a TILE row sets it to
@@ -482,8 +468,7 @@ public class DealQuotationRepository {
         // ── quotation v3 ──────────────────────────────────────────────────────────────────────
         String lineType, BigDecimal quantity, String unit,
         BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
-        // ── owner ruling 2026-09-12 ("normalize it in the database so its the same in unit. make
-        // the size cm and the thickness mm") ───────────────────────────────────────────────────
+        // Sizes are normalised to one unit: face size in cm, thickness in mm.
         // The catalogue's OWN width_mm/height_mm for this row's catalogPriceId -- null for a
         // PLAIN/ADJUSTMENT row, or a TILE row with no catalog link/basis. Carried through from the
         // SAME CatalogSqmBasis lookup DealQuotationService#resolveSqmPerPiece already performs
@@ -497,39 +482,33 @@ public class DealQuotationRepository {
         // by this class's own #mapItemColumns, which looks the same basis up fresh (batched, see
         // CatalogRepository#findSqmBases) since these two fields never reach the database.
         BigDecimal catalogWidthMm, BigDecimal catalogHeightMm,
-        // V176 (owner decision 2026-09-13) — the supplier-stated sqm per box. PERSISTED
+        // The supplier-stated sqm per box (V176). PERSISTED
         // (sales.quotation_item.sqm_per_box); an English per-sqm row's quantity is boxes × this.
         BigDecimal sqmPerBox,
-        // V182 (owner-approved "sell loose pieces", 2026-09-16) — PERSISTED
+        // "Sell loose pieces" switch (V182) — PERSISTED
         // (sales.quotation_item.round_to_full_box). true on every PLAIN/ADJUSTMENT row (the flag
         // is meaningless there — neither has a piecesPerBox) and on every TILE row unless the rep
         // opted out; see WastageCalculator.Input's own Javadoc for what it changes.
         boolean roundToFullBox,
-        // ── GLA-123 slice S1 (2026-09-19) ───────────────────────────────────────────────────────
         // Non-null exactly on a PRICING_REQUEST-origin TILE row created from an approved
         // pricing-decision item (DealQuotationService#createFromPricingRequest) — PERSISTED
-        // (sales.quotation_item.pricing_request_item_id/pricing_decision_item_id, columns that
-        // have existed since V74's customerquotation/ path; this is simply the first time the
-        // DEAL_DIRECT-shaped engine writes them). Null on every DEAL_DIRECT row and on any
-        // PRICING_REQUEST row the rep added themselves (D7 extra row, or a TILE row whose link was
+        // (sales.quotation_item.pricing_request_item_id/pricing_decision_item_id, columns shared
+        // with the customerquotation/ path). Null on every DEAL_DIRECT row and on any
+        // PRICING_REQUEST row the rep added themselves (extra row, or a TILE row whose link was
         // dropped by deleting-and-re-adding it — see DealQuotationService#update's own comment on
         // why an ItemInput can never carry a link the CLIENT supplied). Read back as
         // DealQuotationItemDto#ceoNetUnitPrice != null (a plain non-null check — see that field's
-        // own Javadoc; there is no separate boolean field for this) and enforced, as of the M4(a)/
-        // (b) fix (Opus review, 2026-09-20), by DealQuotationService#requireLinkedLineIdentityUnchanged
-        // — NOT DealQuotationService#requireLockedPriceUnchanged, a method that never shipped: the
-        // owner ruling revised 2026-09-19 replaced a price LOCK with sales editing price freely,
-        // flagged for CEO re-approval, before this whole field ever reached a released build.
+        // own Javadoc; there is no separate boolean field for this) and enforced by
+        // DealQuotationService#requireLinkedLineIdentityUnchanged. Price is not locked: sales
+        // edits it freely and the change is flagged for CEO re-approval.
         Long pricingRequestItemId, Long pricingDecisionItemId,
-        // ── Sales feedback #1 (2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ" ────────────────
-        // The list price / the DIRECT_NET net exactly as the rep typed them, per ตร.ม. including
+        // Per-ตร.ม. prices including VAT (V192.2). The list price / the DIRECT_NET net exactly as the rep typed them, per ตร.ม. including
         // VAT. PERSISTED (sales.quotation_item.list_price_sqm / direct_net_price_sqm) beside the
         // per-แผ่น unitPrice / netUnitPrice the service derived from them, which stay what every
         // sum, comparison and printed cell reads. Null on a row priced per แผ่น, and on every
         // PLAIN / ADJUSTMENT row.
         BigDecimal listPriceSqm, BigDecimal directNetPriceSqm,
-        // ── Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06) ─────────────────────
-        // The row's OWN price mode, PERSISTED in sales.quotation_item.price_mode. Non-null only on
+        // Mixed price modes (V192.5). The row's OWN price mode, PERSISTED in sales.quotation_item.price_mode. Non-null only on
         // a TILE row of a document whose price_mode is MIXED; null everywhere else, where the
         // document's mode applies (WastageCalculator#rowPriceMode).
         String priceMode
@@ -574,7 +553,7 @@ public class DealQuotationRepository {
                 directNetPriceSqm, value);
         }
 
-        /** The pre-GLA-123 shape (no pricing-request/decision item link) — kept so every existing
+        /** The shape without a pricing-request/decision item link — kept so every existing
          * construction site (tests, mostly, plus every DEAL_DIRECT call site in this class and
          * DealQuotationService) compiles unchanged. Defaults both to null, correct for every
          * DEAL_DIRECT row. */
@@ -649,23 +628,22 @@ public class DealQuotationRepository {
         // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; see DealQuotationDtos'
         // printedByDisplayId/salesRepDisplayId Javadoc. Null on every path that does not set one.
         Long printedByDisplayId, Long salesRepDisplayId,
-        // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
+        // See DealQuotationDtos' own Javadoc on each field (V180/V181).
         boolean omitContactHonorific, String fullPaymentTerm,
         BigDecimal subtotal, Long parentQuotationId, int revisionNo,
-        // GLA-74 part 1 (V186) — see DealQuotationDtos#derivedFromQuotationId's own Javadoc.
+        // See DealQuotationDtos#derivedFromQuotationId's own Javadoc (V186).
         // Mutually exclusive with parentQuotationId in practice (a row is either an ordinary
         // create/revision, which sets parentQuotationId, or a reorder clone, which sets THIS
         // instead) — DealQuotationService#insertCopyOf is the one place that decides which.
         Long derivedFromQuotationId,
         List<NewItem> items,
-        // ── GLA-123 slice S1 (2026-09-19) ───────────────────────────────────────────────────────
-        // origin: 'DEAL_DIRECT' (every call site before this feature) or 'PRICING_REQUEST'
+        // origin: 'DEAL_DIRECT' or 'PRICING_REQUEST'
         // (DealQuotationService#createFromPricingRequest). recipientType/recipientLabel: for a NEW
-        // DEAL_DIRECT document (DealQuotationService#create, slice 2 S2-B1) the rep's DESIGNER/OWNER/
+        // DEAL_DIRECT document (DealQuotationService#create) the rep's DESIGNER/OWNER/
         // BUYER and its Thai label; for a revision or reorder, the SOURCE document's own recipient
         // copied verbatim (#insertCopyOf); for PRICING_REQUEST, the SOURCE pricing
         // request's own recipientType/recipientLabel (ผู้ออกแบบ/เจ้าของ/ผู้ซื้อ), carried over so
-        // a later slice's issue() can reuse TicketService#advanceStageForCustomerQuotationIssue's
+        // issue() can reuse TicketService#advanceStageForCustomerQuotationIssue's
         // existing recipient->stage mapping unchanged. pricingRequestId/pricingDecisionId: the
         // source request/decision, null for DEAL_DIRECT.
         String origin, String recipientType, String recipientLabel,
@@ -679,9 +657,8 @@ public class DealQuotationRepository {
         // already trimmed and checked by DealQuotationService, null where there is none to carry.
         String orderedByPhone, String orderedByEmail) {
 
-        // The pre-GLA-123 convenience constructor is GONE (owner ruling 2026-10-16, "remove the
-        // unspecified option") — it was the last code that could write 'UNSPECIFIED', and had no
-        // caller left once every create path stated its own recipient.
+        // There is no convenience constructor that defaults the recipient: every create path
+        // states its own, so nothing here can write 'UNSPECIFIED'.
         //
         // UNSPECIFIED survives READ-ONLY: V52 defaulted pre-existing rows to it and they are served
         // raw, while both write paths refuse it. Do not reintroduce a constructor that supplies a
@@ -740,10 +717,9 @@ public class DealQuotationRepository {
                 .addValue("contactEmail", p.contact() != null ? p.contact().email() : null)
                 .addValue("origin", p.origin())
                 .addValue("recipientType", p.recipientType())
-                // GLA-123 slice S1 (coordinator follow-up) — was silently DROPPED: passed on
-                // InsertDraftParams by #createFromPricingRequest but never bound/columned here,
-                // so every row lost the PR's ผู้ออกแบบ/เจ้าของ/ผู้ซื้อ free-text label. Mirrors
-                // CustomerQuotationRepository#insertDraft, which has always carried it.
+                // Carries the PR's ผู้ออกแบบ/เจ้าของ/ผู้ซื้อ free-text label (passed on
+                // InsertDraftParams by #createFromPricingRequest). Mirrors
+                // CustomerQuotationRepository#insertDraft.
                 .addValue("recipientLabel", p.recipientLabel())
                 .addValue("pricingRequestId", p.pricingRequestId())
                 .addValue("pricingDecisionId", p.pricingDecisionId())
@@ -770,7 +746,7 @@ public class DealQuotationRepository {
                 .addValue("fullPaymentTerm", p.fullPaymentTerm())
                 .addValue("parentQuotationId", p.parentQuotationId())
                 .addValue("derivedFromQuotationId", p.derivedFromQuotationId())
-                // Owner-directed reversal of F2 (2026-09-26) — see DealQuotationDtos#orderedByName.
+                // See DealQuotationDtos#orderedByName.
                 .addValue("orderedByName", p.orderedByName())
                 .addValue("orderedByPhone", p.orderedByPhone())
                 .addValue("orderedByEmail", p.orderedByEmail()),
@@ -785,7 +761,7 @@ public class DealQuotationRepository {
      * set — shared by {@link #insertItems}, {@link #insertItemsAtSeq} and
      * {@link #updateItemsInPlace} so an insert and an update of the same row can never drift on a
      * column. Deliberately does NOT set {@code picture_id}/{@code picture_placement} — those are
-     * owned exclusively by the GLA-75 picture endpoints (see {@link #setItemPicture} etc.), which
+     * owned exclusively by the picture endpoints (see {@link #setItemPicture} etc.), which
      * is what lets {@link #updateItemsInPlace} leave a row's picture alone.
      */
     private MapSqlParameterSource itemParams(long quotationId, int seq, NewItem item) {
@@ -797,12 +773,12 @@ public class DealQuotationRepository {
             .addValue("color", item.color())
             .addValue("texture", item.texture())
             .addValue("size", item.sizeText())
-            // v3: the printed หน่วย is now per-row, not the hardcoded "แผ่น" it used to be —
-            // a PLAIN row carries JOB/Bags/Barrels/ชุด and an ADJUSTMENT row carries none at
-            // all (NULL, which the renderer prints as an EMPTY cell rather than falling back).
+            // The printed หน่วย is per-row: a PLAIN row carries JOB/Bags/Barrels/ชุด and an
+            // ADJUSTMENT row carries none at all (NULL, which the renderer prints as an EMPTY
+            // cell rather than falling back).
             .addValue("rawUnit", item.unit())
-            // v3: quantity, not piecesFinal. For a TILE row the service sets quantity =
-            // piecesFinal so this is byte-identical to the previous expression; for PLAIN it
+            // quantity, not piecesFinal. For a TILE row the service sets quantity =
+            // piecesFinal; for PLAIN it
             // is the rep's own จำนวน, and for ADJUSTMENT it is −1 (which is precisely what
             // makes amount = quantity × netPrice come out negative).
             .addValue("qty", item.quantity())
@@ -842,7 +818,7 @@ public class DealQuotationRepository {
             .addValue("sqmPerBox", item.sqmPerBox())
             // V182
             .addValue("roundToFullBox", item.roundToFullBox())
-            // GLA-123 slice S1
+            // Pricing-request/decision item link (null on DEAL_DIRECT rows).
             .addValue("pricingRequestItemId", item.pricingRequestItemId())
             .addValue("pricingDecisionItemId", item.pricingDecisionItemId())
             // V192.2 — the per-ตร.ม. prices as typed; null on a row priced per แผ่น.
@@ -958,7 +934,7 @@ public class DealQuotationRepository {
 
     /** This quotation's current item ids — {@code DealQuotationService#update} reads these BEFORE
      * writing anything, to decide which of the request's item ids may be reused (see the class's
-     * stable-item-id contract, GLA-75-picture / #931 follow-up). */
+     * stable-item-id contract). */
     public List<Long> findItemIds(long quotationId) {
         return jdbc.query("SELECT quotation_item_id FROM sales.quotation_item WHERE quotation_id = :id",
             Map.of("id", quotationId), (rs, rowNum) -> rs.getLong("quotation_item_id"));
@@ -967,7 +943,7 @@ public class DealQuotationRepository {
     /**
      * Deletes this quotation's item rows whose id is NOT in {@code claimedIds} — an empty
      * {@code claimedIds} deletes every current row (the payload reused none of them), exactly
-     * what the pre-GLA-75-picture full replace always did. Returns the picture ids those deleted
+     * what a full replace does. Returns the picture ids those deleted
      * rows carried, so the caller can {@link #deletePicturesIfUnreferenced} them; a picture still
      * referenced by another row (a parent revision sharing it) is left alone by that call, not by
      * this one.
@@ -988,7 +964,7 @@ public class DealQuotationRepository {
         return pictureIds;
     }
 
-    /** Quotation ↔ deal linking slice 2 (S2-B1) — sets a direct quotation's ผู้รับ. DRAFT-only AND
+    /** Sets a direct quotation's ผู้รับ. DRAFT-only AND
      * DEAL_DIRECT-only via the WHERE clause (the enforcement, as for {@link #updateHeader}): a
      * PRICING_REQUEST row's recipient belongs to its คำขอราคา and is never rewritten here.
      *
@@ -1010,7 +986,7 @@ public class DealQuotationRepository {
                 .addValue("recipientLabel", recipientLabel));
     }
 
-    /** Sales feedback #5 (V192.1, 2026-10-06) — sets whether a quotation's printed document names
+    /** Sets whether a quotation's printed document names
      * its project ("ไม่แสดงชื่อโครงการในใบเสนอราคา"). DRAFT-only via the WHERE clause (the
      * enforcement, as for {@link #updateHeader}): a document that has been submitted or approved
      * is frozen at what it printed then. A separate statement rather than one more positional
@@ -1034,11 +1010,10 @@ public class DealQuotationRepository {
     /** DRAFT-only via the WHERE clause — the enforcement, not a service-layer check the caller
      * could forget (mirrors {@code CustomerQuotationRepository.updateHeader}'s contract).
      *
-     * <p>The four {@code customer_*} columns are RE-SNAPSHOTTED here, not only at insert. Owner
-     * feedback F7 (2026-09-10) puts เลขที่ผู้เสียภาษี / โทร. on screen as editable fields on the
-     * SELECTED customer, and promised "the values on screen at save time" — which was false while
-     * this statement left the columns alone: correcting a wrong tax id and re-saving the draft
-     * still printed the old one forever. Re-snapshotting on every DRAFT save is safe precisely
+     * <p>The four {@code customer_*} columns are RE-SNAPSHOTTED here, not only at insert. เลขที่ผู้เสียภาษี / โทร.
+     * are editable on screen on the SELECTED customer and must print "the values on screen at
+     * save time"; leaving the columns alone would mean correcting a wrong tax id and re-saving
+     * the draft still printed the old one forever. Re-snapshotting on every DRAFT save is safe precisely
      * because of the {@code doc_status = 'DRAFT'} predicate below: an issued/approved/superseded
      * document is not matched by this UPDATE at all, so the freeze that makes a sent document
      * trustworthy still holds. A revision is its own DRAFT row, so it picks up the correction the
@@ -1051,12 +1026,11 @@ public class DealQuotationRepository {
                             String documentLanguage, String currency, BigDecimal subtotal,
                             // V179 — print-only override; see DealQuotationDtos' Javadoc.
                             Long printedByDisplayId, Long salesRepDisplayId,
-                            // Owner feedback 2026-09-14 — project_name was write-once at INSERT
-                            // only until now; genuinely editable on every DRAFT save, same as
+                            // project_name is editable on every DRAFT save, same as
                             // customer_notes just below it.
                             String projectName,
-                            // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc
-                            // on each field. Both always sent on every DRAFT save, same "no
+                            // See DealQuotationDtos' own Javadoc on each field (V180/V181).
+                            // Both always sent on every DRAFT save, same "no
                             // missing-keeps-stored" discipline as printedByDisplayId/projectName
                             // above: DealQuotationService resolves the WHOLE value (including
                             // forcing fullPaymentTerm/remainderMode/creditDays null where they don't
@@ -1133,8 +1107,8 @@ public class DealQuotationRepository {
     }
 
     /**
-     * Quotation-editor bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลัง
-     * ไม่ได้"): {@link #updateHeader}'s own re-snapshot only fires on the DRAFT's OWN next save —
+     * Lets a corrected contact email/phone reach existing drafts: {@link #updateHeader}'s own
+     * re-snapshot only fires on the DRAFT's OWN next save —
      * so correcting a typo'd email/phone on the CONTACT record itself never reached a draft the
      * rep was not actively re-saving, and the printed PDF (rendered fresh from the DB on every
      * download, see {@code DealQuotationService}'s render path) kept the stale value indefinitely.
@@ -1151,7 +1125,7 @@ public class DealQuotationRepository {
      * only re-snapshotted when the caller confirms the edit actually touched {@code first_name}/
      * {@code last_name} — never recomputed as an incidental side effect of some other field's PATCH.
      * {@code ordered_by_name} (the signature name) follows {@code contact_name} under the same flag
-     * (ruling 2026-10-18: a DRAFT's signature name is its contact's name).
+     * (a DRAFT's signature name is its contact's name).
      *
      * <p>Mirrors {@link #updateHeader}'s own {@code doc_status = 'DRAFT'} predicate exactly, so a
      * PENDING_APPROVAL/APPROVED/REJECTED/CANCELLED row's frozen snapshot is never touched — only a
@@ -1160,7 +1134,7 @@ public class DealQuotationRepository {
      * written), so there is nothing to guard against here that {@code contact_id} being a
      * non-FK reference would otherwise risk.
      *
-     * <p>D6 fix (Opus review 2026-09-16): {@code contact_phone}/{@code contact_email} are wrapped
+     * <p>{@code contact_phone}/{@code contact_email} are wrapped
      * in {@code NULLIF(TRIM(...), '')}, matching the {@code contact_name} case just below AND
      * {@code DealQuotationService#resolveContact}'s own {@code blankToNull(contact.phone())}/
      * {@code blankToNull(contact.email())} — every OTHER writer of these two columns normalises a
@@ -1215,7 +1189,7 @@ public class DealQuotationRepository {
      * not the deal, so another deal's DRAFT that already points at the same contact id is refreshed
      * to the contact's live values too, exactly as editing the contact would do.
      *
-     * <p>{@code ordered_by_name} (the signature name, ruling 2026-10-18) is cleared with the contact
+     * <p>{@code ordered_by_name} (the signature name) is cleared with the contact
      * and refilled the same way, so a draft never prints the old customer's contact.
      *
      * @return the number of drafts moved.
@@ -1250,7 +1224,7 @@ public class DealQuotationRepository {
 
     /** Compare-and-set DRAFT -> PENDING_APPROVAL. Rowcount 0 means not open for submit. Clears any
      * stale rejection reason from a prior cycle (V165's own header comment: "cleared on the next
-     * submit"). GLA-123 slice S2: widened from {@code origin = 'DEAL_DIRECT'} to include {@code
+     * submit"). Applies to both {@code origin = 'DEAL_DIRECT'} and {@code
      * 'PRICING_REQUEST'} — submit's own validations (item completeness, ผู้สั่งซื้อ, payment term,
      * validity date) are origin-agnostic and apply unchanged to both. */
     public int submit(long quotationId, long actorId) {
@@ -1264,22 +1238,21 @@ public class DealQuotationRepository {
 
     /**
      * Compare-and-set PENDING_APPROVAL -> APPROVED (DEAL_DIRECT) or -> ISSUED (PRICING_REQUEST),
-     * and — in the SAME statement — the V175 approver snapshot (owner ruling 2026-09-13,
-     * "already-sent quotations never change afterwards"): the approver's Thai/English names and
+     * and — in the SAME statement — the V175 approver snapshot (already-sent quotations never
+     * change afterwards): the approver's Thai/English names and
      * signature bytes as they are at this instant. A data-modifying CTE rather than two
      * statements, so the pair is atomic even with no surrounding transaction: the INSERT only
      * sees the row the UPDATE actually won, and a lost compare-and-set inserts nothing. No
      * signature on file stores NULL image + mime with the names still frozen. Returns the
      * snapshot rowcount, which equals the UPDATE's (both LEFT JOINs keep the row).
      *
-     * <p>GLA-123 slice S2 REWORK (owner ruling reversed the dual-approval design, 2026-09-20):
-     * this is now the WHOLE of "approve" for BOTH origins — one approval issues a
-     * PRICING_REQUEST-origin quotation exactly the way one approval already terminates a
-     * DEAL_DIRECT one (that origin's own "terminal" state is spelled {@code APPROVED} rather than
-     * {@code ISSUED}, a pre-existing naming difference this rework does not touch — see
+     * <p>This is the WHOLE of "approve" for BOTH origins — one approval issues a
+     * PRICING_REQUEST-origin quotation exactly the way one approval terminates a
+     * DEAL_DIRECT one (that origin's "terminal" state is spelled {@code APPROVED} rather than
+     * {@code ISSUED} — see
      * {@code DealQuotationService#approve}'s own origin branch for where that name is chosen).
-     * Reusing this ONE method (rather than a parallel PRICING_REQUEST-only compare-and-set, as an
-     * earlier draft of this feature had) is what makes the printed approver, the frozen V175
+     * Reusing this ONE method (rather than a parallel PRICING_REQUEST-only compare-and-set) is
+     * what makes the printed approver, the frozen V175
      * signature, and the {@code approval_note} column all come from the SAME, already-tested path
      * DEAL_DIRECT uses — there is no second signature/snapshot mechanism to keep in sync.
      * {@code CASE WHEN origin = 'DEAL_DIRECT' THEN 'APPROVED' ELSE 'ISSUED' END} is the only
@@ -1318,8 +1291,8 @@ public class DealQuotationRepository {
     }
 
     /** Compare-and-set PENDING_APPROVAL -> DRAFT, with the reason recorded for the rep to see.
-     * GLA-123 slice S2 rework: widened to both origins for the identical reason {@link #approve}
-     * was — a reject is a reject, one approver, one decision, regardless of origin. */
+     * Applies to both origins for the same reason as {@link #approve}
+     * — a reject is a reject, one approver, one decision, regardless of origin. */
     public int reject(long quotationId, long approverId, String reason) {
         return jdbc.update("""
             UPDATE sales.quotation
@@ -1332,13 +1305,13 @@ public class DealQuotationRepository {
     }
 
     /**
-     * GLA-123 slice S3 (R9 — customer outcome): mirrors {@code
+     * Customer outcome: mirrors {@code
      * CustomerQuotationRepository#recordOutcome} column-for-column (same compare-and-set FROM
      * {@code ISSUED}, same outcome/note/actor/timestamp columns — {@code sales.quotation} is one
      * shared table for both origins, V75 never scoped these columns to the legacy chain). Scoped
      * to {@code origin = 'PRICING_REQUEST'} here purely as defense in depth: the service layer
      * ({@code DealQuotationService#recordOutcome}) already refuses a {@code DEAL_DIRECT} row
-     * before this is ever reached (R10 — the direct quotation never joins the pipeline), so this
+     * before this is ever reached (the direct quotation never joins the pipeline), so this
      * WHERE clause should never be the thing that actually excludes a row in practice.
      */
     public int recordOutcome(long quotationId, String outcome, String outcomeNote, long actorId,
@@ -1363,7 +1336,7 @@ public class DealQuotationRepository {
                 .addValue("outcomeClientRequestId", outcomeClientRequestId));
     }
 
-    /** Step 5's own idempotency lookup for this origin, mirrors {@code
+    /** The idempotency lookup for this origin, mirrors {@code
      * CustomerQuotationRepository#findIdByOutcomeClientRequestId} exactly — same
      * {@code (issued_by, outcome_client_request_id)} partial-unique index from V75, which is
      * table-wide (not origin-scoped), so this stays a safe replay check even though the WHERE
@@ -1387,22 +1360,20 @@ public class DealQuotationRepository {
     public record ExpiredQuotationRow(long quotationId, long pricingRequestId, long ticketId, String number) {}
 
     /**
-     * D5 — the PRICING_REQUEST-origin counterpart of
+     * The PRICING_REQUEST-origin counterpart of
      * {@code CustomerQuotationRepository#expireOverdueQuotations}; see that method's own comment
      * for why this predicate EXCLUDES it (that query is {@code origin IS NULL}-scoped precisely
-     * to leave this origin to its own S2 flow, which this method now is). Never touches a
-     * {@code DEAL_DIRECT} row (D5 — that origin never expires) because {@code origin =
+     * to leave this origin to this method). Never touches a
+     * {@code DEAL_DIRECT} row (that origin never expires) because {@code origin =
      * 'PRICING_REQUEST'} excludes it categorically, not merely by never reaching {@code ISSUED}.
      */
     public List<ExpiredQuotationRow> expireOverdueQuotations() {
-        // NIT fix (Opus re-review, 2026-09-20): validity_date is computed and compared in Bangkok
+        // validity_date is computed and compared in Bangkok
         // local time everywhere else this feature touches it (DealQuotationService
         // #approveAndIssuePricingRequestOrigin's own LocalDate.now(BANGKOK)) — CURRENT_DATE reads
-        // the DB SESSION's timezone instead, which is
-        // not guaranteed to be Bangkok. Inherited from the legacy CustomerQuotationRepository
-        // query this one was modelled on, but that one is untouched here (out of this fix's
-        // scope) and this one is NEW, so it is bound to an explicit Bangkok "today" parameter
-        // instead of trusting the session TZ to agree.
+        // the DB SESSION's timezone instead, which is not guaranteed to be Bangkok. So this
+        // query binds an explicit Bangkok "today" parameter instead of trusting the session TZ
+        // to agree (unlike the legacy CustomerQuotationRepository query it was modelled on).
         LocalDate bangkokToday = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"));
         return jdbc.query("""
             UPDATE sales.quotation
@@ -1418,16 +1389,28 @@ public class DealQuotationRepository {
                 rs.getLong("ticket_id"), rs.getString("number")));
     }
 
-    /** Owner review 2026-10-28: confirming an order from {@code keepId} cancels the deal's OTHER open DEAL_DIRECT
-     * quotations (DRAFT / PENDING_APPROVAL), which could otherwise never be submitted or approved again. Returns the
-     * cancelled numbers so the caller can log them. PRICING_REQUEST-origin rows are never touched. */
-    public List<String> cancelOtherOpenDirectQuotations(long ticketId, long keepId) {
-        return jdbc.queryForList("""
-            UPDATE sales.quotation SET doc_status = 'CANCELLED', updated_at = now()
-             WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
-               AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
-            RETURNING number
-            """, Map.of("ticketId", ticketId, "keepId", keepId), String.class);
+    /** A quotation cancelled by {@link #cancelOtherOpenDirectQuotations}; {@code wasPending} = it was PENDING_APPROVAL (not DRAFT). */
+    public record CancelledQuotation(long id, String number, boolean wasPending) {}
+
+    /** Confirming an order from {@code keepId} cancels the deal's OTHER open DEAL_DIRECT
+     * quotations (DRAFT / PENDING_APPROVAL), which could otherwise never be submitted or approved again. Returns what
+     * was cancelled (with whether it was waiting on approval) so the caller can log and notify. PRICING_REQUEST-origin
+     * rows are never touched. */
+    public List<CancelledQuotation> cancelOtherOpenDirectQuotations(long ticketId, long keepId) {
+        return jdbc.query("""
+            WITH prior AS (
+                SELECT quotation_id, doc_status FROM sales.quotation
+                 WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
+                   AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
+                 FOR UPDATE) -- lock first, so a concurrent DRAFT -> PENDING_APPROVAL is read as PENDING (B7 notice)
+            UPDATE sales.quotation q SET doc_status = 'CANCELLED', updated_at = now()
+              FROM prior p
+             WHERE q.quotation_id = p.quotation_id
+               AND q.doc_status IN ('DRAFT', 'PENDING_APPROVAL') -- row-lock re-check against a concurrent approve
+            RETURNING q.quotation_id, q.number, p.doc_status
+            """, Map.of("ticketId", ticketId, "keepId", keepId),
+            (rs, n) -> new CancelledQuotation(rs.getLong("quotation_id"), rs.getString("number"),
+                "PENDING_APPROVAL".equals(rs.getString("doc_status"))));
     }
 
     /** Compare-and-set DRAFT -> CANCELLED. */
@@ -1452,7 +1435,7 @@ public class DealQuotationRepository {
      *   <li>{@code APPROVED} — an ordinary revision of an already-approved document
      *       ({@code DealQuotationService#createRevision}); the parent stays a valid, live APPROVED
      *       document until the child actually replaces it, not before.</li>
-     *   <li>{@code DRAFT} — owner clarification (2026-09-15): a revision minted by resubmitting a
+     *   <li>{@code DRAFT} — a revision minted by resubmitting a
      *       ตีกลับ'd draft ({@code DealQuotationService#submitAsRevisionOfRejected}). That parent
      *       was never a live, sent document (it was rejected, never approved), so there is no
      *       "still valid until replaced" concern to preserve — but it still only becomes
@@ -1481,12 +1464,11 @@ public class DealQuotationRepository {
     public record SupersededSibling(long id, String number) {}
 
     /**
-     * Owner ruling (2026-10-17, VERSIONING.md B-4): the unit of "one live offer" is the DEAL, not
+     * The unit of "one live offer" is the DEAL (VERSIONING.md B-4), not
      * the origin or the recipient. Approving/issuing {@code approvedId} supersedes every OTHER live
      * quotation on the SAME {@code ticketId}: a {@code DEAL_DIRECT} row that is {@code APPROVED},
      * or a {@code PRICING_REQUEST} row that is {@code ISSUED} or {@code REVISION_REQUESTED} (the
-     * same live vocabulary {@link #supersede} uses per origin). Supersedes the 2026-09-19 rule,
-     * which covered {@code DEAL_DIRECT} only.
+     * same live vocabulary {@link #supersede} uses per origin).
      *
      * <p>{@code ACCEPTED} is deliberately not live: a recorded customer outcome is a fact about the
      * past, not an offer still on the table. Legacy {@code origin IS NULL} rows stay out too.
@@ -1518,8 +1500,8 @@ public class DealQuotationRepository {
     public record ApproverSignatureSnapshot(String mimeType, byte[] image) {}
 
     /** Present iff the V175 snapshot row exists for this quotation (i.e. it was approved on or
-     * after V175, or backfilled); empty means "no snapshot taken", NOT "no signature". GLA-123
-     * slice S2 rework: this is the ONLY snapshot read for BOTH origins now — whoever approves a
+     * after V175, or backfilled); empty means "no snapshot taken", NOT "no signature". This is
+     * the ONLY snapshot read for BOTH origins — whoever approves a
      * PRICING_REQUEST-origin quotation freezes into this SAME row {@link #approve} already writes
      * for DEAL_DIRECT, one approver, one snapshot, no slot concept. */
     public Optional<ApproverSignatureSnapshot> findApproverSignatureSnapshot(long quotationId) {
@@ -1553,14 +1535,13 @@ public class DealQuotationRepository {
      * employees in the sales division ({@code DivisionAccessPolicy.SALES_DIVISION_CODE}, the SAME
      * population {@code CommissionRepository#findActiveSalesRepOptions} already queries) and (b)
      * any active employee holding the {@code hr.employee.can_create_quotation} grant (e.g.
-     * ภิญญดา, who is {@code qc} role, not sales division).
+     * a {@code qc}-role employee outside the sales division).
      *
-     * <p>Second review pass, finding N5 (2026-09-19): the predicate itself now lives in
+     * <p>The predicate itself lives in
      * {@link th.co.glr.hr.commission.QuotationDisplayNameEligibility}, shared with
      * {@code PricingRequestRepository}'s own {@code printedByDisplayId}/{@code salesRepDisplayId}
      * validation, so the two forms' eligible-employee rule can never drift apart. This method and
-     * {@link #isEligibleQuotationDisplayName} keep their own names/signatures — every existing
-     * caller here is unaffected — and simply delegate.
+     * {@link #isEligibleQuotationDisplayName} simply delegate.
      */
     public List<th.co.glr.hr.commission.CommissionRepOptionDto> findEligibleQuotationDisplayNameOptions(
             String salesDivisionCode) {
@@ -1576,17 +1557,15 @@ public class DealQuotationRepository {
         return th.co.glr.hr.commission.QuotationDisplayNameEligibility.isEligible(jdbc, employeeId, salesDivisionCode);
     }
 
-    /** GLA-123 slice S1 — the ONE single-quotation-by-id read both origins share (widened from
-     * {@code origin = 'DEAL_DIRECT'}): {@code DealQuotationService#requireQuotation} calls this
+    /** The ONE single-quotation-by-id read both origins share:
+     * {@code DealQuotationService#requireQuotation} calls this
      * for get/update/submit/etc. on EITHER origin, so a PRICING_REQUEST row must be readable back
      * the moment {@link #insertDraft} creates it. LEGACY ({@code origin IS NULL}) rows stay
-     * EXCLUDED here on purpose (slice 1, 2026-09-30): this is the read every get/update/submit/
+     * EXCLUDED here on purpose: this is the read every get/update/submit/
      * approve/cancel/revise/confirm-order/file path funnels through, so excluding them is what makes
-     * a LEGACY row — which {@link #search} now lists, read-only — 404 on every one of those paths.
-     * (Until slice 1, {@link #search}/{@link #counts} were DEAL_DIRECT-only.) {@link #findByTicket} used to be
-     * grouped with those two under the same "DIRECT-deal LIST surfaces, deliberately DEAL_DIRECT
-     * only" reasoning; see that method's own Javadoc for why that turned out to be wrong for IT
-     * specifically (GLA-123 item 8, S3 MAJOR 4 fix). */
+     * a LEGACY row — which {@link #search} lists, read-only — 404 on every one of those paths.
+     * {@link #findByTicket} is scoped like this method, not like a DEAL_DIRECT-only list; see
+     * that method's own Javadoc for why. */
     public Optional<DealQuotationDto> findById(long quotationId) {
         try {
             DealQuotationDto dto = jdbc.queryForObject(
@@ -1605,19 +1584,13 @@ public class DealQuotationRepository {
      * {@code directQuotationsQuery}) and {@code DealDirectQuotationPanel.jsx} both call to decide
      * whether a deal has ANY quotation to show at all.
      *
-     * <p><b>GLA-123 slice S3 MAJOR 4 fix (Opus review against real Postgres, 2026-09-23):</b> this
-     * used to read {@code origin = 'DEAL_DIRECT'} only, grouped with {@link #search}/{@link
-     * #counts} under a single "DIRECT-deal LIST surfaces, deliberately DEAL_DIRECT only, so those
-     * pages never start showing pipeline quotations by accident" rationale. That reasoning does
-     * not hold for THIS method specifically: unlike the approver queue those two serve,
-     * {@code findByTicket} is the sole source for "does this deal have a quotation at all", and
-     * GLA-123 item 8 explicitly requires {@code DealDocumentRegister} to recognise the new origin.
-     * With the old scope, a deal whose only quotation was PRICING_REQUEST-origin showed
-     * "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" even with one ISSUED — reproduced against real Postgres.
-     * Widened to both origins, matching {@link #findById}'s own reasoning. ({@link #search}/{@link
-     * #counts} stayed DEAL_DIRECT-only at the time; slice 1 of quotation ↔ deal linking widened them
-     * to every origin, 2026-09-30.) LEGACY rows are still excluded here — the deal page reads them
-     * from {@code customerquotation/}.
+     * <p>Covers both origins, matching {@link #findById}'s own reasoning: unlike the approver
+     * queue that {@link #search}/{@link #counts} serve, {@code findByTicket} is the sole source
+     * for "does this deal have a quotation at all", and {@code DealDocumentRegister} must
+     * recognise PRICING_REQUEST-origin rows. Scoped to DEAL_DIRECT only, a deal whose only
+     * quotation was PRICING_REQUEST-origin would show "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" even with
+     * one ISSUED. LEGACY rows are still excluded here — the deal page reads them from
+     * {@code customerquotation/}.
      */
     public List<DealQuotationDto> findByTicket(long ticketId) {
         List<Long> ids = jdbc.query("""
@@ -1629,14 +1602,13 @@ public class DealQuotationRepository {
     }
 
     /**
-     * The "ฉบับแก้" bucket (owner feedback F5, 2026-09-10): a DRAFT that was sent back with a
+     * The "ฉบับแก้" bucket: a DRAFT that was sent back with a
      * reason ({@code approval_note}) OR a revision still in progress ({@code parent_quotation_id}).
      * ONE definition, shared by {@link #search}'s {@code needsRework} filter and {@link #counts}
      * so the tab's count can never disagree with the rows the tab lists.
      *
-     * <p>Opus review (2026-09-15): this used to say {@code approval_note} is "cleared again on
-     * the next submit" — true before that same day's owner clarification, false after it.
-     * {@code DealQuotationService#submit}'s resubmit-after-rejection path now mints a REVISION of
+     * <p>{@code approval_note} is NOT cleared on the next submit:
+     * {@code DealQuotationService#submit}'s resubmit-after-rejection path mints a REVISION of
      * a rejected row instead of resubmitting it, and deliberately leaves the rejected row's own
      * {@code approval_note} untouched — a permanent record of why that number was retired — so a
      * rejected row stays in this bucket until {@code approve}'s ancestor walk finally supersedes
@@ -1681,8 +1653,7 @@ public class DealQuotationRepository {
     }
 
     /**
-     * {@code /quotations} list / approver-queue search — ALL origins since slice 1 (owner decision
-     * D4, 2026-09-30); it was {@code origin = 'DEAL_DIRECT'} only. {@code statuses} null or empty
+     * {@code /quotations} list / approver-queue search — ALL origins. {@code statuses} null or empty
      * means "any status". {@code ownerTicketCreatedById} non-null scopes to deals created by that
      * employee (the "own deals only" rule — see {@code DealQuotationService#listOwnerScope}); null
      * means no owner restriction. It applies to every origin alike. {@code needsRework} narrows to
@@ -1705,7 +1676,7 @@ public class DealQuotationRepository {
             where.append(" AND ").append(NEEDS_REWORK_PREDICATE);
         }
         if (ownerTicketCreatedById != null) {
-            where.append(" AND t.created_by = :ownerId");
+            where.append(" AND (t.created_by = :ownerId OR t.keyed_by = :ownerId)");
             params.addValue("ownerId", ownerTicketCreatedById);
         }
         List<long[]> idsAndKind = jdbc.query("""
@@ -1749,7 +1720,7 @@ public class DealQuotationRepository {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String ownerClause = "";
         if (ownerTicketCreatedById != null) {
-            ownerClause = " AND t.created_by = :ownerId";
+            ownerClause = " AND (t.created_by = :ownerId OR t.keyed_by = :ownerId)";
             params.addValue("ownerId", ownerTicketCreatedById);
         }
         String originClause = originPredicate(originFilter, includePricedOrigins);
@@ -1769,31 +1740,26 @@ public class DealQuotationRepository {
 
     /**
      * Batches {@link #findByTicket}/{@link #search}'s per-row hydration into a small, FIXED number
-     * of queries regardless of how many ids are requested — never one per quotation. The previous
-     * version called {@link #findById} per id, and that method itself issues two queries (header +
-     * items), so a list of N quotations cost 2N round trips (N+1 twice over).
+     * of queries regardless of how many ids are requested — never one per quotation (calling
+     * {@link #findById} per id would cost two queries each, header + items).
      *
-     * <p>Was "exactly TWO queries total" before owner ruling 2026-09-12 added a batched catalogue
-     * lookup for {@code DealQuotationLines#sizeLine}'s width_mm/height_mm (see {@link
-     * #findItemsForQuotations}'s own comment) — that adds at most two more (a distinct-{@code
+     * <p>Two queries (headers, items) plus the batched catalogue lookup for {@code
+     * DealQuotationLines#sizeLine}'s width_mm/height_mm (see {@link
+     * #findItemsForQuotations}'s own comment), which adds at most two more (a distinct-{@code
      * catalog_price_id} query, then {@link CatalogRepository#findSqmBases}'s own chunked queries,
-     * negligible at realistic item counts), so FOUR total now, still independent of {@code
+     * negligible at realistic item counts): FOUR total, independent of {@code
      * ids.size()}. Order is preserved to match the callers' own {@code ORDER BY quotation_id DESC}.
      */
     private List<DealQuotationDto> hydrate(List<Long> ids) {
         if (ids.isEmpty()) {
             return List.of();
         }
-        // GLA-123 slice S3 MAJOR 4 fix, follow-up (Opus review against real Postgres, 2026-09-23):
-        // this filter used to be `origin = 'DEAL_DIRECT'` only — a SECOND, independent scope on
-        // top of the id list each caller already selected, and it silently re-dropped every
-        // PRICING_REQUEST id #findByTicket's own (now-widened) query passed in, so the "widen
-        // findByTicket" fix above did not actually work until this line was found and fixed too
-        // (caught by this slice's own #listForTicket_includesAPricingRequestOriginQuotation_...
-        // test going red against the real DB). Slice 1 (quotation <-> deal linking): #search now
-        // lists every origin, and splits its ids BEFORE calling here — LEGACY (origin IS NULL) ids
-        // go to #hydrateLegacy, never to this method. This filter is kept deliberately: it is what
-        // guarantees a LEGACY row can never come out of the full engine mapper as an editable row.
+        // This filter is a SECOND, independent scope on top of the id list each caller already
+        // selected: it must admit both DEAL_DIRECT and PRICING_REQUEST ids, or it would silently
+        // re-drop the PRICING_REQUEST ids #findByTicket's own query passed in. #search lists
+        // every origin and splits its ids BEFORE calling here — LEGACY (origin IS NULL) ids go to
+        // #hydrateLegacy, never to this method. The filter is what guarantees a LEGACY row can
+        // never come out of the full engine mapper as an editable row.
         Map<Long, List<DealQuotationItemDto>> itemsByQuotation = findItemsForQuotations(ids);
         List<DealQuotationDto> rows = jdbc.query(
             baseSelect() + " WHERE q.quotation_id IN (:ids) AND q.origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')",
@@ -1920,12 +1886,11 @@ public class DealQuotationRepository {
              ORDER BY quotation_id, seq
             """, Map.of("ids", ids), (ResultSet rs) -> {
                 // A RowCallbackHandler: Spring has ALREADY advanced to this row before calling us.
-                // An inner `while (rs.next())` here used to re-advance past it and consume the
-                // rest of the result set in this one call, so Spring's own outer loop found
-                // nothing left and stopped -- silently dropping the very FIRST row of the combined
+                // An inner `while (rs.next())` here would re-advance past it and consume the
+                // rest of the result set in this one call, so Spring's own outer loop would find
+                // nothing left and stop -- silently dropping the very FIRST row of the combined
                 // (quotation_id, seq) ordering, i.e. the seq-1 item of whichever quotation sorts
-                // first (see #search_returnsEveryItemAcrossMultipleQuotations_... in
-                // DealQuotationIntegrationTest). One call per row, no loop.
+                // first. One call per row, no loop.
                 long quotationId = rs.getLong("quotation_id");
                 byQuotation.computeIfAbsent(quotationId, k -> new ArrayList<>()).add(mapItem(rs, basisByPriceId));
             });
@@ -2051,10 +2016,9 @@ public class DealQuotationRepository {
         BigDecimal grandTotal = WastageCalculator.grandTotal(subtotal, vatTotal);
         Instant approvedAt = instant(rs, "approved_at");
         Instant createdAt = instant(rs, "created_at");
-        // Owner feedback F8 (2026-09-10): the header date is the date the sales rep CREATED the
-        // quotation, for EVERY status -- it used to be the approved date once approved, else
-        // today. DealQuotationRenderAdapter#toRenderModel derives the printed B4 cell the same
-        // way, so the list/detail UI and the printed document can never disagree. offerDate
+        // The header date is the date the sales rep CREATED the quotation, for EVERY status
+        // (not the approved date). DealQuotationRenderAdapter#toRenderModel derives the printed
+        // B4 cell the same way, so the list/detail UI and the printed document can never disagree. offerDate
         // (remark 1) is a separate, rep-editable date and is unaffected.
         LocalDate quotationDate = createdAt != null
             ? createdAt.atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate()
@@ -2123,10 +2087,10 @@ public class DealQuotationRepository {
             rs.getString("sales_rep_display_name"),
             rs.getString("sales_rep_display_name_en"),
             rs.getString("sales_rep_display_phone"),
-            // V180/V181 (items 2/4, 2026-09-16) — see DealQuotationDtos' own Javadoc on each field.
+            // See DealQuotationDtos' own Javadoc on each field (V180/V181).
             rs.getBoolean("omit_contact_honorific"),
             rs.getString("full_payment_term"),
-            // GLA-74 part 1 (V186) — see DealQuotationDtos#derivedFromQuotationId's own Javadoc.
+            // See DealQuotationDtos#derivedFromQuotationId's own Javadoc (V186).
             nullableLong(rs, "derived_from_quotation_id"),
             rs.getString("derived_from_quotation_number"),
             rs.getString("derived_from_quotation_status"),
@@ -2146,20 +2110,20 @@ public class DealQuotationRepository {
             rs.getString("ceo_price_mode"),
             rs.getString("pricing_request_code"),
             rs.getInt("items_removed_from_ceo_count"),
-            // M4(d) — populated by DealQuotationService#requireQuotation via #withRemovedCeoItems
+            // Populated by DealQuotationService#requireQuotation via #withRemovedCeoItems
             // for a single-row PRICING_REQUEST-origin lookup only; every OTHER read path (list/
             // search, both DEAL_DIRECT-only) never needs it, so it stays empty straight out of
             // this shared mapper rather than paying a second query per row in a list loop.
             List.of(),
-            // Owner-directed reversal of F2 (V192, 2026-09-26) — see
-            // DealQuotationDtos#orderedByName's own Javadoc. NULL prints the dotted placeholder.
+            // See DealQuotationDtos#orderedByName's own Javadoc (V192).
+            // NULL prints the dotted placeholder.
             rs.getString("ordered_by_name"),
             // Sales feedback #5 (V192.1) — NOT NULL DEFAULT FALSE, so never SQL NULL here.
             rs.getBoolean("hide_project_name"),
             // V192.3 — NULL on every row nobody typed them into.
             rs.getString("ordered_by_phone"),
             rs.getString("ordered_by_email"),
-            // Round 8 — sales.quotation.recipient_type/recipient_label, already persisted (see
+            // sales.quotation.recipient_type/recipient_label, persisted on insert (see
             // InsertDraftParams); read-only exposure so the เอกสาร register can show who the
             // quotation is for. NOT NULL column for every row, so recipientType is never null here.
             rs.getString("recipient_type"),
@@ -2171,7 +2135,7 @@ public class DealQuotationRepository {
     }
 
     /**
-     * Slice 1 (owner decision D4, "show legacy, read-only") — the ONE mapper a LEGACY row
+     * Legacy rows are shown read-only: the ONE mapper a LEGACY row
      * ({@code origin IS NULL}, written by {@code customerquotation/}) ever goes through, and only
      * from {@link #search}. Deliberately NARROW rather than {@link #baseSelect}/{@link #mapQuotation}:
      *
@@ -2242,7 +2206,7 @@ public class DealQuotationRepository {
                     List.of(), issuedAt, instant(rs, "updated_at"),
                     ORIGIN_LEGACY, null, false, null, null, 0, List.of(), null,
                     false, null, null,
-                    // #1084 recipient chip: a v1 row carries recipient_type/label too (V52).
+                    // Recipient chip: a v1 row carries recipient_type/label too (V52).
                     rs.getString("recipient_type"), rs.getString("recipient_label"),
                     rs.getString("ticket_code"), rs.getString("deal_stage"), true);
             });
@@ -2262,7 +2226,7 @@ public class DealQuotationRepository {
         return !ceoPriceMode.equals(currentPriceMode);
     }
 
-    /** GLA-75: the stored row, plus its picture link (V170) — only the placement is read here;
+    /** The stored row, plus its picture link (V170) — only the placement is read here;
      * the bytes are served separately by {@link #findItemPicture}. An item without a picture
      * keeps the legacy constructor's {@code hasPicture=false} shape exactly. */
     private DealQuotationItemDto mapItem(ResultSet rs, Map<Long, CatalogSqmBasis> basisByPriceId) throws SQLException {
@@ -2341,11 +2305,11 @@ public class DealQuotationRepository {
         // none) must not be handed to a client as if it meant something.
         String itemPriceMode = WastageCalculator.PRICE_MODE_MIXED.equals(documentPriceMode)
             ? rs.getString("item_price_mode") : null;
-        // The mode THIS row is priced and printed in. Everything below that used to read the
-        // document's mode — the CEO comparison, DealQuotationLines#tilePrint — reads this, so a
-        // single-mode document is mapped exactly as it always was.
+        // The mode THIS row is priced and printed in. Everything below that depends on price mode
+        // — the CEO comparison, DealQuotationLines#tilePrint — reads this rather than the
+        // document's mode, so a single-mode document maps the same either way.
         String priceMode = WastageCalculator.rowPriceMode(documentPriceMode, itemPriceMode);
-        // GLA-123 slice S1 (owner ruling revised 2026-09-19: editable, not locked) — see
+        // Price is editable, not locked — see
         // DealQuotationItemDto#priceChangedFromCeo's own Javadoc. Applied via #withCeoComparison
         // below (mirroring #withSqmPerBox/#withRoundToFullBox's own device) so the two constructor
         // call sites below (tile vs. non-tile) never have to agree on yet another trailing
@@ -2431,13 +2395,13 @@ public class DealQuotationRepository {
                 null, null,
                 lineType, quantity, rs.getString("raw_unit"), specialPriceSqm, adjustmentPct,
                 adjustmentDeadline, null,
-                // Review fix F2: a FLAT adjustment's amount has no column of its own, so echo it
+                // A FLAT adjustment's amount has no column of its own, so echo it
                 // back off unit_price or a GET→PUT round-trip of the row cannot be saved.
                 DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct,
                     rs.getBigDecimal("unit_price"))).withCeoComparison(priceChangedFromCeo, ceoListUnitPrice,
                     ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice, ceoNetUnitPrice);
         }
-        // English per-sqm (owner decision 2026-09-13) or the ordinary pieces print — decided in
+        // English per-sqm or the ordinary pieces print — decided in
         // DealQuotationLines#tilePrint, the SAME call DealQuotationService#toItemDto makes.
         DealQuotationLines.TilePrint print = DealQuotationLines.tilePrint(documentLanguage, priceMode, quantityMode,
             areaSqm, sqmPerPiece, piecesPerSqm, piecesBeforeWastage, wastageMode, wastageValue, piecesAfterWastage,
@@ -2497,7 +2461,7 @@ public class DealQuotationRepository {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // GLA-75 item pictures (V170). Bytes live once, immutable, in sales.quotation_item_picture;
+    // Item pictures (V170). Bytes live once, immutable, in sales.quotation_item_picture;
     // an item references one by picture_id + picture_placement. See V170's header for why.
     // Every item-scoped statement below is keyed by BOTH quotation_id and quotation_item_id, so an
     // item id from another quotation can never be reached through this quotation's URL.

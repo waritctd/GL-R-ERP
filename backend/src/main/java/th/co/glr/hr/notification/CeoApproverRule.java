@@ -1,36 +1,29 @@
 package th.co.glr.hr.notification;
 
 /**
- * Decides who gets NOTIFIED about a pending CEO-stage approval -- centralizes what used to be five
- * separate copies (four repository methods plus one inline {@code NotificationRepository} SQL
- * fragment), all originally keyed on the pre-existing {@code MD%}/{@code MN%} division-prefix
- * convention.
+ * Decides who gets NOTIFIED about a pending CEO-stage approval -- the one shared predicate for
+ * every repository method and SQL fragment that needs it.
  *
- * <p><b>Deliberately NARROWER than the {@code ceo} role, by owner ruling 2026-08-10.</b> This is
+ * <p><b>Deliberately NARROWER than the {@code ceo} role.</b> This is
  * NOT a mirror of {@link th.co.glr.hr.auth.DivisionAccessPolicy#roleFor} and must not be
- * "resynced" with it if that method ever changes -- that discipline applied to an earlier version
- * of this predicate, but no longer applies. That earlier version WAS written as such a mirror
- * (division code EXACTLY {@code md}, OR any กรรมการ-family position) on the assumption that "who
- * may approve" and "who should be told" are the same set. Measured against real data (both the UAT
- * and production databases, identical on this point as of 2026-08-10), that assumption was false in
- * practice: every active {@code md}/กรรมการ-family
- * employee -- ประธานกรรมการ, two more กรรมการ, and กรรมการผู้จัดการ -- matched one arm of that
- * {@code OR} or the other, so the "narrowing" was a no-op against production data; it selected the
- * exact same four people the old {@code MD%}/{@code MN%} rule did. The owner's ruling is that only
- * กรรมการผู้จัดการ should be notified -- the position test alone is now the single discriminator.
+ * "resynced" with it if that method ever changes. A mirror (division code EXACTLY {@code md}, OR
+ * any กรรมการ-family position) would assume that "who may approve" and "who should be told" are
+ * the same set, which they are not: every active {@code md}/กรรมการ-family employee --
+ * ประธานกรรมการ, two more กรรมการ, and กรรมการผู้จัดการ -- would match one arm of that
+ * {@code OR} or the other, so nobody would be narrowed out. Only กรรมการผู้จัดการ should be
+ * notified -- the position test alone is the single discriminator.
  *
  * <p><b>ประธานกรรมการ and กรรมการ still HOLD the {@code ceo} role and can still approve</b> --
- * {@code DivisionAccessPolicy#roleFor} is completely untouched by this change. They are simply no
- * longer *told*. This class governs NOTIFICATION ROUTING ONLY and confers no approval authority;
+ * {@code DivisionAccessPolicy#roleFor} is unaffected. They are simply not *told*. This class
+ * governs NOTIFICATION ROUTING ONLY and confers no approval authority;
  * whether someone may actually approve a CEO-stage request is decided entirely by role checks in
  * the controllers/services, never by this class.
  *
  * <p><b>Consequence, stated plainly:</b> if no active employee holds the position
  * กรรมการผู้จัดการ, {@link CeoApproverRepository#findEmployeeIds()} returns empty and NOBODY is
  * notified of a pending CEO-stage request -- approval authority is unaffected, but the queue goes
- * silent. The previous division-based rule had accidental redundancy (any of four people would be
- * notified for the same event) that this removes by design. That is the accepted trade-off of the
- * 2026-08-10 owner ruling, not an oversight.
+ * silent. There is no redundancy (several people notified for the same event) by design. That is
+ * an accepted trade-off, not an oversight.
  */
 public final class CeoApproverRule {
 

@@ -66,6 +66,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -75,7 +76,7 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-Postgres coverage for the STORED remaining invoice (GLA-99 step 2): lifecycle
+ * Real-Postgres coverage for the STORED remaining invoice: lifecycle
  * (draft -&gt; issue -&gt; revise -&gt; issue), numbering (shared {@code AR_GLR} document_sequence,
  * base_number carried across a revision, a fresh base per deal), snapshot immutability, and — per
  * CLAUDE.md's "permission changes must ship evidence" requirement — the write/read authz gate
@@ -91,6 +92,7 @@ import th.co.glr.hr.ticket.TicketService;
  */
 class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
+    private RecordingSalesMailer mailer;
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
     private PricingDecisionService decisionService;
@@ -116,7 +118,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     void wireStepsServices() {
         tickets = new TicketRepository(jdbc);
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -157,7 +160,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
         remainingInvoiceRepository = new RemainingInvoiceRepository(jdbc);
         remainingInvoiceService = new RemainingInvoiceService(
-            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            remainingInvoiceRepository, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(), notifications);
 
         salesRepId = createEmployee(employees, "พนักงานขาย RI", "sales-ri1@glr.co.th", "SALES", "แผนกขาย");
         otherSalesRepId = createEmployee(employees, "พนักงานขาย RI2", "sales-ri2@glr.co.th", "SALES", "แผนกขาย");
@@ -178,7 +181,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * Owner ruling 2026-10-28 (SK-07): each tax invoice's VAT is rounded on its own net, so deposit + remaining can
+     * Each tax invoice's VAT is rounded on its own net, so deposit + remaining can
      * differ from the deal's VAT-inclusive payable by a satang -- and outstanding + the final BALANCE receipt then
      * FOLLOW THE ISSUED DOCUMENTS: once the remaining invoice is issued, payable = deposit notice total + remaining
      * invoice grand total, the deposit receipt is the notice total, the balance is exactly the invoice grand total
@@ -210,6 +213,55 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(after.amountOutstanding()).isEqualByComparingTo("0");
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Hand-off notification: issuing the remaining invoice tells account to collect it.
+    // Pins the bell row AND the email path for the same recipient.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private static final String RI_ISSUED_TITLE = "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ";
+
+    private String invoiceIssuedMessage(long ticketId, UserPrincipal issuer, RemainingInvoiceDocumentDto doc,
+                                        boolean revision) {
+        var s = tickets.findById(ticketId).orElseThrow().summary();
+        return issuer.name() + " ออกใบแจ้งหนี้ " + doc.docNumber() + (revision ? " (ฉบับแก้ไข)" : "") + " แล้ว\n"
+            + "ดีล " + s.code() + " · ลูกค้า " + s.customerName() + " · ยอดชำระรวม VAT "
+            + th.co.glr.hr.common.ThaiText.money(doc.grandTotal()) + " บาท"
+            + "\nสิ่งที่ต้องทำต่อ: ตรวจรับเงินโอนจากลูกค้า แล้วบันทึกรับชำระในระบบ";
+    }
+
+    @Test
+    void issue_firstVersion_notifiesAccountWithTheVatInclusiveTotal() {
+        long accountId = mailer.seedRoleEmployee("account");
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NotifyIssue");
+        RemainingInvoiceDocumentDto draft = remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor);
+        mailer.assertNoNotice("REMAINING_INVOICE_ISSUED", RI_ISSUED_TITLE); // a draft notifies nobody
+
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
+
+        mailer.assertRoleNotice("account", "REMAINING_INVOICE_ISSUED", RI_ISSUED_TITLE,
+            invoiceIssuedMessage(fixture.ticketId(), salesActor, issued, false),
+            "/finance/deals/" + fixture.ticketId(), accountId);
+    }
+
+    /** Every issue notifies: v1 as a plain invoice, the revision (version > 1) with the (ฉบับแก้ไข) marker. */
+    @Test
+    void issue_revision_notifiesAccountAgainWithTheRevisedMarker() {
+        long accountId = mailer.seedRoleEmployee("account");
+        DealFixture fixture = buildAcceptedDeal(salesActor, "NotifyRevise");
+        RemainingInvoiceDocumentDto v1 = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        RemainingInvoiceDocumentDto revisionDraft = remainingInvoiceService.revise(v1.id(), salesActor);
+
+        RemainingInvoiceDocumentDto v2 = remainingInvoiceService.issue(revisionDraft.id(), salesActor);
+
+        assertThat(v2.version()).isEqualTo(2);
+        mailer.assertRoleNotices("account", "REMAINING_INVOICE_ISSUED", RI_ISSUED_TITLE,
+            "/finance/deals/" + fixture.ticketId(),
+            List.of(invoiceIssuedMessage(fixture.ticketId(), salesActor, v1, false),
+                invoiceIssuedMessage(fixture.ticketId(), salesActor, v2, true)),
+            accountId);
+    }
+
     @Test
     void createDraft_thenIssue_mintsFirstVersionOfANewBase() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "Lifecycle1");
@@ -218,9 +270,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(draft.status()).isEqualTo("DRAFT");
         assertThat(draft.docNumber()).isNull();
         assertThat(draft.items()).isNotEmpty();
-        // P5 (Opus review, GLA-99 step 2 review-round-2): vatAmount/grandTotal are new money
-        // fields (V188) that were going stored but unasserted — pin them against the SAME formula
-        // DepositNoticeService#computeRemainingInvoiceMoney (which this class now reuses) documents.
+        // vatAmount/grandTotal are stored money fields — pin them against the SAME formula
+        // DepositNoticeService#computeRemainingInvoiceMoney (which this class reuses) documents.
         assertThat(draft.vatAmount())
             .isEqualByComparingTo(draft.netAmount().multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP));
         assertThat(draft.grandTotal()).isEqualByComparingTo(draft.netAmount().add(draft.vatAmount()));
@@ -235,8 +286,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(issued.grandTotal()).isEqualByComparingTo(issued.netAmount().add(issued.vatAmount()));
     }
 
-    /** Fresh-engine ruling 3: on the LEGACY path (no accepted quotation -> resolveLegacy) the draft's reference
-     * defaults to the latest ISSUED deposit notice's reference (it used to be null -> a blank reference cell). */
+    /** On the LEGACY path (no accepted quotation -> resolveLegacy) the draft's reference
+     * defaults to the latest ISSUED deposit notice's reference (not null, which would leave a blank reference cell). */
     @Test
     void createDraft_legacyPath_defaultsTheReferenceToTheIssuedDepositNoticesReference() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "LegacyRef");
@@ -256,7 +307,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(edited.reference()).isEqualTo("PO-EDITED-2");
     }
 
-    /** Fresh-engine ruling 1: stored notes no longer print -- the file carries only the template's own หมายเหตุ block. */
+    /** Stored notes do not print -- the file carries only the template's own หมายเหตุ block. */
     @Test
     void issuedFile_neverPrintsStoredNotes() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "NotesNotPrinted");
@@ -308,8 +359,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
-    /** There is no item capacity any more: a deal whose deposit notice carries 30 items still gets a draft, an issued
-     * invoice and a rendered file (it used to be refused with a 409 above 22 rows). */
+    /** There is no item capacity: a deal whose deposit notice carries 30 items still gets a draft, an issued
+     * invoice and a rendered file (no 409 above 22 rows). */
     @Test
     void createDraft_with30Items_succeeds_andRenders() throws Exception {
         DealFixture fixture = buildAcceptedDeal(salesActor, "ThirtyItems");
@@ -397,7 +448,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     void createDraft_negativeNetAfterDeduction_isRefusedWithConflict() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "Negative1");
         // Push the deposit notice's own deposit amount above the item total it will be matched
-        // against — ruling D11: items/deduction both come from the matched notice's own snapshot,
+        // against — items/deduction both come from the matched notice's own snapshot,
         // so inflating ITS depositAmount is what drives the remaining invoice's net negative.
         jdbc.update("UPDATE sales.deposit_notice SET deposit_amount = :amt WHERE deposit_notice_id = :id",
             Map.of("amt", new BigDecimal("999999.00"), "id", fixture.depositNoticeId()));
@@ -408,8 +459,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Owner rulings O2 (one live remaining invoice per DEAL) + O3 (issue refreshes the snapshot)
-    // — GLA-99 step 2 review-round-1, 2026-09-20.
+    // One live remaining invoice per DEAL; issue refreshes the snapshot.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -436,13 +486,13 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         RemainingInvoiceDocumentDto aReread = remainingInvoiceService.get(issuedA.id(), salesActor);
         assertThat(aReread.status()).isEqualTo("SUPERSEDED");
         assertThat(aReread.supersededById()).isEqualTo(issuedB.id());
-        // Superseded stays downloadable (O2's own text).
+        // Superseded stays downloadable.
         assertThat(remainingInvoiceService.file(aReread.id(), salesActor)).isNotEmpty();
 
         List<RemainingInvoiceDocumentDto> all = remainingInvoiceService.list(fixtureA.ticketId(), salesActor);
         List<RemainingInvoiceDocumentDto> stillIssued = all.stream()
             .filter(d -> "ISSUED".equals(d.status())).toList();
-        assertThat(stillIssued).hasSize(1); // exactly one live, per O2
+        assertThat(stillIssued).hasSize(1); // exactly one live per deal
         assertThat(stillIssued.get(0).id()).isEqualTo(issuedB.id());
     }
 
@@ -455,7 +505,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         acceptPreparedSecondChain(fixtureA.ticketId(), salesActor);
 
         // A second DRAFT on the SAME deal is refused even though it would be for a DIFFERENT
-        // quotation chain than draftA's — O2: at most one live (DRAFT or ISSUED) remaining
+        // quotation chain than draftA's — at most one live (DRAFT or ISSUED) remaining
         // invoice per deal, not per chain.
         assertThatThrownBy(() -> remainingInvoiceService.createDraft(fixtureA.ticketId(), null, salesActor))
             .isInstanceOfSatisfying(ApiException.class,
@@ -470,7 +520,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         BigDecimal newDeduction = originalDeduction.add(new BigDecimal("1.00"));
 
         // The deposit notice is edited/re-issued at a DIFFERENT amount AFTER the draft was
-        // created but BEFORE it is issued — O3: issue() must re-snapshot from the LATEST issued
+        // created but BEFORE it is issued — issue() must re-snapshot from the LATEST issued
         // notice (+ current accepted quotation), never freeze the draft's own now-stale snapshot.
         jdbc.update("UPDATE sales.deposit_notice SET deposit_amount = :amt WHERE deposit_notice_id = :id",
             Map.of("amt", newDeduction, "id", fixture.depositNoticeId()));
@@ -478,16 +528,15 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(draft.id(), salesActor);
         assertThat(issued.depositDeduction()).isEqualByComparingTo(newDeduction);
         assertThat(issued.netAmount()).isEqualByComparingTo(issued.itemsTotal().subtract(newDeduction));
-        // P5: vatAmount/grandTotal must refresh in step with netAmount, not stay pinned to the
+        // vatAmount/grandTotal must refresh in step with netAmount, not stay pinned to the
         // draft's own now-stale figures.
         assertThat(issued.vatAmount())
             .isEqualByComparingTo(issued.netAmount().multiply(new BigDecimal("0.07")).setScale(2, RoundingMode.HALF_UP));
         assertThat(issued.grandTotal()).isEqualByComparingTo(issued.netAmount().add(issued.vatAmount()));
         assertThat(issued.vatAmount()).isNotEqualByComparingTo(draft.vatAmount());
         // The dialog fields the user already typed on the draft (reference/depositReference/
-        // docDate/notes) are NOT touched by the refresh — only the computed content is. Nit
-        // (Opus review, GLA-99 step 2 review-round-2): notes was the one dialog field this test
-        // never actually asserted survives the refresh.
+        // docDate/notes) are NOT touched by the refresh (notes included) — only the computed
+        // content is.
         assertThat(issued.reference()).isEqualTo(draft.reference());
         assertThat(issued.depositReference()).isEqualTo(draft.depositReference());
         assertThat(issued.docDate()).isEqualTo(draft.docDate());
@@ -495,12 +544,12 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // REVIEW ROUND 2 POLISH (Opus review, GLA-99 step 2 review-round-2, 2026-09-20) — P1-P3, P5.
+    // DB invariants and race mapping
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** P1: O2 ("one live remaining invoice per deal") is now a real DB invariant, not merely an
-     * application-level courtesy check — V188's {@code ux_remaining_invoice_ticket_issued} was
-     * widened from (ticket_id, customer_quotation_id) to ticket_id ALONE. Proven by going around
+    /** "One live remaining invoice per deal" is a real DB invariant, not merely an
+     * application-level courtesy check — {@code ux_remaining_invoice_ticket_issued} is
+     * on ticket_id ALONE, not (ticket_id, customer_quotation_id). Proven by going around
      * {@link RemainingInvoiceService#issue}'s own supersede-before-issue pass entirely: a raw
      * second ISSUED row for the SAME ticket_id, inserted directly via JDBC, must be refused by
      * POSTGRES itself, regardless of which quotation chain it claims. */
@@ -523,7 +572,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
-    /** P1's DRAFT-side twin: at most one DRAFT per ticket_id, not per (ticket, quotation). */
+    /** The DRAFT-side twin of the issued-row invariant: at most one DRAFT per ticket_id, not per (ticket, quotation). */
     @Test
     void v188_dbInvariant_atMostOneDraftRemainingInvoicePerTicket_evenBypassingTheService() {
         DealFixture fixture = buildAcceptedDeal(salesActor, "DbInvariantDraft");
@@ -537,7 +586,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
-    /** P2: createDraft's own SELECT-then-INSERT (sameChainLive/anotherDraftLive) races the exact
+    /** createDraft's own SELECT-then-INSERT (sameChainLive/anotherDraftLive) races the exact
      * same way {@link #revise_repositoryRaceIsMappedToConflict_neverAnUnmapped500} already pins for
      * revise() — a repository-level unique-violation must surface as 409, never an unmapped 500.
      * Same deterministic spied-repository technique that test's own Javadoc explains choosing over
@@ -558,7 +607,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
         RemainingInvoiceService racingService =
-            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(),
+                new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
 
         assertThatThrownBy(() -> racingService.createDraft(fixture.ticketId(), null, salesActor))
             .as("a DB-level unique-violation race must surface as 409, never an unmapped 500")
@@ -569,10 +619,10 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.list(fixture.ticketId(), salesActor)).isEmpty();
     }
 
-    /** P3: revise() refuses a live DRAFT for a DIFFERENT quotation chain too, not only a same-chain
+    /** revise() refuses a live DRAFT for a DIFFERENT quotation chain too, not only a same-chain
      * one — the identical cross-chain refusal {@link #createDraft_refusesASecondDraftOnTheDealWhileOneAlreadyExists_evenADifferentChain}
-     * already pins for createDraft, now applied to revise() as well (O2: one live DRAFT per DEAL,
-     * not per chain — enforceable as a real DB invariant since P1). */
+     * pins for createDraft (one live DRAFT per DEAL,
+     * not per chain — enforced as a real DB invariant). */
     @Test
     void revise_refusesWhenADraftForADifferentChainAlreadyExistsOnTheDeal() {
         DealFixture fixtureA = buildAcceptedDeal(salesActor, "ReviseCrossChainA", "ReviseCrossChainB");
@@ -690,7 +740,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
             remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
 
-        // H1 lockdown: account is ROW-SCOPED to its list scope (live, S10+). Below S10 every read is refused;
+        // Account is ROW-SCOPED to its list scope (live, S10+). Below S10 every read is refused;
         // ceo and sales_manager are unaffected by the scope.
         // (Below S10 AND no pending payment status: a deposit-notice-issued deal is in scope by the payment rule.)
         setStage(fixture.ticketId(), "NEGOTIATION");
@@ -708,23 +758,73 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(remainingInvoiceService.get(issued.id(), ceoActor).id()).isEqualTo(issued.id());
         setStage(fixture.ticketId(), "PROCUREMENT");
         assertThat(remainingInvoiceService.get(issued.id(), accountActor).id()).isEqualTo(issued.id());
-        // R1 fix (GLA-99 step 2 review-round-1): this test's own name has always promised
-        // sales_manager too, but nothing here ever constructed or asserted that actor — the
-        // method name asserted a claim its body could not back up. Added for real now.
+        // This test's name promises sales_manager too, so that actor is constructed and asserted here.
         assertThat(remainingInvoiceService.get(issued.id(), salesManagerActor).id()).isEqualTo(issued.id());
         assertThat(remainingInvoiceService.file(issued.id(), ceoActor)).isNotEmpty();
         assertThat(remainingInvoiceService.file(issued.id(), accountActor)).isNotEmpty();
         assertThat(remainingInvoiceService.file(issued.id(), salesManagerActor)).isNotEmpty();
     }
 
+    // ── dead deals: DepositNoticeService#requireTicketViewer, the read gate shared by
+    // deposit-notice and remaining-invoice reads, lets ACCOUNT open a lost/cancelled deal that still has an ISSUED
+    // deposit notice; nobody else is widened, and without an issued notice nothing is ────────────────────────────
+
+    private RemainingInvoiceDocumentDto issuedRemainingInvoiceOnADeadDeal(String label) {
+        DealFixture fixture = buildAcceptedDeal(salesActor, label);
+        RemainingInvoiceDocumentDto issued = remainingInvoiceService.issue(
+            remainingInvoiceService.createDraft(fixture.ticketId(), null, salesActor).id(), salesActor);
+        jdbc.update("""
+            UPDATE sales.ticket SET lifecycle = 'CANCELLED', status = 'cancelled', sales_stage = 'NEGOTIATION',
+                   payment_status = 'DEPOSIT_PAID'
+             WHERE ticket_id = :id
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("id", fixture.ticketId()));
+        assertThat(tickets.isInAccountScope(fixture.ticketId())).as("fixture: outside account's LIST scope").isFalse();
+        return issued;
+    }
+
+    @Test
+    void read_deadDealWithAnIssuedDepositNotice_accountCanRead_everyoneElseWhoWasRefusedStillIs() {
+        RemainingInvoiceDocumentDto issued = issuedRemainingInvoiceOnADeadDeal("DeadRead1");
+        long ticketId = issued.ticketId();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id AND status = 'ISSUED'",
+            java.util.Map.of("id", ticketId), Long.class)).as("fixture: an issued deposit notice").isPositive();
+
+        assertThat(remainingInvoiceService.get(issued.id(), accountActor).id()).isEqualTo(issued.id());
+        assertThat(remainingInvoiceService.list(ticketId, accountActor)).isNotEmpty();
+        assertThat(depositNoticeService.listByTicket(ticketId, accountActor)).isNotEmpty();
+
+        UserPrincipal hr = actor(987_654L, "hr");
+        for (UserPrincipal refused : List.of(importActor, otherSalesActor, hr)) {
+            assertThatThrownBy(() -> depositNoticeService.listByTicket(ticketId, refused))
+                .as("deposit notices, %s", refused.role())
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+            assertThatThrownBy(() -> remainingInvoiceService.get(issued.id(), refused))
+                .as("remaining invoice, %s", refused.role())
+                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        }
+    }
+
+    @Test
+    void read_deadDealWithNoIssuedDepositNotice_isStillRefusedToAccount() {
+        RemainingInvoiceDocumentDto issued = issuedRemainingInvoiceOnADeadDeal("DeadRead2");
+        long ticketId = issued.ticketId();
+        jdbc.update("UPDATE sales.deposit_notice SET status = 'DRAFT' WHERE ticket_id = :id",
+            java.util.Map.of("id", ticketId));
+
+        assertThatThrownBy(() -> depositNoticeService.listByTicket(ticketId, accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> remainingInvoiceService.get(issued.id(), accountActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // R1 (Opus review, GLA-99 step 2 review-round-1, 2026-09-20): updateDraft ITs — lifecycle
+    // updateDraft ITs — lifecycle
     // (edits persist, re-snapshot) + refusals for CEO, account, sales_manager, non-owner sales,
     // and import on EACH write op (update/issue/revise/delete), each asserting NOTHING was
-    // written (wrong-way-round, per CLAUDE.md). The pre-existing per-actor tests above already
-    // cover otherSalesActor/ceoActor/importActor for issue/revise/delete/createDraft; this block
-    // adds the two roles those omitted (account, sales_manager) across all four write ops, plus
-    // updateDraft's own coverage from scratch (it had none).
+    // written (wrong-way-round, per CLAUDE.md). The per-actor tests above cover
+    // otherSalesActor/ceoActor/importActor for issue/revise/delete/createDraft; this block
+    // adds the two roles those omit (account, sales_manager) across all four write ops, plus
+    // updateDraft's own coverage.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -735,7 +835,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         BigDecimal newDeduction = originalDeduction.add(new BigDecimal("2.00"));
 
         // The source deposit notice changes AFTER the draft was created — updateDraft's own
-        // re-snapshot (plan step 2: "re-snapshot items from latest issued deposit notice") must
+        // re-snapshot (items from the latest issued deposit notice) must
         // pick it up.
         jdbc.update("UPDATE sales.deposit_notice SET deposit_amount = :amt WHERE deposit_notice_id = :id",
             Map.of("amt", newDeduction, "id", fixture.depositNoticeId()));
@@ -837,18 +937,18 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * Nit fix (Opus review, GLA-99 step 2 review-round-1): two concurrent {@code revise()} calls
+     * Two concurrent {@code revise()} calls
      * on the same ISSUED document race past the plain SELECT-then-INSERT {@code hasLiveDraft}
      * check (see {@link RemainingInvoiceService#revise}) — the loser's {@code insertDraft} trips
-     * {@code ux_remaining_invoice_ticket_quotation_draft} (V188) as a raw unique violation, which
+     * {@code ux_remaining_invoice_ticket_quotation_draft} as a raw unique violation, which
      * must surface as 409, never an unmapped 500.
      *
      * <p>A genuine two-thread race (the shape {@code PayrollDraftOptimisticConcurrencyIntegrationTest}
-     * uses) was tried first and DISCARDED: run against this suite's own test datasource it passed
-     * even with the fix's {@code catch} block removed, five times over — the race window this bug
-     * needs is narrower than this harness's connection/thread scheduling reliably hits, which would
-     * have made that test "green either way", exactly the false-evidence shape CLAUDE.md's own
-     * "vacuous test" rule warns about. This version instead forces the EXACT failure mode
+     * uses) does not work here: against this suite's own test datasource it passes
+     * even with the {@code catch} block removed — the race window this bug
+     * needs is narrower than this harness's connection/thread scheduling reliably hits, which
+     * would make it "green either way", exactly the false-evidence shape CLAUDE.md's own
+     * "vacuous test" rule warns about. This test instead forces the EXACT failure mode
      * deterministically — a spied repository whose {@code insertDraft} throws the same exception
      * type Postgres raises for the real unique-index hit — so it is guaranteed red without the
      * catch and green with it, on every run, not "usually".
@@ -871,7 +971,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any());
         RemainingInvoiceService racingService =
-            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer());
+            new RemainingInvoiceService(racingRepo, depositNoticeService, tickets, new RemainingInvoicePdfRenderer(),
+                new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP));
 
         assertThatThrownBy(() -> racingService.revise(issued.id(), salesActor))
             .as("a DB-level unique-violation race must surface as 409, never an unmapped 500")
@@ -894,7 +995,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         return buildAcceptedDeal(owner, label, null);
     }
 
-    /** Chain B's request and ISSUED quotation, prepared BEFORE chain A's order is confirmed (walk 4, W4-04: a
+    /** Chain B's request and ISSUED quotation, prepared BEFORE chain A's order is confirmed (a
      * confirmed deal can start no new pricing round); {@link #acceptPreparedSecondChain} accepts and confirms it. */
     private long preparedSecondPricingRequestId;
     private long preparedSecondIssuedQuotationId;
@@ -953,7 +1054,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
      * catalog product, pricing request, factory quote, pricing decision and CustomerQuotation,
      * driven to ACCEPTED (no second deposit notice: one ISSUED per deal), exactly like {@link #buildAcceptedDeal}
      * except it reuses the given ticket (and its first ticket item) instead of creating a new one.
-     * Used by the O2 (one live remaining invoice per deal) tests to prove superseding/blocking
+     * Used by the one-live-remaining-invoice-per-deal tests to prove superseding/blocking
      * reaches a genuinely different chain, not merely a different id on the same fixture. This half builds it
      * up to an ISSUED quotation; {@link #acceptPreparedSecondChain} finishes it. */
     private void prepareSecondQuotationChain(long ticketId, UserPrincipal owner, String label) {
@@ -976,32 +1077,28 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
             UUID.randomUUID().toString(), List.of(item));
         long pricingRequestId = pricingRequestService.createDraft(ticketId, request, owner).summary().id();
 
-        // GLA-123 slice S3 MAJOR 5 fix (Opus review, 2026-09-23): this used to call
-        // #driveDraftPricingRequestToQuotationAccepted (recordOutcome through the real API), then
-        // paper over R8's refusal by first SUPERSEDING chain A's quotation via raw SQL. That made
-        // the fixture self-consistent but VACUOUS for this test's own purpose: with only one
-        // ACCEPTED row ever existing at a time, RemainingInvoiceService's own "pick the newest
-        // ACCEPTED chain" selection logic never actually had two real candidates to choose
-        // between — it would have passed identically with a broken "pick ANY accepted row"
-        // implementation. R8 (recordOutcome's own application-layer guard) is real and correct —
-        // no production caller can ever put a ticket into "two rows ACCEPTED at once" — but
-        // whether RemainingInvoiceService's SELECTION QUERY picks the right one among several
-        // ACCEPTED-shaped rows is a genuine, independent thing to prove, and this DB SHAPE (two
-        // ACCEPTED quotations, same ticket) is not reachable through the app at all post-R8. So:
-        // drive chain B to ISSUED through the real API (unchanged), then flip its doc_status to
-        // ACCEPTED with a DIRECT SQL UPDATE — bypassing recordOutcome (and therefore R8)
-        // deliberately and explicitly, not silently. This is a fixture reaching into forbidden
-        // territory on purpose, to test code that must behave correctly even in a shape the
-        // application itself will never again produce (defense in depth, same reasoning as
-        // #v188_dbInvariant_atMostOneIssuedRemainingInvoicePerTicket_evenBypassingTheService a few
-        // tests below, which does the identical "go around the service with raw SQL" move for the
-        // identical reason). Chain A's own row is left untouched — genuinely still ACCEPTED.
+        // Driving chain B through recordOutcome (the real API) would first need chain A's
+        // quotation SUPERSEDED, leaving only one ACCEPTED row at a time. That is VACUOUS for
+        // this test's purpose: RemainingInvoiceService's "pick the newest ACCEPTED chain"
+        // selection logic would never have two real candidates and would pass identically with
+        // a broken "pick ANY accepted row" implementation. recordOutcome's application-layer
+        // guard is real and correct — no production caller can put a ticket into "two rows
+        // ACCEPTED at once" — but whether the SELECTION QUERY picks the right one among several
+        // ACCEPTED-shaped rows is an independent thing to prove, and that DB SHAPE is not
+        // reachable through the app. So: drive chain B to ISSUED through the real API, then
+        // flip its doc_status to ACCEPTED with a DIRECT SQL UPDATE — bypassing recordOutcome
+        // deliberately. This reaches into forbidden territory on purpose, to test code that
+        // must behave correctly even in a shape the application will never produce (defense in
+        // depth, same reasoning as
+        // #v188_dbInvariant_atMostOneIssuedRemainingInvoicePerTicket_evenBypassingTheService a
+        // few tests below, which does the identical "go around the service with raw SQL" move).
+        // Chain A's own row is left untouched — genuinely still ACCEPTED.
         CustomerQuotationDto issuedB = driveDraftPricingRequestToQuotationIssued(pricingRequestId, quantity, owner);
         preparedSecondPricingRequestId = pricingRequestId;
         preparedSecondIssuedQuotationId = issuedB.id();
     }
 
-    /** Accepts (raw SQL, see the MAJOR 5 note above) and confirms the chain {@link #prepareSecondQuotationChain} built. */
+    /** Accepts (raw SQL, see the note in the second-chain builder above) and confirms the chain {@link #prepareSecondQuotationChain} built. */
     private void acceptPreparedSecondChain(long ticketId, UserPrincipal owner) {
         long pricingRequestId = preparedSecondPricingRequestId;
         jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
@@ -1018,8 +1115,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         // the bypass branch: flip the deal to NOT_REQUIRED (chain A's drafts/invoices were made earlier).
         jdbc.update("UPDATE sales.ticket SET deposit_policy = 'NOT_REQUIRED' WHERE ticket_id = :id",
             Map.of("id", ticketId));
-        // No deposit notice for chain B: a deal has at most one ISSUED deposit notice (owner ruling
-        // 2026-10-28), so chain A's stays the deal's only one; the remaining-invoice rules under test
+        // No deposit notice for chain B: a deal has at most one ISSUED deposit notice, so chain A's stays the deal's only one; the remaining-invoice rules under test
         // key off the accepted quotations, not a second notice.
 
     }
@@ -1032,7 +1128,7 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
 
     /** Drives a fresh pricing request to an ISSUED customer quotation — factored out of {@link
      * #driveDraftPricingRequestToQuotationAccepted} so {@link #buildSecondAcceptedQuotationChain}
-     * can stop short of {@code recordOutcome} (see that method's own MAJOR 5 fix comment for why). */
+     * can stop short of {@code recordOutcome} (see that method's own comment for why). */
     private CustomerQuotationDto driveDraftPricingRequestToQuotationIssued(long pricingRequestId, BigDecimal quantity, UserPrincipal owner) {
         pricingRequestService.submit(pricingRequestId, owner);
         pricingRequestService.pickup(pricingRequestId, importActor);

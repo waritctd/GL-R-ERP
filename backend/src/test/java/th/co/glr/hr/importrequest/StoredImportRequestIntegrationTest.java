@@ -30,10 +30,10 @@ import th.co.glr.hr.importrequest.ImportRequestRequests.IssueImportRequestReques
 import th.co.glr.hr.importrequest.ImportRequestRequests.SetRequiredByNoteRequest;
 import th.co.glr.hr.importrequest.ImportRequestRequests.UpdateImportRequestRequest;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
@@ -58,6 +58,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     private ImportRequestService service;
     private ImportRequestRepository stored;
+    private RecordingSalesMailer mailer;
 
     private long ownerId;
     private UserPrincipal owner;
@@ -78,7 +79,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         FactoryConfigRepository factories = new FactoryConfigRepository(jdbc);
         TicketRepository tickets = new TicketRepository(jdbc);
 
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        mailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ObjectMapper objectMapper = new ObjectMapper();
         FileStorageService fileStorage = new FileStorageService("/tmp/glr-ir-per-factory-test-uploads");
@@ -91,7 +93,7 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         service = new ImportRequestService(queries, new ImportRequestRenderer(), stored, factories,
-            tickets, ticketService);
+            tickets, ticketService, notifications);
 
         ownerId = insertEmployee("STORED-OWN");
         owner = principal(ownerId, "sales");
@@ -592,6 +594,136 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(service.advanceStep(id,
             new AdvanceImportStepRequest(ImportRequestStep.ORDERED, null, null), ceoUser).importStep())
             .isEqualTo(ImportRequestStep.ORDERED);
+    }
+
+    // ── P1 hand-off notifications: IR issued/revised -> import (A1), progress -> rep (A3) ───────────
+    // Each case pins the bell row AND the email path (RecordingSalesMailer) for the same recipient.
+
+    private static final String DEAL_LABEL = "ดีล IRSTORE-1 · ลูกค้า บริษัท ยู่ฮุย อินทีเรีย จำกัด";
+
+    private String stepMessage(ImportRequestDto ir, String label) {
+        return importUser.name() + " เริ่มดำเนินการใบขอซื้อ (IR) " + ir.docNumber() + " กับโรงงาน " + ir.factoryName()
+            + " แล้ว ขั้นตอนล่าสุด: " + label + "\n" + DEAL_LABEL
+            + "\nแจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง";
+    }
+
+    private String receivedMessage(ImportRequestDto ir) {
+        return "สินค้าตามใบขอซื้อ (IR) " + ir.docNumber() + " จากโรงงาน " + ir.factoryName() + " เข้าคลังแล้ว"
+            + " และครบทุกใบขอซื้อของดีลนี้\n" + DEAL_LABEL + "\nสิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า";
+    }
+
+    private void advance(long id, String step) {
+        service.advanceStep(id, new AdvanceImportStepRequest(step, null, null), importUser);
+    }
+
+    @Test
+    void issue_newIr_notifiesImportWithTheNewIrText_onBellAndEmail() {
+        long importId = mailer.seedRoleEmployee("import");
+        long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
+
+        ImportRequestDto issued = service.issue(id, null, owner);
+
+        mailer.assertRoleNotice("import", "IMPORT_REQUEST_ISSUED", "ใบขอซื้อ (IR) ใหม่ — รอสั่งซื้อกับโรงงาน",
+            owner.name() + " ออกใบขอซื้อ (IR) " + issued.docNumber() + " สำหรับโรงงาน Padana Stored Test แล้ว\n"
+                + DEAL_LABEL + "\nสิ่งที่ต้องทำต่อ: ส่งอีเมลสั่งซื้อถึงโรงงาน แล้วอัปเดตขั้นตอนในใบขอซื้อ",
+            "/import/deals/" + ticketId, importId);
+        mailer.assertNoNotice("IMPORT_REQUEST_REVISED", "ใบขอซื้อ (IR) ฉบับแก้ไข — กรุณาตรวจสอบ");
+    }
+
+    /** createDrafts issues one IR per factory at once; each gets its own notice (two factories on this deal). */
+    @Test
+    void createDrafts_notifiesImportOncePerIssuedIr() {
+        long importId = mailer.seedRoleEmployee("import");
+
+        List<ImportRequestDto> created = service.createDrafts(ticketId, null, owner);
+
+        assertThat(created).hasSize(2);
+        mailer.assertRoleNotices("import", "IMPORT_REQUEST_ISSUED", "ใบขอซื้อ (IR) ใหม่ — รอสั่งซื้อกับโรงงาน",
+            "/import/deals/" + ticketId,
+            created.stream().map(ir -> owner.name() + " ออกใบขอซื้อ (IR) " + ir.docNumber() + " สำหรับโรงงาน "
+                + ir.factoryName() + " แล้ว\n" + DEAL_LABEL
+                + "\nสิ่งที่ต้องทำต่อ: ส่งอีเมลสั่งซื้อถึงโรงงาน แล้วอัปเดตขั้นตอนในใบขอซื้อ").toList(),
+            importId);
+    }
+
+    /** A revision's issue is the REVISED notice, and is NOT also announced as a brand-new IR. */
+    @Test
+    void issue_revisionIr_notifiesImportWithTheRevisedText_andNotAlsoAsNew() {
+        long importId = mailer.seedRoleEmployee("import");
+        long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
+        ImportRequestDto v1Issued = service.issue(v1, null, owner);
+        ImportRequestDto v2 = service.revise(v1, owner);
+        // revise only opens a DRAFT: nothing revised yet.
+        mailer.assertNoNotice("IMPORT_REQUEST_REVISED", "ใบขอซื้อ (IR) ฉบับแก้ไข — กรุณาตรวจสอบ");
+
+        ImportRequestDto v2Issued = service.issue(v2.id(), null, owner);
+
+        mailer.assertRoleNotice("import", "IMPORT_REQUEST_REVISED", "ใบขอซื้อ (IR) ฉบับแก้ไข — กรุณาตรวจสอบ",
+            owner.name() + " ออกใบขอซื้อ (IR) ฉบับแก้ไข " + v2Issued.docNumber()
+                + " สำหรับโรงงาน Padana Stored Test แทนฉบับเดิม\n" + DEAL_LABEL
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจรายการในฉบับแก้ไข หากสั่งซื้อจากฉบับเดิมไปแล้ว กรุณาแจ้งโรงงานให้แก้ไขตาม",
+            "/import/deals/" + ticketId, importId);
+        // the ONLY "new IR" notice is v1's, from before the revision.
+        mailer.assertRoleNotice("import", "IMPORT_REQUEST_ISSUED", "ใบขอซื้อ (IR) ใหม่ — รอสั่งซื้อกับโรงงาน",
+            owner.name() + " ออกใบขอซื้อ (IR) " + v1Issued.docNumber() + " สำหรับโรงงาน Padana Stored Test แล้ว\n"
+                + DEAL_LABEL + "\nสิ่งที่ต้องทำต่อ: ส่งอีเมลสั่งซื้อถึงโรงงาน แล้วอัปเดตขั้นตอนในใบขอซื้อ",
+            "/import/deals/" + ticketId, importId);
+    }
+
+    /**
+     * Ruling 11-03 (start + end only), per DEAL: START once when the deal's first IR leaves CONTACTED,
+     * silence on intermediate steps, on a factory received while another is still open, and on the
+     * second factory's own start; END once, when the last factory is received.
+     */
+    @Test
+    void advanceStep_notifiesRepOnceWhenTheDealStarts_andOnceWhenEveryFactoryIsReceived() {
+        List<ImportRequestDto> irs = service.createDrafts(ticketId, null, owner);
+        ImportRequestDto padana = byFactory(irs, padanaFactoryId);
+        ImportRequestDto lea = byFactory(irs, leaFactoryId);
+        String startTitle = "เริ่มสั่งซื้อกับโรงงานแล้ว";
+        String allTitle = "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า";
+        String padanaStart = stepMessage(padana, ImportRequestStep.thaiLabel(ImportRequestStep.ORDERED));
+
+        advance(padana.id(), ImportRequestStep.ORDERED);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+
+        for (String step : List.of(ImportRequestStep.PICKED_UP, ImportRequestStep.IN_TRANSIT,
+                ImportRequestStep.AWAITING_CUSTOMS, ImportRequestStep.RECEIVED)) {
+            advance(padana.id(), step);
+        }
+        advance(lea.id(), ImportRequestStep.ORDERED);
+        // padana fully received and LEA started: still exactly the one START, no partial, no END yet.
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว");
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_ALL", allTitle);
+
+        advance(lea.id(), ImportRequestStep.RECEIVED);
+
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_GOODS_RECEIVED_ALL", allTitle,
+            receivedMessage(lea), "/tickets/" + ticketId);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+    }
+
+    /** The deal's first move jumping CONTACTED -> RECEIVED (another factory open) is still the START; the last factory's jump is END only. */
+    @Test
+    void advanceStep_jumpFromContactedToReceived_firstIsTheStart_lastIsTheEnd() {
+        List<ImportRequestDto> irs = service.createDrafts(ticketId, null, owner);
+        ImportRequestDto padana = byFactory(irs, padanaFactoryId);
+        ImportRequestDto lea = byFactory(irs, leaFactoryId);
+        String startTitle = "เริ่มสั่งซื้อกับโรงงานแล้ว";
+        String padanaStart = stepMessage(padana, ImportRequestStep.thaiLabel(ImportRequestStep.RECEIVED));
+
+        advance(padana.id(), ImportRequestStep.RECEIVED);
+
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_PARTIAL", "สินค้าบางโรงงานเข้าคลังแล้ว");
+        mailer.assertNoNotice("IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า");
+
+        advance(lea.id(), ImportRequestStep.RECEIVED);
+
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_GOODS_RECEIVED_ALL", "สินค้าเข้าคลังครบแล้ว — พร้อมนัดส่งลูกค้า",
+            receivedMessage(lea), "/tickets/" + ticketId);
+        mailer.assertEmployeeNotice(ownerId, "IMPORT_STARTED", startTitle, padanaStart, "/tickets/" + ticketId);
     }
 
     // ── authorisation (owner decision 1), asked the wrong way round ─────────────────────────────

@@ -1,52 +1,28 @@
-// Sales Overview (role-scoped views, Sales branch): "what does MY deal need
-// from ME right now" — a single next-action CTA per deal, used by the
+// "What does MY deal need from ME right now": a single next-action CTA per deal, used by the
 // "สิ่งที่ต้องทำ" worklist on SalesOverview.jsx.
 //
-// Presentation only, same convention as salesViewScope.js's dealInScope /
-// TicketListPage's worklistReason: never a security boundary, and never
-// authoritative over what the real service will actually allow (the button
-// this CTA points at re-checks everything server-side). Built entirely from
-// data the caller already has — a ticket-list row (`deal`, as returned by
-// api.tickets.list) plus the sales rep's own pricing-request queue
-// (`pricingRequests`, as returned by api.pricingRequests.queue) — so this
-// never triggers a per-ticket detail fetch.
+// Presentation only, like salesViewScope.js's dealInScope / TicketListPage's worklistReason: never
+// a security boundary (the button this CTA points at re-checks server-side). Built from data the
+// caller already has (a ticket-list row `deal` from api.tickets.list, and the rep's own
+// `pricingRequests` from api.pricingRequests.queue), so it never triggers a per-ticket fetch.
 //
-// Slice 2 put three direct-quotation buckets IN FRONT of all of these (see
-// "bucket 0" inside nextSalesAction): a live DEAL_DIRECT quotation owns the
+// Bucket 0: three direct-quotation buckets come first; a live DEAL_DIRECT quotation owns the
 // deal's CTA outright.
 //
-// The CTA buckets below are a priority cascade, evaluated in pipeline
-// order (earliest-unblocked-step wins): a deal with no live pricing request
-// normally needs "สร้างคำขอราคา" first, even if it also happens to be overdue
-// on follow-up — there is nothing to follow up ABOUT yet. Once a deal has a
-// live pricing request past that point, later buckets take over. Exception:
-// a deal that was already priced OUTSIDE the PricingRequest chain (a legacy
-// deal whose customer quotation went out through the retired ticket-level
-// engine) skips bucket 1 even with zero pricing requests — see bucket 1's own
-// comment below for why, and for why the guard is narrower than it first
-// looks.
+// The other buckets are a priority cascade in pipeline order (earliest-unblocked step wins): a
+// deal with no live pricing request needs "สร้างคำขอราคา" first, even if a follow-up is overdue.
+// Exception: a deal already priced OUTSIDE the PricingRequest chain (legacy: its customer
+// quotation went out through the retired ticket-level engine) skips bucket 1 even with zero
+// pricing requests; see bucket 1's comment.
 //
-// Bucket 4 (RECORD_QUOTATION_OUTCOME) is a discoverability fix, not a new
-// capability: the accept/reject/revision controls already existed on
-// DealQuotationPanel's "ราคาและใบเสนอราคา" section (the "เอกสาร" tab), but a PR
-// sitting at QUOTATION_ISSUED used to fall all the way through this cascade
-// to follow-up/log-activity — the top sticky CTA never told the owning rep
-// the customer's decision was waiting to be recorded, so an issued quotation
-// could sit un-accepted indefinitely with nothing on the page pointing at the
-// controls that would advance it. Placed AFTER bucket 3 (CONFIRM_ORDER) so an
-// already-accepted PR still prioritises confirming the order. See its own
-// comment below.
+// Bucket 4 (RECORD_QUOTATION_OUTCOME) points the rep at the accept/reject/revision controls on
+// DealQuotationPanel's "ราคาและใบเสนอราคา" section (the "เอกสาร" tab); without it an issued
+// quotation could sit unrecorded with nothing on the page pointing at them. It is AFTER bucket 3
+// (CONFIRM_ORDER) so an accepted request still prioritises confirming the order.
 //
-// Bucket 5 (RECORD_DELIVERY — stages 13-14 ส่งมอบสินค้า handed to sales, owner
-// ruling 2026-08-17) reuses importActions.js's nextFulfilmentActionCode
-// rather than keeping a second copy of the delivery-ready status list — see
-// that module's own header for the "shared with sales" note. It sits AFTER
-// bucket 1, not before: a delivery-ready deal that also matches bucket 1's
-// guard (zero pricing requests, no evidence a price ever went out) still gets
-// CREATE_PCR, because bucket 1's early `return` fires first — same
-// earliest-unblocked-step cascade principle as everything else here, not a
-// special case carved out for delivery. See bucket 5's own comment below for
-// why that interaction was checked, on purpose, and left alone.
+// Bucket 5 (RECORD_DELIVERY, stages 13-14 ส่งมอบสินค้า handed to sales) reuses importActions.js's
+// nextFulfilmentActionCode rather than keeping a second delivery-ready status list. It sits AFTER
+// bucket 1: a delivery-ready deal matching bucket 1's guard still gets CREATE_PCR. See bucket 5.
 
 import { bangkokTodayIso } from '../../utils/format.js';
 import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
@@ -55,26 +31,26 @@ import { nextFulfilmentActionCode } from './importActions.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 
 export const SALES_ACTION = {
-  // Slice 2 — flow A (SLICE-2-FLOW-A.md §E): the three buckets a LIVE direct quotation drives.
-  // AWAIT_DIRECT_APPROVAL also covers a PRICING_REQUEST-origin quotation awaiting approval.
+  // The three buckets a LIVE direct quotation drives. AWAIT_DIRECT_APPROVAL also covers a
+  // PRICING_REQUEST-origin quotation awaiting approval.
   SUBMIT_DIRECT_QUOTATION: 'submit_direct_quotation',
   AWAIT_DIRECT_APPROVAL: 'await_direct_approval',
   CONFIRM_ORDER_DIRECT: 'confirm_order_direct',
-  // PR A: แก้ใบเสนอราคา — revise (or open the open revision of) an approved/issued quotation. Only
-  // ever produced when the caller hands nextSalesAction a `reviseTarget`.
+  // แก้ใบเสนอราคา: revise (or open the open revision of) an approved/issued quotation. Only produced
+  // when the caller hands nextSalesAction a `reviseTarget`.
   REVISE_QUOTATION: 'revise_quotation',
   ADVANCE_STAGE: 'advance_stage',
   CREATE_PCR: 'create_pcr',
-  // Owner ruling 2026-10-27: once a designer/owner quotation is sent, เสนอราคา to a later party on
-  // the route — or, when that party's request is still a private DRAFT, send it to import.
+  // Once a designer/owner quotation is sent, เสนอราคา to a later party on the route, or, when that
+  // party's request is still a private DRAFT, send it to import.
   QUOTE_NEXT_PARTY: 'quote_next_party',
   SUBMIT_PRICING_REQUEST: 'submit_pricing_request',
   ISSUE_QUOTATION: 'issue_quotation',
   CONFIRM_ORDER: 'confirm_order',
-  // Owner rulings 2026-10-28: the deal page's main button makes the ขั้น 10 deposit notice and the ขั้น 13 invoice.
+  // The deal page's main button makes the ขั้น 10 deposit notice and the ขั้น 13 invoice.
   CREATE_DEPOSIT_NOTICE: 'create_deposit_notice',
   CREATE_REMAINING_INVOICE: 'create_remaining_invoice',
-  // Owner rulings 2026-10-29 (QA-09): ขั้น 11, deposit paid -> the owning rep creates the import request (IR).
+  // ขั้น 11, deposit paid: the owning rep creates the import request (IR).
   CREATE_IMPORT_REQUEST: 'create_import_request',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
   RECORD_DELIVERY: 'record_delivery',
@@ -112,21 +88,16 @@ const ACTION_LABEL = {
   [SALES_ACTION.LOG_ACTIVITY]: 'บันทึกกิจกรรม',
 };
 
-// Sort weight when two deals need DIFFERENT actions (lower = more urgent). A
-// pending confirm-order/issue-quotation/record-quotation-outcome/record-delivery is a task sitting
-// entirely in the rep's own hands with no external dependency, so each
-// outranks a bare follow-up/log-activity nudge — mirrors the cascade order
-// above. RECORD_QUOTATION_OUTCOME ranks alongside that group (just after
-// CONFIRM_ORDER/ISSUE_QUOTATION): a decision sitting unrecorded is exactly
-// the kind of stall this whole worklist exists to surface, and recording it
-// takes one click once the rep knows the answer — no less urgent than the
-// other "just do it" buckets, and well ahead of CREATE_PCR (which requires
-// building something new) or a bare nudge.
+// Sort weight when two deals need DIFFERENT actions (lower = more urgent). Confirm-order,
+// issue-quotation, record-quotation-outcome and record-delivery sit entirely in the rep's own
+// hands, so each outranks a bare follow-up/log-activity nudge, mirroring the cascade order above.
+// RECORD_QUOTATION_OUTCOME ranks just after CONFIRM_ORDER/ISSUE_QUOTATION: an unrecorded decision
+// is the stall this worklist exists to surface, and it takes one click. CREATE_PCR (building
+// something new) ranks below.
 //
-// Slice 2: each direct-quotation bucket shares the rank of its pricing-request twin — confirming an
-// order is confirming an order (1), sending a quotation onward is ISSUE_QUOTATION's weight (2) — and
-// AWAIT_DIRECT_APPROVAL, which is waiting on ผจก.ขาย/CEO rather than on the rep, takes the waiting
-// rank (5): visible in the worklist, never ahead of something the rep can actually do.
+// Each direct-quotation bucket shares the rank of its pricing-request twin (confirm order = 1,
+// sending a quotation onward = ISSUE_QUOTATION's 2). AWAIT_DIRECT_APPROVAL waits on ผจก.ขาย/CEO,
+// not the rep, so it takes the waiting rank (5).
 const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER]: 1,
   [SALES_ACTION.QUOTE_NEXT_PARTY]: 1,
@@ -162,33 +133,24 @@ export function followUpStatus(deal, todayIso = bangkokTodayIso()) {
   return null;
 }
 
-// LIVE_PR_STATUSES holds the NOT-live statuses — the name reads backwards from what it holds, and
-// that backwards reading is why this comment used to narrate the set's CONTENTS as if they were
-// the live ones. DRAFT is still private to the rep who created it; CANCELLED/SUPERSEDED are dead
-// ends. A request counts as "live" — with import/CEO right now, nothing here for sales to click —
-// precisely by being OUTSIDE this set (see hasLivePr below: `!LIVE_PR_STATUSES.has(pr.status)`).
+// LIVE_PR_STATUSES holds the NOT-live statuses (the name reads backwards). DRAFT is private to the
+// rep who created it; CANCELLED/SUPERSEDED are dead ends. A request is "live" (with import/CEO
+// right now, nothing for sales to click) by being OUTSIDE this set (see hasLivePr below).
 //
-// The eight statuses that ARE live this way split further: APPROVED_FOR_QUOTATION and
-// QUOTATION_ACCEPTED have their own buckets below (2 and 3), and QUOTATION_ISSUED now does too
-// (bucket 4, RECORD_QUOTATION_OUTCOME — see that bucket's own comment for why it used to fall
-// through instead). The remaining five — SUBMITTED, IMPORT_REVIEWING, AWAITING_FACTORY_RESPONSE,
-// READY_FOR_CEO_REVIEW, CEO_REVIEWING — fall through to follow-up/activity, same as a deal with no
-// pending pricing-request action at all. COSTING_REVISION_REQUIRED does NOT belong in that list
-// any more: V141 retired it, so no live request can carry it. V140 is the migration that retired
-// COSTING_IN_PROGRESS and MORE_INFO_REQUIRED; the latter was the one genuine sales action in that
-// old list ("answer import's question"), and with the ขอข้อมูลเพิ่มเติม round-trip retired there is
-// no extra CTA bucket waiting to be built for that specific gap.
+// Of the eight live statuses, APPROVED_FOR_QUOTATION, QUOTATION_ACCEPTED and QUOTATION_ISSUED have
+// their own buckets (2, 3, 4). The remaining five (SUBMITTED, IMPORT_REVIEWING,
+// AWAITING_FACTORY_RESPONSE, READY_FOR_CEO_REVIEW, CEO_REVIEWING) fall through to
+// follow-up/activity. COSTING_REVISION_REQUIRED, COSTING_IN_PROGRESS and MORE_INFO_REQUIRED are
+// retired, so no live request carries them.
 const LIVE_PR_STATUSES = new Set(['DRAFT', 'CANCELLED', 'SUPERSEDED']);
 
-// Ticket statuses that prove a customer-facing price already went out. NOT
-// legacy-only: OrderConfirmationService.confirmOrder still flips 'draft' ->
-// 'quotation_issued' under the redesigned flow (TicketRepository
-// .markQuotationIssuedForOrderConfirmation), so this set alone cannot tell a
-// pre-PCR-chain deal from a current one — bucket 1 pairs it with "this deal
-// has no PricingRequest rows at all". 'document_issued' is genuinely legacy
-// (nothing writes it any more). 'closed' is deliberately absent: verifyClose
-// sets lifecycle=COMPLETED alongside it, and V51 backfilled every historical
-// row, so nextSalesAction's own `lifecycle !== 'ACTIVE'` guard returns first.
+// Ticket statuses that prove a customer-facing price already went out. NOT legacy-only:
+// OrderConfirmationService.confirmOrder still flips 'draft' -> 'quotation_issued' under the current
+// flow (TicketRepository.markQuotationIssuedForOrderConfirmation), so this set alone cannot tell a
+// pre-PCR-chain deal from a current one; bucket 1 pairs it with "no PricingRequest rows at all".
+// 'document_issued' is genuinely legacy. 'closed' is absent on purpose: verifyClose sets
+// lifecycle=COMPLETED alongside it, so nextSalesAction's `lifecycle !== 'ACTIVE'` guard returns
+// first.
 // The ticket statuses OrderConfirmationService.confirmOrder can proceed from (mirror of
 // pricingRequestMeta's BRIDGEABLE_TICKET_STATUSES).
 const BRIDGEABLE_TICKET_STATUSES = new Set(['draft', 'quotation_issued']);
@@ -224,9 +186,9 @@ function issueQuotationAction(pr, quotation) {
   };
 }
 
-/** Owner ruling 2026-10-27: a quotation to redo — its redo draft is open, the customer asked for
- * changes, or the buyer said no or let it expire (DealQuotationService#createFromPricingRequest
- * re-quotes those). A designer or owner who said no is not quoted again: the route moved on. */
+/** A quotation to redo: its redo draft is open, the customer asked for changes, or the buyer said
+ * no or let it expire (DealQuotationService#createFromPricingRequest re-quotes those). A designer
+ * or owner who said no is not quoted again: the route moved on. */
 function isRedo(pr, quotation) {
   return quotation?.docStatus === 'DRAFT' || quotation?.docStatus === 'REVISION_REQUESTED'
     || (DECLINED_DOC_STATUSES.has(quotation?.docStatus) && !isDesignerOrOwner(pr));
@@ -244,9 +206,9 @@ export function pendingRequestQuotation(deal, pricingRequests, quotationByReques
     .find((quotation) => quotation?.docStatus === 'PENDING_APPROVAL');
 }
 
-/** Owner ruling 2026-10-27 ("always in ⋯"): the sent designer/owner quotation whose outcome is still
- * open (ISSUED, or QUOTATION_ISSUED with no row) — furthest along the route — offered as
- * บันทึกผลใบเสนอราคา on its request page beside whatever the primary is. Null otherwise. */
+/** The sent designer/owner quotation whose outcome is still open (ISSUED, or QUOTATION_ISSUED with
+ * no row), furthest along the route, offered as บันทึกผลใบเสนอราคา on its request page beside
+ * whatever the primary is. Null otherwise. */
 export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest) {
   const open = pricingRequests
     .filter((pr) => pr.ticketId === deal.id && pr.status === 'QUOTATION_ISSUED' && isDesignerOrOwner(pr)
@@ -259,11 +221,11 @@ export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest
 }
 
 /**
- * Owner ruling 2026-10-27: once a designer/owner quotation is sent, the rep picks the next party.
- * The anchor is the request furthest along the route whose quotation went out (with no row for it,
- * QUOTATION_ISSUED alone decides). The later on-route parties are offered when none of them has a
- * live request holding the choice back (a later party that said no is the anchor itself); a later
- * party's private DRAFT is sent instead. Null otherwise — and while the route is unknown.
+ * Once a designer/owner quotation is sent, the rep picks the next party. The anchor is the request
+ * furthest along the route whose quotation went out (with no row for it, QUOTATION_ISSUED alone
+ * decides). The later on-route parties are offered when none of them has a live request holding
+ * the choice back (a later party that said no is the anchor itself); a later party's private
+ * DRAFT is sent instead. Null otherwise, and while the route is unknown.
  */
 function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
   const anchor = ownPrs
@@ -292,89 +254,71 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
 }
 
 /**
- * The one next action `deal` needs from its owning sales rep right now, or
- * null if nothing in the cascade applies (e.g. the request is with
- * import/CEO and the deal isn't due for a follow-up or stale).
+ * The one next action `deal` needs from its owning sales rep right now, or null if nothing in the
+ * cascade applies (e.g. the request is with import/CEO and the deal isn't due for a follow-up).
  *
- * `pricingRequests` is the rep's OWN pricing-request queue (already scoped
- * server-side, see api.pricingRequests.queue) — filtered here to the ones
- * belonging to this ticket.
+ * `pricingRequests` is the rep's OWN queue (already scoped server-side), filtered here to this
+ * ticket.
  *
  * `offRouteParties`: a Set of the parties the deal's served route skips (empty = all on it); absent
  * while the route is unknown. `quotationByRequest`: a Map, pricingRequestId -> the newest
- * PRICING_REQUEST-origin quotation `{ id, number, docStatus }` — only the deal page has it.
+ * PRICING_REQUEST-origin quotation `{ id, number, docStatus }`; only the deal page has it.
  */
 export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
-  // 0. Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a LIVE direct quotation. Checked BEFORE
-  //    bucket 1 on purpose: a deal whose price is being written by hand on a DEAL_DIRECT quotation
-  //    must never be told "สร้างคำขอราคา" — that would open the mixed-origin case the server refuses
-  //    (IA §7, pricing-request refusal kept while a live direct quotation exists). Keyed only on
-  //    TicketSummaryDto.liveDirectQuotation (S2-B4 — the newest live DEAL_DIRECT row, server-picked),
-  //    so this stays a list-row-only computation like the rest of this module; a non-live status is
-  //    ignored even if one ever arrives.
+  // 0. A LIVE direct quotation. Checked BEFORE bucket 1 on purpose: a deal whose price is written
+  //    by hand on a DEAL_DIRECT quotation must never be told "สร้างคำขอราคา", which would open the
+  //    mixed-origin case the server refuses. Keyed only on TicketSummaryDto.liveDirectQuotation (the
+  //    newest live DEAL_DIRECT row, server-picked), so this stays a list-row-only computation; a
+  //    non-live status is ignored.
   const directAction = liveDirectQuotationAction(deal.liveDirectQuotation);
-  // confirmOrderFromDirectQuotation (slice 1) 409s unless the deal is still 'draft'; a deal already
-  // past it (a legacy deal whose order is already under way) is never offered that confirm — it
-  // falls through to the ordinary cascade below instead. A list row always carries `status`.
+  // confirmOrderFromDirectQuotation 409s unless the deal is still 'draft'; a deal already past it
+  // is never offered that confirm and falls through to the ordinary cascade. A list row always
+  // carries `status`.
   const confirmRefused = directAction?.key === SALES_ACTION.CONFIRM_ORDER_DIRECT
     && (deal.status ?? 'draft') !== 'draft';
   if (directAction && !confirmRefused) return directAction;
-  // PR A: an APPROVED direct quotation the confirm bucket refuses (deal already past 'draft') is
-  // revised rather than left to fall through to CREATE_PCR.
-  // Owner rulings 2026-10-28: a confirmed flow-A deal keeps its direct quotation APPROVED + live, so
-  // the deposit notice must outrank this revise.
+  // An APPROVED direct quotation the confirm bucket refuses (deal already past 'draft') is revised
+  // rather than left to fall through to CREATE_PCR. A confirmed flow-A deal keeps its direct
+  // quotation APPROVED + live, so the deposit notice must outrank this revise.
   const depositAction = depositNoticeAction(deal, depositNotice);
   if (confirmRefused && reviseTarget) return depositAction ?? importRequestAction(deal, importRequests, items) ?? reviseAction(reviseTarget);
 
-  // Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
-  // So on ขั้น 1–2 the one action is moving the stage — nothing below (a due follow-up, an older
-  // price request) takes it over.
+  // ขั้น 1 → 2 → 3 are moved by hand and the price request starts at ขั้น 3, so on ขั้น 1–2 the one
+  // action is moving the stage; nothing below takes it over.
   if (PRE_SPEC_STAGES.has(deal.salesStage)) {
     return { key: SALES_ACTION.ADVANCE_STAGE, label: ACTION_LABEL[SALES_ACTION.ADVANCE_STAGE] };
   }
 
   const ownPrs = pricingRequests.filter((pr) => pr.ticketId === deal.id);
 
-  // 1. No pricing request has ever been SUBMITTED for this deal (none exist,
-  //    or every one that exists is still a private DRAFT / dead) — mirrors
-  //    TicketListPage's DealStageCell note: a new deal's legacy `status`
-  //    freezes at 'draft' forever under the redesigned flow, so PR existence
-  //    (not ticket.status) is the only reliable signal here.
+  // 1. No pricing request has ever been SUBMITTED for this deal (none exist, or every one is still
+  //    a private DRAFT / dead). A new deal's legacy `status` freezes at 'draft' under the current
+  //    flow, so PR existence (not ticket.status) is the reliable signal (see TicketListPage's
+  //    DealStageCell).
   //
-  //    UAT bug: deals created before the PricingRequest chain existed (every
-  //    legacy/demo deal — e.g. demoData ticket 12, PR-2026-0012) have zero
-  //    pricing requests forever, so this bucket parked them on "create a
-  //    pricing request" permanently — even a PROCUREMENT-stage deal with a
-  //    quotation already issued, deposit already paid, and the import request
-  //    already issued kept offering "สร้างคำขอราคา". `pricedOutsidePcrChain`
-  //    below is the guard, and BOTH of its limbs matter:
+  //    Deals created before the PricingRequest chain (legacy/demo deals) have zero pricing requests
+  //    forever, so this bucket would park even a PROCUREMENT-stage deal with an issued quotation,
+  //    paid deposit and issued import request on "สร้างคำขอราคา". `pricedOutsidePcrChain` below is
+  //    the guard, and BOTH limbs matter:
   //
-  //    - `ownPrs.length === 0` — this deal never entered the chain at all.
-  //      Not the same test as `!hasLivePr`: a customer-change revision leaves
-  //      {parent SUPERSEDED, child DRAFT}, which is "no LIVE request" but is
-  //      emphatically still in the chain; its DRAFT is sent below, not a second request created.
-  //    - evidence a customer-facing price already went out: a quoted status,
-  //      or any paymentStatus (whose own amount-payable precondition means a
-  //      price exists, even though recordPayment itself checks no status).
+  //    - `ownPrs.length === 0`: the deal never entered the chain. Not the same as `!hasLivePr`: a
+  //      customer-change revision leaves {parent SUPERSEDED, child DRAFT}, which is "no LIVE
+  //      request" but still in the chain; its DRAFT is sent below, not a second request created.
+  //    - evidence a customer-facing price went out: a quoted status, or any paymentStatus (its
+  //      amount-payable precondition means a price exists).
   //
-  //    Together those are true only of a pre-chain deal. Either alone is not:
-  //    OrderConfirmationService.confirmOrder sets 'quotation_issued' and then
-  //    confirmCustomer sets paymentStatus under the CURRENT flow too, so
-  //    testing the price evidence alone would strand a revision's rep.
+  //    Together those are true only of a pre-chain deal. confirmOrder sets 'quotation_issued' and
+  //    confirmCustomer sets paymentStatus under the CURRENT flow too, so the price evidence alone
+  //    would strand a revision's rep.
   //
-  //    NOT gated on salesStage or fulfillmentStatus, though both look
-  //    tempting: a rep may manually set ORDER_RECEIVED (allowedTargetStages
-  //    does not filter `auto` stages), and TicketService.reserveStock sets
-  //    fulfillmentStatus FROM_STOCK — and auto-advances the stage — with no
-  //    pricing precondition at all. Either would suppress this bucket on a
-  //    deal that has genuinely never been priced, leaving the rep no CTA and
-  //    a "รอฝ่ายขาย" banner naming themselves: a silent dead end, strictly
-  //    worse than the bug being fixed. Legacy mid-flight statuses
-  //    (submitted/in_review/price_proposed/approved) are excluded for the
-  //    same reason — that engine is retired, so those deals DO still need a
-  //    pricing request.
+  //    NOT gated on salesStage or fulfillmentStatus: a rep may manually set ORDER_RECEIVED, and
+  //    TicketService.reserveStock sets fulfillmentStatus FROM_STOCK (and auto-advances the stage)
+  //    with no pricing precondition. Either would suppress this bucket on a never-priced deal,
+  //    leaving no CTA and a "รอฝ่ายขาย" banner naming the rep. Legacy mid-flight statuses
+  //    (submitted/in_review/price_proposed/approved) are excluded for the same reason: that engine
+  //    is retired, so those deals DO still need a pricing request.
   const hasLivePr = ownPrs.some((pr) => !LIVE_PR_STATUSES.has(pr.status));
   if (!hasLivePr) {
     const pricedOutsidePcrChain = ownPrs.length === 0
@@ -391,37 +335,36 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   }
 
   // The newest PRICING_REQUEST-origin quotation the deal page read for a request. Undefined on the
-  // dashboard and for a request with none (a legacy old-engine quotation, the list not loaded):
-  // the request status alone then decides, as before.
+  // dashboard and for a request with none (legacy quotation, list not loaded): the request status
+  // alone then decides.
   const quotationOf = (pr) => quotationByRequest?.get(pr.id);
 
   // An acceptance is the order (bucket 3), so nothing is quoted after it — no later request's
   // quotation, route choice or redo once any request is accepted (spec B1).
   const accepted = ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED');
 
-  // 2. A price is approved and ready to quote — canCreateCustomerQuotation's
-  //    own gate (pricingRequestMeta.js) is exactly pr.status === 'APPROVED_FOR_QUOTATION'.
-  //    "เสนอใบราคา<party>" writes the new-engine quotation from that request (owner ruling R2); a
-  //    DRAFT already written is opened instead (`to`), and one awaiting approval waits (below).
+  // 2. A price is approved and ready to quote: canCreateCustomerQuotation's gate
+  //    (pricingRequestMeta.js) is exactly pr.status === 'APPROVED_FOR_QUOTATION'. "เสนอใบราคา<party>"
+  //    writes the quotation from that request; a DRAFT already written is opened instead (`to`),
+  //    and one awaiting approval waits (below).
   const approved = !accepted && ownPrs.find((pr) => pr.status === 'APPROVED_FOR_QUOTATION'
     && quotationOf(pr)?.docStatus !== 'PENDING_APPROVAL');
   if (approved) return issueQuotationAction(approved, quotationOf(approved));
 
-  // 3. The customer accepted the quotation but the order isn't confirmed yet —
-  //    canConfirmOrder's own gate: pr.status === 'QUOTATION_ACCEPTED' && !orderConfirmedAt.
-  //    Also gated on the deal's own ticket status being one the order-confirm bridge can advance
-  //    (pricingRequestMeta's confirmOrderBlockedReason / OrderConfirmationService
-  //    .isBridgeableTicketStatus) — otherwise the CTA is a button that can only 409.
-  //    Whoever accepted: an acceptance is the order (owner ruling 2026-10-27).
+  // 3. The customer accepted but the order isn't confirmed: canConfirmOrder's gate is
+  //    pr.status === 'QUOTATION_ACCEPTED' && !orderConfirmedAt. Also gated on the ticket status
+  //    being one the order-confirm bridge can advance (confirmOrderBlockedReason /
+  //    OrderConfirmationService.isBridgeableTicketStatus), else the CTA can only 409. Whoever
+  //    accepted: an acceptance is the order.
   if (ownPrs.some((pr) => pr.status === 'QUOTATION_ACCEPTED' && !pr.orderConfirmedAt)
       && (deal.status == null || BRIDGEABLE_TICKET_STATUSES.has(deal.status))) {
     return { key: SALES_ACTION.CONFIRM_ORDER, label: ACTION_LABEL[SALES_ACTION.CONFIRM_ORDER] };
   }
 
-  // Owner rulings 2026-10-28: ขั้น 10, the customer confirmed the order -> make the deposit notice.
+  // ขั้น 10, the customer confirmed the order -> make the deposit notice.
   if (depositAction) return depositAction;
 
-  // Owner rulings 2026-10-29 (QA-09): ขั้น 11, deposit paid and nothing ordered yet -> create the IR.
+  // ขั้น 11, deposit paid and nothing ordered yet -> create the IR.
   const importAction = importRequestAction(deal, importRequests, items);
   if (importAction) return importAction;
 
@@ -440,17 +383,14 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   const routeAction = accepted ? null : routeChoiceAction(ownPrs, quotationOf, offRouteParties);
   if (routeAction) return routeAction;
 
-  // 4. The quotation went out to the customer but nobody has recorded what the customer said yet.
-  //    The BUYER's (or a legacy/unknown recipient's): a designer/owner outcome is never prompted —
-  //    their quotation leads to the route choice above. canRecordCustomerQuotationOutcome needs the
+  // 4. The quotation went out to the customer but nobody has recorded what the customer said. The
+  //    BUYER's (or a legacy/unknown recipient's): a designer/owner outcome is never prompted, their
+  //    quotation leads to the route choice above. canRecordCustomerQuotationOutcome needs the
   //    quotation ISSUED: the deal page's row says so; without one, QUOTATION_ISSUED is the proxy.
-  //    Before this bucket existed, an issued quotation fell through to follow-up/log-activity with no
-  //    prompt anywhere on the page.
   //
-  //    Placed AFTER bucket 3 (CONFIRM_ORDER), not before: a customer-change revision can leave one
-  //    sibling PR at QUOTATION_ISSUED (a stale, since-superseded round) while another reaches
-  //    QUOTATION_ACCEPTED — CONFIRM_ORDER must win that race, same earliest-unblocked-step principle
-  //    as the rest of this cascade.
+  //    AFTER bucket 3 (CONFIRM_ORDER): a customer-change revision can leave one sibling PR at
+  //    QUOTATION_ISSUED (a stale, superseded round) while another reaches QUOTATION_ACCEPTED, and
+  //    CONFIRM_ORDER must win that race.
   //    `pricingRequestId`: the outcome controls (both quotation engines) live on that request's page.
   const issued = ownPrs.find((pr) => pr.status === 'QUOTATION_ISSUED' && !isDesignerOrOwner(pr)
     && (quotationOf(pr) == null || quotationOf(pr).docStatus === 'ISSUED'));
@@ -469,42 +409,23 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     : ownPrs.filter((pr) => pr.status === 'QUOTATION_ISSUED' && isRedo(pr, quotationOf(pr))).sort(byRoute).at(-1);
   if (redo) return issueQuotationAction(redo, quotationOf(redo));
 
-  // 5. The deal is delivery-ready (goods received / from stock / mid-
-  //    delivery) and nothing upstream of it (buckets 1-4) is still open.
-  //    Reuses nextFulfilmentActionCode (importActions.js) — the SAME
-  //    decision DealFulfilmentPanel's own `can.recordDelivery`/
-  //    `can.completeDelivery` gates and (formerly) ImportOverview's worklist
-  //    read — instead of keeping a second copy of the delivery-ready status
-  //    list here. See that module's own header comment for the "shared with
-  //    sales" note this bucket is the reason for.
+  // 5. The deal is delivery-ready (goods received / from stock / mid-delivery) and nothing upstream
+  //    (buckets 1-4) is still open. Reuses nextFulfilmentActionCode (importActions.js), the same
+  //    decision DealFulfilmentPanel's `can.recordDelivery`/`can.completeDelivery` gates use.
   //
-  //    Stages 13-14 (ส่งมอบสินค้า) are Sales's as of the 2026-08-17 owner
-  //    ruling, ADDITIVE to import/CEO — TicketService.canWriteDelivery =
-  //    FULFILMENT_ROLES ∪ (SALES_ROLES ∧ deal owner), not a transfer.
-  //    ImportOverview no longer PROMPTS for it (nextImportAction now returns
-  //    null on a delivery-ready deal — see that function's own comment for
-  //    why), but the underlying capability is untouched: import/CEO still
-  //    get the real button on DealFulfilmentPanel if they navigate there.
+  //    Stages 13-14 (ส่งมอบสินค้า) are sales's, additive to import/CEO:
+  //    TicketService.canWriteDelivery = FULFILMENT_ROLES ∪ (SALES_ROLES ∧ deal owner).
+  //    ImportOverview no longer prompts for it, but import/CEO still get the real button on
+  //    DealFulfilmentPanel.
   //
-  //    Interaction with bucket 1, checked deliberately rather than left to
-  //    accident: a delivery-ready deal that ALSO matches bucket 1's guard
-  //    (zero pricing requests AND no evidence a price ever went out — see
-  //    bucket 1's own comment above) still returns CREATE_PCR above, never
-  //    reaches here. That is correct, not a gap: the only realistic way to
-  //    reach a delivery-ready fulfillmentStatus with ZERO pricing evidence
-  //    at all is TicketService.reserveStock's FROM_STOCK auto-advance, which
-  //    bucket 1's own comment already documents as having "no pricing
-  //    precondition at all" — i.e. a deal that genuinely has never been
-  //    priced, exactly what bucket 1 exists to catch. The CREATE_PCR UAT-bug
-  //    guard was about a deal that already had price EVIDENCE and was
-  //    wrongly asked for a second pricing request, not about suppressing
-  //    CREATE_PCR on a deal that plausibly never had one. Changing bucket 1's
-  //    priority over this bucket is out of scope for this change; pinned
-  //    below (see the delivery-vs-bucket-1 case in salesActions.test.js) and
-  //    already exercised, before this bucket existed, by workState.test.js's
-  //    'still offers create_pcr after ... FROM_STOCK' case.
-  // Owner rulings 2026-10-28: ขั้น 13 — the invoice is made at นัดส่งสินค้า, before บันทึกส่งมอบ, until it is
-  // issued. `remainingInvoice` undefined = the caller (dashboard worklist) doesn't know -> never offered.
+  //    A delivery-ready deal that ALSO matches bucket 1's guard (zero pricing requests AND no
+  //    price evidence) still returns CREATE_PCR above and never reaches here. That is correct: the
+  //    only realistic way to get a delivery-ready fulfillmentStatus with no pricing evidence is
+  //    TicketService.reserveStock's FROM_STOCK auto-advance, i.e. a deal never priced, which bucket
+  //    1 exists to catch. Pinned by the delivery-vs-bucket-1 case in salesActions.test.js and
+  //    workState.test.js's 'still offers create_pcr after ... FROM_STOCK'.
+  // ขั้น 13: the invoice is made at นัดส่งสินค้า, before บันทึกส่งมอบ, until it is issued.
+  // `remainingInvoice` undefined = the caller (dashboard worklist) doesn't know -> never offered.
   if (remainingInvoice !== undefined && isRemainingInvoiceReady(deal)
       && (remainingInvoice === null || remainingInvoice.status === 'DRAFT')) {
     return {

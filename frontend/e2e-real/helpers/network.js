@@ -16,8 +16,8 @@
 //   Response body is not available for a response that was navigated away from.
 //   Read response.body() before triggering any navigation.
 //
-// That is a real failure this suite hit — smoke.spec.js's employee-directory test, CI run
-// 31264054989 (job 93119227871) on 2026-08-08, green on re-run. The shape that produced it:
+// That is a real failure this suite hit — smoke.spec.js's employee-directory test, which went
+// green on re-run. The shape that produced it:
 //
 //   const [response] = await Promise.all([page.waitForResponse(pred), page.goto('/employees')]);
 //   const body = await response.json();   // ← read only after goto() resolved on `load`

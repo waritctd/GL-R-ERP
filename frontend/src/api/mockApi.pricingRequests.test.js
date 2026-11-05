@@ -2,18 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 import { buildDemoSalesSeed } from '../data/demoSales.js';
 
-// Guards mockApi.js's pricingRequests.create/update item validation directly
-// against the mock module (not just through the create modal's own client-side
-// checks) — see CLAUDE.md "Mock API contract": a mock that is MORE permissive
-// than production is the dangerous direction (issue #199).
+// Guards mockApi.js's pricingRequests.create/update item validation directly against the mock
+// module (not just through the create modal's client-side checks); see CLAUDE.md "Mock API
+// contract": a mock MORE permissive than production is the dangerous direction.
 //
-// V185 (direct-deal-form parity, owner ruling 2026-09-18): requestedQty/requestedUnit/
-// requestedUnitBasis lost their bean-validation @NotNull/@NotBlank — the server now DERIVES all
-// three from the item's own tile fields (color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/
-// a quantity), which are unconditionally REQUIRED instead (PricingRequestService#
-// requireItemFieldsComplete, mirrored here by requirePricingRequestItemFieldsComplete). A caller
-// that bypasses the UI must still be rejected the same way the real backend would 400 it — just
-// for the new reason, not the old one.
+// requestedQty/requestedUnit/requestedUnitBasis carry no bean-validation @NotNull/@NotBlank: the
+// server DERIVES all three from the item's tile fields (color/texture/size/thicknessMm/
+// sqmPerPiece/piecesPerBox/a quantity), which are unconditionally REQUIRED instead
+// (PricingRequestService#requireItemFieldsComplete, mirrored by
+// requirePricingRequestItemFieldsComplete). A caller that bypasses the UI must still be rejected
+// the way the real backend 400s it.
 
 async function ownedActiveTicketWithItems() {
   await api.auth.login({ role: 'sales' });
@@ -31,11 +29,10 @@ function nextClientRequestId() {
   return `66666666-6666-4666-8666-${String(clientRequestSeq).padStart(12, '0')}`;
 }
 
-// V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on
-// every item create()/update()/createCustomerChangeRevision persists. PIECES mode, piecesPerBox=4
-// with roundToFullBox=false so the derived requestedQty (10) exactly matches the piecesInput
-// typed — see resolvePricingRequestItem's own comment on why roundToFullBox:true would silently
-// round 10 up to 12 here.
+// color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are required on every item
+// create()/update()/createCustomerChangeRevision persists. PIECES mode, piecesPerBox=4 with
+// roundToFullBox=false so the derived requestedQty (10) exactly matches the piecesInput typed (see
+// resolvePricingRequestItem on why roundToFullBox:true would round 10 up to 12).
 function validPayload(sourceItem) {
   return {
     recipientType: 'DESIGNER',
@@ -55,7 +52,7 @@ function validPayload(sourceItem) {
       wastageMode: 'NONE',
       piecesPerBox: 4,
       roundToFullBox: false,
-      // GLA-125: required on this form too.
+      // Required on this form too.
       originCountry: 'ไทย-สต็อก',
       leadTimeMinDays: 3,
       leadTimeMaxDays: 7,
@@ -65,12 +62,9 @@ function validPayload(sourceItem) {
 }
 
 describe('mockApi.pricingRequests.create item validation', () => {
-  // V185: ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง/a quantity are now unconditionally required
-  // (requirePricingRequestItemFieldsComplete, mirrors PricingRequestService#
-  // requireItemFieldsComplete) — requestedQty/requestedUnit are no longer client-supplied at all
-  // (the server derives them), so the old bean-validation-style tests for those two fields no
-  // longer describe a reachable code path; these replace them with the current required-field
-  // gate.
+  // ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง/a quantity are unconditionally required
+  // (requirePricingRequestItemFieldsComplete, mirrors PricingRequestService#requireItemFieldsComplete).
+  // requestedQty/requestedUnit are not client-supplied (the server derives them).
   it('rejects an item missing ความหนา (มม.), mirroring requireItemFieldsComplete', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
@@ -92,13 +86,12 @@ describe('mockApi.pricingRequests.create item validation', () => {
     expect(pricingRequest.summary.status).toBe('DRAFT');
     expect(pricingRequest.items[0].requestedUnit).toBe('แผ่น');
     expect(pricingRequest.items[0].requestedUnitBasis).toBe('PER_PIECE');
-    // roundToFullBox:false in validPayload() keeps this an EXACT reproduction of piecesInput —
-    // see that fixture's own comment.
+    // roundToFullBox:false in validPayload() keeps this an EXACT reproduction of piecesInput.
     expect(pricingRequest.items[0].requestedQty).toBe(10);
   });
 
-  // Owner ruling 2026-10-18: import gives the time, so ระยะเวลานำเข้า is optional on a PCR line —
-  // both null passes; a half pair or min > max still 400s (PricingRequestService#requireItemFieldsComplete).
+  // Import gives the time, so ระยะเวลานำเข้า is optional on a PCR line: both null passes; a half pair
+  // or min > max still 400s (PricingRequestService#requireItemFieldsComplete).
   it('accepts a line with no lead time, but rejects a half pair or min > max', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const withLeadTime = (min, max) => {
@@ -126,11 +119,9 @@ describe('mockApi.pricingRequests.create item validation', () => {
     await expect(api.pricingRequests.update(draftId, badPayload)).rejects.toThrow(/แผ่น.*กล่อง/);
   });
 
-  // Mirrors PricingRequestService.validateItems (Part 1 of the review-remediation
-  // plan): brand alone does not identify a product. Without this check, the
-  // mock would be MORE permissive than the real backend (issue #199's failure
-  // mode) — it would happily persist a line that says nothing more than
-  // "1 แผ่น" and hand it to Import.
+  // Mirrors PricingRequestService.validateItems: brand alone does not identify a product. Without
+  // this the mock would be MORE permissive than the backend and persist a line saying nothing more
+  // than "1 แผ่น" and hand it to Import.
   it('rejects an item with no identity field (brand alone is not enough)', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
@@ -149,11 +140,10 @@ describe('mockApi.pricingRequests.create item validation', () => {
     await expect(api.pricingRequests.create(ticket.summary.id, payload)).rejects.toThrow();
   });
 
-  // V185: รุ่น (model) is now unconditionally required (owner ruling) — a productDescription
-  // alone, with no model, can no longer reach create() successfully (it fails
-  // requirePricingRequestItemFieldsComplete's "ขาด รุ่น" before the OLD identity rule would even
-  // matter). This still proves productDescription "identifies" the item alongside the
-  // now-mandatory model, same as PricingRequestServiceTest's own adaptation on the backend side.
+  // รุ่น (model) is unconditionally required, so a productDescription alone cannot reach create()
+  // successfully (it fails requirePricingRequestItemFieldsComplete's "ขาด รุ่น"). This still proves
+  // productDescription "identifies" the item alongside the mandatory model, as
+  // PricingRequestServiceTest does on the backend side.
   it('accepts an item naming both a model and a productDescription (identity is no longer "productDescription alone")', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
@@ -175,11 +165,10 @@ describe('mockApi.pricingRequests.create item validation', () => {
   // real-world scenario is a row that predates this rule in a persisted
   // database, which a fresh in-memory mock session has no equivalent of.
 
-  // ── Opus review finding #2 (2026-09-18): zero-piece rejection ──────────────────────────
-  // Owner ruling 2026-10-12: any fraction of a piece rounds UP, so a tiny positive area derives 1
-  // piece instead of 0 and is accepted -- the mirror of the backend's
-  // DealQuotationIntegrationTest#*_aTinyAreaRoundsUpToOnePiece_*. (The 0-piece guard stays as a
-  // backstop; a zero/blank area is refused by the input checks before it.)
+  // ── Zero-piece rejection ──────────────────────────────────────────────────────────────
+  // Any fraction of a piece rounds UP, so a tiny positive area derives 1 piece instead of 0 and is
+  // accepted: the mirror of the backend's DealQuotationIntegrationTest#*_aTinyAreaRoundsUpToOnePiece_*.
+  // (The 0-piece guard stays as a backstop; a zero/blank area is refused by the input checks first.)
   it('accepts an AREA-mode item with a tiny area, which rounds up to 1 piece', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
@@ -196,7 +185,7 @@ describe('mockApi.pricingRequests.create item validation', () => {
     expect(pricingRequest.items[0].requestedQty).toBe(1);
   });
 
-  // ── Opus review finding #9 (2026-09-18): RESTORED requestedUnitBasis / wastage-cap checks ──
+  // ── requestedUnitBasis / wastage-cap checks ───────────────────────────────────────────
   it('rejects an explicit, unrecognised requestedUnitBasis, mirroring PricingRequestService.validateItems', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
@@ -228,11 +217,11 @@ describe('mockApi.pricingRequests.create item validation', () => {
     await expect(api.pricingRequests.create(ticket.summary.id, payload)).rejects.toThrow(/1000000/);
   });
 
-  // ── Second review pass, "#9 remainder" (2026-09-19): the H4 reasonable-sqm bound ──
+  // ── The reasonable-sqm bound ──────────────────────────────────────────────────────────
   // WastageCalculator#calculate calls requireReasonableSqmPerPiece(sqmPerPiece) whenever
-  // sqmPerPiece is present and positive (0.001 <= sqmPerPiece <= 10) — this was the one #9 check
-  // the first restoration pass missed, leaving the mock free to derive a nonsense piece count from
-  // an out-of-range value (e.g. a size typed in mm² instead of m²) that the real backend 400s on.
+  // sqmPerPiece is present and positive (0.001 <= sqmPerPiece <= 10); without the mirror the mock
+  // would derive a nonsense piece count from an out-of-range value (e.g. a size typed in mm²
+  // instead of m²) that the real backend 400s on.
   it('rejects a sqmPerPiece below the H4 minimum (0.001), mirroring WastageCalculator#requireReasonableSqmPerPiece', async () => {
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
@@ -310,11 +299,9 @@ describe('mockApi.pricingRequests targetCurrency normalisation', () => {
   });
 
   it('create() collapses an empty-string currency to null, mirroring normalizeCurrency', async () => {
-    // Note: a whitespace-only string (e.g. '   ') is NOT used here — it trips
-    // a separate, pre-existing format-check quirk unrelated to this fix (the
-    // mock's 3-letter-code check treats a non-empty whitespace string as
-    // "present but wrong length" where the Java validateCurrency's
-    // currency.isBlank() short-circuits first); out of scope for this task.
+    // A whitespace-only string (e.g. '   ') is NOT used here: it trips a separate format-check quirk
+    // (the mock's 3-letter-code check treats a non-empty whitespace string as "present but wrong
+    // length" where Java validateCurrency's currency.isBlank() short-circuits first).
     const ticket = await ownedActiveTicketWithItems();
     const payload = validPayload(ticket.items[0]);
     payload.targetCurrency = '';
@@ -333,19 +320,16 @@ describe('mockApi.pricingRequests targetCurrency normalisation', () => {
   });
 });
 
-// Review finding M1 (Opus review on feat/pcr-quotation-revision-suffix, 2026-09-18): the
-// pricing-request-chain (customerquotation/) quotation numbering added to mockApi.js —
-// nextMockCustomerQuotationNumber/nextMockCustomerQuotationRevisionNo and the two endpoints that
-// call them, createCustomerQuotation (~L11794) and createCustomerQuotationRevision (~L11958) —
-// shipped with NO test pinning it. Pins the same four cases the backend's own
-// CustomerQuotationRepository/CustomerQuotationService tests pin for the real Java service,
-// driven end to end through the public `api` surface only (no reach into mockApi.js internals).
+// The pricing-request-chain (customerquotation/) quotation numbering in mockApi.js
+// (nextMockCustomerQuotationNumber/nextMockCustomerQuotationRevisionNo and the endpoints that call
+// them, createCustomerQuotation and createCustomerQuotationRevision). Pins the same four cases the
+// backend's CustomerQuotationRepository/CustomerQuotationService tests pin for the real Java
+// service, driven through the public `api` surface only.
 //
-// Drives a fresh deal all the way to APPROVED_FOR_QUOTATION — copied from
-// mockApi.depositNotices.test.js's own driveTicketToAcceptedQuotation, which already proves this
-// exact sequence reaches the mock's real state (not a stub), trimmed to stop right after the
-// CEO's approvePricingDecision since numbering only needs a pricing request the customer-quotation
-// endpoints will accept.
+// Drives a fresh deal to APPROVED_FOR_QUOTATION, copied from mockApi.depositNotices.test.js's
+// driveTicketToAcceptedQuotation (which reaches the mock's real state, not a stub) and trimmed to
+// stop right after the CEO's approvePricingDecision, since numbering only needs a pricing request
+// the customer-quotation endpoints will accept.
 let numberingUuidSeq = 0;
 function nextNumberingUuid() {
   numberingUuidSeq += 1;
@@ -390,8 +374,7 @@ async function driveToApprovedForQuotation() {
       brand: 'SCG',
       model: 'Tile Numbering Mock',
       factory: 'Panaria SpA',
-      // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-      // required — see validPayload's own comment for the roundToFullBox:false reasoning.
+      // Required fields; see validPayload's comment for the roundToFullBox:false reasoning.
       color: 'ขาว',
       texture: 'ด้าน',
       size: '60x60',
@@ -402,7 +385,7 @@ async function driveToApprovedForQuotation() {
       wastageMode: 'NONE',
       piecesPerBox: 4,
       roundToFullBox: false,
-      // GLA-125: required on this form too.
+      // Required on this form too.
       originCountry: 'ไทย-สต็อก',
       leadTimeMinDays: 3,
       leadTimeMaxDays: 7,
@@ -415,7 +398,7 @@ async function driveToApprovedForQuotation() {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
-  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  // Price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
   for (const q of quotes) {
     await api.pricingRequests.markFactoryQuoteContacted(q.id, {
       contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
@@ -488,18 +471,15 @@ describe('mockApi.pricingRequests customerQuotation numbering (review finding M1
     expect(quotationBase(rev3.number, rev3.quotationRevisionNo)).toBe(base);
   });
 
-  // Concrete failure this catches (CLAUDE.md's "Mock API contract": the mock is the default
-  // verification surface, so silence here is the dangerous kind): if mockCustomerQuotationNumberSeq's
-  // top-level `let` (mockApi.js, `= mockQuotationSeq`) ever executed BEFORE the
-  // top-level seed block advances mockQuotationSeq past every demoSales.js-seeded
-  // row's id, the counter would start at 1 and mint a BASE identical to an already-seeded row's
-  // bare number. Every seeded row's number is literally `QT-2026-{id}` (demoSales.js#makeQuotation)
-  // and every mock-minted number always carries a `-{revisionNo}` suffix, so the two FULL strings
-  // never collide char-for-char even under this bug — asserting on the raw `.number` would stay
-  // green and prove nothing. Asserting on the stripped-suffix BASE is what actually observes the
-  // reuse: under the real (correct) seeding this base is always one past every seeded id, so it can
-  // never appear in the seeded set; under the bug, the very first mock-minted base is `QT-2026-0001`,
-  // which demoSales.js's own row id 1 already owns.
+  // Failure this catches (CLAUDE.md's "Mock API contract": silence here is the dangerous kind): if
+  // mockCustomerQuotationNumberSeq's top-level `let` (mockApi.js, `= mockQuotationSeq`) ever ran
+  // BEFORE the seed block advances mockQuotationSeq past every demoSales.js-seeded row's id, the
+  // counter would start at 1 and mint a BASE identical to an already-seeded row's bare number.
+  // Seeded numbers are `QT-2026-{id}` and mock-minted ones always carry a `-{revisionNo}` suffix, so
+  // the FULL strings never collide even under the bug, and asserting on the raw `.number` would
+  // stay green. Asserting on the stripped-suffix BASE observes the reuse: correctly seeded, the
+  // base is one past every seeded id; under the bug, the first minted base is `QT-2026-0001`, which
+  // demoSales.js's row id 1 already owns.
   it('a freshly minted quotation never reuses a base number demoSales.js already seeded', async () => {
     const seededNumbers = new Set(buildDemoSalesSeed().customerQuotations.map((q) => q.number));
     expect(seededNumbers.size).toBeGreaterThan(0);
@@ -512,11 +492,9 @@ describe('mockApi.pricingRequests customerQuotation numbering (review finding M1
   });
 });
 
-// GLA-102: mirrors PricingRequestService's requireUnchangedRecipientType guard, on BOTH routes
-// that can write recipient_type onto an existing pricing request. Before this pass the mock
-// accepted what production refuses on both — the dangerous "mock more permissive than production"
-// direction CLAUDE.md warns about (issue #199's own failure mode): a mock-driven click-through or
-// mock-mode test would show success on a request the real Java service 409s.
+// Mirrors PricingRequestService's requireUnchangedRecipientType guard, on BOTH routes that can
+// write recipient_type onto an existing pricing request. The mock must not accept what production
+// refuses (a mock-mode click-through would show success on a request the real Java service 409s).
 describe('mockApi.pricingRequests recipient guard (GLA-102)', () => {
   async function submittedParent() {
     const ticket = await ownedActiveTicketWithItems();
@@ -572,13 +550,11 @@ describe('mockApi.pricingRequests recipient guard (GLA-102)', () => {
   });
 });
 
-// Second review pass, finding N2: buildPricingRequestSummary used to strip every GLA-125 header
-// term (and customerId) back out of every response, even though create()/update()/
-// createCustomerChangeRevision() already stored them on the raw `pr` object -- so a mock-mode
-// edit/revision would open every one of those fields blank and a save would look like it silently
-// reverted them. This create -> read -> update -> read round trip is the guard against that
-// regression recurring silently: it must see every field on BOTH reads, not just accept whatever
-// create()/update() themselves returned.
+// buildPricingRequestSummary must not strip the header terms (and customerId) out of responses,
+// even though create()/update()/createCustomerChangeRevision() store them on the raw `pr` object;
+// otherwise a mock-mode edit/revision opens those fields blank and a save looks like it reverted
+// them. This create -> read -> update -> read round trip must see every field on BOTH reads, not
+// just accept whatever create()/update() returned.
 describe('mockApi.pricingRequests header terms + customerId (second review pass, finding N2)', () => {
   it('returns every GLA-125 header field and customerId on create, get(), update, and the post-update get()', async () => {
     const ticket = await ownedActiveTicketWithItems();

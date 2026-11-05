@@ -13,7 +13,7 @@ function textFrom(value) {
   return '';
 }
 
-export function technicalMessageMatch(value) {
+function technicalMessageMatch(value) {
   const message = textFrom(value);
   if (!message) return null;
   return TECHNICAL_MESSAGE_MAP.find((entry) => entry.test(message)) ?? null;

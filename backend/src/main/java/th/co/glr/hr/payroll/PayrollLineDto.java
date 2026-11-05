@@ -37,46 +37,44 @@ public record PayrollLineDto(
     BigDecimal totalDeductions,
     BigDecimal netPay,
     String calculationNote,
-    // Reconciliation additions (2026-07-21, C3/C4).
+    // Reconciliation additions.
     BigDecimal directorRemuneration,
     BigDecimal warningLetterDeduction,
     BigDecimal customerReturnDeduction,
     BigDecimal otherPretaxDeduction,
-    // Cancel-after-close reversal, AUTO-REFUND (2026-07-23). See PayrollCalculation.
+    // Cancel-after-close reversal, AUTO-REFUND. See PayrollCalculation.
     BigDecimal leaveRefundDays,
     BigDecimal leaveDeductionRefund,
-    // Withholding-tax override (2026-07-24, V88): the PER-RUN HR-typed override value stored for this
+    // Withholding-tax override (V88): the PER-RUN HR-typed override value stored for this
     // line (nullable; null = none typed this run). This is the TYPED per-run value only -- NOT the
     // standing employee override and NOT the resolved effective amount (the effective withheld amount
     // lives in withholdingTax above). Persisted so it carries forward to next month's run.
     BigDecimal withholdingTaxOverride,
-    // ป.96/2543 compliance (2026-07-28, V92). The two limbs คำชี้แจง ภ.ง.ด.1 keeps apart --
+    // ป.96/2543 compliance (V92). The two limbs คำชี้แจง ภ.ง.ด.1 keeps apart --
     // เงินได้ที่จ่ายตามปกติ (ข้อ 2.1) and เงินพิเศษที่จ่ายเป็นครั้งคราว (ข้อ 2.5). Persisted on
     // payroll_line because the year-to-date carry-forward needs each limb separately: next period's
     // ข้อ 2.5 difference is netted against what was withheld on the VARIABLE limb specifically, and
     // that is unrecoverable once the two are summed. regularTaxableIncome + variableTaxableIncome ==
     // grossTaxableIncome, and regularWithholdingTax + variableWithholdingTax == withholdingTax.
     //
-    // SUPERSEDED going forward (rebase, 2026-07-29): calculateLine now runs exclusively through
-    // calculateClassified (V96, regular/known/cumulative 3-limb -- see the fields below), which has no
-    // concept of this older 2-limb split. Kept only so pre-task-2 rows still round-trip through this
-    // record's shape; every line processed from this rebase forward backfills these four the same way
-    // the 40-arg legacy constructor below already backfills the V96 fields for a pre-limb caller.
+    // SUPERSEDED going forward: calculateLine now runs exclusively through calculateClassified (V96,
+    // regular/known/cumulative 3-limb -- see the fields below), which has no concept of this older
+    // 2-limb split. Kept only so older rows still round-trip through this record's shape; every line
+    // processed now backfills these four the same way the 40-arg legacy constructor below backfills
+    // the V96 fields for a pre-limb caller.
     BigDecimal regularTaxableIncome,
     BigDecimal variableTaxableIncome,
     BigDecimal regularWithholdingTax,
     BigDecimal variableWithholdingTax,
-    // Dedicated one-off pay (2026-07-29, V94/V96 -- both branches added this column; declared once).
+    // Dedicated one-off pay (V94/V96).
     BigDecimal bonusPay,
     BigDecimal otherOneOffPay,
-    // Over-withholding this tax year that payroll cannot hand back (2026-07-29, V94). Computed by
+    // Over-withholding this tax year that payroll cannot hand back (V94). Computed by
     // PayrollCalculator and surfaced all the way to the payslip: a stranded excess otherwise shows up
     // only as a 0.00 withholding line, which is indistinguishable from "nothing was due". NOT computed
-    // by calculateClassified (known gap -- see the rebase report); zero on every classified-engine line.
+    // by calculateClassified (known gap); zero on every classified-engine line.
     BigDecimal excessWithheldToDate,
-    // ---- Task 2 additions (2026-07-29): per-component classified withholding engine. See
-    // PayrollCalculator#calculateClassified and docs/agent-handoffs/119_feat-payroll-classification-
-    // and-hr-declarations.md.
+    // Per-component classified withholding engine (see PayrollCalculator#calculateClassified).
     // Per-limb taxable-income / withholding-tax breakdown, persisted so the NEXT period's year-to-date
     // projection can be reconstructed per ป.96 limb rather than as one blended total (V96,
     // PayrollRepository#findYearToDateByEmployee). taxableIncomeKnownLimb is audit-only -- it is never
@@ -96,31 +94,30 @@ public record PayrollLineDto(
     // column default 'SALARY' when null, which reproduces the pre-existing single 30%-plus-฿20,000-
     // floor rule exactly.
     String garnishmentType,
-    // ---- Defect fix (Opus review, 2026-07-29): V97's four columns were write-only -- read from the
-    // request, folded into tax/SSO arithmetic, then discarded. Appended last so every prior
-    // positional call site keeps compiling via the legacy constructor below. See PayrollCalculator
-    // #calculateClassified (mealAllowance/perDiemTaxable now echoed onto PayrollClassifiedCalculation)
-    // and PayrollService#calculateLine (perDiemExempt/perDiemBasis passed straight through from the
-    // request -- they are never part of the calculator's componentAmounts, so there is nothing for
-    // the calculator to echo back for those two).
+    // V97's four columns (mealAllowance/perDiem*) are echoed back rather than dropped after the tax/SSO
+    // arithmetic. Appended last so every prior positional call site keeps compiling via the legacy
+    // constructor below. See PayrollCalculator#calculateClassified (mealAllowance/perDiemTaxable
+    // echoed onto PayrollClassifiedCalculation) and PayrollService#calculateLine
+    // (perDiemExempt/perDiemBasis passed straight through from the request -- they are never part of
+    // the calculator's componentAmounts, so there is nothing for the calculator to echo back for
+    // those two).
     BigDecimal mealAllowance,
     BigDecimal perDiemExempt,
     BigDecimal perDiemTaxable,
     // PerDiemBasis name, or null when no per-diem was paid this line (matches the DB CHECK: a basis
     // is required only when perDiemExempt/perDiemTaxable are non-zero).
     String perDiemBasis,
-    // D1 fix (fourth reachability audit, 2026-07-30, V101). What HR actually TYPED this run,
-    // verbatim, regardless of customerReturnAlreadyEarned -- distinct from customerReturnDeduction
-    // above, which is the POST-TAX bookkeeping figure (0 in the unearned path, where the amount is
-    // instead netted pre-tax out of commissionPay, per PayrollCalculator's own comment on that field).
-    // Before this field existed, customerReturnDeduction was the ONLY place the entered amount could
-    // round-trip from -- so in the unearned path (the ONLY reachable state before this branch), it
-    // read back as 0 on reload, silently wiping the form field AND the checkbox that gates on it
-    // being > 0 (PayrollPage.jsx), and a reprocess of the same month silently stopped re-applying the
-    // pre-tax netting. Appended last so every prior positional call site keeps compiling via the new
-    // legacy constructor immediately below.
+    // What HR actually TYPED this run, verbatim, regardless of customerReturnAlreadyEarned --
+    // distinct from customerReturnDeduction above, which is the POST-TAX bookkeeping figure (0 in
+    // the unearned path, where the amount is instead netted pre-tax out of commissionPay, per
+    // PayrollCalculator's own comment on that field). Without this field, customerReturnDeduction
+    // would be the ONLY place the entered amount could round-trip from, so in the unearned path it
+    // would read back as 0 on reload, silently wiping the form field AND the checkbox that gates on
+    // it being > 0 (PayrollPage.jsx), and a reprocess of the same month would silently stop
+    // re-applying the pre-tax netting. Appended last so every prior positional call site keeps
+    // compiling via the legacy constructor immediately below.
     BigDecimal customerReturnRequested,
-    // Daily-rate support (2026-07-30). daysWorked is the raw HR-typed figure for this line (nullable
+    // Daily-rate support. daysWorked is the raw HR-typed figure for this line (nullable
     // -- distinct from zero, same reasoning as withholdingTaxOverride -- so a monthly employee's line,
     // which never has this field, round-trips as null rather than a misleading 0). payType is the
     // employee's hr.employee.pay_type code ("M"/"D"/null) AS OF THIS RUN, echoed straight from
@@ -143,8 +140,8 @@ public record PayrollLineDto(
     // (for this field, alongside legalExecutionRequested's existing one) to keep reaching the
     // canonical constructor.
     BigDecimal ssoWageGross,
-    // Issue #376, D-376-1 fix: the ป.วิ.พ. ม.302 "requested" figure -- the monthly amount actually
-    // fed into PayrollCalculator as garnishmentRequested THIS run (DeductionObligationService
+    // The ป.วิ.พ. ม.302 "requested" figure -- the monthly amount actually fed into
+    // PayrollCalculator as garnishmentRequested THIS run (DeductionObligationService
     // #resolveMonthlyAmount's return, obligation-clamp already applied if one exists). Carried out
     // of PayrollService#calculateLine rather than re-derived later, specifically so {@code
     // DeductionObligationService#recordGarnishmentShortfalls} never calls #resolveMonthlyAmount a
@@ -152,8 +149,8 @@ public record PayrollLineDto(
     // #process()) may have already flipped an obligation's status (ACTIVE -> COMPLETED or back), and
     // #findDrivingObligation's ORDER BY (status='ACTIVE') DESC means a second resolve can pick a
     // DIFFERENT obligation than the one #calculateLine actually used -- fabricating a shortfall
-    // "requested" figure the court order never asked for. This field is the fix: it is the exact
-    // number #calculateLine saw, with no re-derivation possible. Intentionally NOT persisted to
+    // "requested" figure the court order never asked for. This field is the exact number
+    // #calculateLine saw, with no re-derivation possible. Intentionally NOT persisted to
     // hr.payroll_line (no column, no INSERT/SELECT reference) -- it is consumed once, in the same
     // #process() transaction, from the same in-memory PayrollLineDto list #preview() already built.
     BigDecimal legalExecutionRequested,
@@ -168,12 +165,11 @@ public record PayrollLineDto(
     BigDecimal welfarePay
 ) {
     /**
-     * Legacy 61-arg constructor: the full signature as it stood right before {@code
-     * legalExecutionRequested} (issue #376, D-376-1 fix) existed -- i.e. through {@code payType}.
-     * Keeps every 61-arg positional call site compiling unchanged; {@code legalExecutionRequested}
-     * defaults to {@code null} (no shortfall can be computed for a line built this way -- true for
-     * every existing call site, none of which ever fed this value to
-     * {@code recordGarnishmentShortfalls} in the first place).
+     * Legacy 61-arg constructor: the full signature before {@code legalExecutionRequested}
+     * existed, i.e. through {@code payType}. Keeps every 61-arg positional call site compiling
+     * unchanged; {@code legalExecutionRequested} defaults to {@code null} (no shortfall can be
+     * computed for a line built this way -- true for every existing call site, none of which ever
+     * fed this value to {@code recordGarnishmentShortfalls}).
      */
     public PayrollLineDto(
         Long id,
@@ -361,12 +357,11 @@ public record PayrollLineDto(
     }
 
     /**
-     * Legacy 59-arg constructor: the full signature as it stood right before {@code daysWorked}/
-     * {@code payType} (daily-rate support, 2026-07-30) existed -- i.e. through {@code
-     * customerReturnRequested}. Keeps every 59-arg positional call site compiling unchanged;
-     * {@code daysWorked}/{@code payType} default to {@code null} (no days-worked figure, pay type
-     * unknown to this caller -- both a no-op for every existing call site, which predates either
-     * concept).
+     * Legacy 59-arg constructor: the full signature before {@code daysWorked}/{@code payType}
+     * existed, i.e. through {@code customerReturnRequested}. Keeps every 59-arg positional call
+     * site compiling unchanged; {@code daysWorked}/{@code payType} default to {@code null} (no
+     * days-worked figure, pay type unknown to this caller -- a no-op for every call site that
+     * predates either concept).
      */
     public PayrollLineDto(
         Long id,
@@ -449,13 +444,13 @@ public record PayrollLineDto(
     }
 
     /**
-     * Legacy 58-arg constructor: the full signature as it stood right before {@code
-     * customerReturnRequested} (V101/D1) existed (i.e. through {@code perDiemBasis}). Keeps every
-     * 58-arg positional call site compiling unchanged. Defaults the new field to whatever {@code
-     * customerReturnDeduction} was given -- the best available reconstruction for a caller that
-     * predates the distinction (correct for the already-earned path, where the two always agreed
-     * anyway; a reasonable approximation for the unearned path, where the true entered figure was
-     * never separately available at this arity either).
+     * Legacy 58-arg constructor: the full signature before {@code customerReturnRequested}
+     * existed (i.e. through {@code perDiemBasis}). Keeps every 58-arg positional call site
+     * compiling unchanged. Defaults the new field to whatever {@code customerReturnDeduction} was
+     * given -- the best available reconstruction for a caller that predates the distinction
+     * (correct for the already-earned path, where the two always agreed anyway; a reasonable
+     * approximation for the unearned path, where the true entered figure was never separately
+     * available at this arity either).
      */
     public PayrollLineDto(
         Long id,

@@ -298,7 +298,7 @@ public class ImportRequestQueryRepository {
      */
     public boolean isDealOwner(long ticketId, long employeeId) {
         Boolean owns = jdbc.queryForObject(
-            "SELECT EXISTS(SELECT 1 FROM sales.ticket WHERE ticket_id = :id AND created_by = :emp)",
+            "SELECT EXISTS(SELECT 1 FROM sales.ticket WHERE ticket_id = :id AND (created_by = :emp OR keyed_by = :emp))",
             Map.of("id", ticketId, "emp", employeeId), Boolean.class);
         return Boolean.TRUE.equals(owns);
     }

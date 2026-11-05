@@ -22,7 +22,7 @@ export const IMPORT_STEPS = [
   { code: 'RECEIVED', s: 'S17', label: 'ถึงโกดัง' },
 ];
 
-export const IMPORT_STEP_CODES = IMPORT_STEPS.map((step) => step.code);
+const IMPORT_STEP_CODES = IMPORT_STEPS.map((step) => step.code);
 
 export function importStepIndex(code) {
   return IMPORT_STEP_CODES.indexOf(code);

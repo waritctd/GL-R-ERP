@@ -78,7 +78,7 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         // recordPayment never calls it. The two things under test — the TicketService gate and the
         // TicketRepository INSERT it protects — are both real.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
-        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any()))
+        when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
         ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequests,

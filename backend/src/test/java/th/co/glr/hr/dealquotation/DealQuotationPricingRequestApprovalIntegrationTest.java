@@ -48,7 +48,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
@@ -69,6 +68,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -79,18 +79,17 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-DB coverage for GLA-123 slice S2 (Phase 3 of the sales pricing redesign), REWORKED
- * (owner ruling reversed the dual-approval design, 2026-09-20): ONE approval — by ผู้จัดการฝ่ายขาย
- * OR the CEO — issues a PRICING_REQUEST-origin quotation, reusing the SAME single-shot
- * compare-and-set (and V175 approver snapshot) DEAL_DIRECT already uses. The CEO's price
+ * Real-DB coverage for approving a PRICING_REQUEST-origin quotation: ONE approval — by
+ * ผู้จัดการฝ่ายขาย OR the CEO — issues it, reusing the SAME single-shot
+ * compare-and-set (and approver snapshot) DEAL_DIRECT already uses. The CEO's price
  * authority survives sales's freedom to edit price after create: a quotation that no longer
  * matches the CEO's decision may ONLY be approved by the CEO.
  *
  * <p>Setup is a trimmed copy of {@code PricingRequestQuotationIntegrationTest}'s own fixture
- * (same fixture shapes, same helper method bodies) plus this slice's own {@link
- * DealQuotationService#wireTicketService} wiring, which S1's suite never needed (issuing is this
- * slice's job). Duplicated rather than shared, matching that file's own stated reason: avoid
- * coupling this new-feature suite's lifecycle to an already-large existing file.
+ * (same fixture shapes, same helper method bodies) plus the {@link
+ * DealQuotationService#wireTicketService} wiring that issuing needs. Duplicated rather than
+ * shared, matching that file's own stated reason: avoid coupling this suite's lifecycle to an
+ * already-large existing file.
  */
 class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
     private PricingRequestRepository pricingRequests;
@@ -102,6 +101,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     private TicketRepository tickets;
     private TicketService ticketService;
 
+    private RecordingSalesMailer salesMailer;
     private long salesRepId;
     private long ceoUserId;
     private long salesManagerId;
@@ -126,7 +126,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        salesMailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, salesMailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -177,8 +178,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         th.co.glr.hr.customerquotation.CustomerQuotationRepository customerQuotationRepository =
             new th.co.glr.hr.customerquotation.CustomerQuotationRepository(jdbc);
         quotationService.wirePricingRequestDependencies(pricingRequests, decisionRepository, customerQuotationRepository);
-        // GLA-123 slice S2's own wiring — S1's suite never needed this (issuing is this slice's
-        // job). See DealQuotationService#ticketService's own Javadoc for why this is a setter.
+        // Issuing needs the ticket service. See DealQuotationService#ticketService's own Javadoc
+        // for why this is a setter.
         quotationService.wireTicketService(ticketService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย S2", "sales-s2@glr.co.th", "SALES", "แผนกขาย");
@@ -254,10 +255,36 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     @Test
     void approve_byCeo_whenUnchanged_issues() {
+        long smRole = salesMailer.seedRoleEmployee("sales_manager");
         DealQuotationDto submitted = submittedQuotation();
         DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), ceoActor);
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
         assertThat(issued.approvedById()).isEqualTo(ceoUserId);
+        // The CEO decided, so the OTHER approver (sales manager) hears it, FYI.
+        salesMailer.assertNoticeFor(smRole, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(ceoActor, "CEO", "อนุมัติใบเสนอราคา " + issued.number() + " แล้ว"),
+            "/quotations/" + issued.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", smRole);
+    }
+
+    /** The CEO already gets "ใบเสนอราคา … ถูกออกแล้ว" when the sales manager issues, so no second "decided" notice on top. */
+    @Test
+    void approve_bySalesManager_doesNotAlsoSendTheCeoADecidedNotice() {
+        salesMailer.seedRoleEmployee("ceo");
+        DealQuotationDto submitted = submittedQuotation();
+
+        quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        salesMailer.assertNoNotice("DEAL_QUOTATION_DECIDED", DECIDED_TITLE);
+    }
+
+    private static final String DECIDED_TITLE = "มีผู้พิจารณาใบเสนอราคาแล้ว — ไม่ต้องดำเนินการ";
+
+    /** Notice wording: who decided (with their role), what they decided, the deal, FYI. */
+    private String decidedMessage(UserPrincipal decider, String roleLabel, String decision) {
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        return decider.name() + " (" + roleLabel + ") " + decision + "\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+            + "\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
     }
 
     @Test
@@ -381,16 +408,41 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     @Test
     void reject_bySalesManager_returnsToDraftWithReason() {
         DealQuotationDto submitted = submittedQuotation();
+        long ceoRole = salesMailer.seedRoleEmployee("ceo");
         DealQuotationDto rejected = quotationService.reject(submitted.id(), new RejectRequest("ราคาไม่เหมาะสม"), salesManagerActor);
         assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(rejected.approvalNote()).isEqualTo("ราคาไม่เหมาะสม");
+        // The sales manager rejected, so the CEO (the other approver) hears it, FYI, with the reason.
+        salesMailer.assertNoticeFor(ceoRole, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(salesManagerActor, "ผู้จัดการฝ่ายขาย",
+                "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": ราคาไม่เหมาะสม"),
+            "/quotations/" + rejected.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", ceoRole);
     }
 
     @Test
     void reject_byCeo_returnsToDraftWithReason() {
         DealQuotationDto submitted = submittedQuotation();
+        long smRole = salesMailer.seedRoleEmployee("sales_manager");
         DealQuotationDto rejected = quotationService.reject(submitted.id(), new RejectRequest("ขอทบทวนราคาใหม่"), ceoActor);
         assertThat(rejected.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        salesMailer.assertNoticeFor(smRole, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
+            decidedMessage(ceoActor, "CEO", "ไม่อนุมัติใบเสนอราคา " + rejected.number() + ": ขอทบทวนราคาใหม่"),
+            "/quotations/" + rejected.id());
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", smRole);
+    }
+
+    /** A rejection that is refused (409, already decided) tells the other approver nothing new. */
+    @Test
+    void reject_whenAlreadyDecided_sendsNoSecondDecidedNotice() {
+        long smRole = salesMailer.seedRoleEmployee("sales_manager");
+        DealQuotationDto submitted = submittedQuotation();
+        quotationService.reject(submitted.id(), new RejectRequest("รอบแรก"), ceoActor);
+
+        assertThatThrownBy(() -> quotationService.reject(submitted.id(), new RejectRequest("รอบสอง"), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        salesMailer.assertBellRecipients("DEAL_QUOTATION_DECIDED", smRole); // exactly the one from round one
     }
 
     @Test
@@ -408,10 +460,9 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * D-2 (owner ruling 2026-10-16, superseding their own earlier answer): the stage moves at
-     * CREATION, not approval.
+     * The stage moves at CREATION, not approval ({@code .design/quote-stage-gates} D-2).
      *
-     * <p>The approve-time advance at {@code DealQuotationService}'s issue hook is kept: it is
+     * <p>The approve-time advance at {@code DealQuotationService}'s issue hook remains: it is
      * idempotent under forward-only, and it still covers a recipient changed between draft and
      * approval. So S4 must be true both before and after, and the issue hook must
      * not write a second STAGE_CHANGED — which is what "idempotent" has to mean here.
@@ -490,7 +541,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Expiry (D5) — ISSUED -> EXPIRED past validity_date; DEAL_DIRECT never expires
+    // Expiry — ISSUED -> EXPIRED past validity_date; DEAL_DIRECT never expires
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -499,12 +550,38 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
 
+        long ceoRole = salesMailer.seedRoleEmployee("ceo");
         jdbc.update("UPDATE sales.quotation SET validity_date = CURRENT_DATE - 1 WHERE quotation_id = :id",
             java.util.Map.of("id", issued.id()));
 
         int expiredCount = quotationService.expireOverdueQuotations();
         assertThat(expiredCount).isEqualTo(1);
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
+        // The rep who owns the deal is told to chase the customer or re-quote; the CEO also gets an FYI.
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        salesMailer.assertNoticeFor(salesRepId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issued.number() + " หมดอายุแล้ว\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+                + "\nสิ่งที่ต้องทำต่อ: ติดตามลูกค้า หรือออกใบเสนอราคาใหม่",
+            "/tickets/" + ticketId);
+        salesMailer.assertNoticeFor(ceoRole, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issued.number() + " หมดอายุ", "/pricing-requests/" + issued.pricingRequestId());
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", salesRepId, ceoRole);
+    }
+
+    /** Review fix: a lost/cancelled deal's rep is not told to chase the customer; the CEO FYI stays. */
+    @Test
+    void expireOverdueQuotations_onALostDeal_doesNotTellTheRep_butStillTellsTheCeo() {
+        DealQuotationDto issued = quotationService.approve(submittedQuotation().id(), new ApproveRequest(null), salesManagerActor);
+        long ceoRole = salesMailer.seedRoleEmployee("ceo");
+        jdbc.update("UPDATE sales.quotation SET validity_date = CURRENT_DATE - 1 WHERE quotation_id = :id",
+            java.util.Map.of("id", issued.id()));
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", java.util.Map.of("id", ticketId));
+
+        assertThat(quotationService.expireOverdueQuotations()).isEqualTo(1);
+
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", ceoRole);
+        salesMailer.assertNoticeFor(ceoRole, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issued.number() + " หมดอายุ", "/pricing-requests/" + issued.pricingRequestId());
     }
 
     @Test
@@ -522,13 +599,14 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         quotationService.expireOverdueQuotations();
         assertThat(quotationService.get(approvedDirect.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.APPROVED);
+        salesMailer.assertNoNotice("CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ"); // nothing expired, nobody told
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MAJOR-3 (owner ruling via coordinator, 2026-09-20) — "the expiry escape hatch": once an
+    // The expiry escape hatch: once an
     // ISSUED PRICING_REQUEST-origin quotation EXPIRES, sales may create a FRESH one from the SAME
     // approved decision, continuing the SAME number family; the expired document stays as an
-    // audit record, never revived/revised. The "one live quotation per request" rule stays.
+    // audit record, never revived/revised. The "one live quotation per request" rule holds.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -562,7 +640,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(secondDraft.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(secondDraft.id()).isNotEqualTo(issued.id());
         // Continues the SAME base number family, one suffix further -- "a later version of the
-        // same offer" (owner's own framing), not an unrelated fresh base number.
+        // same offer", not an unrelated fresh base number.
         assertThat(secondDraft.number()).isEqualTo(firstNumber.substring(0, firstNumber.length() - 2) + "-2");
         // Prefilled from the SAME approved decision -- same item count, same price mode.
         assertThat(secondDraft.items()).hasSize(issued.items().size());
@@ -605,7 +683,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // B-4 (VERSIONING.md, owner ruling 2026-10-17): one LIVE offer per DEAL, origin-agnostic.
+    // One LIVE offer per DEAL, origin-agnostic (VERSIONING.md).
     // Issuing/approving any quotation retires every OTHER live one on the deal.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -702,7 +780,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     }
 
     /**
-     * Owner ruling 2026-10-17: P1 stays QUOTATION_ISSUED while its only quotation is SUPERSEDED by
+     * P1 stays QUOTATION_ISSUED while its only quotation is SUPERSEDED by
      * sibling request P2's issue. Re-quoting P1 would price off the OLDER CEO decision and its
      * issue would retire P2's newer offer, so the API refuses (the UI already hides the button).
      */
@@ -872,10 +950,9 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
 
     private DealQuotationDto submittedQuotation() {
         DealQuotationDto draft = quotationService.createFromPricingRequest(approvedDecision().pricingRequestId(), salesActor);
-        // MAJOR-4 fix (Opus re-review, 2026-09-20): submit now REQUIRES a validity (D5's own
-        // expiry sweep needs validity_date to ever fire) — this fixture's synthetic pricing
-        // request carries no GLA-125 validityDays header term, so every test built on this shared
-        // helper must set one explicitly.
+        // Submit REQUIRES a validity (the expiry sweep needs validity_date to ever fire) — this
+        // fixture's synthetic pricing request carries no validityDays header term, so every test
+        // built on this shared helper must set one explicitly.
         DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
         return quotationService.submit(withValidity.id(), salesActor);
     }
@@ -895,11 +972,11 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     }
 
     /**
-     * <b>THE DEFECT the versioning design exists to fix</b> — owner ruling 2026-10-17,
+     * <b>The defect the versioning design exists to prevent</b> —
      * {@code .design/quote-stage-gates/VERSIONING.md}: the base number belongs to the DEAL, so a
      * second pricing round on the same deal continues the family instead of starting a new one.
      *
-     * <p>A lookup scoped to ONE pricing request (the old {@code findLatestForPricingRequest}) would
+     * <p>A lookup scoped to ONE pricing request would
      * see none of the first request's quotations on a second request and fall through to a fresh
      * base, costing the rep their version number on every รอบราคาใหม่. The family is read from the
      * deal instead.
@@ -908,9 +985,6 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
      * real flow, not a workaround: the rep abandons the document precisely BECAUSE they are going
      * back for a new price, which is the moment the number is currently lost.
      *
-     * <p>Prod note (audit 2026-10-17): zero PRICING_REQUEST-origin quotations exist in production,
-     * so the defect never reached a customer; this test keeps it from shipping the day the route is
-     * first used.
      */
     @Test
     void createFromPricingRequest_aSecondRoundOnTheSameDeal_continuesTheFamily() {

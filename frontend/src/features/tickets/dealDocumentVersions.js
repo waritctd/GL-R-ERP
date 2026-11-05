@@ -25,7 +25,7 @@ function timeOf(value) {
  * @param versionOf row -> numeric version (missing counts as 0)
  * @param dateOf    row -> date string used only to order groups
  */
-export function groupVersions(rows, { keyOf, versionOf, dateOf }) {
+function groupVersions(rows, { keyOf, versionOf, dateOf }) {
   const byKey = new Map();
   for (const row of rows) {
     const key = keyOf(row);

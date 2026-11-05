@@ -19,37 +19,24 @@ import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCa
  * produces by hand. Everything the sheet computes without per-employee tax data — gross, SSO, the
  * deduction total, net pay — is asserted here to the satang.
  *
- * <p><b>Defect fix (Opus review, 2026-07-29):</b> this file used to drive {@link
- * PayrollCalculator#calculate}, the pre-task-2 single-limb engine. {@link
- * PayrollService#calculateLine} has called only {@link PayrollCalculator#calculateClassified} since
- * task 2 — {@code calculate} has ZERO production callers — so this file was reconciling the
- * accountant's real numbers against an engine production no longer runs, while the engine that
- * actually processes every payroll was reconciled against nothing. Repointed at {@code
- * calculateClassified}, driven with every non-zero component classified {@code REGULAR_REPROJECT}
- * (the layered engine's equivalent of the legacy single-limb annualisation when nothing is KNOWN or
- * CUMULATIVE) so the two engines are asked the same question. Every ACCOUNTANT-WORKBOOK figure
- * (the {@code MAY_2026} rows and every test driven directly from them) is UNCHANGED from before
- * this repoint — same transcribed sheet values, same assertions. F8 fix (fifth Opus review,
- * 2026-07-30): this used to say "every expected figure below", overselling scope -- {@link
+ * <p>This file drives {@link PayrollCalculator#calculateClassified}, the engine {@link
+ * PayrollService#calculateLine} actually calls — {@link PayrollCalculator#calculate} has ZERO
+ * production callers, so reconciling against it would prove nothing about what processes every
+ * payroll. Every non-zero component is classified {@code REGULAR_REPROJECT} (the layered engine's
+ * equivalent of single-limb annualisation when nothing is KNOWN or CUMULATIVE). Every
+ * ACCOUNTANT-WORKBOOK figure (the {@code MAY_2026} rows and every test driven directly from them)
+ * is a transcribed sheet value. Not every expected figure here is workbook-reconciled: {@link
  * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()} is NOT reconciled against the
- * sheet (it drives an empty year-to-date, a scenario the sheet does not represent) and its own pin
- * DID move, honestly disclosed in that test's own javadoc (the May REGULAR_REPROJECT figure moved
- * 0 → ฿268.75 after the po96-compliance rebase). "Nothing here changed" was never true of the whole
- * file, only of the workbook-reconciled figures.
+ * sheet (it drives an empty year-to-date, a scenario the sheet does not represent); see that
+ * test's own javadoc.
  *
- * <p><b>Correction (2026-07-29, later same day, after this branch was rebased onto
- * fix/payroll-wht-po96-compliance):</b> the paragraph above used to go on to claim {@code
- * calculateClassified} "must (and does) reproduce {@code calculate}'s numbers" on this
- * classification shape. That was true against the engine {@code calculate} was AT THE TIME — the
- * single-limb annualiser task 2 inherited. The rebase replaced {@code calculate}'s body with branch
- * 117's own two-limb ป.96 engine, in which เงินพิเศษ (ข้อ 2.5) is taken at its actual cumulative
- * amount and is deliberately NOT multiplied out — the opposite of what REGULAR_REPROJECT does to the
- * พิเศษ block below. The two engines no longer agree on this shape, and they do not need to:
- * {@code calculate} still has zero production callers (confirmed unchanged by the rebase), so
- * nothing in this file is reconciled against it. Every test below is reconciled directly against the
- * accountant's workbook figures, which is the only agreement that matters. {@code calculate} itself
- * is left in place (not deleted) per instruction; the other 27 tests exercising it directly ({@code
- * PayrollCalculatorTest}) are a separate call, recorded in the branch's handoff.
+ * <p>{@code calculate} and {@code calculateClassified} do not agree on this classification shape,
+ * and need not: {@code calculate} is a two-limb ป.96 engine in which เงินพิเศษ (ข้อ 2.5) is taken at
+ * its actual cumulative amount and is deliberately NOT multiplied out — the opposite of what
+ * REGULAR_REPROJECT does to the พิเศษ block below. Nothing in this file is reconciled against
+ * {@code calculate}; every test below is reconciled directly against the accountant's workbook
+ * figures, which is the only agreement that matters. {@code calculate} itself is left in place
+ * (not deleted); the tests exercising it directly are in {@code PayrollCalculatorTest}.
  *
  * <p>What this test deliberately does NOT assert: the withholding-tax column (AE). That figure
  * depends on each employee's personal allowances (spouse, children, parent care, life insurance,
@@ -119,7 +106,7 @@ class PayrollExcelReconciliationTest {
     }
 
     /**
-     * F7 fix (fifth Opus review, 2026-07-30): {@link #socialSecurityMatchesTheSheet()} above cannot
+     * {@link #socialSecurityMatchesTheSheet()} above cannot
      * tell a correct salary-only SSO wage base apart from a wrongly-inclusive one -- every {@code
      * MAY_2026} row's base salary already exceeds the ฿17,500 ceiling on its own, so the wage base
      * lands on 875 whether or not the พิเศษ block is folded in. Driven through {@link
@@ -249,9 +236,8 @@ class PayrollExcelReconciliationTest {
 
     /**
      * A migration hazard, pinned so it cannot be forgotten — under BOTH classifications a real
-     * one-off allowance could carry, not just one, now that classification is per-component HR data
-     * rather than a hardcoded slot (handoff section 1: "no component except salary is hardcoded to a
-     * limb").
+     * one-off allowance could carry, not just one, since classification is per-component HR data
+     * rather than a hardcoded slot (no component except salary is hardcoded to a limb).
      *
      * <p>{@code fullAnnualProjection = yearToDate + thisMonth x monthsRemaining} for the REGULAR
      * limb (ข้อ 1(4)): correct as a catch-up mechanism <em>when year-to-date figures are loaded</em>,
@@ -261,13 +247,9 @@ class PayrollExcelReconciliationTest {
      * shrink a projection, it simply reports what one period's actual figure implies with nothing
      * annualised at all, which collapses to zero even faster.
      *
-     * <p><b>Correction (2026-07-29, after this branch was rebased onto
-     * fix/payroll-wht-po96-compliance):</b> an earlier version of this test asserted the hazard from
-     * a hardcoded REGULAR_REPROJECT classification and claimed withholding reached zero "by May
-     * rather than August". That claim does not hold against the post-rebase engine: measured below,
-     * REGULAR_REPROJECT is still withholding ฿268.75 in May and reaches zero only from June. It is
-     * EXTRA_CUMULATIVE_ACTUAL — not REGULAR_REPROJECT — that collapses to zero that early (by March).
-     * Rather than guess which classification a real HR record would carry, both are driven explicitly
+     * <p>Measured below, REGULAR_REPROJECT is still withholding ฿268.75 in May and reaches zero only
+     * from June. It is EXTRA_CUMULATIVE_ACTUAL — not REGULAR_REPROJECT — that collapses to zero
+     * early (by March). Rather than guess which classification a real HR record would carry, both are driven explicitly
      * below and each is pinned to its own measured zero-point, so a future change to either limb's
      * math is caught regardless of which one narrows or widens.
      *
@@ -279,11 +261,11 @@ class PayrollExcelReconciliationTest {
     void anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear() {
         SheetRow row = sheetRow("จริญญา");
 
-        // Whole-baht withholding (2026-08-28, see PayrollCalculator's computedWithholding): the four
-        // pins below are the SAME measured figures HALF_UP-rounded to whole baht -- 1204.17 -> 1204,
-        // 268.75 -> 269, 914.58 -> 915 -- not re-measured. The decay SHAPE this test exists to pin
+        // Whole-baht withholding (see PayrollCalculator's computedWithholding): the four
+        // pins below are the measured figures HALF_UP-rounded to whole baht -- 1204.17 -> 1204,
+        // 268.75 -> 269, 914.58 -> 915. The decay SHAPE this test exists to pin
         // (gradual for REGULAR_REPROJECT, immediate for EXTRA_CUMULATIVE_ACTUAL, and the month each
-        // one first reaches zero) is unchanged by rounding.
+        // one first reaches zero) is unaffected by rounding.
 
         // REGULAR_REPROJECT (ข้อ 1(4)): annualised x months remaining, so it decays gradually and is
         // still withholding something through May; zero only from June (measured).
@@ -354,15 +336,15 @@ class PayrollExcelReconciliationTest {
     }
 
     /**
-     * Whole-baht withholding (owner decision, 2026-08-28). ภ.ง.ด.1 and the KBank PCT transfer file
+     * Whole-baht withholding. ภ.ง.ด.1 and the KBank PCT transfer file
      * are both rendered straight from the stored columns, so a satang in the withheld tax is a
      * satang on the filing and on the bank file; the accountant's workbook has always carried whole
-     * baht. Same house convention already applied to SSO and commission.
+     * baht. Same house convention as SSO and commission.
      *
-     * <p><b>Non-vacuous by construction.</b> The pinned figure below is one the PRE-rounding engine
-     * got demonstrably wrong for this purpose: this exact fixture (จริญญา, month 1, empty YTD, empty
-     * allowances, REGULAR_REPROJECT) produced <b>1204.17</b> before the change, which is what {@link
-     * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()} pinned until 2026-08-28. Revert
+     * <p><b>Non-vacuous by construction.</b> The pinned figure below is one a non-rounding engine
+     * gets wrong: this exact fixture (month 1, empty YTD, empty
+     * allowances, REGULAR_REPROJECT) would produce <b>1204.17</b> unrounded, which is what {@link
+     * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()} would pin without rounding. Revert
      * {@code PayrollCalculator}'s {@code wholeBaht(exactWithholding)} and this test goes red on the
      * satang, not merely on a tautology about {@code scale()}.
      *
@@ -421,15 +403,14 @@ class PayrollExcelReconciliationTest {
      */
     private PayrollClassifiedCalculation calculateForMonth(
             SheetRow row, PayrollTaxAllowanceInput allowances, int month, PayrollTaxTreatment specialPayTreatment) {
-        // The whole พิเศษ block collapsed into slot 1 (only the total matters for the maths, same as
-        // the pre-repoint helper), SSO-EXCLUDED -- matching the sheet's own AF column (handoff
-        // section 5: "In: เงินเดือน ... Out: ... รายได้ไม่คิดภาษี", and AF is salary-only in every row
-        // transcribed above). F7 fix (fifth Opus review, 2026-07-30): this used to pass SSO-INCLUDED,
-        // silently putting the whole พิเศษ block into the wage base -- undetected by any assertion
-        // here because every MAY_2026 row's base salary already saturates the ฿17,500 ceiling on its
-        // own, so socialSecurityMatchesTheSheet() landed on 875 either way. See
-        // aBelowCeilingSalaryDetectsWhetherTheAllowanceBlockWronglyEntersTheSsoBase() below for the
-        // case this fixture could not previously catch.
+        // The whole พิเศษ block collapsed into slot 1 (only the total matters for the maths),
+        // SSO-EXCLUDED -- matching the sheet's own AF column ("In: เงินเดือน ... Out: ...
+        // รายได้ไม่คิดภาษี", and AF is salary-only in every row transcribed above). SSO-INCLUDED
+        // would silently put the whole พิเศษ block into the wage base -- undetectable by any
+        // assertion on these rows because every MAY_2026 row's base salary already saturates the
+        // ฿17,500 ceiling on its own, so socialSecurityMatchesTheSheet() lands on 875 either way.
+        // See aBelowCeilingSalaryDetectsWhetherTheAllowanceBlockWronglyEntersTheSsoBase() above for
+        // the case that does discriminate.
         return calculateClassified(
             new BigDecimal(row.baseSalary()), new BigDecimal(row.allowances()), BigDecimal.ZERO,
             false, allowances, month, specialPayTreatment);
@@ -438,20 +419,18 @@ class PayrollExcelReconciliationTest {
     /**
      * Drives {@link PayrollCalculator#calculateClassified} with salary, one allowance slot
      * (พิเศษ 1, classified {@code REGULAR_REPROJECT}) and director remuneration (also
-     * {@code REGULAR_REPROJECT}) -- the layered engine's equivalent of the legacy single-limb
-     * annualisation this file reconciled against before the repoint (no EXTRA_KNOWN_FREQUENCY /
+     * {@code REGULAR_REPROJECT}) -- the layered engine's equivalent of single-limb
+     * annualisation (no EXTRA_KNOWN_FREQUENCY /
      * EXTRA_CUMULATIVE_ACTUAL component in any of these fixtures, so the three-limb layering
      * collapses to exactly one limb). {@code ssoIncludeSpecialPay1} lets the two director-remuneration
-     * tests reproduce the legacy engine's salary-only SSO base precisely.
+     * tests use a salary-only SSO base precisely.
      *
-     * <p><b>Correction (2026-07-29, post-118 rebase):</b> the javadoc here used to claim this
-     * reproduces {@link PayrollCalculator#calculate} "figure-for-figure". That was true when it was
-     * written, against the single-limb engine that predated the rebase. The rebase replaced {@code
-     * calculate} with branch 117's own two-limb ป.96 engine, in which เงินพิเศษ (ข้อ 2.5) is taken at
-     * its actual cumulative amount and is explicitly NOT multiplied out by the months remaining --
-     * the opposite of what REGULAR_REPROJECT does here. {@code calculate} has zero production callers
-     * either way (see the class javadoc), so nothing here needs to match it; the seven tests above
-     * only need {@code calculateClassified} to reproduce the accountant's workbook, which they do.
+     * <p>This does NOT reproduce {@link PayrollCalculator#calculate} figure-for-figure: that is a
+     * two-limb ป.96 engine, in which เงินพิเศษ (ข้อ 2.5) is taken at its actual cumulative amount
+     * and is explicitly NOT multiplied out by the months remaining -- the opposite of what
+     * REGULAR_REPROJECT does here. {@code calculate} has zero production callers (see the class
+     * javadoc), so nothing here needs to match it; the seven tests above only need
+     * {@code calculateClassified} to reproduce the accountant's workbook.
      */
     private PayrollClassifiedCalculation calculateClassified(
             BigDecimal baseSalary, BigDecimal specialPay1, BigDecimal directorRemuneration,

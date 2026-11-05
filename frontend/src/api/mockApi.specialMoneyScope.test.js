@@ -1,18 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Mock-plumbing coverage for the mock's specialMoney namespace, modelled on the backend's own
+// Mock-plumbing coverage for the mock's specialMoney namespace, modelled on the backend's
 // SpecialMoneyScopeIntegrationTest (backend/src/test/java/th/co/glr/hr/specialmoney/
-// SpecialMoneyScopeIntegrationTest.java, real Postgres, real SpecialMoneyService — read in full
-// for this change). Per CLAUDE.md "Mock API contract" / "Permission changes must ship evidence",
-// this file is NOT itself authz evidence — the Java test above is; this one only pins that the
-// MOCK does not drift back to the pre-2026-08-10 model (a ฝ่าย manager could read/file for their
-// division).
+// SpecialMoneyScopeIntegrationTest.java, real Postgres, real SpecialMoneyService). Per CLAUDE.md
+// "Mock API contract" / "Permission changes must ship evidence", this file is NOT itself authz
+// evidence (the Java test is); it only pins that the MOCK does not drift back to the old model
+// (a ฝ่าย manager could read/file for their division).
 //
 // What IS mirrored, section by section (comments on each describe() below cite the match):
 //   1  list() division/self scoping         9  usage() quota scoping
 //   2,5,6,7 approve()/reject() CEO-only     10 cancel() scoping
-//   3  list() employee scoping              11 in-division confidentiality (the 2026-08-10 leak)
+//   3  list() employee scoping              11 in-division confidentiality (the leak)
 //   4  submit() on-behalf refusal              -- employees(), list(a)/(b), usage(c),
 //                                                 attachments/download(d), submit-on-behalf,
 //                                                 employeeOptions, self-still-works
@@ -20,19 +19,14 @@ import { api } from './mockApi.js';
 //     requestedById differs from employeeId, exercised through the mock's own seed (see below),
 //     not read out of the code -- the "legacy filer()" describe block.
 //   8  ceoCannotApproveAnEvidenceRequiredTypeWithNothingAttached -- mirrored directly below, in
-//     "approve() -- requireEvidence gate". CORRECTION: this comment used to claim
-//     specialMoneyUsage.test.js's approve() call already covered this, which was false --
-//     that file's approve() call is on a request with an attachment already in place (it exists to
-//     pin the payrollMonth-keyed usage accounting, not the evidence gate), so disabling the check
-//     in mockApi.js's specialMoney.approve() (~line 8803) left BOTH files green. See the new
-//     describe block for the real coverage, plus a cap-override-reason guard
-//     (SpecialMoneyService.ceoApproveFrom's ~line 272-278) that had no mock equivalent at all.
+//     "approve() -- requireEvidence gate", plus a cap-override-reason guard
+//     (SpecialMoneyService.ceoApproveFrom's ~line 272-278). specialMoneyUsage.test.js's approve()
+//     call does NOT cover the evidence gate: it approves a request with an attachment in place.
 //   -- `ceoApprovesStraightFromSubmittedForEveryEmployee` / `ceoCanStillClearALegacyManagerApprovedRow`
-//     remain not mirrored here: not a scope/role-gate case for THIS slice (GLA-46 is the authz
-//     divergence being pinned, not the plain-approve happy path or the legacy-status transition).
-//   - `evidenceCanOnlyBeAttachedByTheRequesterAndOnlyBeforeADecision`'s "not after a decision" half
-//     still isn't mirrored here: it needs a row already past a decision AND requestedById !==
-//     employeeId at once, which is a second, more specific fixture than the one below buys.
+//     remain not mirrored here: not a scope/role-gate case.
+//   - `evidenceCanOnlyBeAttachedByTheRequesterAndOnlyBeforeADecision`'s "not after a decision"
+//     half isn't mirrored: it needs a row already past a decision AND requestedById !==
+//     employeeId at once.
 //
 // Fixture, all from frontend/src/data/demoData.js's fixed seed (not random):
 //   - warehouse.manager@glr.co.th -> employees[5] (id 6), positionTh 'ผู้จัดการฝ่าย' for WHL, so
@@ -49,29 +43,26 @@ import { api } from './mockApi.js';
 //   - divAssign's status rule marks index 24 and 29 RSG (resigned/inactive): employee ids 25 and
 //     30 (codes GLR-1025 / GLR-1030) are the only two inactive employees in the whole seed --
 //     used to confirm employees() excludes them for hr/ceo too.
-//   - GLA-46 added request id 13 (buildDemoSpecialMoneyRequests, demoHr.js): employeeId
-//     employees[9] (id 10, WHL, same manager as employees[8] but NOT employees[8] itself),
-//     requestedById employees[5].id (the warehouse manager, id 6) -- a row filed before the
-//     2026-08-10 ruling, when a ฝ่าย manager could submit special-money on a report's behalf.
-//     Mirrors the Java IT's parkAsLegacyOnBehalfRow without a raw-SQL seam: `db` is still not
-//     exported, but the seed itself can now hold a row shaped exactly like that UPDATE produces.
-//     Its owner (employees[9]) has no login of their own in demoData.js's original users list, so
-//     GLA-46 also added one (`users` id 13, email employees[9].email, role 'employee', placed
-//     LAST so it can never win `db.users.find` for `role: 'employee'` over employees[8]'s entry) --
-//     see that file's comment on the new entry. `loginLegacyRowOwner()` below logs in as them.
+//   - Request id 13 (buildDemoSpecialMoneyRequests, demoHr.js): employeeId employees[9] (id 10,
+//     WHL, same manager as employees[8] but NOT employees[8] itself), requestedById employees[5].id
+//     (the warehouse manager, id 6) -- a row filed back when a ฝ่าย manager could submit
+//     special-money on a report's behalf. Mirrors the Java IT's parkAsLegacyOnBehalfRow without a
+//     raw-SQL seam: `db` is not exported, but the seed holds a row shaped exactly like that UPDATE
+//     produces. Its owner (employees[9]) has no login in demoData.js's original users list, so a
+//     `users` id 13 entry (email employees[9].email, role 'employee') sits LAST so it can never win
+//     `db.users.find` for `role: 'employee'` over employees[8]'s entry. `loginLegacyRowOwner()`
+//     below logs in as them.
 //
 // Ordering matters in this file: cancel() terminally mutates request id 1's status, so every
-// read-only assertion against it runs BEFORE the cancel section, and the cancel section is last.
-// approve()/reject() are asserted to reject before cancel() runs, so request id 1 is still
-// SUBMITTED for them. The new "legacy filer()" describe block mutates request id 13 (cancel) and
-// so likewise runs last, after the id-1 cancel section.
+// read-only assertion against it runs BEFORE the cancel section, which is last. approve()/reject()
+// are asserted to reject before cancel() runs, so request id 1 is still SUBMITTED for them. The
+// "legacy filer()" describe block mutates request id 13 (cancel) and likewise runs last.
 //
-// The requireEvidence-gate and cap-override-reason describe blocks (added alongside this comment)
-// each create their OWN fresh row via specialMoney.create() rather than reusing SEEDED_REQUEST_ID
-// or LEGACY_ROW_ID, specifically so they can sit anywhere in this file without caring about the
-// ordering above. The employees()-sort test similarly creates its own employee via
-// api.employees.create() (an ordinary HR onboarding call, unrelated to specialMoney) rather than
-// touching the seed; it only needs to run after the other three employees() tests, which it does.
+// The requireEvidence-gate and cap-override-reason describe blocks each create their OWN fresh row
+// via specialMoney.create() rather than reusing SEEDED_REQUEST_ID or LEGACY_ROW_ID, so they can sit
+// anywhere without caring about the ordering above. The employees()-sort test creates its own
+// employee via api.employees.create() rather than touching the seed; it only needs to run after
+// the other three employees() tests, which it does.
 
 const REPORT_EMPLOYEE_ID = 9; // employees[8].id
 const MANAGER_EMPLOYEE_ID = 6; // employees[5].id
@@ -80,7 +71,7 @@ const MANAGER_OWN_REQUEST_ID = 9; // employeeId 6 (the manager themselves), AID_
 const INACTIVE_EMPLOYEE_IDS = [25, 30]; // divAssign index 24 & 29 -> statuses[2] (RSG)
 const WIDE_WINDOW = { from: '2000-01-01', to: '2999-12-31' };
 
-// GLA-46 legacy on-behalf fixture -- see the header comment and demoHr.js's row-13 comment.
+// Legacy on-behalf fixture -- see the header comment and demoHr.js's row-13 comment.
 const LEGACY_ROW_OWNER_EMPLOYEE_ID = 10; // employees[9].id
 const LEGACY_ROW_OWNER_EMAIL = 'chutima.s@glr.co.th'; // employees[9].email, demoData.js users id 13
 const LEGACY_ROW_ID = 13; // employeeId 10, AID_FUNERAL, SUBMITTED, requestedById 6 (the manager)
@@ -159,16 +150,13 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
       }
     });
 
-    // The three tests above assert `codes` equals `[...codes].sort()`, but demoData.js's seed
-    // builds `code: GLR-${1001 + index}` directly from array index, so `db.employees` is ALREADY
-    // in code order before specialMoney.employees() ever runs -- that assertion could never go red,
-    // .sort() call or not. This test manufactures a genuine out-of-order pair instead of touching
-    // the seed: employees.create() (the ordinary HR onboarding endpoint) assigns the new hire the
-    // HIGHEST code so far (createEmployeeRecord: `code: GLR-${1000 + id}`, id = max existing + 1)
-    // but UNSHIFTS it to the FRONT of db.employees -- so the raw array now holds its highest-coded
-    // row first. Mutation-check: delete the `.sort((a, b) => pgAsc(a.code, b.code))` call in
-    // specialMoney.employees() and this test goes red (the other three do not, which is exactly the
-    // gap this closes).
+    // The three tests above assert `codes` equals `[...codes].sort()`, but demoData.js's seed builds
+    // `code: GLR-${1001 + index}` from array index, so `db.employees` is ALREADY in code order before
+    // specialMoney.employees() runs and that assertion could never go red. This test manufactures a
+    // genuine out-of-order pair: employees.create() assigns the new hire the HIGHEST code so far
+    // (createEmployeeRecord: `code: GLR-${1000 + id}`, id = max existing + 1) but UNSHIFTS it to the
+    // FRONT of db.employees. Mutation-check: delete the `.sort((a, b) => pgAsc(a.code, b.code))`
+    // call in specialMoney.employees() and this test goes red (the other three do not).
     it('is genuinely sorted by employeeCode -- not merely already-ordered in the seed', async () => {
       await loginHr();
       const { employee: created } = await api.employees.create({
@@ -367,9 +355,8 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
 
   // --- approve(): requireEvidence gate (mirrors the IT's
   // ceoCannotApproveAnEvidenceRequiredTypeWithNothingAttached, SpecialMoneyScopeIntegrationTest
-  // ~line 221 -- see the header comment's correction). Each test uses a FRESH row created here,
-  // rather than any shared fixture id, so this block can run anywhere relative to the ordering
-  // notes above without disturbing them.
+  // ~line 221). Each test uses a FRESH row created here, rather than any shared fixture id, so this
+  // block can run anywhere relative to the ordering notes above.
   describe('approve() — requireEvidence gate', () => {
     it('the CEO cannot approve an evidence-required type with nothing attached, and the row stays SUBMITTED', async () => {
       await loginReport();
@@ -414,9 +401,9 @@ describe('mockApi specialMoney — confidential-to-self scoping (2026-08-10 ruli
   // ~line 272-278 `approvedAmount > recheck.eligibleAmount()` check; see mockApi.js's specialMoney
   // header comment for exactly how -- and where -- the mock's `requestedAmount` approximation of
   // `eligibleAmount` diverges from Java). TRAVEL_PER_DIEM is the one type with evidenceRequired:
-  // false, so these rows reach the cap check without also needing an attachment. Each test uses
-  // its own fresh row: the guard mutates the row to APPROVED on success, and a shared row would
-  // let one test's approval hide the next test's guard check entirely.
+  // false, so these rows reach the cap check without also needing an attachment. Each test uses its
+  // own fresh row: the guard mutates the row to APPROVED on success, and a shared row would let one
+  // test's approval hide the next test's guard check.
   describe('approve() — cap-override-reason guard', () => {
     // One day as a domestic driver: Java's eligibleAmount is rate_driver (฿400, V66) x 1 day, so
     // requesting exactly ฿400 keeps every case below one Java would decide the same way. (A ฿500

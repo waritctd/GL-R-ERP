@@ -56,28 +56,22 @@ public class PayrollCalculator {
     private static final int THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR = 2024;
     private static final int THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR = 2026;
     private static final BigDecimal MIN_NET_AFTER_LEGAL_EXECUTION = new BigDecimal("20000.00");
-    // 2026-07-29 (V95): a ninth พิเศษ slot added (ค่าเช่าบ้าน). F7 correction (Opus review,
-    // 2026-07-30): this comment previously said "พิเศษ 9 -- ค่าเช่าบ้าน", which was V95's ORIGINAL
-    // append-only numbering. The handoff's section 9d renumbering (also 2026-07-29, later the same
-    // day) aligned the system to the accountant's workbook instead: ค่าเช่าบ้าน is พิเศษ 2 and พิเศษ 9
-    // is now เงินรางวัล/เงินช่วยเหลืออื่นๆ. See PayrollComponent and PayrollService#specialPayDtos for
-    // the full, CURRENT slot -> label mapping.
+    // There are nine พิเศษ slots, numbered to match the accountant's workbook: ค่าเช่าบ้าน is พิเศษ 2
+    // and พิเศษ 9 is เงินรางวัล/เงินช่วยเหลืออื่นๆ (V95 originally appended ค่าเช่าบ้าน as 9). See
+    // PayrollComponent and PayrollService#specialPayDtos for the full slot -> label mapping.
     private static final int SPECIAL_PAY_SLOTS = 9;
     // ป.96/2543 income classification. คำชี้แจง แบบ ภ.ง.ด.1 splits employment income into
     // เงินได้ที่จ่ายตามปกติ (ข้อ 2.1, annualised by x จำนวนคราวที่ต้องจ่าย) and เงินพิเศษที่จ่ายเป็น
     // ครั้งคราว (ข้อ 2.5, taken at its actual amount and taxed as the difference it makes).
     //
-    // CORRECTED 2026-07-29 ON THE OWNER'S STATEMENT. This was previously inferred from the slot labels
-    // and PayrollCarryForwardDtos' javadoc, which read พิเศษ 1-5 as standing company allowances. That
-    // inference was WRONG about how GL&R actually enters payroll. The owner's account:
+    // Do not infer this from the slot labels or PayrollCarryForwardDtos' javadoc, which read
+    // พิเศษ 1-5 as standing company allowances: that is not how GL&R actually enters payroll. The
+    // owner's account: "all of 1-8 is occasional for each employee in each month except พิเศษ 6
+    // that is commission that sales get every month, just the amount varies".
     //
-    //   "all of 1-8 is occasional for each employee in each month except พิเศษ 6 that is commission
-    //    that sales get every month, just the amount varies"
-    //
-    // RENUMBERED 2026-07-29 (handoff section 9d, "align the system to the accountant's workbook").
-    // ค่าเช่าบ้าน was inserted as พิเศษ 2, shifting every later slot by one -- คอมมิชชั่น moved from
-    // พิเศษ 6 to พิเศษ 7 (zero-based index 5 -> 6). This constant is updated to match; ค่า GPRS(เพิ่ม)
-    // now occupies the OLD index 5 and must NOT be treated as the recurring slot.
+    // Numbering follows the accountant's workbook: ค่าเช่าบ้าน is พิเศษ 2, so คอมมิชชั่น is พิเศษ 7
+    // (zero-based index 6). ค่า GPRS(เพิ่ม) occupies the OLD index 5 and must NOT be treated as the
+    // recurring slot.
     //
     // So the classification is NOT a contiguous slot range:
     //   พิเศษ 7 (คอมมิชชั่น) + commissionPay  -> REGULAR. Paid every คราว, so จำนวนคราวที่ต้องจ่าย is
@@ -89,19 +83,18 @@ public class PayrollCalculator {
     //                                            which is the case ข้อ 2.5 exists for. ข้อ 2.5 names
     //                                            ค่าล่วงเวลา and เงินโบนัส explicitly.
     //
-    // Base salary and ค่าตอบแทนกรรมการ are REGULAR. Owner-confirmed 2026-07-29: "director remuneration
-    // is every month but the pay may change once in a while." Paid every คราว, so ข้อ 2.1 -- a varying
+    // Base salary and ค่าตอบแทนกรรมการ are REGULAR (owner: "director remuneration
+    // is every month but the pay may change once in a while"). Paid every คราว, so ข้อ 2.1 -- a varying
     // amount is no obstacle, because ข้อ 2.4 requires exactly the re-projection this limb already does
     // (ให้คำนวณภาษีหัก ณ ที่จ่ายใหม่ทุกคราว), rebuilding from actual year-to-date each period.
     //
-    // NOT ON THE LIVE PATH. PayrollService#calculateLine calls only calculateClassified (task 2, this
-    // branch); this legacy calculate() method and its hardcoded slot split have zero production
-    // callers. This is a correctness fix to an engine that only PayrollCalculatorTest and the
-    // review-test suite still drive -- not a live-path fix. See PayrollComponent.SPECIAL_PAY_7's
+    // NOT ON THE LIVE PATH. PayrollService#calculateLine calls only calculateClassified; this
+    // legacy calculate() method and its hardcoded slot split have zero production callers and are
+    // driven only by PayrollCalculatorTest and the review-test suite. See PayrollComponent.SPECIAL_PAY_7's
     // javadoc for the equivalent, HR-classified treatment on the engine actually in use.
     private static final int COMMISSION_SPECIAL_PAY_INDEX = 6;
 
-    // ---- Task 2 additions (2026-07-29): per-component classified withholding engine -----------
+    // ---- per-component classified withholding engine -----------------------------------------
     private static final BigDecimal PARENT_ALLOWANCE_PER_HEAD = new BigDecimal("30000.00");
     private static final BigDecimal PARENT_ALLOWANCE_MAX = new BigDecimal("120000.00");
     private static final BigDecimal GARNISHMENT_SALARY_MAX_RATE = new BigDecimal("0.30");
@@ -109,7 +102,7 @@ public class PayrollCalculator {
     private static final BigDecimal GARNISHMENT_OVERTIME_MAX_RATE = new BigDecimal("0.30");
     private static final BigDecimal MIN_NET_AFTER_SEVERANCE_GARNISHMENT = new BigDecimal("300000.00");
 
-    // ข้อ 9 ล.ย.01 (V137, 2026-08-08) -- the single box covering กองทุนสำรองเลี้ยงชีพ / กบข. /
+    // ข้อ 9 ล.ย.01 (V137) -- the single box covering กองทุนสำรองเลี้ยงชีพ / กบข. /
     // กองทุนสงเคราะห์ครูโรงเรียนเอกชน / กอช. This is กอช.'s ฿30,000, the tightest of the four, NOT
     // PVD's 15%-of-wages-to-฿500,000. Source: rd.go.th's current allowance table for ปีภาษี 2568
     // (https://www.rd.go.th/65908.html, ข้อมูล ณ วันที่ 24 ธันวาคม 2568). The full reasoning for
@@ -168,7 +161,7 @@ public class PayrollCalculator {
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
         BigDecimal unpaidLeaveDeduction = money(dailyRate.multiply(unpaidLeaveDays));
-        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): a positive pre-tax CREDIT reversing
+        // Cancel-after-close reversal, auto-refund: a positive pre-tax CREDIT reversing
         // a PRIOR month's over-deduction (the leave that caused it was cancelled after that month's
         // payroll had already processed -- see hr.leave_payroll_correction / LeaveService#cancel).
         // Deliberately kept as its own field rather than netted into unpaidLeaveDays beforehand --
@@ -234,8 +227,8 @@ public class PayrollCalculator {
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
 
         // จำนวนคราวที่ต้องจ่าย remaining this tax year, INCLUDING this period (คำชี้แจง ภ.ง.ด.1 ข้อ 2.1).
-        // PayrollService supplies it so a leaver's final period lands on 1; falling back to
-        // 13 - month reproduces the pre-ป.96 behaviour for any call site that does not.
+        // No production caller supplies it today, so this falls back to 13 - month (the pre-ป.96
+        // behaviour); a leaver's final period therefore does NOT land on 1 (ข้อ 2.10 gap).
         int monthsRemaining = input.remainingPayPeriods() > 0
             ? input.remainingPayPeriods()
             : Math.max(1, 13 - input.payrollMonthValue());
@@ -287,7 +280,7 @@ public class PayrollCalculator {
         // the ข้อ 2.9 December true-up -- no special-casing needed. It would equally serve ข้อ 2.10's
         // final-period true-up for a leaver, but PayrollService never produces a 1 for that reason:
         // resignations are not recorded in this platform, so ข้อ 2.10 is a known gap and only December
-        // reaches this branch in production. See PayrollService#remainingPayPeriods.
+        // reaches this branch in production.
         //
         // CEILING (added after review): the two limbs are asymmetric by design -- the regular limb's
         // credit is spread over the periods that remain (ข้อ 2.3) while the variable limb's charge
@@ -305,12 +298,12 @@ public class PayrollCalculator {
         BigDecimal withholdingTax = min(
             money(regularWithholdingRaw.add(variableWithholdingRaw).max(ZERO)),
             collectableThisYear);
-        // Withholding-tax override (2026-07-24, V88). GUARDRAIL: everything above -- progressiveTax,
+        // Withholding-tax override (V88). GUARDRAIL: everything above -- progressiveTax,
         // annualTax, taxableAnnualIncome, projectedAnnualIncome, the projection and allowances -- is
         // computed and reported UNCHANGED. When an override is present we ONLY substitute the final
         // withheld amount here; every downstream figure (legal-execution floor, totalDeductions, net)
         // then flows from the substituted value automatically. A null override (the common case) is a
-        // no-op and reproduces today's behaviour byte-for-byte. Zero is a legitimate override (withhold
+        // no-op. Zero is a legitimate override (withhold
         // nothing) and is honoured -- hence the explicit null check rather than a truthiness/sign test.
         BigDecimal withholdingTaxOverride = input.withholdingTaxOverride() == null
             ? null
@@ -331,8 +324,8 @@ public class PayrollCalculator {
         // income). Reported rather than left invisible: withholdingTax alone just reads 0.00, which is
         // indistinguishable from "nothing was due this period".
         //
-        // Computed AFTER the override, deliberately. It used to be computed before, which made it
-        // blind to the substitution: an HR override in December could push the employee further past
+        // Computed AFTER the override, deliberately. Computed before, it would be blind to the
+        // substitution: an HR override in December could push the employee further past
         // the year's liability while the payslip went on printing the smaller pre-override figure --
         // understated by exactly the override, on the one document this exists to make truthful, and
         // contradicted by the override clause in calculationNote on the same page.
@@ -525,11 +518,10 @@ public class PayrollCalculator {
     }
 
     /**
-     * Task 2 (2026-07-29): computes withholding from the per-employee, per-component tax treatment
-     * and SSO inclusion data (V95/V96), replacing the hardcoded single-limb split {@link #calculate}
-     * still implements for its frozen regression suite. See docs/agent-handoffs/119_feat-payroll-
-     * classification-and-hr-declarations.md section 1 for the three treatments and their statutory
-     * citations (ป.96/2543 ข้อ 1(4)/(5)/(6)).
+     * Computes withholding from the per-employee, per-component tax treatment and SSO inclusion
+     * data (V95/V96); {@link #calculate} still implements the hardcoded single-limb split for its
+     * frozen regression suite. The three treatments' statutory citations are ป.96/2543 ข้อ
+     * 1(4)/(5)/(6).
      *
      * <p><b>Blocker:</b> a component with a non-zero amount and no stored treatment rejects the run
      * (409) naming the employee and the component -- a zero-amount component never blocks, so adding
@@ -544,8 +536,7 @@ public class PayrollCalculator {
      * CUMULATIVE limb is taxed as the marginal difference of layering the full year-to-date cumulative
      * actual on top of THAT, less whatever has already been withheld on this limb this year. This
      * telescopes to the correct total annual liability by year end regardless of month-to-month
-     * allowance drift -- see the task-2 handoff progress notes for the algebraic argument and the
-     * 12-month integration test that exercises it.
+     * allowance drift (the 12-month integration test exercises it).
      */
     public PayrollClassifiedCalculation calculateClassified(PayrollClassifiedCalculationInput input) {
         PayrollYearToDate yearToDate = input.yearToDate() == null ? PayrollYearToDate.empty() : input.yearToDate();
@@ -566,7 +557,7 @@ public class PayrollCalculator {
             PayrollTaxTreatment treatment = input.treatmentOf(component);
             if (treatment == null) {
                 continue; // zero amount (guaranteed by requireEveryNonZeroComponentClassified above,
-                          // which now also catches a NEGATIVE amount -- defect 4 fix, 2026-07-29)
+                          // which also catches a NEGATIVE amount)
             }
             switch (treatment) {
                 case REGULAR_REPROJECT -> regularSumRaw = regularSumRaw.add(amount);
@@ -579,18 +570,18 @@ public class PayrollCalculator {
         cumulativeSum = money(cumulativeSum);
 
         BigDecimal baseSalary = money(input.amountOf(PayrollComponent.SALARY));
-        // Daily-rate support (2026-07-30): for a pay_type = 'D' employee, baseSalary here is this
+        // Daily-rate support: for a pay_type = 'D' employee, baseSalary here is this
         // PERIOD'S GROSS pay (rate * daysWorked, computed by PayrollService#calculateLine) -- dividing
         // it by 30 would derive a wrong, days-worked-dependent "daily rate" (e.g. ฿11,250/30 = ฿375
         // when the true rate is ฿450). dailyRateOverride carries the employee's ACTUAL per-day rate
         // (hr.employee.current_salary) straight through in that case; null (every monthly employee)
-        // reproduces the pre-existing baseSalary/30 derivation exactly.
+        // derives the rate as baseSalary/30.
         BigDecimal dailyRate = input.dailyRateOverride() != null
             ? money(input.dailyRateOverride())
             : baseSalary.divide(THIRTY, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal hourlyRate = dailyRate.divide(EIGHT, RATE_SCALE, RoundingMode.HALF_UP);
         BigDecimal unpaidLeaveDays = quantity(input.unpaidLeaveDays());
-        // FLOORED to whole baht, not HALF_UP (owner decision, 2026-08-29). เงินเดือน/30 almost never
+        // FLOORED to whole baht, not HALF_UP. เงินเดือน/30 almost never
         // divides evenly -- 29,495/30 = 983.1667 a day -- so this is the one earnings-or-deduction
         // figure the engine COMPUTES that would otherwise put satang on a payslip. Rounding a
         // deduction DOWN deducts no more than was actually earned-and-not-worked, which is the side
@@ -608,27 +599,27 @@ public class PayrollCalculator {
         BigDecimal nonTaxableIncome = money(input.amountOf(PayrollComponent.NON_TAXABLE_INCOME));
 
         // Pretax deductions (unpaid leave net of refund, other pretax) apply against the REGULAR limb
-        // only -- warning-letter deduction no longer reduces taxable income at all (handoff section 6,
-        // post-tax now), and an unearned customer return has already been netted out of
+        // only -- warning-letter deduction does not reduce taxable income at all (it is post-tax),
+        // and an unearned customer return has already been netted out of
         // componentAmounts.get(COMMISSION_PAY) by the caller, so it never reaches this subtraction.
         BigDecimal regularSumAfterLeave = money(regularSumRaw
             .subtract(unpaidLeaveDeduction)
             .add(leaveDeductionRefund)
             .subtract(otherPretaxDeduction)
             .max(ZERO));
-        // Defect 4 fix (review, 2026-07-29): the legacy single-limb engine floors grossTaxableIncome
-        // at zero ONCE, on the combined total (see #calculate above). This layered rewrite floors
-        // regularSumAfterLeave on its own above (needed so the REGULAR limb's own annual reprojection
-        // never goes negative), but that is not a substitute for flooring the combined figure: a
-        // classified NEGATIVE component (e.g. an EXTRA_CUMULATIVE_ACTUAL commission clawback) can make
+        // The legacy single-limb engine floors grossTaxableIncome at zero ONCE, on the combined
+        // total (see #calculate above). This layered engine also floors regularSumAfterLeave on its
+        // own above (needed so the REGULAR limb's own annual reprojection never goes negative), but
+        // that is not a substitute for flooring the combined figure: a classified NEGATIVE
+        // component (e.g. an EXTRA_CUMULATIVE_ACTUAL commission clawback) can make
         // knownSum/cumulativeSum negative enough to drag the total below zero even though
-        // regularSumAfterLeave alone was already non-negative. Restored here.
+        // regularSumAfterLeave alone was already non-negative. So the combined total is floored here.
         BigDecimal grossTaxableIncome = money(regularSumAfterLeave.add(knownSum).add(cumulativeSum).max(ZERO));
 
-        // Defect 2 fix (review, 2026-07-29): the legacy engine derives the SSO wage base from
+        // The legacy engine derives the SSO wage base from
         // ssoWageBase(baseSalary - unpaidLeaveDeduction + leaveDeductionRefund) -- wages ACTUALLY
-        // paid, not the nominal salary -- and the 2026-07-23 cancel-after-close auto-refund flows
-        // through that same subtraction with the opposite sign. This rewrite must preserve that:
+        // paid, not the nominal salary -- and the cancel-after-close auto-refund flows
+        // through that same subtraction with the opposite sign. This engine must preserve that:
         // applied only to the SALARY component's own contribution, because unpaidLeaveDeduction is
         // computed off baseSalary/dailyRate and has no meaning against other SSO-included components
         // (commission, OT, etc.), which are separately and fully paid regardless of this period's
@@ -657,14 +648,14 @@ public class PayrollCalculator {
         BigDecimal regularAnnualProjection = money(money(yearToDate.regularLimbTaxableIncome())
             .add(regularSumAfterLeave.multiply(BigDecimal.valueOf(monthsRemaining))));
         BigDecimal knownThisPeriod = knownSum;
-        // F1 fix (Opus review, 2026-07-30): the running total of every EXTRA_KNOWN_FREQUENCY baht
+        // The running total of every EXTRA_KNOWN_FREQUENCY baht
         // settled so far this tax year, THIS period included -- see PayrollYearToDate#knownLimbTaxableIncome's
-        // javadoc. knownThisPeriod above stays this period's own amount only (Stage 2 below is
-        // unchanged: ข้อ 1(5) taxes a known-frequency payment as its own one-off marginal difference at
+        // javadoc. knownThisPeriod above stays this period's own amount only (Stage 2 below:
+        // ข้อ 1(5) taxes a known-frequency payment as its own one-off marginal difference at
         // the moment it is paid, and that never changes). This YTD total exists solely so Stage 3 can
         // layer the cumulative limb on top of the TRUE running income -- without it, the moment a
-        // bonus's own period ends, the cumulative limb's marginal tax silently forgot the bonus had
-        // ever been paid and re-taxed the same brackets a second time, under-withholding the year.
+        // bonus's own period ends, the cumulative limb's marginal tax would forget the bonus had
+        // ever been paid and re-tax the same brackets a second time, under-withholding the year.
         BigDecimal knownLimbYtdTotal = money(money(yearToDate.knownLimbTaxableIncome()).add(knownThisPeriod));
         BigDecimal cumulativeYtdTotal = money(money(yearToDate.cumulativeLimbTaxableIncome()).add(cumulativeSum));
         BigDecimal fullAnnualProjection = money(regularAnnualProjection.add(knownThisPeriod).add(cumulativeYtdTotal));
@@ -674,18 +665,18 @@ public class PayrollCalculator {
             allowances, fullAnnualProjection, taxExpenseDeduction, yearToDate, socialSecurity, monthsRemaining,
             input.taxYear());
 
-        // Defect 1 fix (review, 2026-07-29): the invariant this engine must satisfy is that total
+        // The invariant this engine must satisfy is that total
         // annual taxable income is always (fullAnnualProjection - taxExpenseDeduction -
         // allowanceBreakdown.total()), floored at zero exactly ONCE -- the three ป.96 limbs decide
-        // WHEN tax is withheld, never how much annual income is taxable. The previous version floored
-        // the REGULAR limb's own net figure at zero BEFORE layering KNOWN and CUMULATIVE on top, so
-        // any allowance/expense headroom the regular limb alone could not absorb (e.g. a modest salary
-        // with real declared allowances, plus a large irregular commission) was destroyed by that
-        // early clamp instead of sheltering the other two limbs.
+        // WHEN tax is withheld, never how much annual income is taxable. Flooring
+        // the REGULAR limb's own net figure at zero BEFORE layering KNOWN and CUMULATIVE on top would
+        // destroy any allowance/expense headroom the regular limb alone could not absorb (e.g. a
+        // modest salary with real declared allowances, plus a large irregular commission) instead of
+        // letting it shelter the other two limbs.
         //
-        // Fixed by carrying the UNCLAMPED running net through all three stages and flooring only the
-        // per-stage figure used to report/tax that stage -- never re-deriving a later stage from an
-        // already-clamped earlier one. netRegular/netWithKnown/netWithCumulative below may be
+        // So the UNCLAMPED running net is carried through all three stages and only the
+        // per-stage figure used to report/tax that stage is floored -- a later stage is never
+        // re-derived from an already-clamped earlier one. netRegular/netWithKnown/netWithCumulative below may be
         // negative; progressiveTax(...) already returns zero for a negative input (every bracket's
         // income.compareTo(lower) <= 0 check is true), so the explicit .max(ZERO) on each *Taxable
         // variable exists only to keep the reported figures non-negative, not to change what gets
@@ -696,11 +687,11 @@ public class PayrollCalculator {
         BigDecimal netRegular = regularAnnualProjection.subtract(deductionsTotal);
         BigDecimal netWithKnown = netRegular.add(knownThisPeriod);
         BigDecimal netWithCumulative = netWithKnown.add(cumulativeYtdTotal);
-        // F1 fix (Opus review, 2026-07-30): Stage 3's OWN base, layering the cumulative limb on top of
+        // Stage 3's OWN base, layering the cumulative limb on top of
         // the regular limb plus every known-limb baht settled THIS YEAR TO DATE (not just this
         // period's) -- see the knownLimbYtdTotal comment above. Deliberately NOT used for the reported
         // taxableAnnualIncome/annualTax fields below (netWithCumulative/taxableWithCumulative/
-        // annualTaxWithCumulative stay as before, this period's known amount only, by design -- see
+        // annualTaxWithCumulative use this period's known amount only, by design -- see
         // PayrollYearToDate's javadoc on why a settled known-limb payment is not carried into any LATER
         // PROJECTION); netWithCumulativeYtd exists solely to get the CUMULATIVE limb's own marginal
         // WITHHOLDING right.
@@ -719,9 +710,9 @@ public class PayrollCalculator {
 
         // ---- Stage 3 (ข้อ 6): EXTRA_CUMULATIVE_ACTUAL, full year-to-date actual layered on top, less
         // tax already withheld on this limb. taxableWithCumulative/annualTaxWithCumulative (reported on
-        // the line, unchanged) still reflect the OLD narrower base; withholdCumulative below is computed
-        // from the YTD-known-inclusive base (netWithCumulativeYtd) so the MONEY withheld is correct even
-        // though the reported projection fields are not (F1 fix -- see comments above).
+        // the line) reflect the narrower base (this period's known amount only); withholdCumulative
+        // below is computed from the YTD-known-inclusive base (netWithCumulativeYtd) so the MONEY
+        // withheld is correct even though the reported projection fields are not (see comments above).
         BigDecimal taxableWithCumulative = money(netWithCumulative.max(ZERO));
         BigDecimal annualTaxWithCumulative = progressiveTax(taxableWithCumulative);
         BigDecimal taxableWithCumulativeYtd = money(netWithCumulativeYtd.max(ZERO));
@@ -732,17 +723,17 @@ public class PayrollCalculator {
             .subtract(money(yearToDate.cumulativeLimbWithholdingTax()))
             .max(ZERO);
 
-        // CROSS-LIMB CEILING (fix, 2026-09-26): restores the legacy #calculate()'s collectableThisYear
-        // guard (see that method's own comment above, ~line 292) for this classified engine, which
-        // dropped it in the rewrite. Each limb above is floored at ZERO independently against its OWN
+        // CROSS-LIMB CEILING: the legacy #calculate()'s collectableThisYear
+        // guard (see that method's own comment above) applied to this classified engine.
+        // Each limb above is floored at ZERO independently against its OWN
         // prior YTD withholding on THAT limb only -- so when one limb has already been over-withheld
         // (its YTD withholding on that limb exceeds its own projected annual tax), the ZERO floor
         // destroys the excess instead of letting it offset a DIFFERENT limb's charge this period. A
         // salaried employee whose regular-limb withholding already exceeds the year's FULL liability
         // (regular + known + cumulative combined) still gets charged the full commission (cumulative
         // limb) tax the moment one lands, because withholdCumulative only floors against its own YTD,
-        // never against what the regular limb already over-collected -- the double-charge this fix
-        // closes.
+        // never against what the regular limb already over-collected -- the double-charge this
+        // ceiling prevents.
         //
         // collectableThisYear is the tax still owed for the WHOLE year across ALL three limbs: the
         // full annual liability once this period's cumulative-limb income is known
@@ -774,13 +765,13 @@ public class PayrollCalculator {
             crossLimbReduction = crossLimbReduction.subtract(reduceRegular);
         }
 
-        // Whole-baht withholding (owner decision, 2026-08-28). The ภ.ง.ด.1 figure and the KBank PCT
+        // Whole-baht withholding. The ภ.ง.ด.1 figure and the KBank PCT
         // transfer amount are both rendered straight from the stored columns -- Pnd1Exporter emits
         // withholding_tax with two decimals, KBankPctExporter emits net_amount as satang -- so a
         // satang here is a satang on the filing and on the bank file. Rounding the TAX (rather than
         // net_amount) is what keeps net = gross - deductions foot: net follows for free once every
         // deduction is whole. Same HALF_UP house convention as SSO (มาตรา 46 วรรคท้าย, see wholeBaht)
-        // and commission (PayrollService#commissionWholeBaht); unlike SSO it has no statutory basis.
+        // and commission (rounded whole-baht in PayrollService); unlike SSO it has no statutory basis.
         //
         // The <=0.50 rounding residual is credited to the REGULAR limb, matching the override path
         // below: the regular limb is the catch-all, and moving it there rather than into the
@@ -820,11 +811,10 @@ public class PayrollCalculator {
                 + " (computed projection retained for transparency).";
         }
 
-        // F3 fix (Opus review, 2026-07-30): PayrollService used to hardcode excessWithheldToDate to
-        // ZERO on every processed line, making PayslipRenderer's over-withholding notice permanently
-        // unreachable and losing the figure spec section 8 requires be kept "for the ภ.ง.ด.1 working
-        // papers and reconciliation". This is the classified engine's own analogue of the legacy
-        // #calculate()'s excessWithheldToDate (see that field's own comment above #calculate's return
+        // Spec section 8 requires this figure be kept "for the ภ.ง.ด.1 working papers and
+        // reconciliation", and PayslipRenderer's over-withholding notice depends on it (a hardcoded
+        // ZERO would make that notice unreachable). This is the classified engine's own analogue of
+        // the legacy #calculate()'s excessWithheldToDate (see that field's own comment above #calculate's return
         // statement): the running total ACTUALLY withheld this tax year AS AT THE END OF THIS PERIOD
         // (yearToDate.withholdingTax() -- every PRIOR period's own persisted total across all three
         // limbs -- plus THIS period's own withholdingTax, taken AFTER the override above, for the same
@@ -832,7 +822,7 @@ public class PayrollCalculator {
         // true liability must show up here, not be silently absorbed) exceeding the TRUE annual
         // liability given everything known so far this year -- annualTaxWithCumulativeYtd, NOT the
         // narrower taxableAnnualIncome/annualTax fields reported below, because those deliberately
-        // exclude a settled known-limb payment from later months (F1) and would over-report an excess
+        // exclude a settled known-limb payment from later months and would over-report an excess
         // that reprojects itself away next period rather than one that is genuinely stranded.
         //
         // In the normal (no override) path this is always zero: each limb's own withholding is already
@@ -940,13 +930,12 @@ public class PayrollCalculator {
     }
 
     /**
-     * Defect 4 fix (review, 2026-07-29): was {@code amount.signum() > 0}, so a NEGATIVE unclassified
-     * component (a commission clawback fed straight from {@code CommissionService}, per the June 2026
-     * production incident recorded in the task-2 handoff §6) skipped this blocker entirely and was
-     * then silently dropped from every limb in {@link #calculateClassified} -- while still being
-     * reported verbatim on the payslip line, breaking the invariant that itemised earnings sum to
-     * {@code grossEarnings}. Decision: a negative amount is treated exactly like a positive one for
-     * this purpose -- it is genuine, non-zero money movement, so it must be classified before it can
+     * Checks {@code amount.signum() != 0}, not {@code > 0}: a NEGATIVE unclassified component (a
+     * commission clawback fed straight from {@code CommissionService}, as in a past production
+     * incident) would otherwise skip this blocker and be silently dropped from every limb in
+     * {@link #calculateClassified} -- while still being reported verbatim on the payslip line,
+     * breaking the invariant that itemised earnings sum to {@code grossEarnings}. A negative amount
+     * is treated exactly like a positive one for this purpose -- it is genuine, non-zero money movement, so it must be classified before it can
      * be included in any limb, same as a positive amount. This is deliberately NOT a separate
      * "negative amounts always block" rule; a negative amount on an ALREADY-classified component
      * (e.g. an ongoing rep's cumulative commission with a clawback this month) sails through exactly
@@ -967,7 +956,7 @@ public class PayrollCalculator {
         }
     }
 
-    /** Garnishment cap by payment type (handoff section 7). See {@link PayrollGarnishmentType}. */
+    /** Garnishment cap by payment type. See {@link PayrollGarnishmentType}. */
     private BigDecimal garnishmentDeduction(
         PayrollGarnishmentType type,
         BigDecimal requested,
@@ -991,11 +980,10 @@ public class PayrollCalculator {
                 yield money(min(requested, cap));
             }
             case OVERTIME_OR_DILIGENCE -> {
-                // Defect fix (Opus review, 2026-07-29): was SPECIAL_PAY_4. Under the workbook
-                // realignment (see PayrollComponent's javadoc / PayrollService#specialPayDtos) slot 4
-                // is now ค่าตำแหน่ง (a position allowance), not เบี้ยขยันประจำ -- that moved to slot 5.
-                // Using the wrong slot let a position allowance quietly inflate the ป.วิ.พ. ม.302
-                // เบี้ยขยัน/ค่าล่วงเวลา garnishment cap.
+                // Slot 5, not SPECIAL_PAY_4: under the workbook numbering (see PayrollComponent's
+                // javadoc / PayrollService#specialPayDtos) slot 4 is ค่าตำแหน่ง (a position
+                // allowance) and เบี้ยขยันประจำ is slot 5. Using slot 4 would let a position
+                // allowance quietly inflate the ป.วิ.พ. ม.302 เบี้ยขยัน/ค่าล่วงเวลา garnishment cap.
                 BigDecimal base = money(input.amountOf(PayrollComponent.OVERTIME_PAY))
                     .add(money(input.amountOf(PayrollComponent.SPECIAL_PAY_5)));
                 BigDecimal cap = percentOf(base, GARNISHMENT_OVERTIME_MAX_RATE.toPlainString());
@@ -1041,8 +1029,8 @@ public class PayrollCalculator {
             SSO_YEAR_CAP,
             money(yearToDate.socialSecurity()).add(currentSocialSecurity.multiply(BigDecimal.valueOf(monthsRemaining)))
         );
-        // Per-head caps (V93). บุตร and อุปการะคนพิการ used to be free-typed baht amounts the engine
-        // trusted without limit -- the only two allowances that were not clamped. The law is per head:
+        // Per-head caps (V93). บุตร and อุปการะคนพิการ are free-typed baht amounts that must be
+        // clamped, because the law is per head:
         // 30,000 per child, 60,000 for the second and later child born from พ.ศ. 2561, and 60,000 per
         // disabled person cared for. The counts come from แบบ ล.ย.01, which asks for exactly that.
         BigDecimal childCap = childAllowanceCap(input);
@@ -1123,16 +1111,15 @@ public class PayrollCalculator {
     }
 
     /**
-     * ค่าอุปการะเลี้ยงดูบิดามารดา (handoff section 4, task 2, 2026-07-29): ฿30,000 PER qualifying
+     * ค่าอุปการะเลี้ยงดูบิดามารดา: ฿30,000 PER qualifying
      * parent, ฿120,000 = the four-parent maximum -- NOT a flat cap regardless of count. Prefers {@code
-     * parentCareCount} (V95's {@code hr.employee_tax_allowance.parent_care_count}, wired by this
-     * task) when a count has been declared; falls back to the legacy flat-cap treatment of the
-     * pre-existing baht-typed {@code parentCareAllowance} field when no count is set (0 or null),
-     * which reproduces {@link PayrollCalculator}'s pre-task-2 behaviour exactly and is what every
-     * call site written before {@code parentCareCount} existed still gets (including {@code
-     * PayrollExcelReconciliationTest}, which sets neither field). This is the reconciliation rule V95
-     * flagged as an open gap ("two sources of truth for one allowance") -- count wins once declared,
-     * the baht figure is a pre-count-migration fallback, never both applied together.
+     * parentCareCount} (V95's {@code hr.employee_tax_allowance.parent_care_count}) when a count has
+     * been declared; falls back to the legacy flat-cap treatment of the baht-typed {@code
+     * parentCareAllowance} field when no count is set (0 or null), which is what every call site
+     * written before {@code parentCareCount} existed still gets (including {@code
+     * PayrollExcelReconciliationTest}, which sets neither field). This is the reconciliation rule for
+     * the "two sources of truth for one allowance" gap V95 flagged -- count wins once declared, the
+     * baht figure is a pre-count-migration fallback, never both applied together.
      */
     private BigDecimal parentCareAllowance(PayrollTaxAllowanceInput input) {
         Integer count = input.parentCareCount();
@@ -1142,15 +1129,15 @@ public class PayrollCalculator {
         return min(money(input.parentCareAllowance()), PARENT_ALLOWANCE_MAX);
     }
 
-    // Defect fix consequence (Opus review, 2026-07-29): retirementAllowance's 117 signature (below)
+    // retirementAllowance's signature (below)
     // carries taxYear so the SSF sunset (SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR) applies here too -- see
-    // PayrollCalculator#calculateClassified, which now resolves its own taxYear from
+    // PayrollCalculator#calculateClassified, which resolves its own taxYear from
     // input.payrollMonthValue() combined with the caller-supplied year (see PayrollService#calculateLine).
     private BigDecimal retirementAllowance(
         PayrollTaxAllowanceInput input, BigDecimal projectedAnnualIncome, int taxYear) {
         BigDecimal remainingCluster = new BigDecimal("500000.00");
 
-        // ข้อ 9 ล.ย.01 -- RESTORED 2026-08-08 (V137), reversing V99. Taken FIRST, restoring V93's
+        // ข้อ 9 ล.ย.01 (V137, which reversed V99). Taken FIRST, per V93's
         // rationale: a contribution taken at source cannot be stopped by the employee, so if the
         // cluster is going to run out it must run out against the voluntary purchases below rather
         // than against money already withheld from their salary.
@@ -1184,7 +1171,7 @@ public class PayrollCalculator {
         BigDecimal providentFund = min(money(input.providentFundAllowance()), PROVIDENT_FUND_ALLOWANCE_CAP);
         // Defensive, and currently DEAD: this term is taken first, so remainingCluster is still the
         // full ฿500,000 here and the ฿30,000 sub-cap above has already bound. Deleting this line
-        // turns no test red (mutation-checked 2026-08-08) -- it is kept for symmetry with the terms
+        // turns no test red (mutation-checked) -- it is kept for symmetry with the terms
         // below and to stay correct if the order or the sub-cap ever changes. Do not read its
         // presence as evidence that anything exercises it.
         providentFund = min(providentFund, remainingCluster);
@@ -1272,12 +1259,12 @@ public class PayrollCalculator {
      * and the NUMERIC(12,2) columns keep a stable scale (0 -> 2 never rounds).
      *
      * <p>Used for เงินสมทบ only. มาตรา 46 วรรคท้าย makes the whole-baht rounding of an SSO
-     * contribution explicit in the statute, and {@code SsoExporter#wholeBaht} has always applied it
-     * when writing the สปส.1-10 filing. Until 2026-08-25 the ENGINE did not, so a wage whose 5% has
-     * satang (the only July 2026 case: ฿11,250 -> ฿562.50) was stored, shown on the payslip and
-     * deducted from net pay at ฿562.50 while the filing declared ฿563 — the payslip and the return
-     * disagreed by design. Rounding here instead of only at the exporter makes the deduction the
-     * employee actually sees the same number the SSO office receives.
+     * contribution explicit in the statute, and {@code SsoExporter#wholeBaht} applies it when
+     * writing the สปส.1-10 filing. If the ENGINE did not, a wage whose 5% has satang (e.g. ฿11,250
+     * -> ฿562.50) would be stored, shown on the payslip and deducted from net pay at ฿562.50 while
+     * the filing declared ฿563 — the payslip and the return would disagree. Rounding here, not only
+     * at the exporter, makes the deduction the employee actually sees the same number the SSO office
+     * receives.
      */
     private BigDecimal wholeBaht(BigDecimal value) {
         return (value == null ? ZERO : value).setScale(0, RoundingMode.HALF_UP).setScale(MONEY_SCALE);

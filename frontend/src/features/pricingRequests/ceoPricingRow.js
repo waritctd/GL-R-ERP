@@ -54,7 +54,7 @@ export function lineProfitThb(costThb, netPriceInCurrency, fxRate) {
  * using the same 2dp ตร.ม.->แผ่น reciprocal, so saving it gives back the formula price. 7% = the Thai
  * document's VAT. null when either input is missing.
  */
-export function specialPriceSqmFromFormula(pricePerPiece, sqmPerPiece) {
+function specialPriceSqmFromFormula(pricePerPiece, sqmPerPiece) {
   const price = Number(pricePerPiece);
   const sqm = Number(sqmPerPiece);
   if (!(price > 0) || !(sqm > 0)) return null;

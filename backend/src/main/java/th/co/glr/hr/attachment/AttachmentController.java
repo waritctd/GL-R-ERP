@@ -101,13 +101,13 @@ public class AttachmentController {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์"));
         requireAttachmentWriteAccess(dto, user);
         String filePath = attachments.findFilePathById(id);
-        // F5 fix (2026-07-30): CommissionService#createFromDeal registers this SAME physical file
+        // CommissionService#createFromDeal registers this SAME physical file
         // a second time, independently, as ข้อ 15 evidence (hr.file_attachment, referenced by
         // sales.invoice_details.invoice_attachment_id) — and the ticket's own creator is always
         // the deal's sales rep, i.e. the person the commission pays. Without this check, that rep
         // could reach this endpoint (requireAttachmentWriteAccess admits ticket participants) and
         // delete both the row AND the file out from under an approved commission — invoice_
-        // attachment_id would stay non-null (V102's CHECK sees no reason to object) while the
+        // attachment_id would stay non-null (the CHECK sees no reason to object) while the
         // file it points at silently stops existing. Refuse outright rather than just skipping
         // the disk delete, so the ticket's own attachment list also stays truthful about what
         // evidence still exists.
@@ -118,10 +118,10 @@ public class AttachmentController {
         attachments.delete(id);
         auditService.record(user, "DELETE_ATTACHMENT", "attachment", id, dto, null);
         // Deferred to commit, not done here: this method is @Transactional, and a disk delete is
-        // not. Removing the bytes inline meant a rollback restored the sales.attachment row while
+        // not. Removing the bytes inline would let a rollback restore the sales.attachment row while
         // the file it points at stayed gone — a document the deal still lists and nobody can ever
         // download again. See FileStorageService#deleteOnCommit, the mirror of the deleteOnRollback
-        // guard PR #708 added for the storing direction.
+        // guard for the storing direction.
         fileStorage.deleteOnCommit(filePath);
         return Map.of("ok", true);
     }
@@ -130,22 +130,23 @@ public class AttachmentController {
      * Reading a deal's documents is the same access question as reading the deal
      * ({@code TicketService#requireViewAccess}) — see {@link TicketAccessPolicy#canViewDocuments}.
      *
-     * <p>#389: this used to be one blanket {@code MANAGER_ROLES = {hr, sales_manager, ceo}} set
-     * that answered BOTH read and write, and it was wrong in both directions — {@code hr} could
-     * download every customer contract, PO and tax invoice on every deal despite being refused the
-     * deal itself everywhere else, while {@code account} could not open the receipt it is required
-     * to confirm money against. Read and write are now two separate questions, both answered by
-     * {@link TicketAccessPolicy} rather than by a role list local to this controller.
+     * <p>Read and write are two separate questions, both answered by {@link TicketAccessPolicy}
+     * rather than by a role list local to this controller. One blanket manager-role set for both
+     * is wrong in both directions — {@code hr} would download every customer contract, PO and tax
+     * invoice on every deal despite being refused the deal itself everywhere else, while
+     * {@code account} could not open the receipt it is required to confirm money against.
      */
     private void requireTicketReadAccess(long ticketId, UserPrincipal actor) {
         TicketSummaryDto summary = requireTicketSummary(ticketId);
-        // import (owner ruling 2026-09-30) and account (H1 lockdown) are row-scoped to their OWN list
+        // import and account are row-scoped to their OWN list
         // scope. The scope predicate is a DB query, so it is only run for the role that needs it, and
         // never matters for a participant (short-circuited inside the policy anyway). All four
         // AttachType values stay readable in scope -- there are no others, so no type filter.
         boolean inRoleScope = switch (String.valueOf(actor.role())) {
-            case "import" -> tickets.isInImportScope(ticketId);
-            case "account" -> tickets.isInAccountScope(ticketId);
+            // Reading only: the deal's documents open wherever the deal page does, which includes a lost/cancelled
+            // deal that still has an issued IR / deposit notice.
+            case "import" -> tickets.isInImportScope(ticketId) || tickets.isDeadDealWithIssuedImportRequest(ticketId);
+            case "account" -> tickets.isInAccountScope(ticketId) || tickets.isDeadDealWithIssuedDepositNotice(ticketId);
             default -> false;
         };
         if (!TicketAccessPolicy.canViewDocuments(summary, actor, inRoleScope)) {

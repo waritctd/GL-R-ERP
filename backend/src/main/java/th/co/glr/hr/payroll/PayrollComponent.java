@@ -13,21 +13,14 @@ package th.co.glr.hr.payroll;
  * written into a tax-treatment or SSO-inclusion row must never be renumbered, relabeled in meaning,
  * or removed, or it silently redefines a stored classification.
  *
- * <p><b>Known gap (2026-07-29):</b> handoff section 10 also names {@code bonusPay} / {@code
- * otherOneOffPay} as future HR-typed fields on the payroll run. Neither has a {@code payroll_line}
- * column yet, so neither is a value here -- adding the column is out of scope for this migration.
- * Add {@code BONUS} / {@code OTHER_ONE_OFF_PAY} here (and to {@code hr.payroll_pay_component}) as
- * an appended addition when those columns land.
- *
- * <p><b>Finding 6 (fourth Opus review, 2026-07-30) -- adding a value here is not just an enum
- * edit.</b> {@link PayrollCalculator#requireEveryNonZeroComponentClassified} 409s the ENTIRE payroll
+ * <p><b>Adding a value here is not just an enum edit.</b> {@link PayrollCalculator#requireEveryNonZeroComponentClassified} 409s the ENTIRE payroll
  * run for any employee/component pair with a non-zero amount and no stored {@code
  * hr.payroll_component_tax_treatment} row -- so a brand-new component added here with no backfill
  * blocks payroll for every existing employee who is ever paid a non-zero amount of it, the instant
  * that value is used, until an {@code INSERT INTO hr.payroll_pay_component} plus a
  * {@code hr.payroll_component_tax_treatment}/{@code hr.payroll_component_sso_inclusion} backfill
  * migration exists for it (see {@code V100__payroll_component_tax_treatment_backfill.sql} for the
- * pattern this repeats: CROSS JOIN every employee, default per the handoff's own recurrence rules).
+ * pattern this repeats: CROSS JOIN every employee, with defaults per the recurrence rules).
  * Adding a value here without that follow-up migration is therefore incomplete by construction, not
  * merely under-tested.
  */
@@ -37,9 +30,8 @@ public enum PayrollComponent {
     /** พิเศษ 1 (ค่าครองชีพ). */
     SPECIAL_PAY_1,
     /**
-     * พิเศษ 2 (ค่าเช่าบ้าน). Renumbered here from slot 9 (2026-07-29, aligned to the accountant's
-     * workbook -- see {@link PayrollService#specialPayDtos}'s javadoc). Every payroll period is VOID
-     * at the time of this relabel, so this is a pure label change: no stored figure moves.
+     * พิเศษ 2 (ค่าเช่าบ้าน), numbered to match the accountant's workbook -- see {@link
+     * PayrollService#specialPayDtos}'s javadoc.
      */
     SPECIAL_PAY_2,
     /** พิเศษ 3 (เบี้ยเลี้ยงประจำ). */
@@ -52,11 +44,9 @@ public enum PayrollComponent {
     SPECIAL_PAY_6,
     /**
      * พิเศษ 7 (คอมมิชชั่น) -- the historical พิเศษ slot, distinct from {@link #COMMISSION_PAY}.
-     * Was slot 6 before the 2026-07-29 workbook realignment. {@code PayrollCalculator}'s legacy
-     * {@code calculate()} method (zero production callers; {@code calculateClassified} is the live
-     * engine) carried a now-corrected {@code COMMISSION_SPECIAL_PAY_INDEX} constant that hardcoded
-     * the OLD slot 6 -- see that constant's javadoc for the fix, applied 2026-07-29 as a follow-up
-     * once branch 117 was rebased in.
+     * {@code PayrollCalculator}'s legacy {@code calculate()} method (zero production callers;
+     * {@code calculateClassified} is the live engine) uses {@code COMMISSION_SPECIAL_PAY_INDEX} for
+     * this slot -- see that constant's javadoc.
      */
     SPECIAL_PAY_7,
     /** พิเศษ 8 (ทำได้ตาม KPI). */
@@ -68,20 +58,16 @@ public enum PayrollComponent {
     /** คอมมิชชั่น -- the auto-fed {@code payroll_line.commission_pay} column (CommissionService). */
     COMMISSION_PAY,
     /**
-     * เงินโบนัส and อื่นๆ — the dedicated one-off fields. <b>Correction (task 2, 2026-07-29):</b> the
-     * original comment here assumed their {@code payroll_line} columns would arrive with branch 117's
-     * V94. Branch 117 was never merged into this worktree, so V94 does not exist here; the columns
-     * are added by V96 instead (see that migration's comment for the full reasoning) rather than
-     * waiting on 117.
+     * เงินโบนัส and อื่นๆ — the dedicated one-off fields; their {@code payroll_line} columns are
+     * added by V96.
      *
-     * <p>Present here from the start deliberately. The spec names โบนัส in the ประกันสังคม wage base
+     * <p>The spec names โบนัส in the ประกันสังคม wage base
      * and calls bonus the archetypal {@code EXTRA_KNOWN_FREQUENCY} — a matrix that cannot express
      * bonus would be unable to state the one classification the spec is most explicit about.
      */
     /**
      * ค่าอาหาร (workbook col K) and เบี้ยเลี้ยง ตจว/ตปท (col P) — V97. Present in the accountant's
-     * ledger since before this system existed and absent from it until 2026-07-29; found by reading
-     * `2026.xlsx`, not by anyone reporting them missing. Both sit inside the workbook's W total and
+     * ledger (the 2026.xlsx workbook). Both sit inside the workbook's W total and
      * are therefore taxable. Deliberately not พิเศษ slots — the workbook does not number them as
      * พิเศษ either.
      */

@@ -110,7 +110,7 @@ const FULFILLMENT_TRACK_KINDS = new Set([
 
 const EVENT_DOT_BASE = 'w-2 h-2 rounded-full mt-[5px] shrink-0';
 
-export function eventDotClass(kind) {
+function eventDotClass(kind) {
   if (kind === 'CREATED') return `${EVENT_DOT_BASE} bg-success-soft`;
   if (kind === 'COMMENTED' || kind === 'COMMENT') return `${EVENT_DOT_BASE} bg-text-muted`;
   if (PAYMENT_TRACK_KINDS.has(kind)) return `${EVENT_DOT_BASE} bg-success`;

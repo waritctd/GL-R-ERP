@@ -20,22 +20,22 @@ public final class DealQuotationRequests {
     /** One item row, as typed by Sales in the editor. Server recomputes every derived number —
      * see {@link WastageCalculator} — never trusts a client-sent total.
      *
-     * <p>M4: {@code model}/{@code color}/{@code texture}/{@code sizeText}/{@code brand} are
+     * <p>{@code model}/{@code color}/{@code texture}/{@code sizeText}/{@code brand} are
      * capped at 255, matching {@code sales.quotation_item}'s LIVE column widths — V49 created them
      * at VARCHAR(80), but V162 widened model/color/texture/size (and brand was always 255); a
      * stale {@code max = 80} here would 400 a value the column happily stores. {@code
      * wastageValue}'s bound is MODE-dependent (percent vs. flat piece count) and so is enforced in
-     * {@link WastageCalculator#calculate}, not here — see that class's own M4 note.
+     * {@link WastageCalculator#calculate}, not here — see that class's own note.
      *
-     * <p><b>Type-aware price validation (quotation v3, 2026-09-11).</b> {@code unitPrice} used to
-     * carry {@code @NotNull @DecimalMin("0.01")}. It cannot any more: an ADJUSTMENT row has no
+     * <p><b>Type-aware price validation.</b> {@code unitPrice} carries no blanket
+     * {@code @NotNull @DecimalMin("0.01")}: an ADJUSTMENT row has no
      * rep-typed price at all (the system derives it from the rows above), so a blanket bean
-     * annotation would 400 the very row type this pass exists to add. The rule was made
-     * TYPE-AWARE rather than relaxed — {@code DealQuotationService#requirePriceValidForType}
-     * still refuses a null, zero or negative price on a TILE or PLAIN row, on EVERY path
-     * including the lenient {@code calculate-line} preview, so nothing a rep could type before is
-     * accepted now. {@code quantityMode}/{@code wastageMode} lost {@code @NotBlank} for the same
-     * reason (a PLAIN row has neither) and are re-required for TILE rows in that same method.
+     * annotation would 400 that row type. The rule is
+     * TYPE-AWARE instead — {@code DealQuotationService#requirePriceValidForType}
+     * refuses a null, zero or negative price on a TILE or PLAIN row, on EVERY path
+     * including the lenient {@code calculate-line} preview. {@code quantityMode}/{@code wastageMode}
+     * carry no {@code @NotBlank} for the same
+     * reason (a PLAIN row has neither) and are required for TILE rows in that same method.
      */
     public record ItemInput(
         @Size(max = 255) String locationLabel,
@@ -46,12 +46,11 @@ public final class DealQuotationRequests {
         @Size(max = 255) String color,
         @Size(max = 255) String texture,
         @Size(max = 255) String sizeText,
-        // Opus review finding #7 (2026-09-18), applied here too as a pure annotation add (same
-        // NUMERIC(6,2) column type as sales.pricing_request_item.thickness_mm, added for the
-        // identical reason on that record): stops an out-of-range value overflowing
+        // Same NUMERIC(6,2) column type as sales.pricing_request_item.thickness_mm; stops an
+        // out-of-range value overflowing
         // sales.quotation_item.thickness_mm as a raw 500 instead of a 400.
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 2) BigDecimal thicknessMm,
-        // Review fix F3 (2026-09-16) — sales.quotation_item.sqm_per_piece is NUMERIC(10,6), exactly
+        // sales.quotation_item.sqm_per_piece is NUMERIC(10,6), exactly
         // like sqmPerBox below; mirrors that field's own @Digits bound. Without it, a direct API
         // call with a 7th decimal prices the line on the UNROUNDED value while the document
         // recomputes quantity from the STORED (6dp) one — e.g. 0.3598349 x 3000 prices 1,079.50 but
@@ -71,13 +70,13 @@ public final class DealQuotationRequests {
         BigDecimal unitPrice,
         @DecimalMin("0") @DecimalMax("100") BigDecimal discountPct,
         @Size(max = 40) String originCountry,
-        // SMALLINT columns (sales.quotation_item.lead_time_min/max_days, V165) — same pure
-        // annotation add as PricingRequestItemRequest's identical fields (Opus review finding #7).
+        // SMALLINT columns (sales.quotation_item.lead_time_min/max_days, V165) — same
+        // annotations as PricingRequestItemRequest's identical fields.
         @Min(0) @Max(32767) Integer leadTimeMinDays,
         @Min(0) @Max(32767) Integer leadTimeMaxDays,
         @Size(max = 4000) String itemNotes,
 
-        // ── quotation v3 (owner feedback pass 3, 2026-09-11) ──────────────────────────────────
+        // ── quotation v3 ──────────────────────────────────
         /** "TILE" (default when null/blank) | "PLAIN" | "ADJUSTMENT" — see WastageCalculator. */
         String lineType,
         /** PLAIN/ADJUSTMENT only. On a TILE row the description is auto-composed from
@@ -89,7 +88,7 @@ public final class DealQuotationRequests {
          * perfectly ordinary thing to quote, and an int here would silently 500 on it.
          *
          * <p>{@code @Digits} matches {@code sales.quotation_item.qty}'s NUMERIC(12,2) EXACTLY
-         * (review fix F4). Without it a 3dp quantity is accepted, the amount is computed from the
+         * Without it a 3dp quantity is accepted, the amount is computed from the
          * unrounded value, Postgres stores the 2dp one — and the printed row no longer multiplies
          * out: จำนวน 1.01 × คงเหลือ X ≠ เป็นเงิน, an arithmetic error the customer can check. */
         @DecimalMax("999999") @Digits(integer = 10, fraction = 2) BigDecimal quantity,
@@ -98,13 +97,13 @@ public final class DealQuotationRequests {
         @Size(max = 30) String unit,
         /** SPECIAL_SQM price mode, TILE rows — ราคาพิเศษ in บาท per ตร.ม., INCLUDING VAT.
          * {@code @Digits} matches {@code sales.quotation_item.special_price_sqm}'s NUMERIC(12,2)
-         * (review fix F4) — the value is printed VERBATIM on the ราคาพิเศษ sub-line, so a 3dp input
+         * — the value is printed VERBATIM on the ราคาพิเศษ sub-line, so a 3dp input
          * would print one figure and store another. */
         @DecimalMax("9999999") @Digits(integer = 10, fraction = 2) BigDecimal specialPriceSqm,
         /** DIRECT_NET price mode, TILE rows — the per-piece net price, typed straight in. */
         @DecimalMax("9999999") BigDecimal directNetPrice,
         /** ADJUSTMENT only — percent of the non-adjustment rows above this one. {@code @Digits}
-         * matches {@code sales.quotation_item.adjustment_pct}'s NUMERIC(6,3) (review fix F4);
+         * matches {@code sales.quotation_item.adjustment_pct}'s NUMERIC(6,3);
          * a 4dp percent applied to a seven-figure base would move the stored discount by baht. */
         @DecimalMin("0") @DecimalMax("100") @Digits(integer = 3, fraction = 3) BigDecimal adjustmentPct,
         /** ADJUSTMENT only — the "สั่งซื้อภายใน" date the composed description prints. */
@@ -114,7 +113,7 @@ public final class DealQuotationRequests {
         @DecimalMax("99999999") BigDecimal adjustmentAmount,
 
         /**
-         * GLA-75 (V170), stable-id follow-up: the EXISTING item's id, exactly as
+         * The EXISTING item's id (V170 item pictures), exactly as
          * {@code DealQuotationItemDto#id} served it — optional, and meaningful on UPDATE only.
          *
          * <p>{@code PUT /api/deal-quotations/{id}} keeps item ids STABLE: an input whose {@code id}
@@ -131,7 +130,7 @@ public final class DealQuotationRequests {
         Long id,
 
         /**
-         * Owner decision 2026-09-13 (V176): the supplier-stated square metres in ONE box — the
+         * V176: the supplier-stated square metres in ONE box — the
          * factor an ENGLISH per-sqm quotation prints its quantity from ({@code boxes × sqmPerBox},
          * 2dp). Optional on the wire; stored on every TILE row that carries it, and REQUIRED (with
          * {@code piecesPerBox}) only for SPECIAL_SQM on an EN document. {@code @Digits} matches
@@ -140,10 +139,9 @@ public final class DealQuotationRequests {
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox,
 
         /**
-         * Owner-approved "sell loose pieces" (2026-09-16). TILE rows only, meaningful only when
-         * {@code piecesPerBox} is set. Nullable — {@code null} reads as {@code true}, exactly
-         * today's ONLY behaviour (round the piece count up to the next full box), so every
-         * existing draft/request compiles and behaves unchanged. {@code false} sells exactly the
+         * "Sell loose pieces". TILE rows only, meaningful only when
+         * {@code piecesPerBox} is set. Nullable — {@code null} reads as {@code true}
+         * (round the piece count up to the next full box). {@code false} sells exactly the
          * wastage-adjusted piece count, unrounded — see {@code WastageCalculator.Input}'s own
          * Javadoc for the arithmetic and {@code DealQuotationService#requireBoxDataForPerSqm} for
          * why it is REFUSED (400) together with an English per-sqm price mode, which has no way to
@@ -152,7 +150,7 @@ public final class DealQuotationRequests {
         Boolean roundToFullBox,
 
         /**
-         * Sales feedback #1 (2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ". TILE rows on a THAI
+         * V192.2 — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ". TILE rows on a THAI
          * document: the list price (ราคาตั้ง) in บาท per ตร.ม., INCLUDING VAT, exactly as sales read
          * it off their price lists. When present the server DERIVES the per-แผ่น list price from it
          * ({@code WastageCalculator#perPieceExVatFromSqmIncVat} — the rule ราคาพิเศษ has always
@@ -182,8 +180,8 @@ public final class DealQuotationRequests {
 
         /**
          * This row's OWN price mode — "NET" | "SPECIAL_SQM" | "DIRECT_NET" — on a document whose
-         * {@code priceMode} is {@code MIXED} (V192.5; sales feedback #14, owner 2026-10-06:
-         * "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้"). Required on every TILE row of such a document,
+         * {@code priceMode} is {@code MIXED} (V192.5: "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้").
+         * Required on every TILE row of such a document,
          * where it decides exactly what the document's mode decides on a single-mode one: which
          * of the row's price fields are read, how its net is worked out, what its ส่วนลด cell
          * prints.
@@ -193,8 +191,7 @@ public final class DealQuotationRequests {
          * at all. Never {@code MIXED} itself: a row is always priced in exactly one way.
          *
          * <p>{@code calculate-line}, which has no document to read a mode off, uses this when it
-         * is present and otherwise infers the mode from which price fields the row carries, as it
-         * always has.
+         * is present and otherwise infers the mode from which price fields the row carries.
          */
         @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET",
             message = "วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET")
@@ -353,15 +350,14 @@ public final class DealQuotationRequests {
     }
 
     /**
-     * {@code contactId} is the ผู้ติดต่อ picked for this quotation, and it is OPTIONAL. Ruling
-     * 2026-10-18: no default is applied. A create with none stores a blank snapshot, and an update
+     * {@code contactId} is the ผู้ติดต่อ picked for this quotation, and it is OPTIONAL. No default
+     * is applied. A create with none stores a blank snapshot, and an update
      * with none keeps the draft's own contact. The deal's {@code sales.ticket.contact_id} is never
      * inherited.
      *
-     * ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): resolving to a contact is no longer
-     * REQUIRED either, so create/update/submit no longer refuse a quotation with no contact
-     * anywhere in the resolution chain. The picked contact's name is also the ผู้สั่งซื้อ signature
-     * name (ruling 2026-10-18): the server writes it to ordered_by_name and ignores {@code
+     * ⚠️ Resolving to a contact is not REQUIRED, so create/update/submit do not refuse a quotation
+     * with no contact anywhere in the resolution chain. The picked contact's name is also the
+     * ผู้สั่งซื้อ signature name: the server writes it to ordered_by_name and ignores {@code
      * orderedByName}. A contact id that IS given (or kept from the draft) must still belong
      * to the deal's customer, refused as 400 otherwise; its name/phone/email are snapshotted onto
      * the quotation same as before (V167). Enforced in {@code DealQuotationService#resolveContact},
@@ -379,7 +375,7 @@ public final class DealQuotationRequests {
         @Min(0) @Max(365) Integer creditDays,
         @Min(1) @Max(365) Integer validityDays,
         /**
-         * Owner feedback 2026-09-14 (V178): "DAYS" (default when null) | "DATE" — remark 7's
+         * V178: "DAYS" (default when null) | "DATE" — remark 7's
          * second variant, กำหนดยืนยันราคา by an exact calendar date rather than a day count.
          * {@code null}/blank means DAYS, same device as {@code priceMode}/{@code
          * documentLanguage} above. On UPDATE a missing value keeps the STORED mode, for the SAME
@@ -395,22 +391,22 @@ public final class DealQuotationRequests {
         LocalDate validityUntil,
         @Size(max = 4000) String customerNotes,
         /**
-         * "NET" | "SPECIAL_SQM" | "DIRECT_NET" — quotation v3, owner feedback pass 3.
+         * "NET" | "SPECIAL_SQM" | "DIRECT_NET".
          *
-         * <p><b>null means different things on create and update</b> (review fix F1). On CREATE it
+         * <p><b>null means different things on create and update</b>. On CREATE it
          * means NET — a brand-new document with no mode chosen is a NET document. On UPDATE it
          * means KEEP THE STORED MODE, because defaulting to NET there silently reprices every
          * SPECIAL_SQM/DIRECT_NET row the moment a client PUTs without this field. See
          * {@code DealQuotationService#update}.
          *
-         * <p>PER-QUOTATION rather than per-item on purpose: in all nine of the owner's
+         * <p>PER-QUOTATION rather than per-item on purpose: in the owner's
          * documents every tile row in a document uses the same mode, so one selector is the least
          * typing. PLAIN rows always carry a direct price and ignore this, which is what still lets
          * a document mix a ราคาพิเศษ tile with a freight line.
          *
-         * <p>"MIXED" (V192.5, sales feedback #14 / owner 2026-10-06) is the document that says the
+         * <p>"MIXED" (V192.5) is the document that says the
          * opposite: no single mode, each TILE row states its own in {@link ItemInput#priceMode}.
-         * Thai, direct-deal documents only. It did not replace the ruling above — one mode for the
+         * Thai, direct-deal documents only. One mode for the
          * whole document is still the default and still what most documents are; MIXED is the
          * rep's explicit choice for the document that needs both.
          */
@@ -428,19 +424,19 @@ public final class DealQuotationRequests {
          * "THB" | "USD" — optional; defaults from {@code documentLanguage} (TH→THB, EN→USD) in
          * {@code DealQuotationService#resolveCurrency}, which also REFUSES a combination the forms
          * do not have (a THB English document or a USD Thai one). Kept on the wire rather than
-         * being purely derived so a later "EN document billed in THB" ruling is a service change,
+         * being purely derived so allowing "EN document billed in THB" later is a service change,
          * not another schema column.
          */
         @Pattern(regexp = "THB|USD", message = "ต้องเป็น THB หรือ USD")
         String currency,
         /**
-         * V179 (owner feedback #4, 2026-09-14) — PRINT-ONLY override: when non-null, the ผู้พิมพ์
+         * V179 — PRINT-ONLY override: when non-null, the ผู้พิมพ์
          * signature slot prints THIS employee's name instead of the real {@code createdBy}'s. Does
          * NOT change who created the document, who may edit it, or anything about access/commission.
          * Must name an active employee in the eligible union (sales-division member OR a
          * {@code can_create_quotation} grant holder — {@code DealQuotationService}
          * {@code #requireEligibleDisplayEmployeeId}) or the request is refused with 400. Null (the
-         * default) means "use the real name", i.e. today's behaviour.
+         * default) means "use the real name".
          */
         Long printedByDisplayId,
         /**
@@ -452,18 +448,16 @@ public final class DealQuotationRequests {
          */
         Long salesRepDisplayId,
         /**
-         * Owner feedback 2026-09-14: "sometimes there's a typo in the ... project so they should
-         * be able to correct it". Was write-once at CREATE (always {@code ticket.projectName()},
-         * never updatable) — now a genuinely editable header field, same "no missing-keeps-stored"
-         * discipline as {@link #printedByDisplayId}/{@link #salesRepDisplayId} just above: the
+         * The project name, an editable header field (a rep must be able to correct a typo): the
          * editor always sends its current value (blank included), so a null here is a real
-         * request to CLEAR it, not "leave alone". {@code null} on CREATE falls back to the deal's
-         * own {@code ticket.projectName()} (today's behaviour, for any caller that does not send
+         * request to CLEAR it, not "leave alone" (unlike {@link #printedByDisplayId}/{@link
+         * #salesRepDisplayId} just above). {@code null} on CREATE falls back to the deal's
+         * own {@code ticket.projectName()} (for any caller that does not send
          * this field at all — see {@code DealQuotationService#create}).
          */
         @Size(max = 200) String projectName,
         /**
-         * Item 2 (V180, owner ruling 2026-09-16) — "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ": when true,
+         * V180 — "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ": when true,
          * {@code DealQuotationRenderAdapter}'s attn line never prefixes "คุณ" onto the ผู้สั่งซื้อ
          * contact name, for a deal whose contact is genuinely a department/section name ("ฝ่าย
          * จัดซื้อ") rather than a person. Nullable on the wire and treated as {@code false} when
@@ -474,7 +468,7 @@ public final class DealQuotationRequests {
          */
         Boolean omitContactHonorific,
         /**
-         * Item 4 (V181, "ไม่รับมัดจำ", owner ruling 2026-09-16) — one of
+         * V181, "ไม่รับมัดจำ" — one of
          * {@link WastageCalculator#FULL_PAYMENT_TERM_BEFORE_DELIVERY}/
          * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_DELIVERY}/
          * {@link WastageCalculator#FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY}, meaningful ONLY on a
@@ -490,7 +484,7 @@ public final class DealQuotationRequests {
             message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
         String fullPaymentTerm,
         /**
-         * IGNORED since the 2026-10-18 ruling. The ผู้สั่งซื้อ signature name is now the picked
+         * IGNORED. The ผู้สั่งซื้อ signature name is the picked
          * contact's name: {@code DealQuotationService} writes {@code ordered_by_name} from the
          * resolved {@link #contactId} on every DRAFT save (null when no contact is picked) and never
          * reads this field. It stays on the wire, still size-checked, so an older client's request
@@ -498,7 +492,7 @@ public final class DealQuotationRequests {
          */
         @Size(max = 255) String orderedByName,
         /**
-         * Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา": when true the
+         * V192.1 — "ไม่แสดงชื่อโครงการในใบเสนอราคา": when true the
          * printed document carries no "Project : …" line ({@link #projectName} itself is still
          * stored and still shown in the editor, the register and on the deal).
          *
@@ -506,7 +500,7 @@ public final class DealQuotationRequests {
          * {@link #priceMode} documents and for the same reason. On CREATE it means false — a
          * brand-new document prints its project. On UPDATE it means KEEP THE STORED CHOICE. That is
          * deliberately NOT {@link #omitContactHonorific}'s "missing clears it": a browser tab still
-         * running the bundle from before this field existed sends no value at all, and reading that
+         * running a bundle from before this field existed sends no value at all, and reading that
          * as false would silently start PRINTING a project name a rep had chosen to hide, on a
          * customer document, the first time anyone saved from the stale tab. The editor itself
          * always sends an explicit true/false.
@@ -514,7 +508,7 @@ public final class DealQuotationRequests {
         Boolean hideProjectName,
         /**
          * V192.3 — the customer's phone, typed in the editor. Shown on the quotation's details and,
-         * when filled, printed on the document's customer contact line (owner ruling 2026-10-13).
+         * when filled, printed on the document's customer contact line.
          * Free text (an extension or several numbers is normal), optional. The editor always sends
          * its current value, so a null/blank on a PUT clears it.
          *
@@ -523,12 +517,12 @@ public final class DealQuotationRequests {
          * {@code DealQuotationService} on the trimmed value.
          */
         String orderedByPhone,
-        /** V192.3 — the email beside {@link #orderedByPhone}; same printed-when-filled (owner,
-         * 2026-10-13), clears-on-blank contract. Its shape and 254-character limit are likewise enforced by
+        /** V192.3 — the email beside {@link #orderedByPhone}; same printed-when-filled,
+         * clears-on-blank contract. Its shape and 254-character limit are likewise enforced by
          * {@code DealQuotationService} after trimming, not here. */
         String orderedByEmail,
         /**
-         * Quotation ↔ deal linking slice 2 (S2-B1) — ผู้รับใบเสนอราคา, persisted to the existing
+         * ผู้รับใบเสนอราคา (quotation ↔ deal linking), persisted to the existing
          * {@code sales.quotation.recipient_type} (V52). {@code DESIGNER | OWNER | BUYER} only —
          * {@code UNSPECIFIED} is the legacy bucket and is never accepted from a client.
          *
@@ -542,8 +536,8 @@ public final class DealQuotationRequests {
          */
         String recipientType,
         /**
-         * The picked ผู้ติดต่อ may be cleared per quotation (owner ruling 2026-10-18, Goal 6: the rep
-         * "picks, changes or clears it on each quotation"). {@link #contactId} null on UPDATE keeps
+         * The picked ผู้ติดต่อ may be cleared per quotation (the rep
+         * picks, changes or clears it on each quotation). {@link #contactId} null on UPDATE keeps
          * the draft's own contact, so clearing needs its own signal: {@code true} on UPDATE stores
          * a blank contact snapshot whatever {@link #contactId} says, and with it a null signature
          * name. Optional; null/false has no effect. Ignored on CREATE (nothing to clear).
@@ -570,7 +564,7 @@ public final class DealQuotationRequests {
                 orderedByPhone, orderedByEmail, recipientType, null, items);
         }
 
-        /** The pre-slice-2 shape (main's V192.3 canonical, no {@link #recipientType}) — kept so every
+        /** The shape without {@link #recipientType} — kept so every
          * existing construction site (tests, mostly) compiles unchanged. Defaults recipientType to
          * null, which on UPDATE means "keep the stored recipient" and on CREATE is refused (400) — a
          * fixture that creates must say who the quotation is for, via {@link #withRecipientType}. */
@@ -758,22 +752,21 @@ public final class DealQuotationRequests {
         }
     }
 
-    /** GLA-75: {@code PATCH /api/deal-quotations/{id}/items/{itemId}/picture} — move an existing
+    /** {@code PATCH /api/deal-quotations/{id}/items/{itemId}/picture} — move an existing
      * picture between the two placements without re-uploading it. */
     public record PicturePlacementRequest(
         @NotBlank @Pattern(regexp = "BELOW|BESIDE", message = "ต้องเป็น BELOW หรือ BESIDE") String placement
     ) {}
 
-    // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): the
-    // alsoApproveAsSalesManager checkbox is GONE — there is no second slot to fill on anyone's
-    // behalf any more. One approval, by whoever may act, issues the document.
+    // There is no dual approval and no second slot to fill on anyone's behalf: one approval,
+    // by whoever may act, issues the document.
     public record ApproveRequest(@Size(max = 2000) String note) {}
 
     public record RejectRequest(@NotBlank @Size(max = 2000) String reason) {}
 
     public record CancelRequest(@Size(max = 2000) String reason) {}
 
-    /** GLA-123 slice S3 (R9 — customer outcome) — mirrors {@code
+    /** Customer outcome — mirrors {@code
      * CustomerQuotationRequests.RecordQuotationOutcomeRequest} field-for-field; kept as this
      * package's own record rather than reused across packages, matching this file's existing
      * convention of one self-contained request-record family per quotation engine. {@code

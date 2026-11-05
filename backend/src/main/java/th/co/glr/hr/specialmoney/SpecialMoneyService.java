@@ -20,7 +20,7 @@ import th.co.glr.hr.notification.NotificationService;
 /**
  * Welfare ("สวัสดิการ") requests. <b>Every type is approved by the CEO and only the CEO, in a single
  * stage, for every employee</b> — there is no manager stage and no per-type exception. That is an
- * owner ruling, and it is the one way this class deliberately does NOT mirror
+ * business rule, and it is the one way this class deliberately does NOT mirror
  * {@code th.co.glr.hr.overtime.OvertimeService}, which keeps a manager → CEO pipeline wherever the
  * employee's ฝ่าย has a ผู้จัดการ.
  *
@@ -30,25 +30,25 @@ import th.co.glr.hr.notification.NotificationService;
  * <p>{@code MANAGER_APPROVED} survives in {@link SpecialMoneyStatus} and in {@code chk_smr_status}
  * only for rows written before the manager stage was removed; nothing can enter that state now.
  *
- * <p><b>A ฝ่าย manager has no welfare access of any kind (owner ruling, 2026-08-10).</b> Welfare is
+ * <p><b>A ฝ่าย manager has no welfare access of any kind.</b> Welfare is
  * confidential to each employee: {@code hr} and {@code ceo} see everything, and <em>everyone else,
  * a ผู้จัดการ included, sees only their own rows</em>. There is deliberately no
- * {@code managesEmployee} concept left in this class — it used to grant a division-wide read plus
- * submit-on-behalf, and both are gone:
+ * {@code managesEmployee} concept in this class: no division-wide read and no
+ * submit-on-behalf:
  *
  * <ul>
  *   <li><b>Read</b> — {@link #list}, {@link #usage}, {@link #listAttachments} and
  *       {@link #resolveAttachmentForDownload} all funnel through {@link #canAccessEmployee}, which
- *       is now "view-all role, or your own employee id", full stop.
- *   <li><b>Submit-on-behalf</b> — removed with the read scope, not kept alongside it. Filing a
+ *       is "view-all role, or your own employee id", full stop.
+ *   <li><b>Submit-on-behalf</b> — not offered alongside the read scope. Filing a
  *       welfare claim means supplying the event date, the reason and the type-specific
  *       {@code detail} (a death in the family, a wedding, a medical event); that IS the
  *       confidential content, so "may file for you but may not read it" is not a coherent
- *       boundary. Keeping it would also have left a write-only limbo: the filer could create a row
+ *       boundary. It would also leave a write-only limbo: the filer could create a row
  *       and then neither list it, read its evidence, nor see its outcome.
- *   <li><b>{@code requested_by_id}</b> — {@link #cancel} and {@link #requireCanAttach} no longer
- *       honour "whoever filed it". With on-behalf gone that disjunct could only ever match a
- *       legacy row, where it let a manager cancel (and be handed the full DTO back) or slip
+ *   <li><b>{@code requested_by_id}</b> — {@link #cancel} and {@link #requireCanAttach} do not
+ *       honour "whoever filed it". With no on-behalf filing that disjunct could only ever match a
+ *       legacy row, where it would let a manager cancel (and be handed the full DTO back) or slip
  *       documents into a colleague's claim. The employee themselves keeps both rights.
  * </ul>
  *
@@ -99,10 +99,10 @@ public class SpecialMoneyService {
         Long employeeId = requestedEmployeeId;
         Long ownEmployeeId = null;
         if (!canViewAll(user)) {
-            // The caller's OWN employee id, and nothing else. This used to also pass the ฝ่าย of a
-            // ผู้จัดการ, which handed every manager a division-wide read of their team's welfare
-            // claims -- medical, funeral, wedding. Welfare is confidential per employee, so the
-            // only non-hr/ceo scope is self.
+            // The caller's OWN employee id, and nothing else. Passing a ผู้จัดการ's ฝ่าย would hand
+            // every manager a division-wide read of their team's welfare claims -- medical,
+            // funeral, wedding. Welfare is confidential per employee, so the only non-hr/ceo
+            // scope is self.
             ownEmployeeId = requireEmployeeId(user);
             if (requestedEmployeeId != null && !canAccessEmployee(user, requestedEmployeeId)) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -250,8 +250,8 @@ public class SpecialMoneyService {
             : existing.requestedAmount();
         String capOverrideReason = request == null ? null : blankToNull(request.capOverrideReason());
 
-        // approvedOn used to be a second, separate `LocalDate.now(BUSINESS_ZONE)` call made later in
-        // this method; folded into `today` since both name the same instant and a request evaluated
+        // approvedOn shares `today` rather than making a second `LocalDate.now(BUSINESS_ZONE)` call:
+        // both name the same instant and a request evaluated
         // across a real midnight boundary should not see two different "todays". `today` is also fed
         // into computeApprovalCeiling below, so the ceiling preview (GET /approval-preview) and this
         // approval always evaluate against the same "now".
@@ -326,10 +326,10 @@ public class SpecialMoneyService {
         // Re-run the evaluator to learn the policy ceiling for this type/employee.
         //
         // The recheck is built from what the EMPLOYEE asked for, not from any CEO-chosen amount.
-        // Substituting a CEO-supplied figure -- as ceoApproveFrom did until 2026-08-03 -- made the
+        // Substituting a CEO-supplied figure would make the
         // cap guard structurally dead for every uncapped type: UNIFORM_NEW_STAFF, TRAVEL_LODGING,
         // TRAINING and OTHER all return `requestedAmount` as their eligible amount, so feeding in the
-        // approved amount made eligibleAmount == approvedAmount and the comparison could never be
+        // approved amount would make eligibleAmount == approvedAmount and the comparison could never be
         // true. A CEO could approve ฿50,000 against a ฿5,000 request and never be asked why.
         //
         // Reading from the original request makes the ceiling mean "the cap, or failing a cap, what
@@ -433,9 +433,9 @@ public class SpecialMoneyService {
 
     /**
      * Welfare is filed for yourself, by yourself — <b>every role, no exception</b>. A ฝ่าย manager
-     * used to be able to file for a team member; that is gone with the read scope, because the
-     * request body itself (event date, reason, {@code detail}) is the confidential content. HR and
-     * the CEO were never able to file on someone's behalf and still cannot.
+     * cannot file for a team member, because the request body itself (event date, reason,
+     * {@code detail}) is the confidential content. HR and the CEO cannot file on someone's
+     * behalf either.
      */
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
@@ -550,10 +550,8 @@ public class SpecialMoneyService {
     }
 
     /**
-     * The single approval gate for welfare: only the CEO decides. A ฝ่าย manager gets no say here —
-     * and, since 2026-08-10, no read of a team member's welfare either (see the class Javadoc).
-     * This sentence used to add "they may file for their team and see their team's requests", which
-     * is exactly the access that was removed.
+     * The single approval gate for welfare: only the CEO decides. A ฝ่าย manager gets no say here
+     * and no read of a team member's welfare either (see the class Javadoc).
      */
     private void requireCeo(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
@@ -568,8 +566,8 @@ public class SpecialMoneyService {
      * {@link #resolveAttachmentForDownload} and {@link #list}'s {@code employeeId} filter.
      *
      * <p><b>Two disjuncts only: a view-all role, or your own row.</b> There is deliberately no
-     * manager branch. It used to end in {@code || managesEmployee(employeeId, user)}, which meant
-     * a ฝ่าย manager could list their whole division's welfare claims, read the per-type amounts
+     * manager branch: a {@code || managesEmployee(employeeId, user)} disjunct would let
+     * a ฝ่าย manager list their whole division's welfare claims, read the per-type amounts
      * those employees had drawn down, and download the evidence behind them — death certificates,
      * medical receipts. Welfare is confidential to each employee; only hr/ceo look across it.
      *
@@ -614,14 +612,14 @@ public class SpecialMoneyService {
     /**
      * Goes to the employee and to nobody else — the same rule as {@link #notifySubmitted}.
      *
-     * <p>This used to also notify {@code managerApprovedBy} on any row that carried one, with a
-     * body naming the employee, the welfare type and the event date. A notification is delivered to
+     * <p>It must not also notify {@code managerApprovedBy} on a row that carries one: the body
+     * names the employee, the welfare type and the event date. A notification is delivered to
      * one {@code employee_id} and read back own-only ({@code NotificationRepository#findByEmployeeId}),
-     * so that branch pushed confidential welfare content straight into a ผู้จัดการ's own inbox —
-     * the very thing {@link #canAccessEmployee} now refuses them through every query path. It could
+     * so that would push confidential welfare content straight into a ผู้จัดการ's own inbox —
+     * the very thing {@link #canAccessEmployee} refuses them through every query path. It could
      * only ever fire on a legacy row ({@code ceoDirectApprove} never stamps the manager columns, and
-     * nothing can enter {@code MANAGER_APPROVED} any more), and it linked to a screen where that
-     * manager can no longer see the request at all, so it was a dead-end leak rather than a feature.
+     * nothing can enter {@code MANAGER_APPROVED}), and it would link to a screen where that
+     * manager cannot see the request at all, so it would be a dead-end leak.
      */
     private void notifyCeoApproved(SpecialMoneyRequestDto request) {
         notificationService.notify(

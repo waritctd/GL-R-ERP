@@ -46,7 +46,6 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteItemReq
 import th.co.glr.hr.factoryquote.FactoryQuoteRequests.ReceiveFactoryQuoteRequest;
 import th.co.glr.hr.factoryquote.FactoryQuoteService;
 import th.co.glr.hr.notification.NotificationRepository;
-import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricing.FxRateRepository;
 import th.co.glr.hr.catalog.CatalogRepository;
 import th.co.glr.hr.pricing.PricingFormulaConfigRepository;
@@ -68,6 +67,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingrequest.QuantityType;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
+import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
@@ -79,10 +79,10 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-DB acceptance + authz + concurrency coverage for Step 4 (Customer Quotation Generation
- * and Issuance). Builds directly on Step 3's own fixtures/style ({@code
- * PricingDecisionIntegrationTest}) — an APPROVED pricing_decision is the precondition every
- * Step 4 operation starts from.
+ * Real-DB acceptance + authz + concurrency coverage for Customer Quotation Generation
+ * and Issuance. Builds directly on the fixtures/style of {@code
+ * PricingDecisionIntegrationTest} — an APPROVED pricing_decision is the precondition every
+ * operation here starts from.
  */
 class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
@@ -98,6 +98,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private CustomerQuotationService quotationService;
     private TicketService ticketService;
 
+    private RecordingSalesMailer salesMailer;
     private long salesRepId;
     private long otherSalesId;
     private long importUserId;
@@ -119,7 +120,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireServicesAndCreateDeal() {
         tickets = new TicketRepository(jdbc);
         pricingRequests = new PricingRequestRepository(jdbc);
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        salesMailer = new RecordingSalesMailer(jdbc);
+        NotificationRepository notifications = new NotificationRepository(jdbc, salesMailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
@@ -291,7 +293,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * Regression test for "สร้างใบเสนอราคาแล้ว รายละเอียดสินค้าไม่ขึ้น ทั้ง excel และ pdf": before
      * the fix, {@code sales.quotation_item.model/color/texture/size} were always NULL for a
-     * Step 4-created row ({@code PricingDecisionRepository#findApprovedSalesView} dropped
+     * customer-quotation-created row ({@code PricingDecisionRepository#findApprovedSalesView} dropped
      * color/texture/size from its SELECT, and {@code CustomerQuotationRepository}'s NewItem/
      * insertItems never carried model/color/texture/size through to the INSERT at all), so
      * {@code QuotationRenderer#buildDesc} — reused as-is, never modified, and never the bug —
@@ -372,22 +374,20 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Per-REQUESTED-UNIT price differs (per box vs per piece)...
         assertThat(perBoxItem.finalUnitPrice()).isNotEqualByComparingTo(perPieceItem.finalUnitPrice());
-        // V152 (V109 engine wiring): the LANDED COST itself is still exactly basis-invariant —
+        // The LANDED COST itself is exactly basis-invariant —
         // both scenarios share the same 200 pieces / 100 sqm physical quantity at Italy [8,12)mm,
         // so both land on the identical TC=91537.0232 (hand-verified the same way
         // LandedCostCalculatorFormulaIntegrationTest does; see that class for the full
         // step-by-step derivation) — landed cost per box = 91537.0200/10 = 9153.7020, landed cost
         // per piece = 91537.0200/200 = 457.6851, and 9153.7020*10 == 457.6851*200 exactly.
         //
-        // But the LINE TOTAL below is no longer basis-invariant, and that is now CORRECT, not a
-        // regression. Owner ruling 2026-09-19 (Phase 2 CEO pricing) replaced V109's original rule
-        // — cost x (1+margin) x selling_buffer, rounded UP to the nearest ฿10 — with HALF_UP 2dp
-        // (see PricingFormulaEngine#sellingPrice, formerly roundUpSellingPrice). It still
+        // But the LINE TOTAL below is not basis-invariant, and that is CORRECT. The selling price
+        // is cost x (1+margin) x selling_buffer, rounded HALF_UP to 2dp
+        // (see PricingFormulaEngine#sellingPrice). It
         // rounds at the PER-REQUESTED-UNIT level, BEFORE multiplying by quantity, so the same
-        // underlying cost still rounds by a different RELATIVE amount depending on how large the
-        // per-unit price is, and that per-unit rounding slop still gets multiplied by a different
-        // quantity (10 boxes vs 200 pieces) on each side — only the rounding RULE changed, not
-        // this structural non-invariance. Hand-verified at margin=0.10
+        // underlying cost rounds by a different RELATIVE amount depending on how large the
+        // per-unit price is, and that per-unit rounding slop gets multiplied by a different
+        // quantity (10 boxes vs 200 pieces) on each side. Hand-verified at margin=0.10
         // (approvedSingleItemPricingRequest's own default), sellingBuffer=1.07:
         //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> HALF_UP 2dp -> ฿10,773.91/box
         //              x 10 boxes   = ฿107,739.10
@@ -403,12 +403,11 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Discount Policy B: never below the CEO-approved minimum WITHOUT approval — Phase 2
-    // (owner ruling 2026-08-16) turned the old hard 422-on-save into an approval gate at
-    // issue() instead. The full CEO approve/reject workflow (price-binding invariant, authz,
-    // rejection reasons, notifications) is exercised in DiscountApprovalIntegrationTest, which
-    // shares this class's fixtures/style; this test only re-confirms what changed AT THESE THREE
-    // SITES: save no longer throws, issue() still does.
+    // Discount Policy B: never below the CEO-approved minimum WITHOUT approval — an approval
+    // gate at issue(), not a hard 422-on-save. The full CEO approve/reject workflow
+    // (price-binding invariant, authz, rejection reasons, notifications) is exercised in
+    // DiscountApprovalIntegrationTest, which shares this class's fixtures/style; this test
+    // only confirms AT THESE THREE SITES: save does not throw, issue() does.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -488,7 +487,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Quotation numbering (owner ruling 2026-09-18): "{base}-{n}" from the very first document,
+    // Quotation numbering: "{base}-{n}" from the very first document,
     // matching the direct quotation flow (DealQuotationRepository#baseNumber/#revisionNumber,
     // shared via QuotationNumbering). See that class's Javadoc for the full rule, including the
     // legacy-bare-number fallback pinned by createRevision_ofLegacyBareNumberedQuotation_* below.
@@ -530,9 +529,9 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
         CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
 
-        // Simulate a quotation issued BEFORE this change: a bare number, no "-1" suffix, at
-        // revisionNo == 1 -- exactly the shape a pre-2026-09-18 production row carries. Writing
-        // directly to sales.quotation (never renamed/migrated by app code per the owner ruling) is
+        // Simulate a legacy quotation: a bare number, no "-1" suffix, at
+        // revisionNo == 1 -- exactly the shape an older production row carries. Writing
+        // directly to sales.quotation (legacy numbers are never renamed/migrated by app code) is
         // the only way to reproduce that legacy shape in a fresh test fixture.
         String bareNumber = issued.number().substring(0, issued.number().length() - "-1".length());
         jdbc.update("UPDATE sales.quotation SET number = :number WHERE quotation_id = :id",
@@ -632,7 +631,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * 2026-09-30 owner ruling (#6): account may download the FILE of an ISSUED customer quotation on a deal inside
+     * Account may download the FILE of an ISSUED customer quotation on a deal inside
      * its list scope -- and nothing else in this service (get / list / create stay 403, asserted above).
      */
     @Test
@@ -696,7 +695,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Step 5: Customer Decision and Commercial Revisions
+    // Customer Decision and Commercial Revisions
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -786,18 +785,17 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * Renamed and re-pointed by the reissue-through-CEO-chain ruling (owner, 2026-08-13), which
-     * SPLIT this cascade in two rather than weakening it.
+     * The cascade is SPLIT in two.
      *
-     * <p>It used to assert that createCustomerChangeRevision superseded the old pricing request,
-     * the old decision AND the old quotation, all at creation time. The quotation half was the
-     * problem: it left the customer holding no live offer for the entire time the replacement
-     * chain ran, and nothing to fall back to if the CEO refused the new price. The decision half
-     * stays eager — it is internal pricing state, not the customer-facing offer, and the issued
+     * <p>createCustomerChangeRevision supersedes the old pricing request and the old decision at
+     * creation time, but not the old quotation: retiring it then would leave the customer holding
+     * no live offer for the entire time the replacement chain runs, and nothing to fall back to
+     * if the CEO refused the new price. The decision half
+     * is eager — it is internal pricing state, not the customer-facing offer, and the issued
      * quotation carries its own frozen price snapshot in sales.quotation_item, so superseding the
      * decision cannot change what the customer was quoted.
      *
-     * <p>The quotation's retirement is not untested, it moved: it now happens when the REPLACEMENT
+     * <p>The quotation's retirement is covered elsewhere: it happens when the REPLACEMENT
      * quotation is issued, which is proved end to end by
      * {@code ReissueThroughCeoChainIntegrationTest#parentQuotationStaysIssuedWhileTheChainRuns_andRetiresWhenTheReplacementIssues}.
      */
@@ -946,6 +944,22 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    /** Review fix: a lost/cancelled deal's rep is not told to chase the customer; the CEO FYI stays. */
+    @Test
+    void expireOverdueQuotations_onALostDeal_doesNotTellTheRep_butStillTellsTheCeo() {
+        long pr = approvedPricingRequest();
+        CustomerQuotationDto draft = quotationService.create(pr, new CreateCustomerQuotationRequest(
+            null, null, null, LocalDate.now().minusDays(1), null, null), salesActor);
+        CustomerQuotationDto issued = quotationService.issue(draft.id(), new IssueCustomerQuotationRequest(null), salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", ticketId));
+
+        assertThat(quotationService.expireOverdueQuotations()).isEqualTo(1);
+
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", ceoUserId);
+        salesMailer.assertNoticeFor(ceoUserId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคาลูกค้า " + issued.number() + " หมดอายุ", "/pricing-requests/" + pr);
+    }
+
     @Test
     void expireOverdueQuotations_sweep_pastValidityFlips_futureValidityAndAcceptedUntouched() {
         long prPast = approvedPricingRequest();
@@ -980,9 +994,16 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             SELECT COUNT(*) FROM sales.pricing_request_event
              WHERE pricing_request_id = :id AND event_kind = 'CUSTOMER_QUOTATION_EXPIRED'
             """, Map.of("id", prPast), Long.class)).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("""
-            SELECT COUNT(*) FROM hr.notification WHERE type = 'CUSTOMER_QUOTATION_EXPIRED'
-            """, Map.of(), Long.class)).isEqualTo(1L);
+        // The CEO's FYI plus the rep who owns the deal -- one row each, nobody else
+        // (the unexpired and the accepted quotations told nobody).
+        var t = tickets.findById(ticketId).orElseThrow().summary();
+        salesMailer.assertNoticeFor(salesRepId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคา " + issuedPast.number() + " หมดอายุแล้ว\nดีล " + t.code() + " · ลูกค้า " + t.customerName()
+                + "\nสิ่งที่ต้องทำต่อ: ติดตามลูกค้า หรือออกใบเสนอราคาใหม่",
+            "/tickets/" + ticketId);
+        salesMailer.assertNoticeFor(ceoUserId, "CUSTOMER_QUOTATION_EXPIRED", "ใบเสนอราคาลูกค้าหมดอายุ",
+            "ใบเสนอราคาลูกค้า " + issuedPast.number() + " หมดอายุ", "/pricing-requests/" + prPast);
+        salesMailer.assertBellRecipients("CUSTOMER_QUOTATION_EXPIRED", salesRepId, ceoUserId);
 
         // Idempotent: a second sweep with nothing new to expire touches nothing further.
         assertThat(quotationService.expireOverdueQuotations()).isEqualTo(0);
@@ -1009,7 +1030,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Step 5: Authorization — wrong-way-round
+    // Customer decision: Authorization — wrong-way-round
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -1060,7 +1081,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // R-H (quotation arithmetic reconciliation, 2026-09-15): document-level VAT/grand total
+    // Quotation arithmetic reconciliation: document-level VAT/grand total
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -1133,7 +1154,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /** Drives a two-item pricing request all the way to APPROVED_FOR_QUOTATION with an APPROVED
-     * pricing_decision — the precondition every Step 4 operation starts from. */
+     * pricing_decision — the precondition every customer-quotation operation starts from. */
     private long approvedPricingRequest() {
         long pricingRequestId = twoItemSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
@@ -1292,7 +1313,7 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /** Like {@link #twoItemSubmittedCosting} but with three items (Factory A4/B4/C4), for the
-     * document-level-VAT-vs-Σper-line-VAT reconciliation test (R-H), which needs to set each
+     * document-level-VAT-vs-Σper-line-VAT reconciliation test, which needs to set each
      * item's price independently. */
     private long threeItemSubmittedCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, threeItemPricingRequest(), salesActor)
@@ -1345,9 +1366,8 @@ class CustomerQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * The CEO fixture. Unlike {@link #createEmployee}, which leaves {@code positionTh} null, this
      * sets a real position -- {@code CeoApproverRule} keys the CEO-notified set on position
-     * กรรมการผู้จัดการ ALONE, so an employee with no position can never match it. These fixtures
-     * used to land in that set via the superseded division-based rule, which is why they needed no
-     * position before. Division stays MD so the {@code ceo} ROLE ({@code DivisionAccessPolicy}) and
+     * กรรมการผู้จัดการ ALONE, so an employee with no position can never match it.
+     * Division stays MD so the {@code ceo} ROLE ({@code DivisionAccessPolicy}) and
      * every authz assertion in this class are unchanged; only notification routing is affected.
      */
     private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {

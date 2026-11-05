@@ -50,9 +50,8 @@ const accountUser = { id: 11, role: 'account' };
 const hrUser = { id: 2, role: 'hr' };
 const qcUser = { id: 20, role: 'qc' };
 const warehouseUser = { id: 21, role: 'warehouse' };
-// #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) is a per-employee
-// capability, not a role -- ภิญญดา (employee 144, role `qc`) is the plan's own example of who
-// gets it without being sales/sales_manager.
+// canCreateQuotation is a per-employee capability grant, not a role: a `qc` employee can hold it
+// without being sales/sales_manager.
 const qcWithGrant = { id: 20, role: 'qc', canCreateQuotation: true };
 
 const ownedTicket = { id: 18, createdById: 6 };
@@ -81,11 +80,9 @@ describe('canTransitionDealQuotation', () => {
     expect(canTransitionDealQuotation('DRAFT', undefined)).toBe(false);
   });
 
-  // GLA-123 slice S2 — widened from five to seven: ISSUED/EXPIRED are the PRICING_REQUEST-origin
-  // tail (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo; ISSUED -> EXPIRED
-  // past validity_date, D5). Unreachable in practice for a DEAL_DIRECT row — see
-  // DEAL_QUOTATION_TRANSITIONS' own comment for why widening this shared abstract graph does not
-  // loosen what a DEAL_DIRECT row can actually reach.
+  // ISSUED/EXPIRED are the PRICING_REQUEST-origin tail (PENDING_APPROVAL -> ISSUED on one approval
+  // by sales_manager or ceo; ISSUED -> EXPIRED past validity_date). Unreachable for a DEAL_DIRECT
+  // row; see DEAL_QUOTATION_TRANSITIONS' comment for why widening this shared graph is safe.
   it('DEAL_QUOTATION_TRANSITIONS covers exactly the seven statuses the plan (+ S2) defines', () => {
     expect(Object.keys(DEAL_QUOTATION_TRANSITIONS).sort()).toEqual(
       ['APPROVED', 'CANCELLED', 'DRAFT', 'EXPIRED', 'ISSUED', 'PENDING_APPROVAL', 'SUPERSEDED'].sort(),
@@ -100,7 +97,7 @@ describe('dealQuotationStatusLabel', () => {
     expect(dealQuotationStatusLabel('APPROVED')).toEqual({ label: 'อนุมัติแล้ว', tone: 'success' });
     expect(dealQuotationStatusLabel('SUPERSEDED')).toEqual({ label: 'ฉบับที่ไม่ได้ใช้แล้ว', tone: 'neutral' });
     expect(dealQuotationStatusLabel('CANCELLED')).toEqual({ label: 'ยกเลิก', tone: 'danger' });
-    // GLA-123 slice S2 — only ever reached by a PRICING_REQUEST-origin row.
+    // Only reached by a PRICING_REQUEST-origin row.
     expect(dealQuotationStatusLabel('ISSUED')).toEqual({ label: 'ออกใบแล้ว', tone: 'success' });
     expect(dealQuotationStatusLabel('EXPIRED')).toEqual({ label: 'หมดอายุ', tone: 'neutral' });
   });
@@ -162,11 +159,9 @@ describe('canCreateDealQuotation', () => {
   });
 });
 
-// Owner ask 2026-09-10 ("inline deal creation"): the role-only half of canCreateDealQuotation
-// for the moment BEFORE a ticket exists. Must grant exactly the same three audiences
-// canCreateDealQuotation already grants "own deal" access to -- sales/sales_manager/grant -- and
-// refuse everyone canCreateDealQuotation refuses, since the creator immediately becomes the new
-// ticket's owner and would re-pass the real check the instant it exists.
+// Role-only half of canCreateDealQuotation for the moment BEFORE a ticket exists. Must grant exactly
+// the same three audiences (sales/sales_manager/grant) and refuse everyone else, since the creator
+// immediately becomes the new ticket's owner and would re-pass the real check.
 describe('canCreateDealQuotationStandalone', () => {
   it('grants sales, sales_manager, and a canCreateQuotation-granted employee', () => {
     expect(canCreateDealQuotationStandalone(salesOwner)).toBe(true);
@@ -243,9 +238,9 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
     expect(canReviseDealQuotation(otherSales, quotation({ docStatus: 'APPROVED' }))).toBe(false);
   });
 
-  // Owner ruling 2026-10-28: once the order is confirmed from a direct quotation it is the agreed order -- no
-  // revise action (the server's createRevision answers 409). The third argument is the deal's order-confirmation
-  // fact; null means "unknown" (still loading / errored) and hides the action.
+  // Once the order is confirmed from a direct quotation there is no revise action (the server's
+  // createRevision answers 409). The third argument is the deal's order-confirmation fact; null
+  // means "unknown" (loading / errored) and hides the action.
   it('revise is hidden once the order is confirmed or while that is unknown, shown only when known-unconfirmed', () => {
     const approved = quotation({ docStatus: 'APPROVED' });
     expect(canReviseDealQuotation(salesOwner, approved, { confirmed: false })).toBe(true);
@@ -261,11 +256,10 @@ describe('canSubmitDealQuotation / canCancelDealQuotation / canReviseDealQuotati
   });
 });
 
-// PR B (revise a PRICING_REQUEST-origin quotation). Mirrors DealQuotationService#createRevision's
-// PRICING_REQUEST branch: ISSUED / REVISION_REQUESTED only, and ONLY the owning sales rep -- the
-// wider canEditDealQuotation audience (sales_manager, canCreateQuotation grant) must NOT see the
-// button for this origin. Display-only; the authoritative proof is the real-DB
-// DealQuotationPricingRequestRevisionIntegrationTest.
+// Revise a PRICING_REQUEST-origin quotation. Mirrors DealQuotationService#createRevision's
+// PRICING_REQUEST branch: ISSUED / REVISION_REQUESTED only, and ONLY the owning sales rep; the
+// wider canEditDealQuotation audience must NOT see the button for this origin. Display-only; the
+// authoritative proof is DealQuotationPricingRequestRevisionIntegrationTest.
 describe('canReviseDealQuotation -- PRICING_REQUEST origin', () => {
   const prQ = (overrides = {}) => quotation({ origin: 'PRICING_REQUEST', docStatus: 'ISSUED', ...overrides });
 
@@ -295,9 +289,9 @@ describe('canReviseDealQuotation -- PRICING_REQUEST origin', () => {
   });
 });
 
-// GLA-136 (owner ruling 2026-09-30) — display gate for "สร้างดีลจากใบเสนอราคา". Mirrors
-// DealQuotationService#promoteToDeal's own gate (requireEditAccess + DEAL_DIRECT + APPROVED);
-// the authoritative, real-DB proof is DealQuotationPromoteIntegrationTest.
+// Display gate for "สร้างดีลจากใบเสนอราคา". Mirrors DealQuotationService#promoteToDeal's gate
+// (requireEditAccess + DEAL_DIRECT + APPROVED); the authoritative proof is
+// DealQuotationPromoteIntegrationTest.
 describe('canPromoteDealQuotationToDeal', () => {
   it('owner (edit rights) on an APPROVED direct quotation', () => {
     expect(canPromoteDealQuotationToDeal(salesOwner, quotation({ docStatus: 'APPROVED' }))).toBe(true);
@@ -376,9 +370,7 @@ describe('canApproveDealQuotation / canDecideDealQuotation', () => {
     expect(canApproveDealQuotation(ceo)).toBe(true);
   });
 
-  // Wrong-way-round: sales -- even the deal's own owning rep -- must never approve its own
-  // quotation. This is the case CLAUDE.md calls out by name ("manager sees their own division"
-  // is not the test that matters).
+  // Wrong-way-round: sales, even the deal's own owning rep, must never approve its own quotation.
   it('sales can NEVER approve, including the deal\'s own owning rep', () => {
     expect(canApproveDealQuotation(salesOwner)).toBe(false);
   });
@@ -465,11 +457,10 @@ describe('remainderModeLabel / defaultLeadTimeForOrigin', () => {
   });
 });
 
-// Frontend pass 4 (owner ruling 2026-09-10): "Autofill as much as possible when the item is in
-// the database; sales can also fill in their own item if it is not in the database, but ALL info
-// about the tile has to be completed." validateQuotationItem is the single completeness check --
-// deliberately identical for a catalog-linked row and a hand-typed one (a catalog pick only ever
-// fills fields, it never exempts a row from carrying them).
+// Autofill when the item is in the database; sales may also fill in an item that is not, but ALL
+// info about the tile must be completed. validateQuotationItem is the single completeness check,
+// identical for a catalog-linked and a hand-typed row (a catalog pick only fills fields, it never
+// exempts a row from carrying them).
 function completeItem(overrides = {}) {
   return {
     model: 'Trilogy', color: 'Ivory', texture: 'Lappato', sizeText: '60x120',
@@ -520,8 +511,8 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ piecesPerBox: 0 }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
   });
 
-  // The box this names on a Thai tile row is ราคา/ตร.ม. since sales feedback #1 (2026-10-06); the
-  // error KEY is still `unitPrice` (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
+  // The box this names on a Thai tile row is ราคา/ตร.ม.; the error KEY is still `unitPrice`
+  // (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
   it('flags a missing or non-positive price', () => {
     expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
     expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
@@ -539,9 +530,8 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       .toEqual({ piecesInput: 'กรุณาระบุจำนวนแผ่น' });
   });
 
-  // The owner's own point: a catalog pick that left a gap (e.g. NO_THICKNESS, roughly a third of
-  // the prod catalog) must still be flagged -- catalogPriceId being set is never treated as "this
-  // row is exempt".
+  // A catalog pick that left a gap (e.g. NO_THICKNESS, about a third of the prod catalog) must still
+  // be flagged: catalogPriceId being set never exempts a row.
   it('a catalog-linked item with a null thickness (a catalog gap) is still invalid', () => {
     const item = completeItem({ catalogPriceId: 42, productCode: 'PAN-T600-IVO', thicknessMm: null });
     expect(validateQuotationItem(item)).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
@@ -562,10 +552,9 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     );
   });
 
-  // Owner feedback #7 (2026-09-14): mirrors DealQuotationService#requireEveryTileItemHasALeadTime
-  // -- SUBMIT-only. `requireLeadTime` defaults to OFF specifically so a draft may still be saved
-  // with no lead time; only a caller that explicitly opts in (QuotationEditorPage's
-  // `submitItemErrorsByRow`) sees it.
+  // Mirrors DealQuotationService#requireEveryTileItemHasALeadTime. SUBMIT-only: `requireLeadTime`
+  // defaults to OFF so a draft may be saved with no lead time; only a caller that opts in
+  // (QuotationEditorPage's `submitItemErrorsByRow`) sees it.
   describe('requireLeadTime option (owner feedback #7, 2026-09-14)', () => {
     it('is never flagged by default, even with no lead time at all', () => {
       const item = completeItem({ leadTimeMinDays: null, leadTimeMaxDays: null });
@@ -600,9 +589,7 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
       expect(validateQuotationItem(item, 'NET', 'TH', { requireLeadTime: true })).toEqual({});
     });
 
-    // Wording-scan fix 3 (2026-09-17): a lead time of 0 (or negative) used to be read as a valid
-    // "exact same-day" value once BOTH fields were present, not a missing one — this test now pins
-    // the OPPOSITE: 0 is a genuinely INVALID value (min must be >= 1 day), refused with the same
+    // A lead time of 0 (or negative) is INVALID (min must be >= 1 day), refused with the same
     // message the backend uses, unconditionally (not gated on `requireLeadTime`).
     it('a zero lead time is refused as an invalid value, not accepted as an exact same-day range', () => {
       const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 0 });
@@ -617,7 +604,7 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     });
   });
 
-  // ── Wording-scan fix 3 (2026-09-17): an ENTERED lead-time range must be min>=1, max>=min ──────
+  // ── An ENTERED lead-time range must be min>=1, max>=min ──
   describe('lead-time value validity (owner-approved wording-scan finding 3)', () => {
     it('refuses min < 1 unconditionally (not gated on requireLeadTime)', () => {
       const item = completeItem({ leadTimeMinDays: 0, leadTimeMaxDays: 3 });
@@ -648,7 +635,7 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     });
   });
 
-  // ── Wording-scan fix 4 (2026-09-17): an AREA-mode row that computes to ZERO pieces ────────────
+  // ── An AREA-mode row that computes to ZERO pieces ──
   describe('AREA-mode zero-pieces rejection (owner-approved wording-scan finding 4)', () => {
     it('refuses when the debounced preview reports piecesBeforeWastage === 0', () => {
       const item = completeItem({ quantityMode: 'AREA', areaSqm: 0.01, piecesBeforeWastage: 0 });
@@ -666,7 +653,7 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     });
   });
 
-  // ── Wording-scan fix 5 (2026-09-17): PIECES wastage must be a whole number ────────────────────
+  // ── PIECES wastage must be a whole number ──
   describe('fractional PIECES-wastage rejection (owner-approved wording-scan finding 5)', () => {
     it('refuses a fractional value in PIECES mode', () => {
       const item = completeItem({ wastageMode: 'PIECES', wastageValue: 0.5 });
@@ -685,11 +672,10 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
   });
 });
 
-// Owner feedback 2026-09-12: the editor shows/accepts แผ่น/ตร.ม. (pieces per sqm) while the wire
-// field stays ตร.ม./แผ่น (sqmPerPiece) verbatim -- see quotationMeta.js's own comment on these two
-// for the full contract. `WastageCalculator#piecesPerSqm`'s formula (round(1/x, 2, HALF_UP)) is
-// mirrored for DISPLAY only; these tests pin that mirror and the round trip through it, never the
-// money math itself.
+// The editor shows/accepts แผ่น/ตร.ม. (pieces per sqm) while the wire field stays ตร.ม./แผ่น
+// (sqmPerPiece) verbatim; see quotationMeta.js's comment on these two. `WastageCalculator#piecesPerSqm`
+// (round(1/x, 2, HALF_UP)) is mirrored for DISPLAY only; these tests pin that mirror and its round
+// trip, never the money math itself.
 describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่น/ตร.ม. display, owner feedback 2026-09-12)', () => {
   it('mirrors WastageCalculator#piecesPerSqm — round(1/x, 2, HALF_UP)', () => {
     expect(piecesPerSqmFromSqmPerPiece(0.72)).toBe(1.39);
@@ -707,9 +693,8 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
 
   it('CLAUDE.md acceptance check — enter 16.39, store 1/16.39, redisplay exactly 16.39', () => {
     const stored = sqmPerPieceFromPiecesPerSqm(16.39);
-    // NUMERIC(10,6) precision -- matches sqm_per_piece's own column scale everywhere it is
-    // persisted (V24, V165), which is what leaves enough headroom below the 2dp the reverse
-    // direction rounds to for the round trip to land on the exact original figure.
+    // NUMERIC(10,6) precision matches sqm_per_piece's column scale, leaving enough headroom below
+    // the 2dp the reverse direction rounds to for the round trip to land on the original figure.
     expect(stored).toBeCloseTo(1 / 16.39, 6);
     expect(piecesPerSqmFromSqmPerPiece(stored)).toBe(16.39);
   });
@@ -729,9 +714,8 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
 });
 
 describe('perSqmIncVatFromPerPiece (Thai SPECIAL_SQM ราคาตั้ง shown per ตร.ม., owner feedback 2026-09-14)', () => {
-  // The four real-document figures the owner gave, each round2(unitPrice x piecesPerSqm x 1.07)
-  // where piecesPerSqm is piecesPerSqmFromSqmPerPiece(sqmPerPiece) -- the SAME reciprocal exercised
-  // above, never a second one.
+  // Real-document figures, each round2(unitPrice x piecesPerSqm x 1.07) where piecesPerSqm is
+  // piecesPerSqmFromSqmPerPiece(sqmPerPiece), the same reciprocal exercised above.
   it('reproduces all four owner figures exactly', () => {
     expect(perSqmIncVatFromPerPiece(1299.0, 0.72)).toBe(1932.0);
     expect(perSqmIncVatFromPerPiece(881.46, 0.36)).toBe(2621.99);
@@ -789,11 +773,9 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
   });
 });
 
-// ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง แต่
-// PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are ALSO
-// asserted, verbatim, in backend/src/test/java/.../DealQuotationLinesTest.java's own
-// "SHARED GRAMMAR vector table" section, against `DealQuotationLines#parseTwoDimensions`. The two
-// must never drift apart again without both going red.
+// ── SHARED GRAMMAR vector table. Inputs and expected {width, height, unit} results are ALSO
+// asserted, verbatim, in backend DealQuotationLinesTest.java's "SHARED GRAMMAR vector table"
+// section against `DealQuotationLines#parseTwoDimensions`; the two must never drift apart.
 describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
   it('basic separators and case', () => {
     expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
@@ -835,13 +817,11 @@ describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
     expect(parseSizeText(null)).toBeNull();
   });
 
-  // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. JS's `\s` is Unicode-aware
-  // and its own `.trim()`/`\s` already treat NBSP etc. as whitespace, while Java's `\s` is
-  // ASCII-only and `String.trim()` strips only <= U+0020 -- so the two engines disagreed on every
-  // character in this class (in one direction or the other). Both must now agree, via a shared
-  // pre-fold rather than trying to reconcile two different `\s` definitions inside the pattern
-  // itself. The SAME vectors are pinned in DealQuotationLinesTest.java's own "F2" section, against
-  // `DealQuotationLines#parseTwoDimensions` -- same inputs, same result, on both sides. ───────────
+  // ── Unicode whitespace normalisation. JS's `\s` is Unicode-aware and treats NBSP etc. as
+  // whitespace, while Java's `\s` is ASCII-only and `String.trim()` strips only <= U+0020, so the
+  // two engines disagreed. Both agree via a shared pre-fold rather than reconciling two `\s`
+  // definitions in the pattern. The SAME vectors are pinned in DealQuotationLinesTest.java's "F2"
+  // section. ──
   it('agrees with the backend on every measured whitespace divergence', () => {
     expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // NBSP
     expect(parseSizeText('30x60 cm')).toEqual({ width: 30, height: 60, unit: 'cm' });
@@ -857,13 +837,10 @@ describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
   });
 });
 
-// ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing vectors
-// below must stay well under 50ms; a regression in either the grammar fix or the length guard alone
-// would blow one of them up (the first is short enough to bypass the guard entirely and exercises
-// the grammar fix in isolation; the second is the reviewer's own reported shape, which also
-// exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 389ms / 3,357ms at
-// 128 / 248 chars (the reviewer's own run measured 130ms / 4,092ms). Same vectors pinned in
-// DealQuotationLinesTest.java's own "F1" section. ──────────────────────────────────────────────
+// ── Catastrophic regex backtracking (ReDoS). Both timing vectors must stay well under 50ms. The
+// first is short enough to bypass the length guard and exercises the grammar fix alone; the second
+// also exercises MAX_SIZE_TEXT_LENGTH, so a regression in either fix alone blows one of them up.
+// Same vectors pinned in DealQuotationLinesTest.java's "F1" section. ──
 describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
   it('pathological whitespace under the 64-char length guard does not catastrophically backtrack', () => {
     const attack = '30' + ' '.repeat(18) + 'x60' + ' '.repeat(18) + 'x1' + ' '.repeat(18) + '!';
@@ -894,12 +871,9 @@ describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
   });
 });
 
-// ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a catalog-linked 60x60 row must
-// recompute แผ่น/ตร.ม. from the TYPED size (0.18), not silently keep the catalogue's 0.36 -- the old
-// SIZE_CM_PATTERN already tolerated a third dimension, so this specific vector was never broken on
-// the frontend; it is pinned here anyway because it is the exact pairing that exposed the
-// backend/frontend disagreement (backend printed the catalogue while this recomputed from the typed
-// text -- see the matching backend test for the PDF-side half of the bug). ─────────────────────────
+// ── Typing "30x60x1" against a catalog-linked 60x60 row must recompute แผ่น/ตร.ม. from the TYPED
+// size (0.18), not keep the catalogue's 0.36. This is the pairing that exposed the backend/frontend
+// disagreement (backend printed the catalogue); see the matching backend test for the PDF half. ──
 describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on the 2026-09-16 bug pairing', () => {
   it('"30x60x1" against a catalogSizeText of "60x60" recomputes 0.18 and is confirmed different', () => {
     expect(sqmPerPieceFromSizeCm('30x60x1')).toBe(0.18);
@@ -922,15 +896,11 @@ describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on th
   });
 
   /**
-   * F5-style bonus (2026-09-16 review): the two vectors above never distinguish an explicit unit
-   * from "no unit, check both readings" -- both happen to land on the same reading regardless (the
-   * backend's own equivalent test had this exact vacuity, see DealQuotationLinesTest's F5 section).
-   * This one does: catalogue 30cm x 60cm, typed "60x30mm" -- an explicit MM reading that matches
-   * NEITHER the catalogue's mm figures (300,600) NOR its cm figures directly (30,60), but DOES match
-   * the catalogue's cm figures order-swapped (60==60, 30==30) if the explicit unit were ignored and
-   * both readings checked anyway. Mutation-checked the same way as the backend test: forcing the
-   * typed `unit` to `null` in `compareToCatalogFaceSize` turns this red (it wrongly reads as
-   * "matches"); the real unit resolution turns it green.
+   * The two vectors above never distinguish an explicit unit from "no unit, check both readings"
+   * (both land on the same reading). This one does: catalogue 30cm x 60cm, typed "60x30mm", an
+   * explicit MM reading that matches NEITHER the catalogue's mm figures (300,600) NOR its cm
+   * figures (30,60), but WOULD match the cm figures order-swapped if the explicit unit were
+   * ignored. Forcing the typed `unit` to `null` in `compareToCatalogFaceSize` turns it red.
    */
   it('pins unit resolution -- mutation-discriminating (F5-style), unlike the two vectors above', () => {
     expect(sizeTextDiffersFromCatalogFaceSize('60x30mm', '30x60')).toBe(true);
@@ -972,11 +942,10 @@ describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mi
   });
 });
 
-// Review fix (2026-09-15): sizeTextMatchesCatalogFaceSize's negation is NOT the right predicate
-// for "should the editor recompute แผ่น/ตร.ม.?" -- it reads "can't tell" (unparseable) the same as
-// "confirmed different". sizeTextDiffersFromCatalogFaceSize is the three-way-aware predicate that
-// only fires on a CONFIRMED difference, mirroring DealQuotationLines#sizeLine's own FALLBACK rule
-// (a blank/unparseable typed size keeps the catalogue dims, never treated as "different").
+// sizeTextMatchesCatalogFaceSize's negation is NOT the right predicate for "should the editor
+// recompute แผ่น/ตร.ม.?": it reads "can't tell" (unparseable) the same as "confirmed different".
+// sizeTextDiffersFromCatalogFaceSize only fires on a CONFIRMED difference, mirroring
+// DealQuotationLines#sizeLine's FALLBACK rule (blank/unparseable typed size keeps catalogue dims).
 describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t tell" must never read as "different")', () => {
   it('is true only when both sides parse AND genuinely differ -- the exact prod bug\'s two lines', () => {
     expect(sizeTextDiffersFromCatalogFaceSize('30x60', '60x60')).toBe(true);
@@ -1002,14 +971,13 @@ describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t 
   });
 });
 
-// ── F3 (MEDIUM-LOW, 2026-09-16 review): the catalogue side of the comparison can carry its own
-// unit token (sizeTextFromCatalog's sizeRaw/size fallback, ~49 prod rows with no width_mm/
-// height_mm) and must honour it rather than reading the digits as bare cm -- see parseSizeCmPair's
-// own doc for the false claim this replaces and the "600x1200 mm read as 600cm x 1200cm" bug. ────
+// ── The catalogue side of the comparison can carry its own unit token (sizeTextFromCatalog's
+// sizeRaw/size fallback, ~49 prod rows with no width_mm/height_mm) and must honour it rather than
+// reading the digits as bare cm; see parseSizeCmPair's doc. ──
 describe('parseSizeCmPair / catalogue-side unit honouring (F3, 2026-09-16 review)', () => {
   it('an explicit mm unit on the CATALOGUE side is converted to its actual cm face size, not read as bare cm digits', () => {
-    // Pre-fix bug: reading "600x1200 mm" as literal cm digits (600,1200) made a rep's correctly
-    // typed "60x120" (the tile's REAL cm size) fail to match its own catalogue row.
+    // Reading "600x1200 mm" as literal cm digits (600,1200) would make a correctly typed "60x120"
+    // fail to match its own catalogue row.
     expect(sizeTextMatchesCatalogFaceSize('60x120', '600x1200 mm')).toBe(true);
     // A genuinely different tile must still read as different.
     expect(sizeTextMatchesCatalogFaceSize('30x60', '600x1200 mm')).toBe(false);
@@ -1033,9 +1001,7 @@ describe('quotationItemMissingSummary', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Owner feedback pass 1, 2026-09-10 — F1 grouping + origin mapping, F5 tab metadata.
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── F1 grouping + origin mapping, F5 tab metadata ──
 
 describe('originCountryFromCode (F1 catalog autofill)', () => {
   it('maps the four codes this app has ประเทศต้นทาง options for', () => {
@@ -1068,14 +1034,13 @@ describe('originCountryFromCode (F1 catalog autofill)', () => {
   });
 });
 
-// ── MED-5: the แก้ predicate must match the SQL, not JS truthiness ──────────────────────────────
+// ── The แก้ predicate must match the SQL, not JS truthiness ──
 describe('isDealQuotationNeedingRework — mirrors NEEDS_REWORK_PREDICATE', () => {
   const draft = (over = {}) => ({ docStatus: 'DRAFT', approvalNote: null, parentQuotationId: null, ...over });
 
   it('an EMPTY-STRING approvalNote counts as present, exactly as `IS NOT NULL` does', () => {
-    // The whole finding: `Boolean('')` is false, `'' IS NOT NULL` is TRUE. The mock used the
-    // former, so this row was in the แก้ tab on the real backend and missing from it in the mock —
-    // fewer rows than production, which is the direction nobody notices from the UI.
+    // `Boolean('')` is false but `'' IS NOT NULL` is TRUE; a mock using the former shows fewer rows
+    // than production, which nobody notices from the UI.
     expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: '' }))).toBe(true);
     expect(meta.isDealQuotationNeedingRework(draft({ approvalNote: 'ราคาสูงเกินไป' }))).toBe(true);
   });
@@ -1153,7 +1118,7 @@ describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
     expect(rework.params.status).toBeUndefined();
   });
 
-  // QA-37: ISSUED/SENT/ACCEPTED rows are approved-and-beyond; they sat in no tab but ทั้งหมด.
+  // ISSUED/SENT/ACCEPTED rows are approved-and-beyond; they must not sit in no tab but ทั้งหมด.
   it('อนุมัติแล้ว covers every approved-and-beyond status, still keyed APPROVED', () => {
     const tab = meta.dealQuotationStatusTab('APPROVED');
     expect(tab.label).toBe('อนุมัติแล้ว');
@@ -1186,9 +1151,8 @@ describe('DEAL_QUOTATION_STATUS_TABS (F5)', () => {
   });
 });
 
-// ── Global list scope (owner ruling 2026-09-24) — mirrors DealQuotationService.listOwnerScope /
-// LIST_SEE_ALL_ROLES. These are presentation hints only, never an authz boundary on their own —
-// see DealQuotationIntegrationTest for the authoritative evidence.
+// ── Global list scope. Mirrors DealQuotationService.listOwnerScope / LIST_SEE_ALL_ROLES; these are
+// presentation hints only, never an authz boundary (see DealQuotationIntegrationTest). ──
 describe('dealQuotationListSeesAll', () => {
   it('is true only for sales_manager and ceo', () => {
     expect(meta.dealQuotationListSeesAll({ role: 'sales_manager' })).toBe(true);
@@ -1262,12 +1226,11 @@ describe('filterDealQuotationRows', () => {
     expect(meta.filterDealQuotationRows(rows, { repId: 6, amount: 'gte1m' })).toEqual([]);
   });
 
-  // Owner ask 2026-10-13 ("filter according to the ลูกค้า as email or not"). The customer master
-  // (customers.customer, V41) has NO email column, so "the customer has an email" can only mean the
-  // quotation's own snapshots: contactEmail (V167, the customer-master contact snapshot, no
-  // longer printed) OR orderedByEmail (V192.3, the ผู้ติดต่อ email the rep typed, which prints). Either
-  // one non-blank = มีอีเมล; whitespace counts as blank (the live writers NULLIF(TRIM()) these
-  // columns, but V167's backfill copied contact.email raw, so old rows can carry whitespace).
+  // Filter by whether the customer has an email. The customer master has NO email column, so it can
+  // only mean the quotation's own snapshots: contactEmail (customer-master contact snapshot, no
+  // longer printed) OR orderedByEmail (the ผู้ติดต่อ email the rep typed, which prints). Either
+  // non-blank = มีอีเมล; whitespace counts as blank (live writers NULLIF(TRIM()) these columns but an
+  // old backfill copied contact.email raw, so old rows can carry whitespace).
   it('filters by email: has = contactEmail OR orderedByEmail non-blank, none = both blank', () => {
     const emailRows = [
       { id: 1, contactEmail: 'a@example.co.th', orderedByEmail: null },
@@ -1313,7 +1276,7 @@ describe('filterDealQuotationRows', () => {
   });
 });
 
-// ── Quotation v3 / v3b (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
+// ── Quotation v3 / v3b ──
 describe('v3/v3b document settings', () => {
   it('offers all three tile price modes on a Thai document', () => {
     expect(meta.availablePriceModes('TH').map((o) => o.code)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET']);
@@ -1476,7 +1439,7 @@ describe('v3 row validation', () => {
     expect(meta.quotationItemMissingSummary({ sqmPerBox: 'x', specialPriceSqm: 'y' }, 0)).toBe('รายการที่ 1: ขาด ตร.ม./กล่อง, ราคาต่อ ตร.ม.');
   });
 
-  // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+  // ── ตร.ม./กล่อง is OPTIONAL for English per-sqm ──
   describe('English per-sqm with a blank box area (Option B)', () => {
     const perSqmNoBox = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: null };
 
@@ -1500,17 +1463,12 @@ describe('v3 row validation', () => {
     });
   });
 
-  // Review fix F1 (2026-09-16): validateQuotationItem used to flag `roundToFullBox === false` here
-  // as "defence in depth" against DealQuotationService#requireBoxDataForPerSqm's 400. That claim
-  // was false (itemInputFromRow already forces `roundToFullBox: true` onto the wire in this mode
-  // regardless of the row's own state — see quotationItemInput.test.jsx), and the branch was
-  // actively harmful: it permanently blocked บันทึกร่าง/ส่งขออนุมัติ for a row ticked under NET/TH
-  // and then switched to English per-sqm, with no on-screen control left to un-tick it (the
-  // checkbox is disabled AND unchecked in this mode). Fixed at the source instead —
-  // QuotationEditorPage's `applyPriceMode` now resets the stored flag to `true` the moment the
-  // document reaches this mode — so the branch was dropped rather than kept pointing at a state
-  // that can no longer occur. The SERVER-side rejection of roundToFullBox=false under English
-  // per-sqm is unchanged; only this frontend checklist branch was removed.
+  // validateQuotationItem must NOT flag `roundToFullBox === false` here: itemInputFromRow already
+  // forces `roundToFullBox: true` onto the wire in this mode (see quotationItemInput.test.jsx), and
+  // such a flag would permanently block save/submit for a row ticked under NET/TH then switched to
+  // English per-sqm, with no on-screen control to un-tick it (the checkbox is disabled AND
+  // unchecked). QuotationEditorPage's `applyPriceMode` resets the stored flag to `true` on reaching
+  // this mode. The SERVER still rejects roundToFullBox=false under English per-sqm.
   it('English per-sqm no longer flags roundToFullBox=false in the checklist — that state is now unreachable, not merely re-guarded', () => {
     const perSqm = { ...tile, unitPrice: '', specialPriceSqm: 64, sqmPerBox: 0.6 };
     expect(meta.validateQuotationItem({ ...perSqm, roundToFullBox: false }, 'SPECIAL_SQM', 'EN')).toEqual({});
@@ -1550,7 +1508,7 @@ describe('v3 row validation', () => {
   });
 });
 
-// ── Owner-approved "sell loose pieces" (2026-09-16, V182) ───────────────────────────────────────
+// ── "Sell loose pieces" ──
 describe('roundToFullBoxDisabledReason', () => {
   it('is disabled until แผ่น/กล่อง is filled', () => {
     expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: '' }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
@@ -1558,8 +1516,8 @@ describe('roundToFullBoxDisabledReason', () => {
     expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 0 }, 'NET', 'TH')).toBe('กรอกแผ่น/กล่องก่อน');
   });
 
-  // Option B (owner decision, 2026-09-16): only disabled when a box AREA (ตร.ม./กล่อง) is present —
-  // mirrors DealQuotationService#buildTileItem's hasBoxArea branching.
+  // Only disabled when a box AREA (ตร.ม./กล่อง) is present; mirrors
+  // DealQuotationService#buildTileItem's hasBoxArea branching.
   it('is disabled in English per-sqm mode, once แผ่น/กล่อง AND ตร.ม./กล่อง are both filled', () => {
     expect(meta.roundToFullBoxDisabledReason({ piecesPerBox: 10, sqmPerBox: 0.6 }, 'SPECIAL_SQM', 'EN'))
       .toBe(meta.ROUND_TO_FULL_BOX_DISABLED_PER_SQM_REASON);
@@ -1588,8 +1546,8 @@ describe('roundToFullBoxSummary', () => {
   it('off (round up): "ปัดขึ้นเต็มกล่อง → N กล่อง (M แผ่น)"', () => {
     expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4, roundToFullBox: true }))
       .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
-    // Undefined reads the same as true (a pre-V182 row, or a freshly loaded server row that has
-    // not round-tripped yet) -- this helper must never treat "not yet known" as "loose pieces".
+    // Undefined reads the same as true (a legacy row, or a freshly loaded server row not yet round-
+    // tripped); "not yet known" must never be treated as "loose pieces".
     expect(meta.roundToFullBoxSummary({ piecesPerBox: 10, piecesFinal: 40, boxes: 4 }))
       .toBe('ปัดขึ้นเต็มกล่อง → 4 กล่อง (40 แผ่น)');
   });
@@ -1610,7 +1568,7 @@ describe('roundToFullBoxSummary', () => {
   });
 });
 
-// ── "ข้อมูลที่ยังไม่ครบ" checklist (owner, 2026-09-11) ─────────────────────────────────────────
+// ── "ข้อมูลที่ยังไม่ครบ" checklist ──
 describe('buildQuotationChecklist', () => {
   const customer = { id: 5, name: 'บริษัท ก จำกัด', address: '1 ถนนสุขุมวิท', taxId: '0105551234567', phone: '02-000-0000' };
   const complete = {
@@ -1620,35 +1578,32 @@ describe('buildQuotationChecklist', () => {
   const warnings = (entries) => entries.filter((e) => !e.blocking).map((e) => e.check);
 
   it('pins the blocking set to what the backend already refuses — nothing the owner has not ruled on', () => {
-    // Wording-scan fix 6 (2026-09-17): creditDaysInvalid joins the set — the backend already
-    // refuses an explicit invalid (<=0) creditDays on every save, not just submit. creditDays
-    // itself (the BLANK-on-draft reminder) stays a warning, same as fullPaymentTerm.
+    // creditDaysInvalid is blocking: the backend refuses an explicit invalid (<=0) creditDays on
+    // every save, not just submit. creditDays itself (the BLANK-on-draft reminder) stays a warning,
+    // same as fullPaymentTerm.
     //
-    // Owner-directed reversal of F2/V167 (2026-09-26): 'contact' is GONE from this set —
-    // ผู้สั่งซื้อ is now a single optional free-text field with nothing left to block on.
+    // 'contact' is NOT in this set: ผู้สั่งซื้อ is a single optional free-text field.
     //
-    // Owner ruling 2026-09-30: 'entryChannel' joins the set on the INLINE-CREATE path — a rep must
-    // pick one of the three real ช่องทางรับงาน before บันทึกร่าง creates the deal. This is the ONE
-    // entry here the backend does NOT refuse (TicketService.create accepts UNSPECIFIED, the V144
-    // default): it is a deliberate frontend-only product rule, ruled on, not a mirror.
+    // 'entryChannel' is blocking on the INLINE-CREATE path: a rep must pick one of the three real
+    // ช่องทางรับงาน before บันทึกร่าง creates the deal. The backend does NOT refuse this
+    // (TicketService.create accepts UNSPECIFIED); it is a deliberate frontend-only product rule.
     //
-    // Slice 2 (SLICE-2-FLOW-A.md, IA D1–D7 owner-approved 2026-09-30): 'deal', 'recipient' and
-    // 'liveDirectQuotation' join — each mirrors a create refusal the server makes (no ticket to
-    // hang the quotation on; S2-B1's 400 on a direct create without a recipient; S2-B3's N6 409).
+    // 'deal', 'recipient' and 'liveDirectQuotation' each mirror a create refusal the server makes
+    // (no ticket to hang the quotation on; 400 on a direct create without a recipient; 409 on a
+    // live direct quotation).
     //
-    // Owner ruling 2026-09-30 (one pricing route per deal): 'livePricingRequest' joins — it mirrors
-    // DealQuotationService#create's 409 on a deal holding a live pricing request.
-    // Owner ruling 2026-10-11: orderedByEmail joins the set — the server refuses a malformed
-    // ผู้ติดต่อ Email with a 400 on every save, so the editor says so before the click. (A blank
-    // one is fine: the field is optional, and there is no "missing" check for it at all.)
+    // 'livePricingRequest' mirrors DealQuotationService#create's 409 on a deal holding a live
+    // pricing request.
+    // orderedByEmail: the server refuses a malformed ผู้ติดต่อ Email with a 400 on every save, so
+    // the editor says so before the click. (A blank one is fine: the field is optional.)
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
       ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
         'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient'],
     );
     // The submit-only set: บันทึกร่าง still works, ส่งขออนุมัติ is disabled (QuotationEditorPage guards).
     expect([...meta.QUOTATION_SUBMIT_BLOCKING_CHECKS].sort()).toEqual(['creditDays', 'fullPaymentTerm', 'leadTime']);
-    // Wrong-way-round: none of the header fields a customer might simply not have is blocking,
-    // and the blank-creditDays reminder is a warning, not a blocker (fix 6).
+    // Wrong-way-round: no header field a customer might simply not have is blocking, and the
+    // blank-creditDays reminder is a warning, not a blocker.
     ['customerAddress', 'customerTaxId', 'customerPhone', 'dealProject', 'creditDays']
       .forEach((check) => expect(meta.QUOTATION_BLOCKING_CHECKS.has(check)).toBe(false));
     // The CONTACT/CONTACT_PHONE/CONTACT_EMAIL check names themselves no longer exist at all.
@@ -1672,8 +1627,8 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
   });
 
-  // Slice 2 (SLICE-2-FLOW-A.md §A) — the three new create-time gates, each blocking and each naming
-  // its reason; the defaults leave every pre-slice-2 caller's checklist exactly as it was.
+  // The three create-time gates, each blocking and each naming its reason; the defaults leave an
+  // existing caller's checklist unchanged.
   it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
     expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
@@ -1713,7 +1668,7 @@ describe('buildQuotationChecklist', () => {
     expect(meta.recipientForDealStage('NEGOTIATION')).toBe('');
   });
 
-  // Owner ruling 2026-09-30 — one pricing route per deal: the ONE definition of "live pricing request".
+  // One pricing route per deal: the ONE definition of "live pricing request".
   it('hasLivePricingRequest: any status but CANCELLED/SUPERSEDED on THIS deal counts', () => {
     const pr = (status, ticketId = 18) => ({ id: 1, ticketId, status });
     ['DRAFT', 'SUBMITTED', 'IMPORT_REVIEWING', 'APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']
@@ -1736,7 +1691,7 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
 
-  // Owner ruling 2026-09-30 #2: the channel pre-fills the recipient on a new deal.
+  // The channel pre-fills the recipient on a new deal.
   it('owner ruling #2: each real entry channel names its recipient; UNSPECIFIED/unknown name none', () => {
     expect(meta.recipientForEntryChannel('DESIGNER_LED')).toBe('DESIGNER');
     expect(meta.recipientForEntryChannel('OWNER_DIRECT')).toBe('OWNER');
@@ -1745,8 +1700,8 @@ describe('buildQuotationChecklist', () => {
     expect(meta.recipientForEntryChannel(null)).toBe('');
   });
 
-  // Owner ruling 2026-09-30 #1: the route is READ from the served catalog (routeForChannel), never a
-  // local table — so this is exercised against the guarded fixture mockApi serves.
+  // The route is READ from the served catalog (routeForChannel), never a local table, so this is
+  // exercised against the guarded fixture mockApi serves.
   it('owner ruling #1: a recipient is off-route exactly when its quote stage is not on the channel\'s served route', () => {
     const offRoute = (channel, recipient) => meta.isRecipientOffRoute(routeForChannel(DEAL_STAGE_CATALOG, channel), recipient);
     expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('DESIGNER_LED', r))).toEqual([false, false, false]);
@@ -1759,19 +1714,16 @@ describe('buildQuotationChecklist', () => {
     expect(meta.isRecipientOffRoute(undefined, 'DESIGNER')).toBe(false);
   });
 
-  // Owner ruling (2026-09-16): "make ผู้ออกแบบ optional including ฝ่าย". Both were already optional on
-  // the backend and never blocking; the checklist still listed "ยังไม่ได้เลือกผู้ออกแบบ" as missing
-  // information, which read as required. Wrong-way-round: neither a blank designer (unitCode) nor a
-  // blank ฝ่าย (deptCode) may produce ANY checklist entry, warning or blocking.
+  // ผู้ออกแบบ and ฝ่าย are optional (also on the backend, never blocking). Wrong-way-round: neither a
+  // blank designer (unitCode) nor a blank ฝ่าย (deptCode) may produce ANY checklist entry.
   it('never lists ผู้ออกแบบ or ฝ่าย as missing — both are optional', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, terms: { unitCode: '', deptCode: '' } });
     expect(entries).toEqual([]);
     expect(Object.values(meta.QUOTATION_CHECK)).not.toContain('designer');
   });
 
-  // Owner-directed reversal of F2/V167 (2026-09-26): ผู้สั่งซื้อ used to be its own blocking check
-  // here ("กรุณาระบุผู้สั่งซื้อ", targeting the picker) — it produces NO entry at all now, blocking
-  // or otherwise, regardless of whether a contact-shaped value is even passed in.
+  // ผู้สั่งซื้อ produces NO checklist entry, blocking or otherwise, regardless of whether a
+  // contact-shaped value is passed in.
   it('never checks ผู้สั่งซื้อ any more, whether or not a contact-shaped value is passed', () => {
     expect(meta.buildQuotationChecklist({ ...complete, contact: null })).toEqual([]);
     expect(meta.buildQuotationChecklist(complete)).toEqual([]);
@@ -1816,7 +1768,7 @@ describe('buildQuotationChecklist', () => {
     ]);
   });
 
-  // Wrong-way-round: existing callers never pass it, and a deal that already exists has its channel.
+  // Wrong-way-round: existing callers never pass it, and an existing deal has its channel.
   it('raises nothing about ช่องทางรับงาน when it is picked, omitted, or the deal already exists', () => {
     const inline = { ...complete, isInlineCreate: true, customer: { id: 5, name: 'x' }, hasProject: true };
     expect(meta.buildQuotationChecklist({ ...inline, hasEntryChannel: true })).toEqual([]);
@@ -1857,18 +1809,16 @@ describe('buildQuotationChecklist', () => {
     expect(blocking(meta.buildQuotationChecklist({ ...complete, priceModeLanguageConflict: true }))).toEqual(['priceModeLanguage']);
   });
 
-  // ── Opus review fix (2026-09-16, F2): FULL_PAYMENT_TERM now recognises BOTH routes to
-  // depositPercent = 0 (the "ไม่รับมัดจำ" checkbox AND a custom-typed "0"), not just the checkbox —
-  // see #isEffectiveZeroDeposit's own tests below for the shared computation. The entry itself
-  // stays NON-blocking (DealQuotationService#create/#update accept a zero-deposit DRAFT with no
-  // term yet — only #submit refuses it; QuotationEditorPage's own separate hasUnresolvedZeroDeposit
-  // guard is what disables ส่งขออนุมัติ for this state).
+  // ── FULL_PAYMENT_TERM recognises BOTH routes to depositPercent = 0 (the "ไม่รับมัดจำ" checkbox AND
+  // a custom-typed "0"); see #isEffectiveZeroDeposit's tests below. The entry stays NON-blocking
+  // (DealQuotationService#create/#update accept a zero-deposit DRAFT with no term; only #submit
+  // refuses it; QuotationEditorPage's hasUnresolvedZeroDeposit guard disables ส่งขออนุมัติ). ──
   it('lists (but does not block) a missing เงื่อนไขการชำระเงิน on the checkbox route', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, noDeposit: true, fullPaymentTerm: '' });
     expect(entries).toEqual([{
       check: 'fullPaymentTerm', message: 'มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน',
       targetId: 'fullPaymentTerm', blocking: false,
-      // QA-34: save-draft stays allowed (blocking false) but ส่งขออนุมัติ is disabled for it.
+      // Save-draft stays allowed (blocking false) but ส่งขออนุมัติ is disabled for it.
       submitBlocking: true,
     }]);
   });
@@ -1895,7 +1845,7 @@ describe('buildQuotationChecklist', () => {
     })).toEqual([]);
   });
 
-  // ── Wording-scan fix 6 (2026-09-17): CREDIT remainder needs at least 1 credit day ────────────
+  // ── CREDIT remainder needs at least 1 credit day ──
   it('BLOCKS an explicit invalid (0) creditDays under a CREDIT remainder', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, remainderMode: 'CREDIT', creditDays: 0 });
     expect(entries).toEqual([{
@@ -1914,7 +1864,7 @@ describe('buildQuotationChecklist', () => {
     expect(entries).toEqual([{
       check: 'creditDays', message: 'กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน',
       targetId: 'creditDays', blocking: false,
-      // QA-34: a blank credit-days count keeps บันทึกร่าง open but disables ส่งขออนุมัติ.
+      // A blank credit-days count keeps บันทึกร่าง open but disables ส่งขออนุมัติ.
       submitBlocking: true,
     }]);
   });
@@ -1968,10 +1918,9 @@ describe('joinPresent', () => {
   });
 });
 
-// V178 (owner ruling 2026-09-14) — the SAME five rules as
-// th.co.glr.hr.dealquotation.DealQuotationRenderAdapter#hasSpecialPricing's own test class
-// (DealQuotationRenderAdapterV3Test), mirrored here so the editor's toggle and the server's save
-// gate can never disagree about what counts as "special pricing".
+// The SAME five rules as DealQuotationRenderAdapter#hasSpecialPricing's test class
+// (DealQuotationRenderAdapterV3Test), mirrored so the editor's toggle and the server's save gate
+// can never disagree about what counts as "special pricing".
 describe('hasSpecialPricing (#V178)', () => {
   const tile = (overrides = {}) => ({
     lineType: LINE_TYPE_TILE, unitPrice: 100, netUnitPrice: 100, discountPct: null, ...overrides,
@@ -2030,8 +1979,8 @@ describe('hasSpecialPricing (#V178)', () => {
 describe('newestQuotationByRequest — a deal\'s quotation map (deal page, request page)', () => {
   const row = (id, pricingRequestId, docStatus) => ({ id, pricingRequestId, docStatus, origin: 'PRICING_REQUEST' });
 
-  // Clean-review finding: a revision draft cancelled after ⋯ แก้ใบเสนอราคา used to become the
-  // request's quotation, leaving the deal page with no button at all.
+  // A revision draft cancelled after ⋯ แก้ใบเสนอราคา must not become the request's quotation (it
+  // would leave the deal page with no button at all).
   it('a cancelled draft never stands in for the quotation it revised: the newest row that is not CANCELLED', () => {
     const byRequest = meta.newestQuotationByRequest([row(10, 1, 'ISSUED'), row(11, 1, 'CANCELLED'), row(12, 2, 'CANCELLED')]);
     expect(byRequest.get(1)).toMatchObject({ id: 10, docStatus: 'ISSUED' });
@@ -2039,8 +1988,8 @@ describe('newestQuotationByRequest — a deal\'s quotation map (deal page, reque
   });
 });
 
-// QA-35 (owner ruling 2026-10-30): every recipient's ลูกค้ายอมรับ asks first. DESIGNER/OWNER keep the
-// "skips the later parties" copy; the BUYER (last party) and an unknown recipient get copy with no skip.
+// Every recipient's ลูกค้ายอมรับ asks first. DESIGNER/OWNER keep the "skips the later parties"
+// copy; the BUYER (last party) and an unknown recipient get copy with no skip.
 describe('acceptOutcomeConfirmCopy', () => {
   it('DESIGNER and OWNER keep the skip-the-later-parties copy', () => {
     expect(meta.acceptOutcomeConfirmCopy('DESIGNER')).toEqual({
@@ -2059,8 +2008,8 @@ describe('acceptOutcomeConfirmCopy', () => {
   });
 });
 
-// VW-04 (owner ruling 2026-10-30): the confirm-order lead used to print "ใบเสนอราคา " + a blank
-// whenever the caller had no number; it must read as a sentence either way.
+// The confirm-order lead must read as a sentence whether or not the caller has a number (no
+// "ใบเสนอราคา " + a blank).
 describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
   it('names the quotation number when there is one', () => {
     expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))

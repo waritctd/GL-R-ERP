@@ -52,7 +52,7 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Quotation v3b (owner, 2026-09-11 overnight) — the ENGLISH quotation (F-SM-008) against REAL
+ * The ENGLISH quotation (F-SM-008) against REAL
  * Postgres, through the REAL {@link DealQuotationService} and {@link DealQuotationRepository}.
  *
  * <p>Why this exists alongside {@link DealQuotationEnglishFormTest}: that file drives the adapter
@@ -186,7 +186,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(str(sheet, 3, 1)).doesNotContain(String.valueOf(java.time.Year.now().getValue() + 543));
         assertThat(str(sheet, 6, 8)).isEqualTo("Amount (USD)");
         assertThat(str(sheet, 6, 1)).isEqualTo("Description & Conditions");
-        // "remove ฝ่าย field completely" (owner, 2026-10-06): this quotation was created WITH a
+        // The ฝ่าย field is removed completely: this quotation was created WITH a
         // deptCode ("P003"), and the document still prints neither "Dept." nor the value.
         assertThat(approved.deptCode()).isEqualTo("P003");
         assertThat(str(sheet, 2, 7)).as("H3 — no 'Dept.' label").isEmpty();
@@ -199,10 +199,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .contains("Printed by").contains("Quoted by").contains("Approved by").contains("Ordered by");
         assertThat(str(sheet, 38, 0))
             .contains("(Jennet Longsakul)").contains("(Rarm Itarat)");
-        // Regression guard, ruling 2026-10-18: a contact ("Aisha Rahman") IS recorded on this deal,
+        // Regression guard: a contact ("Aisha Rahman") IS recorded on this deal,
         // but this request picks none and the deal's contact is never inherited, so the
         // server-derived orderedByName is null -- the ผู้สั่งซื้อ/"Ordered by" slot stays the dotted
-        // placeholder and never falls back to a contact name (owner reversal of F2, 2026-09-26).
+        // placeholder and never falls back to a contact name.
         assertThat(str(sheet, 38, 0)).doesNotContain("(Aisha Rahman)").contains("(..........................)");
         // No VAT row survived onto the sheet.
         assertThat(allText(sheet)).noneMatch(t -> t.contains("ภาษีมูลค่าเพิ่ม"));
@@ -210,7 +210,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     /** The regression that matters, on the REAL write path: a Thai document on the same deal, with
      * the same items, is completely unaffected — 7% VAT, Thai labels, and its OWN form number
-     * (F-SM-002 (03); blank until 2026-10-06, printed since — sales feedback Admin #6). */
+     * (F-SM-002 (03), which is printed on the document). */
     @Test
     void thaiQuotationOnTheSameDeal_stillCarriesItsVat() throws Exception {
         DealQuotationDto thai = quotationService.create(ticketId,
@@ -226,7 +226,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         Sheet sheet = renderSheet(thai.id());
         assertThat(str(sheet, 0, 7)).contains("ใบเสนอราคา");
-        // "remove ฝ่าย field completely" (owner, 2026-10-06) — stored "P003", printed nowhere.
+        // The ฝ่าย field is removed completely — stored "P003", printed nowhere.
         assertThat(thai.deptCode()).isEqualTo("P003");
         assertThat(str(sheet, 2, 7)).as("H3 — no ฝ่าย label").isEmpty();
         assertThat(str(sheet, 2, 8)).as("I3 — no department").isEmpty();
@@ -253,7 +253,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     // ── SPECIAL_SQM is unavailable in English ──────────────────────────────────────────────
 
-    // ── owner decision 2026-09-13: English per-sqm pricing (Option A) ───────────────────────────
+    // ── English per-sqm pricing (Option A) ──────────────────────────────────────────────────────
 
     /**
      * The owner's QN6900933 reproduced exactly through the real service and real Postgres:
@@ -323,7 +323,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * Review fix (Opus, 2026-09-13): a supplier sqm/box to 5 decimals, as the prod catalogue
+     * A supplier sqm/box to 5 decimals, as the prod catalogue
      * carries them, whose box quantity is NOT a whole cent. 120 boxes × 0.59696 = 71.6352 → Qty
      * 71.64, and Amount = the printed Qty × 64 = 4,584.96 — not 71.6352 × 64 = 4,584.65. Checked on
      * the DTO, the stored document totals, and the rendered sheet's own cells, so the printed row
@@ -376,11 +376,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.specialPriceLine()).isEqualTo("(1 box = 20 pcs = 1.22 sqm)");
     }
 
-    // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+    // ── Option B: ตร.ม./กล่อง OPTIONAL for English per-sqm ──────────────────────────────────────
 
     /** Blank box area, แผ่น/กล่อง filled: quantity derives from the box-rounded piecesFinal ×
-     * sqmPerPiece instead of boxes × sqmPerBox — accepted on create, update AND the preview, where
-     * this exact combination used to 400 before Option B. */
+     * sqmPerPiece instead of boxes × sqmPerBox — accepted on create, update AND the preview. */
     @Test
     void englishPerSqm_noBoxArea_piecesPerBoxFilled_isNowAccepted_onCreateUpdateAndPreview() throws Exception {
         // 3,360 pcs / 28 per box = 120 exactly (no box rounding needed) — sqmPerPiece 0.36 (tileItem's
@@ -395,9 +394,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.boxes()).isEqualTo(120);
         assertThat(item.sqmPerBox()).isNull();
         assertThat(item.specialPriceLine()).isNull(); // no box sub-line without a box area
-        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op,
-        // so the box count (new information on this branch, which has no "= N boxes" tail of its
-        // own before this fix) prints instead of the misleading rounding phrase + pure echo.
+        // 3,360 / 28 = 120 exactly -- box rounding is a no-op, so the box count (new
+        // information on this branch, which has no "= N boxes" tail of its own) prints instead of
+        // the misleading rounding phrase + pure echo.
         assertThat(item.calculationLine())
             .isEqualTo("(Quantity 3,360 pcs = 120 boxes) (28 pcs/box)");
 
@@ -443,10 +442,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     /** Blank box area AND no แผ่น/กล่อง either — a TILE row with no box multiple at all, exactly
      * like any other tile row without a pieces-per-box. No box rounding, no box wording.
      *
-     * <p>F1 fix (2026-09-16 review): {@code calculationLine} used to read
-     * "(Quantity 3,360 pcs = 3,360 pcs)" -- a pure echo of the count already stated, the exact
-     * production-bug shape (real example: "(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)"), newly
-     * REACHABLE here after Option B's no-box-area English per-sqm branch. */
+     * <p>{@code calculationLine} must not read "(Quantity 3,360 pcs = 3,360 pcs)" -- a pure echo
+     * of the count already stated, the exact production-bug shape (real example: "(จำนวน 15 แผ่น =
+     * 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)"), reachable via the no-box-area English per-sqm branch. */
     @Test
     void englishPerSqm_noBoxAreaAndNoPiecesPerBox_isAccepted_noBoxRounding() {
         ItemInput row = withBoxes(perSqmItem(3360, 28, null, "64"), null);
@@ -477,8 +475,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.calculationLine()).isEqualTo("(Quantity 3,357 pcs = 335 boxes + 7 pcs) (10 pcs/box)");
         assertThat(item.specialPriceLine()).isNull();
 
-        // preview accepts it too — no completeness gate to bypass, but this used to be the exact
-        // refused combination before Option B.
+        // preview accepts it too — no completeness gate to bypass.
         assertThat(quotationService.calculateLine(row, "EN", salesActor).quantity())
             .isEqualByComparingTo("1208.52");
     }
@@ -517,7 +514,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualTo("แผ่น");
     }
 
-    /** Owner-approved "sell loose pieces" (V182), narrowed by Option B: a box AREA present is
+    /** "Sell loose pieces" (V182), narrowed by Option B: a box AREA present is
      * still boxes × sqmPerBox, which has no "loose pieces" term at all, so
      * {@code roundToFullBox = false} is STILL refused whenever ตร.ม./กล่อง is filled — on the same
      * three surfaces (create, update, the lenient preview) as before. */
@@ -554,7 +551,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * F4 (2026-09-16 review) — {@code DealQuotationService#requireStoredItemComplete}'s guard is
+     * {@code DealQuotationService#requireStoredItemComplete}'s guard is
      * {@code piecesPerBoxOptional = perSqm && !hasBoxArea}: a box AREA present with แผ่น/กล่อง
      * BLANK is refused at create/update/preview time (proven above by {@code
      * englishPerSqm_boxAreaFilledButPiecesPerBoxBlank_isStillRefused_onCreateUpdateAndPreview}),
@@ -564,11 +561,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
      * (bypassing create/update's own validation entirely), the same technique {@code
      * DealQuotationIntegrationTest#submit_reChecksStoredItems_incompleteRowIsBadRequest} uses.
      *
-     * <p>Mutation-check (2026-09-16): narrowing the guard from {@code perSqm && !hasBoxArea} to
-     * {@code perSqm} alone would make this exact combination submittable — {@code
-     * piecesPerBoxOptional} would then read {@code true} for ANY English per-sqm row regardless of
-     * a box area being present, silently accepting the partially-filled pair this test exists to
-     * refuse. Confirmed to go red under that mutation, and reverted (see the PR body).
+     * <p>Mutation: narrowing the guard from {@code perSqm && !hasBoxArea} to {@code perSqm} alone
+     * turns this test red.
      */
     @Test
     void submit_reChecksStoredItems_boxAreaPresentButPiecesPerBoxNull_isBadRequest() {
@@ -590,13 +584,13 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * F5.1 (2026-09-16 review) — the lenient calculate-line preview of a blank-box-area English
-     * per-sqm row with no resolved ตร.ม./แผ่น used to leak the raw {@code
-     * WastageCalculator#sqmQuantityFromPieces} exception message verbatim: "ข้อมูลรายการไม่ถูกต้อง:
-     * sqmPerPiece is required for a per-sqm quantity, got: null" -- a developer-facing, English
-     * string on a screen a sales rep is typing into. {@code requireItemComplete} (which names this
-     * same field "ตร.ม./แผ่น" on create/update) is deliberately skipped on this lenient path, so
-     * nothing else names the field in Thai here. Now it reuses that same field name instead.
+     * The lenient calculate-line preview of a blank-box-area English per-sqm row with no resolved
+     * ตร.ม./แผ่น must not leak the raw {@code WastageCalculator#sqmQuantityFromPieces} exception
+     * message ("ข้อมูลรายการไม่ถูกต้อง: sqmPerPiece is required for a per-sqm quantity, got:
+     * null") -- a developer-facing, English string on a screen a sales rep is typing into. {@code
+     * requireItemComplete} (which names this same field "ตร.ม./แผ่น" on create/update) is
+     * deliberately skipped on this lenient path, so nothing else names the field in Thai here; the
+     * preview reuses that same field name instead.
      */
     @Test
     void calculateLine_englishPerSqm_noBoxAreaAndNoSqmPerPiece_namesTheMissingFieldInThai() {
@@ -618,12 +612,12 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             });
     }
 
-    /** Owner decision (B): the preview in English returns the English lines and the sqm quantity. */
+    /** The preview in English returns the English lines and the sqm quantity. */
     @Test
     void calculateLine_inEnglish_returnsTheEnglishLinesAndThePerSqmQuantity() {
         DealQuotationItemDto preview = quotationService.calculateLine(perSqmItem(3360, 28, "0.6", "64"), "EN", salesActor);
         assertThat(preview.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
-        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op,
+        // 3,360 / 28 = 120 exactly -- box rounding is a no-op,
         // so the rounding phrase and its "= 3,360 pcs" echo drop; see DealQuotationLinesTest's
         // matching tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox.
         assertThat(preview.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes)");
@@ -635,9 +629,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
         // An English NET preview: English lines, PCS, pieces.
         DealQuotationItemDto net = quotationService.calculateLine(tileItem("100.00", 10), "EN", salesActor);
-        // Wording-scan fix 1 (2026-09-17): tileItem's piecesPerBox=1 makes box rounding a no-op, and
+        // tileItem's piecesPerBox=1 makes box rounding a no-op, and
         // a one-piece box's count would only repeat the piece count, so neither the rounding
-        // phrase nor "= 10 boxes" prints. Wording-scan fix 7: singular "1 pc/box".
+        // phrase nor "= 10 boxes" prints. Singular "1 pc/box".
         assertThat(net.calculationLine()).isEqualTo("(Quantity 10 pcs) (1 pc/box)");
         assertThat(net.unit()).isEqualTo("PCS");
 
@@ -673,7 +667,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             thaiRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
                 List.of(withSqmPerBox(specialSqmItem("2000.00", 10, "1350"), "0.72"))), salesActor);
         assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
-        // 1350 / 1.07 / 2.78 = 453.84 per piece (the owner's own QN6900704-2 figure).
+        // 1350 / 1.07 / 2.78 = 453.84 per piece (QN6900704-2's printed figure).
         assertThat(created.items().get(0).netUnitPrice()).isEqualByComparingTo("453.84");
         assertThat(created.items().get(0).unitPrice()).isEqualByComparingTo("2000.00");
         assertThat(created.items().get(0).quantity()).isEqualByComparingTo("10");
@@ -693,7 +687,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(created.vatAmount()).isEqualByComparingTo("0.00");
     }
 
-    // ── owner ruling 2026-09-13 (1)(4)(5): the item lines follow the language, at READ time ──
+    // ── the item lines follow the language, at READ time ────────────────────────────────────
 
     private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
 
@@ -709,13 +703,13 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             salesActor);
         var tile = created.items().get(0);
         assertThat(tile.descriptionLine()).isEqualTo("Tile Model Model A Color White Finish Matte");
-        // F2 fix (2026-09-16 review): tileItem's "60x60" carries no unit and no catalogue link, so
-        // this now prints in centimetres ("60 cm x 60 cm") rather than the old ambiguous verbatim
-        // "60x60" -- see DealQuotationLinesTest's "F2" section for the production bug this closes.
+        // tileItem's "60x60" carries no unit and no catalogue link, so this prints in centimetres
+        // ("60 cm x 60 cm") rather than the ambiguous verbatim "60x60" -- see
+        // DealQuotationLinesTest's "F2" section for the production bug this closes.
         assertThat(tile.sizeLine()).isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
-        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 makes box rounding a no-op, and a
+        // piecesPerBox=1 makes box rounding a no-op, and a
         // one-piece box's count would only repeat the piece count -- so neither the rounding
-        // phrase nor "= 10 boxes" prints. Wording-scan fix 7: singular "1 pc/box".
+        // phrase nor "= 10 boxes" prints. Singular "1 pc/box".
         assertThat(tile.calculationLine()).isEqualTo("(Quantity 10 pcs) (1 pc/box)");
         assertThat(tile.unit()).isEqualTo("PCS");
         var adjustment = created.items().get(1);
@@ -761,9 +755,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             thaiRequest(List.of(tileItem("100.00", 10), adjustmentItem("3", LocalDate.of(2026, 7, 31)))),
             salesActor);
         assertThat(thai.items().get(0).descriptionLine()).isEqualTo("กระเบื้อง รุ่น Model A สี White ผิว Matte");
-        // F2 fix (2026-09-16 review): same "60x60", no unit, no catalogue link -- centimetres now.
+        // Same "60x60", no unit, no catalogue link -- centimetres.
         assertThat(thai.items().get(0).sizeLine()).isEqualTo("ขนาด 60 cm x 60 cm x 10 mm (ขนาดโดยประมาณ)");
-        // Wording-scan fix 1 (2026-09-17): piecesPerBox=1 -- tileItem's own fixed value -- makes
+        // piecesPerBox=1 -- tileItem's own fixed value -- makes
         // EVERY piece count trivially "already a whole number of boxes", so this row's box
         // rounding was always a no-op; the misleading "และปัดขึ้นเต็มกล่อง = 10 แผ่น" echo drops, and
         // "= 10 กล่อง" does not print either -- a one-piece box's count only repeats the pieces.
@@ -862,7 +856,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         String names = str(renderSheet(approved.id()), 38, 0);
         assertThat(names).contains("(สมชาย ไม่มีชื่ออังกฤษ)");
         // The placeholder's PRESENCE is no signal about this fallback: the ผู้สั่งซื้อ/"Ordered by"
-        // slot prints it too, because this fixture picks no ผู้ติดต่อ (ruling 2026-10-18: the
+        // slot prints it too, because this fixture picks no ผู้ติดต่อ (the
         // server derives orderedByName from the quotation's picked contact, null without one, and
         // never from the deal's). Assert the fallback name landed in the APPROVER slot
         // specifically, rather than a blanket "no placeholder anywhere" that would not hold.
@@ -872,10 +866,10 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * Review F3 (PR #929): nothing proved the CONFIGURED bank block reaches a document through the
-     * service. Making {@code DealQuotationService} pass {@code List.of()} instead of its own field
-     * left all 171 DealQuotation tests green, because every service in the suite is built with empty
-     * lines. This one is built with the owner's block and renders through {@code renderXlsx}, exactly
+     * Proves the CONFIGURED bank block reaches a document through the service. Making {@code
+     * DealQuotationService} pass {@code List.of()} instead of its own field would leave every
+     * other DealQuotation test green, because every other service in the suite is built with empty
+     * lines. This one is built with a configured block and renders through {@code renderXlsx}, exactly
      * as a download does.
      */
     @Test

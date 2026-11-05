@@ -3,12 +3,12 @@ import { apiSessionFor } from './helpers/api.js';
 import { loginAs } from './helpers/auth.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /tax-allowance IN A REAL BROWSER — gap 9 of the ล.ย.01 programme.
+// /tax-allowance IN A REAL BROWSER.
 //
 // WHY THIS SPEC EXISTS. jsdom does not implement the browser's HTML "implicit submission"
 // algorithm at all (SafeForm.jsx's own header: fireEvent.keyDown/keyPress/keyUp('Enter') fires no
 // submit event whatsoever under jsdom — verified empirically, not assumed). TaxAllowanceForm.jsx
-// now puts roughly a dozen text/number inputs inside ONE <form> with ONE submit button, and that
+// puts roughly a dozen text/number inputs inside ONE <form> with ONE submit button, and that
 // exact shape has already shipped this exact bug TWICE in this repo — SafeForm.jsx names both
 // incidents by name, and the FIRST one was this page: "/tax-allowance filed a real tax
 // declaration" the moment a redesign narrowed its blocking-field count. TaxAllowanceForm.test.jsx's
@@ -17,10 +17,8 @@ import { loginAs } from './helpers/auth.js';
 // real implicit submission — CANNOT be reproduced here at all: jsdom does not implement implicit
 // submission. That one needs e2e-real". This file is that.
 //
-// The mock e2e suite used to cover this shape generically (`e2e/implicit-submission.spec.js`, 5
-// tests), but `frontend/e2e/` was deleted whole on 2026-08-08 (CLAUDE.md, "There is only one e2e
-// suite now") — so this file is now the ONLY place implicit-submission behaviour is checked in a
-// real browser anywhere in the app, not just on this page.
+// This is the ONLY place implicit-submission behaviour is checked in a real browser anywhere in
+// the app, not just on this page.
 //
 // WHAT EACH TEST PINS, AND WHAT IT DOES NOT — read this before trusting a green run:
 //   1. The page loads through the real stack (Vite → Spring → Postgres) for a plain employee — the
@@ -31,8 +29,7 @@ import { loginAs } from './helpers/auth.js';
 //      ("a value typed into a ข้อ survives collapsing it") — jsdom can simulate mount/unmount/
 //      re-register fine; it only fails at implicit submission. This test is real-browser
 //      corroboration through the ACTUAL page (real CollapsibleSection CSS/DOM, real
-//      TaxAllowancePage data-fetch wiring), not a newly-discovered gap — said plainly so a reader
-//      doesn't credit it with more novelty than it has.
+//      TaxAllowancePage data-fetch wiring), not a newly-discovered gap.
 //   3. THE HEADLINE TEST. Pressing Enter in a real, focused text field must not POST the
 //      declaration — asserted on the network (a request listener / waitForRequest), not just the
 //      DOM, because a DOM-only assertion can pass while a request already went out.
@@ -41,21 +38,20 @@ import { loginAs } from './helpers/auth.js';
 //      disabled**, i.e. before a signed form is staged. That is a real state an employee spends
 //      most of their time in — the whole form is filled in before the signed scan is attached last
 //      — and it is the state the historical incident occurred in. It is NOT a general "Enter can
-//      never file this declaration" guarantee, and this comment used to claim that it was.
+//      never file this declaration" guarantee.
 //
-//      MEASURED, 2026-08-09, real Chromium against the real stack: with the signed form attached
-//      and the submit button therefore ENABLED, Enter in `#ta-taxpayer-id` fired exactly one
-//      `POST /api/payroll/tax-allowances/declarations/me` and filed the declaration for real.
-//      Verified with a throwaway probe spec, not inferred. That followed from SafeForm.jsx's own
-//      documented mechanism: a form that HAS a default submit button gives implicit submission a
-//      real `event.submitter`, so SafeForm's submitter check passes, and `canSubmit` is true in
-//      that state by construction — both guards satisfied.
+//      Measured in real Chromium against the real stack: with the signed form attached and the
+//      submit button therefore ENABLED, Enter in `#ta-taxpayer-id` fires exactly one
+//      `POST /api/payroll/tax-allowances/declarations/me` unless a confirmation intervenes. That
+//      follows from SafeForm.jsx's own documented mechanism: a form that HAS a default submit
+//      button gives implicit submission a real `event.submitter`, so SafeForm's submitter check
+//      passes, and `canSubmit` is true in that state by construction — both guards satisfied.
 //
-//      RESOLVED by owner ruling the same day: confirm before filing, on ANY trigger, rather than an
-//      Enter-specific guard — the hazard is "files with no confirmation", and an Enter-only fix
-//      leaves a stray click on the enabled button equally exposed. Enter still submits like
-//      ordinary HTML; the submit now opens a ConfirmDialog instead of calling the API. Test 5 below
-//      covers that state, and is only safe to run on a shared database BECAUSE of the ruling.
+//      So the rule is: confirm before filing, on ANY trigger, rather than an Enter-specific guard
+//      — the hazard is "files with no confirmation", and an Enter-only fix leaves a stray click on
+//      the enabled button equally exposed. Enter still submits like ordinary HTML; the submit
+//      opens a ConfirmDialog instead of calling the API. Test 5 below covers that state, and is
+//      only safe to run on a shared database BECAUSE of that confirmation.
 //
 //      In the state this test DOES cover, two guards are active at once: SafeForm.jsx documents
 //      (verified empirically in real Chromium) that a sole default submit button which is DISABLED
@@ -63,8 +59,8 @@ import { loginAs } from './helpers/auth.js';
 //      would refuse a submit if one somehow fired anyway. This test cannot tell those two layers
 //      apart and does not try to.
 //   5. Enter with the submit button ENABLED opens the confirmation and files nothing when
-//      dismissed — the state test 3 deliberately does not reach, and the one that used to file a
-//      real declaration. See the RESOLVED note under test 3.
+//      dismissed — the state test 3 deliberately does not reach, and the one that would otherwise
+//      file a real declaration. See the confirmation note under test 3.
 //   4. The submit button stays disabled until a signed-form file is staged, then enables.
 //      TaxAllowanceForm.test.jsx already pins the PROP wiring (`signedFormAttached` → disabled) in
 //      isolation via a manual rerender. This test additionally exercises the real pipeline that
@@ -91,8 +87,7 @@ import { loginAs } from './helpers/auth.js';
 //     any PENDING/APPROVED row it finds belongs to something else and is not this spec's to touch.
 //     ⚠️ THE COST OF THAT CHOICE: a skipped test reads as green. If demo.employee ever ends up with
 //     a PENDING or APPROVED current-year declaration, the three tests that matter here vanish from
-//     the run and nothing fails. Confirmed by observation, not theory — after a probe filed one
-//     declaration, a re-run reported "1 passed, 3 skipped" and exit 0. CI is unaffected (each job
+//     the run and nothing fails (a re-run reports "1 passed, 3 skipped" and exit 0). CI is unaffected (each job
 //     gets a brand-new Postgres, so the seed state is always NONE), but a LOCAL green run is only
 //     evidence if you read the skip count. `frontend/scripts/reset-e2e-db.mjs` restores a pristine
 //     seed;
@@ -381,20 +376,19 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
   });
 
   /**
-   * The other half of the Enter story, and the one that used to file a real declaration.
+   * The other half of the Enter story, and the one that would otherwise file a real declaration.
    *
-   * The test above stops at "the button is now enabled". THAT is the state in which Enter was
+   * The test above stops at "the button is now enabled". THAT is the state in which Enter is
    * dangerous: with a default submit button present and enabled, HTML's implicit submission hands
    * the event a real `event.submitter`, so SafeForm's submitter guard passes, and `canSubmit` is
-   * true by construction — both guards satisfied, declaration filed, no confirmation. Measured
-   * here on 2026-08-09 with a throwaway probe: exactly one POST, one real PENDING row.
+   * true by construction — both guards satisfied, declaration filed, no confirmation.
    *
-   * Owner ruling: confirm before filing on ANY trigger, not an Enter-specific guard — the hazard is
+   * Rule: confirm before filing on ANY trigger, not an Enter-specific guard — the hazard is
    * "files with no confirmation", and an Enter-only fix leaves a stray click equally exposed. So
-   * Enter still submits, exactly like ordinary HTML; the submit now opens a dialog instead of
+   * Enter still submits, exactly like ordinary HTML; the submit opens a dialog instead of
    * calling the API.
    *
-   * ⚠️ This test is only safe to run on a shared database BECAUSE of that ruling. Dismissing the
+   * ⚠️ This test is only safe to run on a shared database BECAUSE of that confirmation. Dismissing the
    * dialog means nothing is created, so there is no PENDING row to withdraw and no
    * `uq_tad_one_pending_per_employee_year` collision to make every later run of this file skip. An
    * Enter-blocking implementation would have been untestable here without filing something real.

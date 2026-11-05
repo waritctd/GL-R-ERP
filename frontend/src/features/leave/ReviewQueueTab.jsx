@@ -20,18 +20,11 @@ import {
 } from './leaveRequestTable.jsx';
 import { canManagerCancelRequest, canReviewRequest } from './leaveSurfaceTabs.js';
 
-// Leave-surface IA rebuild, Phase A1. This tab is the fix for the Context section's headline
-// complaint: an approver used to see the submit form sitting directly above the queue they were
-// reviewing (LeavePage.jsx's single table did both jobs at once). ReviewQueueTab now owns
-// exclusively the requests THIS user may act on -- approve, reject, or cancel -- with the same
-// per-row predicates leaveSurfaceTabs.js already uses to decide whether this tab is even visible.
-//
-// Phase A4 (#485 shipped GET /api/leave/attachments/{id}, session/scope-gated, but nothing in the
-// frontend called it until now): the medical-certificate attachment download lives in the
-// expand-row disclosure below, plus inline handling for the backend's optimistic-locking-free 409
-// ("already decided by someone else" -- LeaveService#requireStatus) and a confirmation dialog on
-// the requester's own self-cancel path (MyLeaveTab.jsx). A persistent (non-expand-row) detail
-// panel remains out of scope.
+// This tab owns exclusively the requests THIS user may act on (approve, reject, or cancel), with
+// the same per-row predicates leaveSurfaceTabs.js uses to decide whether the tab is visible. The
+// medical-certificate attachment download lives in the expand-row disclosure, with inline handling
+// of the backend's 409 ("already decided by someone else", LeaveService#requireStatus) and a
+// confirmation dialog on the requester's own self-cancel path (MyLeaveTab.jsx).
 
 function isPermissionError(error) {
   return error?.status === 403;
@@ -41,38 +34,23 @@ export function ReviewQueueTab({ user, showToast }) {
   const queryClient = useQueryClient();
   const [confirmState, setConfirmState] = useState(null); // { kind: 'approve'|'reject'|'cancel', id }
   const [expandedId, setExpandedId] = useState(null);
-  // Phase A4: LeaveService has no @Version / optimistic lock -- two approvers (or one stale tab)
-  // can both attempt to decide the same SUBMITTED request. requireStatus() 409s the loser with
-  // "คำขอลานี้ได้รับการพิจารณาไปแล้ว" (or one of cancel's own already-decided messages). That must
-  // not render as a transient toast that vanishes before anyone reads it -- `conflict` pins an
-  // inline explanation to the specific row, force-expanded so it's impossible to miss, until the
-  // user dismisses it (toggling that row's expand state -- see toggleExpand below) or successfully
-  // acts on it again.
+  // LeaveService has no @Version / optimistic lock: two approvers (or one stale tab) can both
+  // attempt to decide the same SUBMITTED request, and requireStatus() 409s the loser. That must
+  // not be a transient toast that vanishes unread: `conflict` pins an inline explanation to the
+  // row, force-expanded, until the user dismisses it (toggleExpand) or acts on it again.
   const [conflict, setConflict] = useState(null); // { id, message } | null
   const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null);
 
   const canReviewAll = hasPermission(user.role, 'canReviewLeave');
 
-  // No CLIENT-side date filter, by design -- a SUBMITTED request awaiting decision can carry any
-  // date, and a reviewer should never lose sight of one because it falls outside some default
-  // range.
+  // No CLIENT-side date filter, by design: a SUBMITTED request awaiting decision can carry any date.
+  // The server default is a WINDOW of +/-12 months (LeaveService.DEFAULT_WINDOW_MONTHS), not
+  // "unfiltered": `list({})` sends no dates and findRequests matches on overlap, so a narrower
+  // default dropped still-SUBMITTED requests out of this queue. Widen the constant if a pending
+  // request older than a year is ever a real case.
   //
-  // ⚠️ That was the stated intent, but until 2026-08-10 it was NOT what happened. `list({})` sends
-  // no date parameters, and LeaveService#list defaults the missing bounds server-side -- so this
-  // "unfiltered" query was in fact scoped to [month-start, +1 month]. findRequests matches on
-  // overlap, so a still-SUBMITTED request whose leave ended last month failed
-  // `end_date >= :fromDate` and DROPPED OUT OF THIS QUEUE the moment the month rolled over; leave
-  // booked more than a month ahead never appeared in it at all. The queue silently lost work its
-  // own comment promised it would never lose.
-  //
-  // The default is now +/-12 months (LeaveService.DEFAULT_WINDOW_MONTHS), which holds the intent
-  // for any realistic pending request. It is a WINDOW, not "unfiltered" -- do not restore the old
-  // wording. If a pending request older than a year is ever a real case, widen the constant rather
-  // than re-asserting something the code does not do.
-  //
-  // Shares its cache key with LeaveSurfacePage.jsx's own `reviewSignalQuery` (both read
-  // `queryKeys.leaveRequests({})`), so mounting this tab costs no extra request once that one has
-  // already landed.
+  // Shares its cache key with LeaveSurfacePage.jsx's `reviewSignalQuery`
+  // (`queryKeys.leaveRequests({})`), so mounting this tab costs no extra request.
   const requestsQuery = useQuery({
     queryKey: queryKeys.leaveRequests({}),
     queryFn: () => api.leave.list({}).then((response) => response.requests || []),
@@ -80,19 +58,11 @@ export function ReviewQueueTab({ user, showToast }) {
     refetchOnWindowFocus: true,
   });
   const allRequests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
-  // Decisions first, then the already-approved rows this user may only void (2026-08-11).
-  //
-  // `list()` returns one stream ordered by start_date DESC (LeaveRepository#findRequests), and
-  // this tab shows two DIFFERENT kinds of row: requests waiting on a decision, and APPROVED leave
-  // that could still be cancelled. Left interleaved by date, a queue headed "รอคุณพิจารณา 4" opened
-  // on an approved row, and the four rows the count refers to were scattered among rows that need
-  // nothing -- on the seeded SAL team, two of the first three rows were already decided. Since this
-  // tab paginates, the interleave could also push a real decision onto page 2 behind rows that are
-  // just sitting there.
-  //
-  // A STABLE partition, not a re-sort: within each group the API's own date order is preserved
-  // (`filter` twice, no comparator), so nothing about the ordering the backend chose is second-
-  // guessed here -- the two groups are simply not shuffled together.
+  // Decisions first, then the already-approved rows this user may only void. `list()` returns one
+  // stream ordered by start_date DESC (LeaveRepository#findRequests); interleaved, a queue headed
+  // "รอคุณพิจารณา 4" would open on an approved row and, since this tab paginates, could push a real
+  // decision onto page 2. A STABLE partition (`filter` twice, no comparator) keeps the API's own
+  // date order within each group.
   const actionableRequests = useMemo(() => {
     const reviewable = allRequests.filter((request) => canReviewRequest(request, user, canReviewAll));
     const cancellableOnly = allRequests.filter((request) => !canReviewRequest(request, user, canReviewAll)
@@ -104,14 +74,9 @@ export function ReviewQueueTab({ user, showToast }) {
   const hasError = requestsQuery.isError && !denied;
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
 
-  // Stat-row parity with the other two tabs (owner ruling, 2026-08-10). Chosen for a QUEUE, which
-  // is a different question than the history tabs ask: not "how much leave was taken" but "how
-  // much is waiting on me, and how urgent is it".
-  //
-  // Counts are over `actionableRequests`, NOT `allRequests` -- the queue only ever shows rows this
-  // user may act on, so a headline number drawn from the wider list would not match the rows
-  // underneath it. `awaitingDecision` narrows further to the genuinely reviewable subset
-  // (canReviewRequest == SUBMITTED and mine to decide); the rest of `actionableRequests` are
+  // Stat-row parity with the other two tabs, chosen for a QUEUE: how much is waiting on me and how
+  // urgent. Counts are over `actionableRequests` (the rows shown), not `allRequests`.
+  // `awaitingDecision` is the reviewable subset (canReviewRequest == SUBMITTED); the rest are
   // already-APPROVED rows this user may only cancel, which are not "waiting on" anyone.
   const totals = useMemo(() => {
     const reviewable = actionableRequests.filter((request) => canReviewRequest(request, user, canReviewAll));
@@ -130,10 +95,9 @@ export function ReviewQueueTab({ user, showToast }) {
     return queryClient.invalidateQueries({ queryKey: ['leave'] });
   }
 
-  // Issue #422 B5: approve/reject/cancel each change a figure PayrollPage reads
-  // (unpaidLeaveDays, via suggested-inputs) with no way for that screen to find out short of a
-  // manual reload. Invalidating the ['payroll'] prefix alongside invalidateLeave() lets an open
-  // PayrollPage tab pick the change up on its own next poll/focus refetch.
+  // approve/reject/cancel each change a figure PayrollPage reads (unpaidLeaveDays, via
+  // suggested-inputs); invalidating the ['payroll'] prefix lets an open PayrollPage pick it up on
+  // its next poll/focus refetch.
   function invalidatePayrollUpstream() {
     return queryClient.invalidateQueries({ queryKey: ['payroll'] });
   }
@@ -142,12 +106,9 @@ export function ReviewQueueTab({ user, showToast }) {
     setConflict((current) => (current?.id === id ? null : current));
   }, []);
 
-  // Phase A4: the shared 409 branch every approve/reject/cancel onError funnels through.
-  // requireStatus() (LeaveService, read before writing this) 409s with a message that already
-  // differs by action ("คำขอลานี้ได้รับการพิจารณาไปแล้ว" for approve/reject, one of two more
-  // specific messages for cancel) -- surfaced verbatim rather than a fixed string, same as
-  // HolidaysTab.jsx's own 409 handling. Every OTHER status still gets the plain toast the caller
-  // already had; only 409 gets the inline, force-expanded, non-vanishing treatment.
+  // The shared 409 branch every approve/reject/cancel onError funnels through. requireStatus()
+  // 409s with a message that already differs by action, surfaced verbatim (like HolidaysTab.jsx).
+  // Every OTHER status keeps the plain toast; only 409 gets the inline, force-expanded treatment.
   function handleReviewError(error, id, fallbackMessage) {
     if (error?.status === 409) {
       setConfirmState(null);
@@ -195,10 +156,9 @@ export function ReviewQueueTab({ user, showToast }) {
     onError: (error, variables) => handleReviewError(error, variables.id, 'ยกเลิกวันลาไม่สำเร็จ'),
   });
 
-  // Phase A4: at most one of approve/reject/cancel can be in flight at once (they are only ever
-  // fired from the single-open ConfirmDialog below), so ONE pending-row id -- not a per-mutation
-  // set -- is enough to know which row's action buttons must disable to stop a double-click firing
-  // two competing decisions on the same request from this client.
+  // At most one of approve/reject/cancel can be in flight (they are fired from the single-open
+  // ConfirmDialog below), so ONE pending-row id is enough to disable that row's action buttons
+  // and stop a double-click firing two competing decisions.
   const pendingRowId = approveMutation.isPending
     ? approveMutation.variables
     : (rejectMutation.isPending ? rejectMutation.variables?.id
@@ -286,11 +246,9 @@ export function ReviewQueueTab({ user, showToast }) {
               </Button>
             </>
           ) : null}
-          {/* `ban`, not `close` (2026-08-10, owner-reported). This button sits directly beside
-              "ปฏิเสธ", and both used the same ✕ -- three icon-only controls where two were the
-              same glyph, distinguishable only by border colour and a tooltip nobody hovers.
-              They are also different ACTIONS on different rows: ปฏิเสธ decides a still-pending
-              request, ยกเลิก voids one that was already approved. Same glyph implied same thing. */}
+          {/* `ban`, not `close`: this button sits beside "ปฏิเสธ", and they are different ACTIONS
+              (ปฏิเสธ decides a pending request, ยกเลิก voids an approved one), so they must not
+              share the ✕ glyph. */}
           {cancellable ? (
             <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" disabled={rowSaving} onClick={() => requestCancel(request.id)}>
               <Icon name="ban" size={14} />
@@ -307,28 +265,23 @@ export function ReviewQueueTab({ user, showToast }) {
     const cancellable = canManagerCancelRequest(request, user, canReviewAll);
     const expanded = expandedId === request.id;
     const rowSaving = pendingRowId === request.id;
-    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status
-    // column (owner ruling, V164 follow-up) -- see that column's own comment for why this reads
-    // `unpaidDays` (the request's total unpaid figure, of which a §5 WARN gate's own
-    // unpaidByRuleDays is always a SUBSET -- LeaveRequestDto's Javadoc) rather than
-    // unpaidByRuleDays alone: either source of unpaid days deserves the same visibility here.
+    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status column;
+    // reads `unpaidDays` (the request's total unpaid figure, of which a §5 WARN gate's
+    // unpaidByRuleDays is always a SUBSET, per LeaveRequestDto's Javadoc) rather than
+    // unpaidByRuleDays alone: either source of unpaid days deserves the same visibility.
     const hasUnpaidDays = Number(request.unpaidDays || 0) > 0;
     return (
       <>
         <div className="flex min-w-0 items-start justify-between gap-3">
-          {/* Wraps, never truncates (2026-08-11). A two-date range is the card's headline and the
-              one thing that must be read exactly; `truncate` is single-line-or-ellipsis, so at
-              390px it rendered "7 ก.ย. 2569 - 11 ก.ย. 25…" — cutting the Buddhist-era YEAR off the
-              end date, which looks like a complete date and is not one. The string is short and
-              space-separated, so wrapping costs at most one extra line. */}
+          {/* Wraps, never truncates: the date range is the card's headline and `truncate` at 390px
+              cut the Buddhist-era YEAR off the end date ("7 ก.ย. 2569 - 11 ก.ย. 25…"), which looks
+              like a complete date. The string is short, so wrapping costs at most one line. */}
           <strong className="min-w-0 text-sm font-extrabold text-text">
             {formatDateRange(request.startDate, request.endDate)}
           </strong>
           <span className="flex shrink-0 items-start gap-1.5">
-            {/* Stacked vertically, never inline (owner ruling, V164 follow-up) -- two badges
-                sharing one line in a narrow column is what forces truncation; stacking removes the
-                problem at every width with no breakpoint variant needed. See
-                leaveRequestTable.jsx's matching desktop status column for the same treatment. */}
+            {/* Stacked vertically, never inline: two badges on one line in a narrow column force
+                truncation. See leaveRequestTable.jsx's desktop status column for the same treatment. */}
             <span className="flex flex-col items-start gap-1">
               <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
               {hasUnpaidDays ? (
@@ -380,8 +333,7 @@ export function ReviewQueueTab({ user, showToast }) {
                 </Button>
               </>
             ) : null}
-            {/* `ban`, matching the desktop icon column -- see its own comment. The two glyphs
-                used to differ here only because this card was written before that fix. */}
+            {/* `ban`, matching the desktop icon column. */}
             {cancellable ? (
               <Button type="button" variant="secondary" className="min-h-11 flex-1" disabled={rowSaving} onClick={() => requestCancel(request.id)}>
                 <Icon name="ban" size={14} />
@@ -397,12 +349,11 @@ export function ReviewQueueTab({ user, showToast }) {
   const confirmRequest = allRequests.find((item) => item.id === confirmState?.id)
     ?? actionableRequests.find((item) => item.id === confirmState?.id);
 
-  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): owner-approved copy -- the CONFIRM button
-  // is the actual commit action (the row's own icon button only OPENS this dialog), so the pay
-  // consequence belongs on the button the approver actually clicks, not only in the warning panel
-  // above. `unpaidByRuleDays` is a SUBSET of the request's own unpaidDays (see LeaveRequestDto's
-  // Javadoc) -- reading it, not totalDays, keeps this label accurate even alongside an ordinary
-  // quota-exceedance unpaid amount the request may ALSO carry.
+  // §5 WARN_UNPAID_* gates: the CONFIRM button is the actual commit action (the row's own icon
+  // button only OPENS this dialog), so the pay consequence belongs on the button the approver
+  // clicks. `unpaidByRuleDays` is a SUBSET of the request's own unpaidDays (LeaveRequestDto's
+  // Javadoc); reading it, not totalDays, stays accurate alongside an ordinary quota-exceedance
+  // unpaid amount.
   const approveConfirmLabel = Number(confirmRequest?.unpaidByRuleDays || 0) > 0
     ? `อนุมัติ (ไม่จ่ายค่าจ้าง ${formatDays(confirmRequest.unpaidByRuleDays)})`
     : 'อนุมัติ';
@@ -441,14 +392,9 @@ export function ReviewQueueTab({ user, showToast }) {
           rows={actionableRequests}
           getRowKey={leaveRequestRowKey}
           gridClassName={LEAVE_REQUEST_TABLE_GRID}
-          // No `panelClassName="overflow-x-auto"` here, deliberately. This branch carried one --
-          // LEAVE_REQUEST_TABLE_GRID's `nav-drawer:min-w-[980px]` floor inside an
-          // `overflow-hidden` flush Panel put 227px of table, including อนุมัติ/ปฏิเสธ, beyond
-          // reach of any gesture at 834px. #650 then fixed that DEFAULT in Panel itself
-          // (`flush` is `overflow-x-auto overflow-y-hidden` now) precisely because three call
-          // sites had each patched it locally, and deleted all three. Re-adding a fourth would
-          // be the pattern that commit exists to end. Verified against the merged default rather
-          // than assumed -- see the PR body.
+          // No `panelClassName="overflow-x-auto"` here, deliberately: Panel's `flush` default is
+          // already `overflow-x-auto overflow-y-hidden`, and per-call-site patches were deleted in
+          // favour of that default.
           loading={loading}
           error={hasError}
           onRetry={() => requestsQuery.refetch()}
@@ -466,13 +412,10 @@ export function ReviewQueueTab({ user, showToast }) {
                     className="mb-3"
                   />
                 ) : null}
-                {/* §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the approver must see this
-                    BEFORE approving, not only after (owner ruling #2 -- see LeaveRequestDto's own
-                    ruleWarnings Javadoc). Placed first, above the request's other detail fields, so
-                    expanding a row to review it surfaces the pay consequence immediately -- the
-                    approve/reject icon buttons live in this row's own actions column (always
-                    visible, not gated on expand), and this is the context an approver should read
-                    before reaching for either one. Owner ruling: show ALL warnings, not just the
+                {/* §5 WARN_UNPAID_* gates: the approver must see this BEFORE approving (see
+                    LeaveRequestDto's ruleWarnings Javadoc). Placed first so expanding a row to review
+                    it surfaces the pay consequence immediately, before the approve/reject icon
+                    buttons (always visible, not gated on expand). Shows ALL warnings, not just the
                     first -- see LeaveRuleWarningList's own comment. */}
                 {request.ruleWarnings?.length > 0 ? (
                   <LeaveRuleWarningList warnings={request.ruleWarnings} className="mb-3" />
@@ -520,9 +463,9 @@ export function ReviewQueueTab({ user, showToast }) {
                 <span>จำนวนวันลา</span>
                 <span className="font-mono">{formatDays(confirmRequest.totalDays)}</span>
               </div>
-              {/* §5 WARN_UNPAID_* gates (V164 follow-up): same figure the confirm button's own
-                  label below reads -- repeated here, in the line-item breakdown, so the number on
-                  the button is never the first place it appears. */}
+              {/* §5 WARN_UNPAID_* gates: same figure the confirm button's own label reads, repeated
+                  in the line-item breakdown so the number on the button is never the first place
+                  it appears. */}
               {Number(confirmRequest.unpaidByRuleDays || 0) > 0 ? (
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--color-warning-dark)' }}>
                   <span>ไม่จ่ายค่าจ้าง (เงื่อนไข §5)</span>
@@ -530,8 +473,7 @@ export function ReviewQueueTab({ user, showToast }) {
                 </div>
               ) : null}
               {/* Next-step copy quoted from api.leave.approve (src/api/mockApi.js): it only sets
-                  status -> APPROVED plus the reviewer stamp -- it does not recompute
-                  quotaRemainingAfter, which was already fixed at create() time. */}
+                  status -> APPROVED plus the reviewer stamp. */}
               <p style={{ margin: 0, fontSize: 12, color: 'var(--color-icon-muted)' }}>{'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว"'}</p>
             </div>
           );

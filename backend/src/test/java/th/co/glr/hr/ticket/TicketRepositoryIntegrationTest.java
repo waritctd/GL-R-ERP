@@ -52,7 +52,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
         TicketDto ticket = tickets.findById(ticketId).orElseThrow();
 
-        // QA-25 (owner ruling 2026-10-29): new deals are numbered DL-<year>-<4 digits>; existing PR- codes keep theirs.
+        // New deals are numbered DL-<year>-<4 digits>; existing PR- codes keep theirs.
         assertThat(ticket.summary().code()).matches("DL-\\d{4}-\\d{4}");
         assertThat(ticket.summary().createdById()).isEqualTo(actorId);
         assertThat(ticket.items()).hasSize(2);
@@ -60,9 +60,9 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsExactlyInAnyOrder("Toyota", "Honda");
     }
 
-    // สี and เนื้อผิว became optional on 2026-08-10 (@NotBlank dropped from TicketItemRequest).
-    // The live price catalog fills `color` on 21% of its 22,455 active rows and `surface` on 22%,
-    // so a rep picking a catalogued product previously had to invent both on most picks. This
+    // สี and เนื้อผิว are optional (no @NotBlank on TicketItemRequest): the live price catalog
+    // fills `color` on only 21% of its active rows and `surface` on 22%, so a rep picking a
+    // catalogued product would otherwise have to invent both. This
     // asserts the real Postgres round-trip rather than the annotation alone: sales.ticket_item's
     // color/texture columns are nullable, so a null must persist as a null and read back as one
     // — a mocked repository would "pass" this while the actual INSERT rejected it.
@@ -170,18 +170,18 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogProductCode()).isNull();
     }
 
-    // ── V183: stock-sourced deal-line pricing (sourced_from_stock / stock_sale_price) ──────────
-    // Sales may flag a line "from warehouse" and type in its own selling price. CAPTURE-ONLY
-    // today — nothing downstream reads this pair yet, so a flagged line can still be attached to,
-    // and priced through, an ordinary PricingRequest exactly as before — see the migration's
-    // header for the full owner ruling. Round-tripped through BOTH write paths (insertItems via
+    // ── stock-sourced deal-line pricing (sourced_from_stock / stock_sale_price) ──────────
+    // Sales may flag a line "from warehouse" and type in its own selling price. CAPTURE-ONLY:
+    // nothing downstream reads this pair, so a flagged line can still be attached to,
+    // and priced through, an ordinary PricingRequest — see the migration's
+    // header for the full rule. Round-tripped through BOTH write paths (insertItems via
     // ticket creation, and replaceItemsPreservingPricing via an items edit) and read back through
     // findItemsByTicketId, same discipline as the catalog-link tests above — a mocked repository
     // would happily "pass" this while the real CHECK constraint / columns did something else.
 
     @Test
     void createTicket_stockSourcedLineWithNoPrice_persistsTheFlagAndANullPrice() {
-        // Walk 4 (W4-09): chk_ticket_item_stock_sale_price is relaxed to
+        // chk_ticket_item_stock_sale_price is relaxed to
         // `sourced_from_stock OR stock_sale_price IS NULL`, so a flagged line needs no price.
         long ticketId = tickets.create(sampleTicket(
             itemFromStock("Cotto", "Stone Series", "White", "Matte", "60x60", null)),
@@ -241,12 +241,12 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void createTicket_forcesStockSalePriceNullWhenNotFlaggedFromStock() {
-        // Review follow-up: TicketService.create validates "flag true => positive price" but
+        // TicketService.create validates "flag true => positive price" but
         // deliberately does not reject the INVERSE, so a malformed request carrying
-        // {sourcedFromStock:false, stockSalePrice:500} used to reach
+        // {sourcedFromStock:false, stockSalePrice:500} must not reach
         // chk_ticket_item_stock_sale_price and come back as a 500 (DataIntegrityViolationException
-        // -> ApiExceptionHandler.handleDataAccess) rather than being normalised. insertItems now
-        // force-nulls it, exactly as mergeEditedItemsPreservingPricing already did on the edit
+        // -> ApiExceptionHandler.handleDataAccess); insertItems force-nulls it, exactly as
+        // mergeEditedItemsPreservingPricing does on the edit
         // path. Real Postgres, real CHECK — a mocked repository could not prove this.
         TicketItemRequest strayPrice = new TicketItemRequest(
             "Toyota", "Hilux", "White", "Matte", "L", null,
@@ -327,7 +327,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(persisted.catalogCurrency()).isEqualTo("THB");
         assertThat(persisted.catalogPriceUnit()).isEqualTo("per_sqm");
         assertThat(persisted.sqmPerPiece()).isEqualByComparingTo("1.440000");
-        // UAT item 1 follow-up (owner ruling 2026-10-18, "fill from catalogue"): the PCR form seeds
+        // "Fill from catalogue": the PCR form seeds
         // ความหนา / แผ่น-กล่อง / ประเทศต้นทาง for a catalogue-linked deal line, so the same join also
         // carries pp.thickness_mm, pp.pcs_per_box and the factory's country.
         assertThat(persisted.catalogThicknessMm()).isEqualByComparingTo("9.0");
@@ -707,7 +707,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    // ── B5 fix: findPricingChainFallbackItems — the read-only display fallback for a deal
+    // ── findPricingChainFallbackItems —the read-only display fallback for a deal
     //    whose sales.ticket_item is still empty (pre-order-confirmation), picking the deal's
     //    live new-engine quotation.
     //    Real Postgres only: the priority CASE/ORDER BY and the origin/doc_status filters
@@ -777,7 +777,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(tickets.findPricingChainFallbackItems(ticketId)).isEmpty();
     }
 
-    // ── Deposit policy that follows the quotation (PR #1173 follow-ups F1/F2) ─────────────────
+    // ── Deposit policy that follows the quotation ─────────────────
     // syncDepositPolicyFromQuotation is the only write the system makes to deposit_policy. It is a
     // compare-and-set: it moves the row only while the policy is still the expected one, nobody
     // has set it by hand (deposit_policy_set_by IS NULL; waiveDeposit always records its actor),
@@ -802,7 +802,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsEntry("deposit_policy_set_by", null);
     }
 
-    /** F2: a waiver that commits between the service's read and this write must win. */
+    /** A waiver that commits between the service's read and this write must win. */
     @Test
     void syncDepositPolicyFromQuotation_writesNothing_whenThePolicyIsNotTheExpectedOne() {
         long ticketId = confirmedTicket();
@@ -869,7 +869,7 @@ class TicketRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(depositPolicyRow(ticket)).containsEntry("deposit_policy", DepositPolicy.REQUIRED);
     }
 
-    // ── QA-16 payment chip (owner ruling 2026-10-29): the derived paymentStage follows the payment
+    // ── Payment chip: the derived paymentStage follows the payment
     // track. Literals, not PaymentStage constants, so this pins the wire value the frontend maps. ──
 
     @Test

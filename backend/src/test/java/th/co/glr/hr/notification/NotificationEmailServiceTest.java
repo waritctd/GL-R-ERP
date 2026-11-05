@@ -63,17 +63,17 @@ class NotificationEmailServiceTest {
 
         verify(mailer).sendHtml(
             eq("employee@glr.co.th"),
-            eq("[GL&R HR] Leave submitted"),
+            eq("[GL&R Portal] Leave submitted"),
             argThat(html -> html.contains("เรียน คุณสมชาย,")
                 && html.contains("body text")
                 && html.contains("https://portal.example/leave/1")
                 && html.contains("ดูรายละเอียดในระบบ")
-                && html.contains("ระบบบริหารงานบุคคล GL&amp;R")
+                && html.contains(">GL&amp;R Portal<") && !html.contains("ระบบบริหารงานบุคคล")
                 && !html.contains("Redirected for testing")),
             argThat(text -> text.contains("เรียน คุณสมชาย,")
                 && text.contains("body text")
                 && text.contains("ดูรายละเอียดในระบบ: https://portal.example/leave/1")
-                && text.contains("ระบบบริหารงานบุคคล GL&R")
+                && text.contains("\nGL&R Portal\n") && !text.contains("ระบบบริหารงานบุคคล")
                 && !text.contains("Redirected for testing")),
             argThat(NotificationEmailServiceTest::hasGlrLogoInline));
     }
@@ -106,7 +106,7 @@ class NotificationEmailServiceTest {
 
         verify(mailer).sendHtml(
             eq("employee@glr.co.th"), // NOT swapped to "tester@example.com" - see OverrideRedirectingMailerTest for that
-            eq("[GL&R HR] Leave submitted (UAT)"),
+            eq("[GL&R Portal] Leave submitted (UAT)"),
             argThat(html -> html.contains("body text")
                 && html.contains("https://portal.example/leave/1")
                 && !html.contains("Redirected for testing")
@@ -143,7 +143,7 @@ class NotificationEmailServiceTest {
 
         verify(mailer).sendHtml(
             isNull(),
-            eq("[GL&R HR] Leave submitted (UAT)"),
+            eq("[GL&R Portal] Leave submitted (UAT)"),
             argThat(html -> html.contains("เรียน ท่านผู้ใช้งาน,")
                 && html.contains("body text")
                 && !html.contains("ดูรายละเอียดในระบบ")

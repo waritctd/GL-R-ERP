@@ -13,17 +13,15 @@ const ONE_ITEM = {
   leadTimeMinDays: 30, leadTimeMaxDays: 45,
 };
 
-// Branch fix (deposit-notice autofill): drives the mock's own pricing-request chain end to end
-// — Step 1 create through Step 5 customer-accept, then confirmOrder — against the REAL mock
-// state (not a stubbed api object), exercising mockApi.depositNotices.createDraft's new
-// header-autofill + new-chain item-fallback behaviour the same way
-// OrderConfirmationIntegrationTest proves it against the real Java service (backend/src/test/
-// java/th/co/glr/hr/orderconfirmation/OrderConfirmationIntegrationTest.java).
+// Drives the mock's own pricing-request chain end to end (Step 1 create through Step 5
+// customer-accept, then confirmOrder) against the REAL mock state (not a stubbed api object),
+// exercising mockApi.depositNotices.createDraft's header-autofill + new-chain item-fallback
+// behaviour the way OrderConfirmationIntegrationTest proves it against the real Java service
+// (backend/src/test/java/th/co/glr/hr/orderconfirmation/OrderConfirmationIntegrationTest.java).
 //
-// Every deal created through this chain reaches createDraft with approved_price = NULL on
-// every ticket item (the chain never writes that legacy column — see
-// DepositNoticeService.createDraft's own comments) and, before this fix, no header autofill
-// at all — this is exactly the bug the branch fixes.
+// Every deal created through this chain reaches createDraft with approved_price = NULL on every
+// ticket item (the chain never writes that legacy column; see DepositNoticeService.createDraft's
+// comments).
 
 let seq = 0;
 
@@ -66,15 +64,15 @@ async function driveTicketToApprovedDecision({ priceMode, discountPct } = {}) {
     items: [{
       sourceTicketItemId: sourceItemId,
       // productId 1 = mockProductPrices' seeded "Panaria SpA" line (factoryId 1), which has an
-      // ACTIVE mockPriceImportVersions row — submit()'s catalog gate (financial-integrity
-      // review Finding A) requires every item to resolve against an active catalog entry.
+      // ACTIVE mockPriceImportVersions row: submit()'s catalog gate requires every item to resolve
+      // against an active catalog entry.
       productId: 1,
       brand: 'SCG',
       model: 'Tile Mock',
       factory: 'Panaria SpA',
-      // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-      // required on every item create() persists. PIECES mode + roundToFullBox:false keeps the
-      // derived requestedQty an exact 10, matching what this fixture always meant.
+      // color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are required on every
+      // item create() persists. PIECES mode + roundToFullBox:false keeps the derived requestedQty
+      // an exact 10, matching what this fixture always meant.
       color: 'ขาว',
       texture: 'ด้าน',
       size: '60x60',
@@ -85,7 +83,7 @@ async function driveTicketToApprovedDecision({ priceMode, discountPct } = {}) {
       wastageMode: 'NONE',
       piecesPerBox: 4,
       roundToFullBox: false,
-      // GLA-125: required on this form too.
+      // Required on this form too.
       originCountry: 'ไทย-สต็อก',
       leadTimeMinDays: 3,
       leadTimeMaxDays: 7,
@@ -98,7 +96,7 @@ async function driveTicketToApprovedDecision({ priceMode, discountPct } = {}) {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
-  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  // Price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
   for (const q of quotes) {
     await api.pricingRequests.markFactoryQuoteContacted(q.id, {
       contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
@@ -189,8 +187,7 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
   it('sources items from the accepted quotation and autofills the header when no ticket item has an approved price', async () => {
     const { ticketId, customer, project, quotation } = await driveTicketToAcceptedQuotation();
 
-    // Precondition matching the branch's own diagnosis: this chain never touches
-    // ticket.items[].approvedPrice.
+    // Precondition: this chain never touches ticket.items[].approvedPrice.
     const { ticket: detail } = await api.tickets.get(ticketId);
     expect(detail.items.length).toBeGreaterThan(0);
     expect(detail.items.every((it) => it.approvedPrice == null)).toBe(true);
@@ -347,7 +344,7 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     expect(depositNotice.depositPercent).toBe(0.4);
   });
 
-  // Mirrors TicketService.applyCustomerConfirmation's policy sync (owner ruling 2026-10-22).
+  // Mirrors TicketService.applyCustomerConfirmation's policy sync.
   it('confirmOrder on a 0% quotation sets depositPolicy NOT_REQUIRED, and both draft routes 409', async () => {
     const { ticketId, prId, accepted } = await driveTicketToNewEngineAcceptedQuotation({
       depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY',
@@ -378,14 +375,11 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
   });
 });
 
-// Issue #752: the mock must reproduce production's one-render gap. Per
-// DepositNoticeService.issue (backend/src/main/java/th/co/glr/hr/deposit/DepositNoticeService.java
-// ~L200-225), PR #721 moved the PDF/XLSX render into an afterCommit callback — so the DTO
-// issue() itself returns still reports hasPdf/hasXlsx FALSE (built before the render runs),
-// and only a SUBSEQUENT read of the same document reports both true. Before this fix the mock
-// never touched hasPdf/hasXlsx in issue() at all, so they stayed false forever and a developer
-// wiring a download button to these flags could never observe, under VITE_USE_MOCKS=true, the
-// one-render gap that exists in production.
+// The mock must reproduce production's one-render gap: DepositNoticeService.issue renders the
+// PDF/XLSX in an afterCommit callback, so the DTO issue() itself returns still reports
+// hasPdf/hasXlsx FALSE (built before the render runs) and only a SUBSEQUENT read reports both
+// true. Otherwise a developer wiring a download button to these flags could never observe the
+// gap under VITE_USE_MOCKS=true.
 describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduces the one-render gap)', () => {
   it('issue() response reports hasPdf/hasXlsx false; a subsequent read of the same doc reports both true', async () => {
     const { ticketId } = await driveTicketToAcceptedQuotation();
@@ -404,16 +398,14 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
     const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
     expect(issued.status).toBe('ISSUED');
     expect(issued.docNumber).not.toBeNull();
-    // The issue() RESPONSE mirrors the pre-render committed state — false/false — even
-    // though the document IS now ISSUED. This assertion already holds on the unfixed mock
-    // too (it never sets these true anywhere), so it is not by itself evidence of the fix;
-    // it pins the response contract precisely because the next assertion changes it.
+    // The issue() RESPONSE mirrors the pre-render committed state (false/false) even though the
+    // document IS now ISSUED. This already holds on an unfixed mock, so it is not by itself
+    // evidence; it pins the response contract the next assertion changes.
     expect(issued.hasPdf).toBe(false);
     expect(issued.hasXlsx).toBe(false);
 
-    // A SUBSEQUENT read of the SAME document (i.e. after the "render" has "happened") must
-    // see both true. This is the assertion that fails on the unfixed mock, because issue()
-    // never flips the stored doc's flags at all — they stay false forever.
+    // A SUBSEQUENT read of the SAME document (after the "render" has "happened") must see both
+    // true. This fails on a mock whose issue() never flips the stored doc's flags.
     const { depositNotice: reread } = await api.depositNotices.get(draft.id);
     expect(reread.hasPdf).toBe(true);
     expect(reread.hasXlsx).toBe(true);
@@ -425,8 +417,8 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
   });
 });
 
-// Owner ruling 2026-10-23 (mirrors DepositNoticeService.update): sales may change the deposit %
-// on a DRAFT and the amount follows; 0 is refused; an ISSUED notice refuses every edit.
+// Mirrors DepositNoticeService.update: sales may change the deposit % on a DRAFT and the amount
+// follows; 0 is refused; an ISSUED notice refuses every edit.
 describe('mockApi.depositNotices.update deposit percent', () => {
   it('on a DRAFT takes the new percent and recomputes the amount; 0, over 100% and fractional are refused', async () => {
     const { ticketId } = await driveTicketToAcceptedQuotation();
@@ -512,7 +504,7 @@ describe('mockApi.depositNotices.update deposit percent', () => {
     await api.tickets.confirmCustomer(ticketId);
     const { depositNotice: issued } = await api.depositNotices.issue(draft.id);
 
-    // Owner ruling 2026-10-23: a second draft that predates the issue takes no number either.
+    // A second draft that predates the issue takes no number either.
     await expect(api.depositNotices.issue(secondDraft.id)).rejects.toMatchObject({
       status: 409,
       message: `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`,
@@ -528,7 +520,7 @@ describe('mockApi.depositNotices.update deposit percent', () => {
     expect(reread.depositPercent).toBe(issued.depositPercent);
     expect(reread.depositAmount).toBe(issued.depositAmount);
 
-    // Owner ruling 2026-10-23 (DepositNoticeService.createDraftFromQuotation): one notice per deal.
+    // One notice per deal (DepositNoticeService.createDraftFromQuotation).
     const message = `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`;
     await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject({ status: 409, message });
     const prId = (await api.pricingRequests.listForTicket(ticketId)).items
@@ -538,10 +530,8 @@ describe('mockApi.depositNotices.update deposit percent', () => {
   });
 });
 
-// GLA-32 (2026-09-19): mirrors DepositNoticeService.issue's account-role notification (backend
-// backend/src/main/java/th/co/glr/hr/deposit/DepositNoticeService.java) — issuing a deposit
-// notice notifies the account role, in-app, so account picks up the deal here rather than
-// nowhere.
+// Mirrors DepositNoticeService.issue's account-role notification: issuing a deposit notice
+// notifies the account role, in-app, so account picks up the deal here.
 describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
   it('notifies the seeded account user with the ticket code, customer name and doc number', async () => {
     const { ticketId, customer } = await driveTicketToAcceptedQuotation();
@@ -560,8 +550,8 @@ describe('mockApi.depositNotices.issue account notification (GLA-32)', () => {
     expect(own).toBeTruthy();
     expect(own.message).toContain(issued.docNumber);
     expect(own.message).toContain(customer.name);
-    // Opus review (2026-09-19): account matches this against a bank transfer, which is the
-    // deposit PLUS VAT (totalPayable) — the message must show both, not depositAmount alone.
+    // Account matches this against a bank transfer, which is the deposit PLUS VAT (totalPayable):
+    // the message must show both, not depositAmount alone.
     expect(issued.totalPayable).not.toBe(issued.depositAmount);
     expect(own.message).toContain(String(Math.round(issued.totalPayable)));
   });

@@ -73,7 +73,7 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
                                            new ImportRequestRenderer(),
                                            new ImportRequestRepository(jdbc),
                                            new FactoryConfigRepository(jdbc),
-                                           tickets, ticketService);
+                                           tickets, ticketService, notifications);
 
         long employeeId = insertEmployee("IRSVC");
         importUser  = principal(employeeId, "import");

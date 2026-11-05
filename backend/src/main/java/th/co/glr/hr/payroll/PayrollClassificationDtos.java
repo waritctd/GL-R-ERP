@@ -6,8 +6,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * DTOs for the two per-employee, per-component payroll matrices introduced V95 (owner decisions
- * 2026-07-29, docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md): the
+ * DTOs for the two per-employee, per-component payroll matrices: the
  * withholding-tax treatment classification and the SSO wage-base inclusion tick. Grouped in one
  * file like {@link PayrollReconciliationDtos}, which this mirrors in shape.
  */
@@ -37,21 +36,19 @@ public final class PayrollClassificationDtos {
     ) {}
 
     /**
-     * P0 fix (Opus review, 2026-07-30): the HTTP surface + screen the reachability test demanded.
      * One employee's full classification row for the matrix screen, WITH the display fields
      * {@link EmployeeComponentTaxTreatments} deliberately omits -- that record is keyed purely by
-     * employeeId because it existed only for internal (repository/calculator) plumbing before this
-     * fix; the screen needs a name and code to render a matrix a human can read.
+     * employeeId because it exists only for internal (repository/calculator) plumbing; the
+     * screen needs a name and code to render a matrix a human can read.
      *
-     * <p>F2 fix (fifth Opus review, 2026-07-30): {@code byComponent} used to be the RAW stored map
-     * ({@code hr.payroll_component_tax_treatment} rows only), not the EFFECTIVE classification
-     * {@link PayrollCalculator#calculateClassified} actually applies -- on any employee the V96/V100
-     * backfills never reached, every cell rendered blank and the badge read "ยังไม่จัดประเภท N รายการ"
-     * while payroll ran fine on synthesized defaults. HR, trusting the badge, would then classify a
-     * single cell and (see the now-fixed {@code PayrollService#treatmentsFor}) strand every other
-     * component. {@code byComponent} is now the same merged/effective map {@code treatmentsFor}
-     * resolves for the engine, so the screen and the engine can never disagree about what "currently
-     * applies" means.
+     * <p>{@code byComponent} is the EFFECTIVE classification
+     * {@link PayrollCalculator#calculateClassified} actually applies, not the RAW stored map
+     * ({@code hr.payroll_component_tax_treatment} rows only): for an employee with no stored
+     * rows every cell would render blank and the badge would read "ยังไม่จัดประเภท N รายการ"
+     * while payroll runs fine on synthesized defaults. HR, trusting the badge, would then
+     * classify a single cell and strand every other component. It is the same merged/effective
+     * map {@code PayrollService#treatmentsFor} resolves for the engine, so the screen and the
+     * engine can never disagree about what "currently applies" means.
      */
     public record TaxTreatmentMatrixRow(
         long employeeId,
@@ -65,7 +62,7 @@ public final class PayrollClassificationDtos {
         // stored row (see PayrollClassifiedCalculationDtos#treatmentOf), so the matrix screen must
         // render it as a fixed label, never an editable cell.
         Map<PayrollComponent, PayrollTaxTreatment> byComponent,
-        // F2 fix (fifth Opus review, 2026-07-30): components for which HR (or a migration backfill)
+        // Components for which HR (or a migration backfill)
         // has an actual stored row -- i.e. a value NOT synthesized by this snapshot. Includes a
         // present-and-null "deliberately left unclassified" row. The frontend uses this to tell HR
         // apart "you set this" from "the system is defaulting this", which is exactly the distinction

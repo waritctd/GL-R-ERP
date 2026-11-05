@@ -30,24 +30,24 @@ public record PayrollCalculation(
     BigDecimal totalDeductions,
     BigDecimal netPay,
     String calculationNote,
-    // Reconciliation additions (2026-07-21, C3/C4).
+    // Reconciliation additions.
     BigDecimal directorRemuneration,
     BigDecimal warningLetterDeduction,
     BigDecimal customerReturnDeduction,
     BigDecimal otherPretaxDeduction,
-    // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the pre-tax credit reversing a PRIOR
+    // Cancel-after-close reversal, AUTO-REFUND: the pre-tax credit reversing a PRIOR
     // month's over-deduction. Kept separate from unpaidLeaveDays/unpaidLeaveDeduction (this month's
     // OWN unpaid leave, if any) throughout -- see PayrollCalculator for how the two combine.
     BigDecimal leaveRefundDays,
     BigDecimal leaveDeductionRefund,
-    // Withholding-tax override (2026-07-24, V88): the RESOLVED effective override that was APPLIED to
+    // Withholding-tax override: the RESOLVED effective override that was APPLIED to
     // this calculation, or null if none was (the normal computed withholding stands). When non-null,
     // withholdingTax above equals money(withholdingTaxOverride); annualTax / taxableAnnualIncome /
     // projectedAnnualIncome are UNCHANGED and still reflect the true progressive-tax computation, for
     // transparency. Carried onto payroll_line.withholding_tax_override so the per-run typed value can
     // carry forward.
     BigDecimal withholdingTaxOverride,
-    // ป.96/2543 compliance (2026-07-28, V92). The two limbs คำชี้แจง ภ.ง.ด.1 requires be kept apart:
+    // ป.96/2543 compliance. The two limbs คำชี้แจง ภ.ง.ด.1 requires be kept apart:
     // เงินได้ที่จ่ายตามปกติ (ข้อ 2.1, annualised) and เงินพิเศษที่จ่ายเป็นครั้งคราว (ข้อ 2.5, actual
     // amount, taxed as a difference). regularTaxableIncome + variableTaxableIncome == grossTaxableIncome
     // and regularWithholdingTax + variableWithholdingTax == withholdingTax, always -- both invariants
@@ -67,8 +67,8 @@ public record PayrollCalculation(
     BigDecimal variableAnnualTax,
     // จำนวนคราวที่ต้องจ่าย remaining this tax year including this one (ข้อ 2.1). 1 in December, which is
     // what turns the ordinary formula into the ข้อ 2.9 true-up. NOT 1 in a leaver's final period --
-    // ข้อ 2.10 is a known gap (see PayrollService#remainingPayPeriods), so nothing in production ever
-    // supplies a 1 for that reason.
+    // ข้อ 2.10 is a known gap (no production caller supplies it; the calculator uses 13 - month), so
+    // nothing in production ever lands on 1 for that reason.
     int remainingPayPeriods,
     // Withholding already remitted this tax year IN EXCESS of the year's assessed liability, as at
     // this period. Normally zero. Non-zero means an earlier period over-withheld and payroll cannot
@@ -76,7 +76,7 @@ public record PayrollCalculation(
     // negative withholding. Reported so the condition is visible: withholdingTax on its own reads
     // 0.00, which is indistinguishable from "nothing was due this period".
     BigDecimal excessWithheldToDate,
-    // Dedicated one-off pay (2026-07-29, V94), both inside the ข้อ 2.5 variable limb.
+    // Dedicated one-off pay, both inside the ข้อ 2.5 variable limb.
     BigDecimal bonusPay,
     BigDecimal otherOneOffPay
 ) {}

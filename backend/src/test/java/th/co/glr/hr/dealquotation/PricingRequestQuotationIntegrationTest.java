@@ -71,9 +71,8 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-DB coverage for GLA-123 slice S1 (Phase 3 of the sales pricing redesign, 2026-09-19):
- * {@link DealQuotationService#createFromPricingRequest} — the direct-deal engine reused to create
- * a quotation from an APPROVED-FOR-QUOTATION pricing request's CEO-approved decision.
+ * Real-DB coverage for {@link DealQuotationService#createFromPricingRequest} — the direct-deal
+ * engine reused to create a quotation from an APPROVED-FOR-QUOTATION pricing request's CEO-approved decision.
  *
  * <p>Setup mirrors {@code PricingDecisionCeoPriceModeIntegrationTest} (same fixtures, same helper
  * shapes) — duplicated rather than shared, to avoid coupling this new-feature suite's lifecycle to
@@ -158,9 +157,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test", "", "", "");
         customerQuotationRepository = new th.co.glr.hr.customerquotation.CustomerQuotationRepository(jdbc);
         quotationService.wirePricingRequestDependencies(pricingRequests, decisionRepository, customerQuotationRepository);
-        // M2 (Opus review, 2026-09-20) fixture — the OLD create path, wired the same way
-        // PricingDecisionCeoPriceModeIntegrationTest's own fixture does, purely so this file's M2
-        // tests can put a live legacy quotation on a PR without hand-seeding its schema.
+        // The legacy create path, wired the same way PricingDecisionCeoPriceModeIntegrationTest's
+        // own fixture does, purely so this file's mutual-exclusivity tests can put a live legacy
+        // quotation on a PR without hand-seeding its schema.
         legacyQuotationService = new th.co.glr.hr.customerquotation.CustomerQuotationService(
             customerQuotationRepository, pricingRequests, decisionRepository, tickets, ticketService,
             customers, new QuotationRenderer(), notifications,
@@ -224,14 +223,14 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * B1 (Opus review BLOCKER, 2026-09-20): a real-DB probe found that a NET line with an active
-     * "ปรับราคาเอง" override (150, 10% discount) read {@code ceoListUnitPrice = 10137.01} (the
-     * bare auto-formula {@code list_unit_price}) instead of 150 — so it showed as
-     * {@code priceChangedFromCeo = true} the instant it was created, since the quotation's own
-     * {@code unitPrice} (correctly prefilled as 150, per {@code buildItemInputFromDecisionItem})
-     * never matched. Fixed by joining {@code COALESCE(manual_selling_price_per_requested_unit,
-     * list_unit_price)} as {@code ceo_list_unit_price} — mirrors
-     * {@code PricingDecisionService#effectiveListPrice} exactly.
+     * A NET line with an active "ปรับราคาเอง" override (150, 10% discount) must read
+     * {@code ceoListUnitPrice = 150}, not 10137.01 (the bare auto-formula {@code list_unit_price}):
+     * otherwise it shows as {@code priceChangedFromCeo = true} the instant it is created, since
+     * the quotation's own {@code unitPrice} (correctly prefilled as 150, per
+     * {@code buildItemInputFromDecisionItem}) never matches. The query joins
+     * {@code COALESCE(manual_selling_price_per_requested_unit, list_unit_price)} as
+     * {@code ceo_list_unit_price} — mirrors {@code PricingDecisionService#effectiveListPrice}
+     * exactly.
      */
     @Test
     void net_withManualOverride_effectiveListPriceIsTheOverride_notTheAutoFormulaPrice() {
@@ -269,7 +268,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(quotation.priceMode()).isEqualTo("SPECIAL_SQM");
         for (DealQuotationItemDto item : quotation.items()) {
             assertThat(item.netUnitPrice()).isEqualByComparingTo(item.ceoNetUnitPrice());
-            // W5-03/QA-31 (Ploy 2026-10-30): the ราคา column is the net, never the cost x margin
+            // The ราคา column is the net, never the cost x margin
             // formula price — that is a CEO-side reference, not a list price the customer was given.
             assertThat(item.unitPrice()).isEqualByComparingTo(item.netUnitPrice());
             assertThat(item.specialPriceSqm()).isNotNull();
@@ -405,10 +404,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * Isolates the ROLE check from the OWNERSHIP check (coordinator follow-up, 2026-09-20): the
-     * four wrong-way-round tests above are all "not the owner", so the ownership check alone
-     * already explains every 403 there — mutation-checking the role gate by itself showed exactly
-     * that (disabling ONLY the role check left every existing test green). This test makes the
+     * Isolates the ROLE check from the OWNERSHIP check: the four wrong-way-round tests above
+     * are all "not the owner", so the ownership check alone already explains every 403 there
+     * (disabling ONLY the role check leaves them all green). This test makes the
      * actor GENUINELY the ticket's owner (created_by, updated directly — TicketService#create
      * itself is sales-only, so a non-sales owner cannot arise through the normal API) while
      * holding a non-sales role, so ONLY the role check can be what stops them.
@@ -427,34 +425,30 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     @Test
     void owningSalesRep_canCreate_mutationCheckControl() {
         // The positive control for the four wrong-way-round tests above: same fixture, the
-        // OWNING rep succeeds. Mutation-checked by temporarily removing the ownership check in
-        // DealQuotationService#createFromPricingRequest and confirming exactly the four
-        // wrong-way-round tests above go red while this one and every other test in the class
-        // stay green — see the PR body for the before/after run.
+        // OWNING rep succeeds. Mutation-check record: removing the ownership check in
+        // DealQuotationService#createFromPricingRequest must turn exactly the four
+        // wrong-way-round tests above red, and no other test.
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
         assertThat(quotation.id()).isPositive();
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Submit — LIVE as of S2 (GLA-123)
+    // Submit
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** GLA-123 slice S2: submit is now LIVE for this origin — {@code
+    /** Submit is LIVE for this origin — {@code
      * DealQuotationService#requireReorderAllowedForOrigin} no longer guards submit/approve/reject
-     * (it now covers only createReorder, still refused here; createRevision is no longer
-     * guarded by it). This test used to pin the S1-era 409 refusal by
-     * name (commit history: {@code submit_refusedForPricingRequestOrigin}); it now pins the
-     * opposite — see {@code DealQuotationPricingRequestApprovalIntegrationTest} for the FULL
+     * (it covers only createReorder, still refused here; createRevision is not guarded by it
+     * either). See {@code DealQuotationPricingRequestApprovalIntegrationTest} for the FULL
      * approval matrix (unchanged/changed x sales_manager/ceo, the CEO-required-when-changed gate,
-     * wrong-way-round refusals, issue hooks, expiry) that S2 actually ships. */
+     * wrong-way-round refusals, issue hooks, expiry). */
     @Test
     void submit_nowLiveForPricingRequestOrigin() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
-        // MAJOR-4 fix (Opus re-review, 2026-09-20): submit now REQUIRES a validity — this
-        // fixture's synthetic pricing request carries no GLA-125 validityDays header term, so it
-        // must be set explicitly before submit, the same round trip
+        // Submit REQUIRES a validity — this fixture's synthetic pricing request carries no
+        // validityDays header term, so it must be set explicitly before submit, the same round trip
         // #upsertRequestWithItems's other call sites in this file already use for a header edit.
         List<ItemInput> items = quotation.items().stream().map(this::existingTileInput).toList();
         DealQuotationDto withValidity = quotationService.update(quotation.id(),
@@ -470,15 +464,14 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // GLA-123 slice S2 update: submit/approve/reject are now LIVE for this origin (see
-    // submit_nowLiveForPricingRequestOrigin above), but only createReorder remains
-    // explicitly refused by #requireReorderAllowedForOrigin (createRevision is no longer guarded
-    // by it for this origin).
+    // Submit/approve/reject are LIVE for this origin (see submit_nowLiveForPricingRequestOrigin
+    // above); only createReorder is explicitly refused by #requireReorderAllowedForOrigin
+    // (createRevision is not guarded by it for this origin).
     // Doubly true in practice: this origin's own status machine skips APPROVED entirely
     // (PENDING_APPROVAL -> ISSUED on one approval, by sales_manager or ceo, never APPROVED as a
     // resting state — see DealQuotationService#approveAndIssuePricingRequestOrigin), and both
     // methods require APPROVED regardless. cancel is the one status-machine method this feature
-    // deliberately WIDENS (owner ruling: a DRAFT is safe to cancel, mirrors DEAL_DIRECT exactly).
+    // deliberately WIDENS (a DRAFT is safe to cancel, mirrors DEAL_DIRECT exactly).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -499,7 +492,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             .extracting("status").isEqualTo(HttpStatus.CONFLICT);
     }
 
-    /** Owner ruling: cancelling a DRAFT is allowed for this origin, mirroring DEAL_DIRECT exactly
+    /** Cancelling a DRAFT is allowed for this origin, mirroring DEAL_DIRECT exactly
      * — see DealQuotationRepository#cancel's own comment. */
     @Test
     void cancel_allowedForPricingRequestOriginDraft() {
@@ -534,7 +527,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Sales MAY edit price (owner ruling revised 2026-09-19) — accepted + flagged, not refused.
+    // Sales MAY edit price — accepted + flagged, not refused.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -587,7 +580,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
-    /** Mixed price modes (V192.5, sales feedback #14 / owner 2026-10-06) are for the quotations sales
+    /** Mixed price modes are for the quotations sales
      * price THEMSELVES. A quotation created from a pricing request carries the CEO's decision, and
      * that decision has exactly one price mode ({@code pricing_decision.price_mode}); every
      * "changed from the CEO" comparison on this origin is made against it, row by row. Letting
@@ -617,7 +610,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Extra rows refused (owner ruling 2026-09-19) — pin with a mutation-checkable test.
+    // Extra rows refused — pin with a mutation-checkable test.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -638,23 +631,19 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // M3 (Opus review, 2026-09-20) — origin-aware view gate. A real-DB probe found that
-    // import AND account could both read a PRICING_REQUEST quotation's CEO discount/list via
-    // GET /deal-quotations/{id} through DEAL_DIRECT's broader VIEW_ROLES (which includes
-    // account) plus its quotation-grant bypass. Fixed in DealQuotationService#requireViewAccess
-    // by branching on origin FIRST and using the narrower PRICING_REQUEST_VIEW_ROLES before
-    // falling through to the DEAL_DIRECT rules. Covers every read path that funnels through
-    // requireViewAccess: get, renderPdf/renderXlsx, getItemPicture, findForPricingRequest.
+    // Origin-aware view gate. Without it, import AND account could both read a PRICING_REQUEST
+    // quotation's CEO discount/list via GET /deal-quotations/{id} through DEAL_DIRECT's broader
+    // VIEW_ROLES (which includes account) plus its quotation-grant bypass.
+    // DealQuotationService#requireViewAccess branches on origin FIRST and uses the narrower
+    // PRICING_REQUEST_VIEW_ROLES before falling through to the DEAL_DIRECT rules. Covers every
+    // read path that funnels through requireViewAccess: get, renderPdf/renderXlsx,
+    // getItemPicture, findForPricingRequest.
     //
-    // MAJOR-4/MINOR-1 fix (owner ruling, confirmed 2026-09-20, second re-review): import was
-    // ORIGINALLY admitted here (this comment used to say "mirrors CustomerQuotationService
-    // .VIEW_ROLES exactly: sales/sales_manager/ceo/import"), on the theory that import already
-    // sees the legacy customer quotation's own CEO price via that class's VIEW_ROLES. The owner's
-    // standing rule is narrower than that theory: import must see NOTHING price- or
-    // discount-shaped anywhere in this chain, on EITHER engine — the legacy side's inclusion of
-    // import is its own, separate, unchanged fact this PR does not touch. PRICING_REQUEST_VIEW_ROLES
-    // is now sales/sales_manager/ceo ONLY. See importRole_cannotGet_403 and its siblings below
-    // (replacing the old importRole_canGet_mutationCheckControl, which asserted the opposite).
+    // Import is NOT admitted, even though import sees the legacy customer quotation's own CEO
+    // price via CustomerQuotationService's VIEW_ROLES: the standing rule is that import must see
+    // NOTHING price- or discount-shaped anywhere in this chain, on EITHER engine (the legacy
+    // side's inclusion of import is its own, separate fact). PRICING_REQUEST_VIEW_ROLES is
+    // sales/sales_manager/ceo ONLY. See importRole_cannotGet_403 and its siblings below.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -676,8 +665,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** account's quotation-grant does NOT bypass the origin-aware gate — the whole point of the
-     * M3 fix, since DEAL_DIRECT's own {@code hasQuotationGrant} check would have let this same
-     * actor straight through. Proves the fix branches on origin BEFORE the grant check, not just
+     * point of the origin-aware gate, since DEAL_DIRECT's own {@code hasQuotationGrant} check
+     * would let this same actor straight through. Proves the gate branches on origin BEFORE the grant check, not just
      * that account lacks the grant by default. */
     @Test
     void accountRoleWithQuotationGrant_stillCannotGet_403() {
@@ -700,8 +689,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MAJOR-4/MINOR-1 (owner ruling, confirmed 2026-09-20) — import must not be able to open a
-    // PRICING_REQUEST quotation at all: on this origin the document's OWN price fields ARE the
+    // Import must not be able to open a PRICING_REQUEST quotation at all: on this origin the document's OWN price fields ARE the
     // CEO's approved list/discount (createFromPricingRequest prefills them verbatim), so there is
     // no narrower cut the way account's exclusion has one. Covers get, render, the
     // findForPricingRequest list endpoint, and update — every path a probe could reach.
@@ -758,7 +746,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(viewed.id()).isEqualTo(quotation.id());
     }
 
-    /** MINOR-1 (owner ruling, confirmed 2026-09-20) — import's OWN, UNRELATED, legitimate access
+    /** Import's OWN, UNRELATED, legitimate access
      * to {@code PricingDecisionService#salesView} (its SALES_VIEW_ROLES already includes import,
      * for import's own factory-costing purposes — untouched by this PR) must keep working, and
      * must never expose which pricing method the CEO chose. Proven two ways: behaviourally (the
@@ -774,9 +762,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // M1 fix (Opus review, 2026-09-20) — read-only lookup by pricing request id, backing
-    // PricingRequestDetailPage's "ใบเสนอราคาลูกค้า" panel. No create side effect (unlike
-    // createFromPricingRequest itself), reuses the SAME requireViewAccess gate M3 pinned above.
+    // Read-only lookup by pricing request id, backing PricingRequestDetailPage's
+    // "ใบเสนอราคาลูกค้า" panel. No create side effect (unlike createFromPricingRequest itself),
+    // reuses the SAME requireViewAccess gate pinned above.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -808,13 +796,13 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // M2 (Opus review, 2026-09-20) — mutual exclusivity, both directions. A real-DB probe found
-    // one pricing request could get BOTH an old-flow (CustomerQuotationService) and a new-flow
-    // (DealQuotationService#createFromPricingRequest) quotation. Fixed with a live-quotation
-    // check in each create path, using the mirror-image repository methods
-    // DealQuotationRepository#hasLivePricingRequestQuotation / CustomerQuotationRepository#hasLiveQuotation.
-    // This mutual-exclusivity guard is independent of the S1/S2 submit boundary (submit is now
-    // LIVE for this origin — see submit_nowLiveForPricingRequestOrigin above and
+    // Mutual exclusivity, both directions. One pricing request must not get BOTH an old-flow
+    // (CustomerQuotationService) and a new-flow (DealQuotationService#createFromPricingRequest)
+    // quotation. Each create path checks for a live quotation, using the mirror-image repository
+    // methods DealQuotationRepository#hasLivePricingRequestQuotation /
+    // CustomerQuotationRepository#hasLiveQuotation.
+    // This guard is independent of the submit boundary (see
+    // submit_nowLiveForPricingRequestOrigin above and
     // DealQuotationPricingRequestApprovalIntegrationTest for the full flow) — it protects "one live
     // quotation per PR, regardless of which engine wrote it" at CREATE time, before either
     // engine's own status machine is even reachable.
@@ -875,12 +863,12 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MINOR-4 (owner ruling, confirmed 2026-09-20, second re-review) — a REJECTED quotation on
-    // either engine has no live offer, so it must not block the OTHER engine's create path. Both
-    // hasLiveQuotation/hasLivePricingRequestQuotation forced their target row's doc_status
-    // directly via SQL rather than driving the full create->issue->recordOutcome workflow: these
-    // two guards are pure doc_status predicates, and isolating them from an unrelated multi-step
-    // flow's own setup cost is the same technique the M2 tests above already use.
+    // A REJECTED quotation on either engine has no live offer, so it must not block the OTHER
+    // engine's create path. These tests force the target row's doc_status directly via SQL
+    // rather than driving the full create->issue->recordOutcome workflow: the two guards
+    // (hasLiveQuotation/hasLivePricingRequestQuotation) are pure doc_status predicates, and
+    // isolating them from an unrelated multi-step flow's own setup cost is the same technique
+    // the mutual-exclusivity tests above use.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -898,11 +886,11 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(newQuotation.id()).isPositive();
     }
 
-    /** Mirror direction (owner ruling: "make them consistent") — REJECTED is unreachable for a
-     * PRICING_REQUEST-origin row in S1 (the S1 guard refused submit/approve/reject/revise/reorder for this
-     * origin; today only createReorder is refused, via requireReorderAllowedForOrigin), so this forces it via SQL to prove
-     * hasLivePricingRequestQuotation's own predicate is ALREADY correct for the day S2 makes it
-     * reachable, rather than leaving an untested guess. */
+    /** Mirror direction — REJECTED is not reachable through the API for a PRICING_REQUEST-origin
+     * row (only createReorder is refused, via requireReorderAllowedForOrigin, but the origin's
+     * status machine never rests on it), so this forces it via SQL to prove
+     * hasLivePricingRequestQuotation's own predicate is correct, rather than leaving an
+     * untested guess. */
     @Test
     void newQuotationRejected_oldCreateStillWorks() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
@@ -919,7 +907,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // M4 (Opus review, 2026-09-20) — changes that alter the OFFER aren't flagged. (a) refuses a
+    // Changes that alter the OFFER must not go unflagged. (a) refuses a
     // linked line's TYPE changing away from TILE; (b) refuses a linked line's PRODUCT IDENTITY
     // changing; (c) dropping a linked line is still allowed but flags the header count; (d)
     // "คืนรายการ" restores a dropped linked line. Quantity/เผื่อ stay freely editable and
@@ -967,10 +955,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** Positive control for the two refusals above: quantity IS freely editable on a linked line
-     * (the ruling this whole slice is built on) — only lineType/product-identity are protected.
-     * Mutation-checked by temporarily disabling requireLinkedLineIdentityUnchanged's call inside
-     * #update and confirming exactly the two tests above go red while this one and the rest of
-     * the suite stay green — see the PR body for the before/after run. */
+     * — only lineType/product-identity are protected.
+     * Mutation-check record: disabling requireLinkedLineIdentityUnchanged's call inside #update
+     * must turn exactly the two tests above red, and not this one. */
     @Test
     void linkedLine_quantityChanged_allowed() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
@@ -1017,7 +1004,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             upsertRequestWithItems(quotation, quotation.priceMode(), List.of(existingTileInput(kept))), salesActor);
         assertThat(afterDrop.items()).hasSize(1);
         assertThat(afterDrop.itemsRemovedFromCeoCount()).isEqualTo(1);
-        // M4(d) fix's own field — exactly the dropped line, ready for a "คืนรายการ" button.
+        // Exactly the dropped line, ready for a "คืนรายการ" button.
         assertThat(afterDrop.removedCeoItems()).hasSize(1);
         assertThat(afterDrop.removedCeoItems().get(0).pricingDecisionItemId()).isEqualTo(droppedDecisionItemId);
         assertThat(afterDrop.removedCeoItems().get(0).brand()).isEqualTo(dropped.brand());
@@ -1052,11 +1039,11 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MAJOR-1 (Opus re-review, 2026-09-20) — restoreRemovedItem never recomputed total_amount,
-    // the column #mapQuotation reads as the subtotal and from which VAT/grand total derive. A
-    // restore left the total understated by exactly the restored line's amount until the next
-    // full save. Fixed with DealQuotationRepository#updateSubtotal, reusing #update's own
-    // WastageCalculator.subtotal arithmetic.
+    // restoreRemovedItem must recompute total_amount, the column #mapQuotation reads as the
+    // subtotal and from which VAT/grand total derive; otherwise a restore leaves the total
+    // understated by exactly the restored line's amount until the next full save.
+    // DealQuotationRepository#updateSubtotal reuses #update's own WastageCalculator.subtotal
+    // arithmetic.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -1079,13 +1066,13 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
 
         DealQuotationDto restored = quotationService.restoreRemovedItem(quotation.id(), droppedDecisionItemId, salesActor);
 
-        // The load-bearing assertion (MAJOR-1's own probe): the PERSISTED total must equal what
+        // The load-bearing assertion: the PERSISTED total must equal what
         // the CURRENT lines actually sum to — NOT necessarily the pre-drop snapshot, since a
-        // rebuilt line is not guaranteed byte-identical to the one that was dropped (the
-        // coordinator's own probe numbers show exactly this: original 201,842.25, but the lines
-        // after a drop+restore summed to a DIFFERENT 222,116.27 — the bug was the STORED total
-        // staying at the stale post-drop 121,644.12 instead of catching up to THAT number, not
-        // failing to reproduce the original). Recomputed independently here via the SAME
+        // rebuilt line is not guaranteed byte-identical to the one that was dropped (observed:
+        // original 201,842.25, but the lines after a drop+restore summed to a DIFFERENT
+        // 222,116.27 — the bug was the STORED total staying at the stale post-drop 121,644.12
+        // instead of catching up to THAT number, not failing to reproduce the original).
+        // Recomputed independently here via the SAME
         // WastageCalculator arithmetic #update/#restoreRemovedItem themselves use, so this proves
         // the persisted column agrees with the lines, not merely with itself.
         BigDecimal expectedSubtotal = WastageCalculator.subtotal(
@@ -1110,13 +1097,12 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MAJOR-3 (Opus re-review, 2026-09-20) — write-without-read: requireEditAccess honoured
-    // can_create_quotation/EDIT_ROLES broadly while requireViewAccess (M3) already excluded them
-    // for this origin, so a grant holder of ANY role got UPDATE/CANCEL/RESTORE ok, GET 403 — and
-    // read every ceo* field back out of the write response anyway (update/restoreRemovedItem both
-    // return requireQuotation(id) with no separate view check). Fixed by making
-    // requireEditAccessForQuotation origin-aware too (every write path funnels through it,
-    // including #update, which used to call the raw ticket-only check directly).
+    // No write-without-read: requireEditAccess honours can_create_quotation/EDIT_ROLES broadly
+    // while requireViewAccess already excludes them for this origin, so without an origin-aware
+    // requireEditAccessForQuotation a grant holder of ANY role would get UPDATE/CANCEL/RESTORE
+    // ok, GET 403 — and read every ceo* field back out of the write response anyway
+    // (update/restoreRemovedItem both return requireQuotation(id) with no separate view check).
+    // Every write path funnels through requireEditAccessForQuotation, including #update.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -1163,7 +1149,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MINOR-2/MINOR-3 (Opus re-review, 2026-09-20) — restore refuses when the document has since
+    // Restore refuses when the document has since
     // switched price mode or language away from what the CEO's decision was priced in, rather
     // than silently building an inconsistent (or wrong-currency) row.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1222,17 +1208,16 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // NIT fix (Opus review, 2026-09-20) — refreshDraftContactSnapshot used to filter
-    // `origin = 'DEAL_DIRECT'` only, so a live PRICING_REQUEST DRAFT's frozen ผู้สั่งซื้อ snapshot
-    // never refreshed when the underlying customers.contact row changed. Widened to match
-    // findById/updateHeader/cancel's own IN ('DEAL_DIRECT', 'PRICING_REQUEST').
+    // refreshDraftContactSnapshot must cover a live PRICING_REQUEST DRAFT too, or its frozen
+    // ผู้สั่งซื้อ snapshot never refreshes when the underlying customers.contact row changes.
+    // Its filter matches findById/updateHeader/cancel's own IN ('DEAL_DIRECT', 'PRICING_REQUEST').
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void refreshDraftContactSnapshot_updatesAPricingRequestOriginDraftToo() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
         // The PCR-origin draft's contact comes from the PCR's own picked recipient contact — the
-        // deal's contact is never inherited (ruling 2026-10-18, DealQuotationService#resolveContact).
+        // deal's contact is never inherited (DealQuotationService#resolveContact).
         jdbc.update("UPDATE sales.pricing_request SET recipient_contact_id = :contactId WHERE pricing_request_id = :id",
             Map.of("contactId", contactId, "id", decision.pricingRequestId()));
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
@@ -1250,12 +1235,12 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // MINOR fix (Opus review, 2026-09-20) — a customer-change revision must supersede the OLD
-    // pricing request's own PRICING_REQUEST-origin DRAFT quotation (mirrors PR cancel's own
-    // DRAFT-supersede behaviour), or S1 would leave it orphaned forever (there is no S2 issue-time
-    // supersede for this origin yet). Never touches a LEGACY quotation, which the owner's
-    // reissue-through-CEO-chain ruling deliberately keeps live until the replacement is issued —
-    // see supersedeOpenPricingRequestOriginDraft's own Javadoc for the full reasoning.
+    // A customer-change revision must supersede the OLD pricing request's own
+    // PRICING_REQUEST-origin DRAFT quotation (mirrors PR cancel's own DRAFT-supersede
+    // behaviour), or it is orphaned forever (there is no issue-time supersede for this origin
+    // yet). Never touches a LEGACY quotation, which the reissue-through-CEO-chain rule
+    // deliberately keeps live until the replacement is issued — see
+    // supersedeOpenPricingRequestOriginDraft's own Javadoc for the full reasoning.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -1283,17 +1268,15 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void directDealSearch_includesPricingRequestOriginRows() {
-        // GLA-123 slice S3 MAJOR 4 fix (Opus review against real Postgres, 2026-09-23): this test
-        // used to assert the OPPOSITE — that #listForTicket stayed empty for a ticket whose only
-        // quotation is PRICING_REQUEST-origin, because DealQuotationRepository#findByTicket used
-        // to be `origin = 'DEAL_DIRECT'` only. That scope was wrong: #listForTicket backs `GET
-        // /tickets/{id}/deal-quotations`, which is the ONLY source DealDocumentRegister.jsx's
-        // directQuotationsQuery and DealDirectQuotationPanel.jsx have for "does this deal have a
-        // quotation at all" (GLA-123 item 8) — with the old scope, a deal whose only quotation was
-        // PRICING_REQUEST-origin showed the FALSE "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state even
-        // with one ISSUED, reproduced against real Postgres. #search/#counts (the DEAL_DIRECT
-        // approver queue, a genuinely different surface) are UNCHANGED and still exclude this
-        // origin — see those methods' own Javadoc.
+        // #listForTicket must NOT stay empty for a ticket whose only quotation is
+        // PRICING_REQUEST-origin, i.e. DealQuotationRepository#findByTicket must not be
+        // `origin = 'DEAL_DIRECT'` only: #listForTicket backs `GET /tickets/{id}/deal-quotations`,
+        // which is the ONLY source DealDocumentRegister.jsx's directQuotationsQuery and
+        // DealDirectQuotationPanel.jsx have for "does this deal have a quotation at all" — with
+        // the narrow scope, a deal whose only quotation was PRICING_REQUEST-origin showed the
+        // FALSE "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state even with one ISSUED.
+        // #search/#counts (the DEAL_DIRECT approver queue, a genuinely different surface) still
+        // exclude this origin — see those methods' own Javadoc.
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
         DealQuotationDto created = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
 
@@ -1303,10 +1286,10 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(forTicket.get(0).origin()).isEqualTo("PRICING_REQUEST");
     }
 
-    /** Round 8: sales.quotation.recipient_type/recipient_label were always persisted (copied from
-     * the source pricing request) but DealQuotationDto omitted them, so DealDocumentRegister could
-     * not say who a PRICING_REQUEST-origin quotation is for. Through the real service + repository
-     * (the row mapper and every SELECT feeding the DTO), listForTicket must serve them. */
+    /** sales.quotation.recipient_type/recipient_label are persisted (copied from the source
+     * pricing request) and DealQuotationDto must carry them, so DealDocumentRegister can say who
+     * a PRICING_REQUEST-origin quotation is for. Through the real service + repository (the row
+     * mapper and every SELECT feeding the DTO), listForTicket must serve them. */
     @Test
     void listForTicket_servesTheSourcePricingRequestsRecipient() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
@@ -1351,11 +1334,11 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             item.id(), item.sqmPerBox(), true);
     }
 
-    /** M4(a) fix's own test fixture — the SAME linked row, resubmitted as PLAIN instead of TILE.
+    /** Fixture: the SAME linked row, resubmitted as PLAIN instead of TILE.
      * Fully-formed PLAIN fields (unitPrice/quantity/unit), same reasoning as
      * {@link #plainItemInput}'s own comment: an invalid PLAIN row would 400 on an UNRELATED
      * validation before {@code requireLinkedLineIdentityUnchanged} is ever reached, which would
-     * mask the guard under test (confirmed by mutation check). */
+     * mask the guard under test. */
     private ItemInput linkedItemAsPlain(DealQuotationItemDto item) {
         return new ItemInput(null, null, null, null, null, null, null, null, null, null, null, null,
             null, null, null, null, new BigDecimal("500.00"), null, null, null, null, null,
@@ -1363,7 +1346,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             item.id(), null, true);
     }
 
-    /** M4(b) fix's own test fixture — the SAME linked row, unchanged except {@code brand}. */
+    /** Fixture: the SAME linked row, unchanged except {@code brand}. */
     private ItemInput linkedItemWithChangedBrand(DealQuotationItemDto item) {
         return new ItemInput(item.locationLabel(), item.catalogPriceId(), item.productCode(), "ยี่ห้ออื่น",
             item.model(), item.color(), item.texture(), item.sizeText(), item.thicknessMm(), item.sqmPerPiece(),
@@ -1388,7 +1371,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     }
 
     /** A brand-new PLAIN row — used only by {@link #addingAnExtraPlainRow_refused400} to prove the
-     * server refuses it for a PRICING_REQUEST-origin quotation (owner ruling 2026-09-19). */
+     * server refuses it for a PRICING_REQUEST-origin quotation. */
     private ItemInput plainItemInput() {
         // unitPrice (position 17) MUST be positive — requirePriceValidForType requires it for
         // EVERY TILE/PLAIN row regardless of origin, so a null here would 400 for an unrelated
@@ -1410,10 +1393,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         return upsertRequestWithItems(quotation, quotation.priceMode(), items);
     }
 
-    /** MAJOR-3 fix's own test fixture (Opus re-review, 2026-09-20) — an `account`-role employee
-     * holding the {@code can_create_quotation} grant, which lets them view/edit ANY DEAL_DIRECT
-     * deal but must NOT bypass the narrower PRICING_REQUEST-origin gate (M3's own view fix, now
-     * mirrored on every write path). {@code suffix} keeps each call site's employee/email unique
+    /** Fixture: an `account`-role employee holding the {@code can_create_quotation} grant,
+     * which lets them view/edit ANY DEAL_DIRECT deal but must NOT bypass the narrower
+     * PRICING_REQUEST-origin gate (the origin-aware view gate, mirrored on every write path). {@code suffix} keeps each call site's employee/email unique
      * within one test class run. */
     private UserPrincipal grantedAccountActor(String suffix) {
         EmployeeRepository employees = new EmployeeRepository(
@@ -1435,7 +1417,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             quotation.omitContactHonorific(), quotation.fullPaymentTerm(), items);
     }
 
-    /** MINOR-2/MINOR-3 fix's own test fixture (Opus re-review, 2026-09-20) — same as {@link
+    /** Fixture: same as {@link
      * #upsertRequestWithItems} but also switches {@code priceMode}/{@code documentLanguage}
      * (currency resolved server-side from whichever language is passed — {@code
      * DealQuotationService#resolveCurrency} refuses any other combination). */
@@ -1449,15 +1431,13 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             quotation.omitContactHonorific(), quotation.fullPaymentTerm(), items);
     }
 
-    /** M6 fix (coordinator follow-up, 2026-09-20): the wrong-way-round tests above all assert "no
-     * row was inserted". They used to query {@link DealQuotationRepository#findByTicket}, which
-     * WAS DEAL_DIRECT-only at the time (widened since — GLA-123 slice S3 MAJOR 4 fix, see {@code
-     * directDealSearch_includesPricingRequestOriginRows}) — a PRICING_REQUEST-origin row would
-     * never show up there regardless of whether the guard under test actually fired, so that
-     * assertion could never fail. Count the row directly with raw SQL instead (still correct and
-     * still the better assertion even now that #findByTicket would also see it, since this stays
+    /** The wrong-way-round tests above all assert "no row was inserted". Querying
+     * {@link DealQuotationRepository#findByTicket} would be wrong if it were DEAL_DIRECT-only
+     * (see {@code directDealSearch_includesPricingRequestOriginRows}): a PRICING_REQUEST-origin
+     * row would never show up there regardless of whether the guard under test fired, so that
+     * assertion could never fail. Count the row directly with raw SQL instead (it stays
      * independent of that method's own origin scope), exactly like {@code
-     * duplicateCreate_returnsTheSameOpenDraft_doesNotInsertASecondRow} already does. */
+     * duplicateCreate_returnsTheSameOpenDraft_doesNotInsertASecondRow} does. */
     private int countPricingRequestQuotationsForTicket() {
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id AND origin = 'PRICING_REQUEST'
@@ -1501,7 +1481,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             null, false, null, false, directNetPrice, false);
     }
 
-    /** "ปรับราคาเอง" (manual override) — B1 fix's own test needs this: NET mode's EFFECTIVE list
+    /** "ปรับราคาเอง" (manual override) — the NET-override test needs this: NET mode's EFFECTIVE list
      * price is COALESCE(this, list_unit_price), never the bare auto-formula price once an
      * override is active. */
     private UpdatePricingDecisionItemRequest overrideItem(long itemId, BigDecimal overridePrice, String reason,

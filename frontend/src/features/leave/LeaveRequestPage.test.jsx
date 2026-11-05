@@ -19,18 +19,17 @@ vi.mock('../../api/index.js', () => ({
       create: vi.fn(),
       cancel: vi.fn(),
       preview: vi.fn(),
-      // #leave-holiday-visibility: step 2 now reads this unconditionally (the วันหยุดที่จะถึง
-      // panel AND the per-selection calendar-context note both call it) -- every test that
-      // reaches step 2 needs a default resolved value, or both queries error out silently.
+      // Step 2 reads this unconditionally (the วันหยุดที่จะถึง panel AND the per-selection
+      // calendar-context note both call it), so every test that reaches step 2 needs a default
+      // resolved value, or both queries error out silently.
       calendarContext: vi.fn(),
     },
   },
 }));
 
-// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock
-// reproduces that faithfully rather than a File, which is exactly the shape that exposed the
-// "blob" filename bug in #498/#504. A mock that quietly upgrades the library's real return type
-// would make this test pass whether or not the component re-wraps it.
+// browser-image-compression returns a plain Blob with no `.name`; this mock reproduces that rather
+// than a File, which is the shape that exposed the "blob" filename bug. A mock that quietly
+// upgraded the return type would pass whether or not the component re-wraps it.
 vi.mock('browser-image-compression', () => ({
   default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
 }));
@@ -92,10 +91,8 @@ function renderComposer(initialEntries = ['/leave/new']) {
 }
 
 async function goToStep2ForVacation() {
-  // Returns the render utils (container, etc.) so callers that need to reach past the rendered
-  // output -- e.g. dispatching a raw DOM event straight at the <form> -- can do so without
-  // re-implementing this same setup. Existing callers that only awaited this for its side effects
-  // are unaffected; an ignored return value changes nothing for them.
+  // Returns the render utils (container, etc.) so callers can reach past the rendered output, e.g.
+  // dispatching a raw DOM event straight at the <form>.
   const utils = renderComposer();
   const vacationButton = await screen.findByRole('button', { name: /ลาพักร้อน/ });
   fireEvent.click(vacationButton);
@@ -104,20 +101,11 @@ async function goToStep2ForVacation() {
   return utils;
 }
 
-// Shared baseline fixture, called from every describe block's own `beforeEach` below --
-// including the sibling "implicit submission" block at the bottom of this file. Before this was
-// extracted, that sibling block had NO beforeEach of its own and silently relied on whatever
-// mock state the PREVIOUS describe block's last-run test happened to leave behind (`vi.fn()`
-// implementations set via `mockResolvedValue` persist across tests; only `vi.clearAllMocks()`
-// -- called here, not globally -- resets call HISTORY). That "worked" only because the main
-// describe's own last test ("cancel from step 1...") never called create(), leaving its call
-// count at 0 by accident of file order -- not because anything guaranteed it. Adding a nested
-// describe block whose OWN last test DOES call create() (quota-pool preference's "the chosen
-// preference reaches create() at submit") broke that accidental handoff: the "implicit
-// submission" tests started seeing a stale `create()` call recorded by a test that never ran
-// under them. Each describe block calling this itself, and clearing mocks itself, makes every
-// block correct regardless of what ran immediately before it in the file -- test ORDER must never
-// be load-bearing for isolation.
+// Shared baseline fixture, called from every describe block's own `beforeEach`, including the
+// sibling "implicit submission" block at the bottom. Each block calling this itself and clearing
+// mocks itself keeps every block correct regardless of what ran before it: `vi.fn()`
+// implementations set via `mockResolvedValue` persist across tests (only `vi.clearAllMocks()`,
+// called here, resets call HISTORY), so test ORDER must never be load-bearing for isolation.
 function installDefaultLeaveMocks() {
   vi.clearAllMocks();
   api.leave.employees.mockResolvedValue({
@@ -187,12 +175,12 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(await screen.findByText(/ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน/)).not.toBeNull();
   });
 
-  // Real-backend gap found via click-through testing (not visible under mocks -- LeaveService's
-  // resolveTargetEmployee() gate has no mock-mode equivalent): a preview call can fail outright
-  // with a plain 403 instead of returning a LeaveRuleOutcome, e.g. HR/CEO requesting leave for
-  // themselves. That has no `code` for LeaveRulePanel's RULE_META, so before this fix it silently
-  // read as "not blocking" (an errored query's `data` is undefined) and left the type looking
-  // available with a permanently unresolved skeleton -- see PreviewErrorNotice's own comment.
+  // Real-backend gap (not visible under mocks: LeaveService's resolveTargetEmployee() gate has no
+  // mock-mode equivalent): a preview call can fail outright with a plain 403 instead of returning a
+  // LeaveRuleOutcome, e.g. HR/CEO requesting leave for themselves. That has no `code` for
+  // LeaveRulePanel's RULE_META, so an errored query (`data` undefined) must not silently read as
+  // "not blocking" and leave the type looking available with a permanently unresolved skeleton;
+  // see PreviewErrorNotice's own comment.
   it('step 1: a preview call that fails outright (not a LeaveRuleOutcome) disables the type with the real error message', async () => {
     api.leave.preview.mockImplementation((payload) => {
       if (payload?.leaveTypeCode === 'PERSONAL') {
@@ -234,11 +222,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.queryByText(/ขั้นตอนที่ 3\/3/)).toBeNull();
   });
 
-  // Owner ruling (2026-09-09): "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้" -- unlike every other type
-  // above, SICK must NOT trip the past-start-date block at all, with no lower bound (an arbitrarily
-  // old date, not merely "a few days back"). This does not exercise sickCertificateRuleOutcome's
-  // separate SICK_CERTIFICATE_WINDOW gate (LeaveService.java) -- that rule lives in the backend
-  // preview response, not this client-side check, and is untouched by this test.
+  // "ลาป่วยย้อนหลังได้ตลอด พนักงานยื่นได้": unlike every other type above, SICK must NOT trip the
+  // past-start-date block at all, with no lower bound. This does not exercise
+  // sickCertificateRuleOutcome's separate SICK_CERTIFICATE_WINDOW gate (LeaveService.java), which
+  // lives in the backend preview response.
   it('step 2: SICK start date in the past is NOT rejected and does not block advancing', async () => {
     renderComposer();
     fireEvent.click(await screen.findByRole('button', { name: /ลาป่วย/ }));
@@ -258,11 +245,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(await screen.findByText(/ขั้นตอนที่ 3\/3/)).not.toBeNull();
   });
 
-  // The two call sites of isStartDateBlockedAsPast can disagree: `shouldValidate` on the type
-  // button re-runs the schema but writes back only leaveTypeCode's own error, so a past-date error
-  // raised under ลาพักร้อน used to survive the switch to ลาป่วย -- error text still rendered while
-  // the Next button was already enabled. Exactly the "this should have been ลาป่วย" correction the
-  // owner ruling exists to allow, so it is pinned rather than left to self-heal on the next click.
+  // The two call sites of isStartDateBlockedAsPast can disagree: `shouldValidate` on the type button
+  // re-runs the schema but writes back only leaveTypeCode's own error, so a past-date error raised
+  // under ลาพักร้อน could survive the switch to ลาป่วย (error text still rendered while Next is
+  // enabled). That is exactly the correction the SICK exemption exists to allow, so it is pinned.
   it('step 2: switching ลาพักร้อน -> ลาป่วย clears the past-date error the old type raised', async () => {
     await goToStep2ForVacation();
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
@@ -279,10 +265,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
   });
 
-  // Owner ruling (2026-09-28): PERSONAL filed as ลากิจฉุกเฉิน is exempt from the past-start-date
-  // block the same way SICK is above, but gated on the checkbox itself rather than unconditional --
-  // ticking it IS the "yes, this is an emergency" confirmation. isStartDateBlockedAsPast's own
-  // comment covers why the backend needs no matching change for this.
+  // PERSONAL filed as ลากิจฉุกเฉิน is exempt from the past-start-date block the same way SICK is
+  // above, but gated on the checkbox itself: ticking it IS the "yes, this is an emergency"
+  // confirmation. See isStartDateBlockedAsPast's own comment for why the backend needs no matching
+  // change.
   it('step 2: PERSONAL start date in the past is blocked until ลากิจฉุกเฉิน is ticked, then advances to step 3', async () => {
     renderComposer();
     // No "ประเภทอื่นๆ" disclosure needed -- ลากิจ (PERSONAL) is a top-level type button, same as
@@ -390,10 +376,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     ));
   });
 
-  // #leave-holiday-visibility (PR 3): holidays are now visible BEFORE a date is picked, not only
-  // after -- this panel sits above the date inputs and never touches startDate/endDate at all, so
-  // rendering it here (with no date field ever changed by this test) is itself the proof it does
-  // not depend on what the employee has, or has not yet, chosen.
+  // Holidays are visible BEFORE a date is picked: this panel sits above the date inputs and never
+  // touches startDate/endDate, so rendering it here (with no date field changed) is itself the proof
+  // it does not depend on what the employee has chosen.
   it('step 2: shows the วันหยุดที่จะถึง panel above the date inputs, so holidays are visible before picking a date', async () => {
     api.leave.calendarContext.mockResolvedValue({
       calendarContext: {
@@ -411,12 +396,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(panelHeading.closest('section').textContent).toMatch(/วันหยุดทดสอบ/);
   });
 
-  // #leave-holiday-visibility (PR 3): real วันหยุดบริษัท names run up to 149 chars
-  // (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim copy of production's hr.holiday -- the reason
-  // V129 widened name_th from VARCHAR(120) to TEXT). The reactive per-selection note used to
-  // interpolate `${formatDate(...)} (${nameTh})` straight into one run-on sentence, comma-joined
-  // with every other holiday in range -- fine at a hand-written fixture's 9-17 chars, an
-  // unreadable wall of text at production length with two holidays in one selected range.
+  // Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim
+  // copy of production's hr.holiday; V129 widened name_th to TEXT). The per-selection note must not
+  // interpolate `${formatDate(...)} (${nameTh})` into one comma-joined run-on sentence: fine at 9-17
+  // chars, an unreadable wall at production length with two holidays in one selected range.
   it('step 2: a multi-day range with two long company-holiday names renders each on its own line, not a comma-joined wall of text', async () => {
     const LONG_NAME_1 = 'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
     const LONG_NAME_2 = 'วันพระบาทสมเด็จพระพุทธยอดฟ้าจุฬาโลกมหาราช และวันที่ระลึกมหาจักรีบรมราชวงศ์';
@@ -494,19 +477,18 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       contactPhone: null,
       purposeCode: null,
       requestedAsEmergency: null,
-      // §5.3.5 pool choice (V161): always sent, defaulting to CARRIED_IN_FIRST -- this fixture's
-      // balances() resolves to `[]` (beforeEach), so the selector never renders and the value here
-      // is untouched defaultForm() state, not a user choice. See the "quota pool preference (V161)"
-      // describe block below for the selector's own render-gate/default/toggle coverage.
+      // Pool choice: always sent, defaulting to CARRIED_IN_FIRST. This fixture's balances()
+      // resolves to `[]` (beforeEach), so the selector never renders and the value here is untouched
+      // defaultForm() state, not a user choice. See the "quota pool preference" describe block below
+      // for the selector's own coverage.
       quotaPoolPreference: 'CARRIED_IN_FIRST',
       attachmentFile: null,
     });
   });
 
-  // Found in #498/#504 (same defect, different component): imageCompression() returns a Blob, and
-  // FormData built from a bare Blob has no filename to send, so the multipart part's filename
-  // defaults to the literal string "blob" per spec. Only JPG/PNG hit this -- PDFs skip
-  // compression entirely, which is why the bug reads as image-only.
+  // imageCompression() returns a Blob, and FormData built from a bare Blob has no filename, so the
+  // multipart part's filename defaults to the literal string "blob" per spec. Only JPG/PNG hit this:
+  // PDFs skip compression entirely.
   it('re-wraps the compressed image so create() receives the original filename, not "blob"', async () => {
     await goToStep2ForVacation();
 
@@ -566,12 +548,11 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: futureDate } });
     fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'หาหมอครึ่งวัน' } });
-    // "ลาทั้งวัน" is TICKED by default (V166) -- unticking it reveals the time fields.
+    // "ลาทั้งวัน" is TICKED by default -- unticking it reveals the time fields.
     fireEvent.click(screen.getByLabelText(/ลาทั้งวัน/));
 
-    // Partial-day span (V166): endDate is NO LONGER forced to startDate when timed -- it was
-    // already handleStartDateChange's own sync (endDate === startDate here only because the user
-    // never touched endDate after setting startDate, same as before this feature).
+    // Partial-day span: endDate is NOT forced to startDate when timed (endDate === startDate here
+    // only because the user never touched endDate after setting startDate).
     expect(screen.getByLabelText(/วันที่สิ้นสุด/).value).toBe('31/12/2642'); // the field shows พ.ศ.
     fireEvent.change(screen.getByLabelText(/เวลาเริ่ม/), { target: { value: '08:30' } });
     fireEvent.change(screen.getByLabelText(/เวลาสิ้นสุด/), { target: { value: '12:30' } });
@@ -590,9 +571,8 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(payload.endTime).toBe('12:30');
   });
 
-  // The owner's own motivating case (CLAUDE.md task brief): a timed span that crosses a calendar
-  // day, now possible since V166 relaxed chk_leave_time_single_day. This is the behaviour the old
-  // "sub-day" feature could never represent (endDate used to be force-locked to startDate).
+  // A timed span that crosses a calendar day (possible since chk_leave_time_single_day was
+  // relaxed): behaviour the old "sub-day" feature could not represent.
   it('a timed span can now cross calendar days -- endDate stays independently editable', async () => {
     await goToStep2ForVacation();
 
@@ -663,10 +643,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.getByRole('button', { name: /ส่งคำขอ/ }).disabled).toBe(true);
   });
 
-  // The safety-relevant half of the same gap as the step-1 test above: before this fix,
-  // `step3Blocking` read null on an errored FULL preview (undefined `data`), so the submit button
-  // fell back to enabled with no explanation -- an errored authorization check must gate submit
-  // exactly like a real blocking verdict, not silently read as a clean pass.
+  // The safety-relevant half of the same gap as the step-1 test above: `step3Blocking` read null on
+  // an errored FULL preview (undefined `data`), so submit fell back to enabled with no explanation.
+  // An errored authorization check must gate submit exactly like a real blocking verdict.
   it('step 3: a preview call that fails outright (not a LeaveRuleOutcome) renders role="alert" and disables submit', async () => {
     api.leave.preview.mockImplementation((payload) => {
       if (!payload?.startDate) return Promise.resolve(dateless_ok_preview);
@@ -694,10 +673,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/leave?tab=review'));
   });
 
-  // §5.3.5 pool choice (V161): the carry-in/own-quota selector. Nested here (not a sibling
-  // describe) so it inherits the outer beforeEach's employees/contactDefaults/create/preview/
-  // calendarContext mocks -- only leaveTypes (VACATION gains carriesForward: true below) and
-  // balances (a real carry-in fixture) differ per test.
+  // The carry-in/own-quota selector. Nested (not a sibling describe) so it inherits the outer
+  // beforeEach's employees/contactDefaults/create/preview/calendarContext mocks; only leaveTypes
+  // (VACATION gains carriesForward: true below) and balances (a real carry-in fixture) differ per test.
   describe('quota-pool preference (§5.3.5, V161)', () => {
     beforeEach(() => {
       api.leave.types.mockResolvedValue({
@@ -819,12 +797,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       expect(api.leave.create.mock.calls[0][0].quotaPoolPreference).toBe('OWN_FIRST');
     });
 
-    // §5.3.5 carry-forward, step-3 QuotaBar (V161 wiring, 2026-09-03) -- the LeaveRequestPage.jsx
-    // counterpart to MyLeaveTab.test.jsx's "reconciles สิทธิ์/เหลือ and the QuotaBar cap when a
-    // carry-over is present" test. This fixture is the exact scenario from the bug report: a
-    // 6-day annual VACATION quota plus a 2-day carry-in, one request for 7 days. 7 > 6 (the bare
-    // annualQuotaDays alone) but sits well inside 6 + 2 = 8 (the combined pool), so the bar must
-    // read the request as fitting, not as over-quota.
+    // Step-3 QuotaBar with carry-forward: the counterpart to MyLeaveTab.test.jsx's "reconciles
+    // สิทธิ์/เหลือ and the QuotaBar cap when a carry-over is present". A 6-day annual VACATION quota
+    // plus a 2-day carry-in, one request for 7 days: 7 > 6 (the bare annualQuotaDays) but inside
+    // 6 + 2 = 8 (the combined pool), so the bar must read the request as fitting.
     it("step 3's QuotaBar cap folds in carriedInDays, so a request within the combined pool does not fire the over-quota warning", async () => {
       api.leave.balances.mockResolvedValue(carryInBalance());
       // Overrides the default installDefaultLeaveMocks() preview (fixed totalDays: 1) -- both
@@ -900,11 +876,10 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   });
 });
 
-// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): 10 of 17 LeaveRuleCode gates no longer
-// BLOCK -- they submit normally and carry `ruleWarnings`/`unpaidByRuleDays` instead (see
-// LeaveRuleEnforcement.java's class Javadoc). `messageTh` below is copied VERBATIM from
-// LeaveRuleMessages' real ADVANCE_NOTICE/PROBATION_NOT_PASSED templates (WARN_UNPAID_TAIL
-// included), same reason CLAUDE.md gives for never hand-translating backend copy.
+// §5 WARN_UNPAID_* gates: 10 of 17 LeaveRuleCode gates do not BLOCK; they submit normally and carry
+// `ruleWarnings`/`unpaidByRuleDays` instead (see LeaveRuleEnforcement.java's class Javadoc).
+// `messageTh` below is copied VERBATIM from LeaveRuleMessages' real ADVANCE_NOTICE/
+// PROBATION_NOT_PASSED templates (WARN_UNPAID_TAIL included): never hand-translate backend copy.
 const advanceNoticeWarning = {
   code: 'ADVANCE_NOTICE',
   params: {
@@ -1108,46 +1083,33 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
   });
 });
 
-// HTML implicit submission (fix/form-enter-submits-real-records): a <form> with no submit button
-// but exactly ONE field that blocks implicit submission fires a real 'submit' event on Enter, no
-// button ever pressed. jsdom does not implement that algorithm at all (pressing "Enter" via
-// fireEvent does nothing special) -- e2e/implicit-submission.spec.js is the layer that reproduces
-// the real thing. See `canSubmit`'s own comment in LeaveRequestPage.jsx for why this describe
-// block is hardening, not a fix for a currently-reachable bug.
+// HTML implicit submission: a <form> with no submit button but exactly ONE field that blocks
+// implicit submission fires a real 'submit' event on Enter. jsdom does not implement that algorithm
+// (e2e/implicit-submission.spec.js reproduces the real thing). See `canSubmit`'s comment in
+// LeaveRequestPage.jsx for why this describe block is hardening, not a fix.
 //
-// `submitWithSubmitter` below, not `fireEvent.submit(form)`: this form is now `<SafeForm
-// canSubmit={step === 3} ...>` (#safe-form-primitive), and `canSubmit` is a RESTRICTION layered on
-// top of SafeForm's own submitter guard, not a replacement for it -- both checks always apply.
-// `fireEvent.submit(form)` dispatches a plain synthetic Event with no `.submitter` property at all
-// under jsdom, so it would be blocked by the submitter guard on EVERY step including step 3, which
-// would make "does NOT call create()" pass for the wrong reason on steps 1/2 (no submitter present
-// at all, not because `canSubmit` rejected it -- this repo's own documented vacuous-test shape)
-// and make "calls create()" on step 3 fail outright. A manually constructed `SubmitEvent` with an
-// explicit `submitter` is picked up by React's onSubmit exactly like a real click (verified), so
-// every case below now exercises `canSubmit` specifically. Mirrors
-// TaxAllowanceForm.test.jsx's "form-level submit gate blocks Enter-key implicit submission" and
-// TicketCreateModal.test.jsx's `submitForm()`.
+// `submitWithSubmitter` below, not `fireEvent.submit(form)`: this form is `<SafeForm
+// canSubmit={step === 3} ...>`, and `canSubmit` is a RESTRICTION layered on SafeForm's own submitter
+// guard, so both always apply. `fireEvent.submit(form)` dispatches a plain Event with no `.submitter`
+// under jsdom, so it would be blocked by the submitter guard on EVERY step, making "does NOT call
+// create()" pass for the wrong reason on steps 1/2 and "calls create()" on step 3 fail. A
+// constructed `SubmitEvent` with an explicit `submitter` is picked up by React's onSubmit like a
+// real click, so every case exercises `canSubmit`. Mirrors TaxAllowanceForm.test.jsx's "form-level
+// submit gate blocks Enter-key implicit submission" and TicketCreateModal.test.jsx's `submitForm()`.
 function submitWithSubmitter(form) {
   form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: document.createElement('button') }));
 }
 
 describe('LeaveRequestPage implicit submission (Enter-key) hardening', () => {
-  // Own beforeEach (not inherited -- this is a SIBLING describe, not nested inside the one above)
-  // -- see installDefaultLeaveMocks' own comment for why this must not depend on whatever the
-  // previous describe block's last test happened to leave behind.
+  // Own beforeEach (not inherited: this is a SIBLING describe) -- see installDefaultLeaveMocks'
+  // comment.
   beforeEach(() => {
     installDefaultLeaveMocks();
   });
 
   // The gate's blocking branch (`event.preventDefault(); return;`) is synchronous, so a correctly
-  // gated step 1/2 never even calls `handleSubmit`, let alone awaits anything — but an assertion
-  // that only checks SYNCHRONOUSLY, right after the submit dispatch, proves nothing about whether
-  // the gate is doing that work: `handleSubmit(onSubmit)` is asynchronous (`onSubmit` itself is
-  // `async`), so if the gate were ever removed, `api.leave.create` would still not have been
-  // called yet at that exact synchronous instant either -- the assertion would keep passing for
-  // the wrong reason. Found via this file's own mutation-check (temporarily making
-  // `handleFormSubmit` call `handleSubmit(onSubmit)` unconditionally): a bare synchronous
-  // `expect(...).not.toHaveBeenCalled()` here stayed green regardless. Waiting a beat first means
+  // gated step 1/2 never calls `handleSubmit`. But `handleSubmit(onSubmit)` is asynchronous, so a
+  // SYNCHRONOUS "not called" check would also pass with the gate removed. Waiting a beat first means
   // "not called" is checked once an unguarded submit would already have gotten there.
   async function flushAsyncSubmitChain() {
     await new Promise((resolve) => { setTimeout(resolve, 50); });

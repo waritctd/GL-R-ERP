@@ -65,14 +65,14 @@ public class TaxAllowanceDeclarationService {
     private static final Set<String> EDIT_ROLES = Set.of("hr");
 
     /**
-     * A ล.ย.01 declares the employee's allowances for a WHOLE TAX YEAR (owner ruling 2026-08-31).
-     * There is no "in force from month N" any more: HR's approval makes the declaration effective
+     * A ล.ย.01 declares the employee's allowances for a WHOLE TAX YEAR.
+     * There is no "in force from month N": HR's approval makes the declaration effective
      * for every payroll month of its {@code tax_year}, so every row this service writes -- both
      * {@code hr.tax_allowance_declaration.effective_month} and the {@code effective_month} half of
      * {@code hr.employee_tax_allowance}'s primary key -- is dated 1.
      *
      * <p><b>The column stays; only the choice goes.</b> {@code hr.employee_tax_allowance}'s PK is
-     * {@code (employee_id, tax_year, effective_month)} (V93) and rows written before this ruling
+     * {@code (employee_id, tax_year, effective_month)} (V93) and older rows
      * still hold months 2-12, so {@code PayrollRepository#findTaxAllowancesByEmployee}'s {@code
      * effective_month <= :month ORDER BY effective_month DESC} resolution is deliberately left
      * alone -- re-running an already-filed month still reproduces the figures it was filed on.
@@ -82,7 +82,7 @@ public class TaxAllowanceDeclarationService {
      */
     static final int WHOLE_YEAR_EFFECTIVE_MONTH = 1;
 
-    // Real MIME allowlist (2026-08-01 evidence PR) -- AttachmentController#upload passes Set.of(),
+    // Real MIME allowlist -- AttachmentController#upload passes Set.of(),
     // which disables type checking entirely; deliberately NOT copying that here. ล.ย.01 evidence is
     // a scanned/photographed certificate or receipt, never anything else.
     private static final Set<String> EVIDENCE_MIME_TYPES =
@@ -181,7 +181,7 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * Owner decision #4's read half: seed the ล.ย.01 header from the employee master so nobody
+     * Read half of the header prefill: seed the ล.ย.01 header from the employee master so nobody
      * retypes a 13-digit tax ID and a thirteen-part address on every filing.
      *
      * <p><b>The employee is {@code actor.employeeId()} and there is no other way to name one.</b>
@@ -341,18 +341,17 @@ public class TaxAllowanceDeclarationService {
         if (rows == 0) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to auto-approve on-behalf declaration");
         }
-        // Approval IS go-live (owner ruling 2026-08-31) -- an on-behalf row that stopped at
-        // APPROVED here would have been the one path that still needed a second ใช้กับเงินเดือน
-        // click, which is exactly the two-step flow that ruling removed.
+        // Approval IS go-live -- an on-behalf row that stopped at APPROVED here would be the one
+        // path that still needed a second ใช้กับเงินเดือน click, which is exactly the two-step
+        // flow approval-is-go-live removes.
         promoteToPayrollAllowances(id, actor);
         TaxAllowanceDeclarationDto created = repository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after insert"));
         auditService.record(actor, "CREATE_TAX_ALLOWANCE_DECLARATION_ON_BEHALF", "tax_allowance_declaration",
             id, null, created);
-        // Audit finding (2026-08-31, notification sweep): this path never notified the employee at
-        // all -- it produces an APPROVED declaration (decision #9 is "for staff who never log in",
-        // but that describes portal access, not email; email is a separate channel and still worth
-        // sending). Reuses TAX_ALLOWANCE_APPROVED rather than a new type: the fact that matters to
+        // The employee is notified: this path produces an APPROVED declaration ("for staff who
+        // never log in" describes portal access, not email; email is a separate channel and still
+        // worth sending). Reuses TAX_ALLOWANCE_APPROVED rather than a new type: the fact that matters to
         // the employee (their declaration IS approved) is identical to a regular #approve, so the
         // frontend's existing type->icon mapping already renders this correctly with no touch. The
         // message text is the only thing that differs, to stay accurate about who acted.
@@ -366,15 +365,14 @@ public class TaxAllowanceDeclarationService {
      * PENDING -> APPROVED, <b>and live on payroll in the same transaction</b>. Supersedes any other
      * APPROVED declaration for the same employee/tax-year FIRST — {@code
      * uq_tad_one_approved_per_employee_year} is not deferrable, so approving without superseding
-     * first would 500 on the constraint instead of cleanly retiring the old row (decision #7: "a new
-     * submission supersedes the previous once approved").
+     * first would 500 on the constraint instead of cleanly retiring the old row (a new
+     * submission supersedes the previous once approved).
      *
-     * <p><b>Approval is go-live</b> (owner ruling 2026-08-31). {@link #promoteToPayrollAllowances}
-     * used to be a separate HR action ({@code POST .../apply}, with its own งวดเดือน picker); it now
-     * runs here, so an approved ล.ย.01 reduces withholding for its whole tax year with no second
-     * click and no month to choose. {@link #apply} survives only to clear the pre-ruling backlog of
-     * rows that are APPROVED with {@code applied_at IS NULL} — nothing this method produces can
-     * land in that state.
+     * <p><b>Approval is go-live.</b> {@link #promoteToPayrollAllowances} runs here, so an approved
+     * ล.ย.01 reduces withholding for its whole tax year with no second click and no month to
+     * choose. {@link #apply} survives only to clear the backlog of rows that were approved when
+     * go-live was a separate HR action ({@code APPROVED} with {@code applied_at IS NULL}) —
+     * nothing this method produces can land in that state.
      */
     @Transactional
     public TaxAllowanceDeclarationDto approve(long declarationId, TaxAllowanceReviewRequest request, UserPrincipal actor) {
@@ -406,11 +404,10 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * Owner decision #4: the ล.ย.01 header prefills from HR records and is editable, and the
+     * The ล.ย.01 header prefills from HR records and is editable, and the
      * employee's corrections reach the master DB <b>only after HR confirms</b>. This is that write.
      *
-     * <p><b>Why {@code approve} and not {@code apply}</b> (the plan doc suggested apply; this is a
-     * deliberate departure, stated for review):
+     * <p><b>Why {@code approve} and not {@code apply}:</b>
      * <ol>
      *   <li>"After HR confirms" IS {@code approve}. {@code apply} is a later, separate step about
      *       payroll <i>effective dating</i>.</li>
@@ -522,13 +519,13 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * Clears the PRE-RULING BACKLOG: a declaration that was approved back when approval and go-live
+     * Clears the BACKLOG: a declaration that was approved back when approval and go-live
      * were two separate HR actions, and whose second click never came ({@code status = 'APPROVED'
-     * AND applied_at IS NULL} — the register's ยังไม่ใช้กับเงินเดือน queue). Since 2026-08-31
-     * {@link #approve} promotes in its own transaction, so nothing new ever lands in that state and
+     * AND applied_at IS NULL} — the register's ยังไม่ใช้กับเงินเดือน queue). {@link #approve}
+     * promotes in its own transaction, so nothing new lands in that state and
      * this endpoint is a one-way drain, not part of the flow.
      *
-     * <p>It takes no งวดเดือน. The month picker it used to carry is the thing the ruling removed.
+     * <p>It takes no งวดเดือน: go-live always dates the whole year at month 1.
      */
     @Transactional
     public TaxAllowanceDeclarationDto apply(long declarationId, UserPrincipal actor) {
@@ -576,12 +573,12 @@ public class TaxAllowanceDeclarationService {
      * the UI. Scoped to ONE employee and ONE tax year, and only inside a deliberate HR promotion —
      * other years and other employees are never touched.
      *
-     * <p><b>No PROCESSED-month guard.</b> This method used to refuse with 409 when the target
-     * month's {@code hr.payroll_period} was already {@code PROCESSED}, which made sense while HR
-     * picked the month: it stopped a deliberate back-date into a month already filed on ภ.ง.ด.1.
-     * Under the ruling the target month is ALWAYS January, so that guard would refuse every
-     * promotion from February onward — it would not protect anything, it would make the feature
-     * unusable for eleven months of the year. Removing it does not retro-alter a filed month:
+     * <p><b>No PROCESSED-month guard.</b> A 409 when the target month's {@code hr.payroll_period}
+     * is already {@code PROCESSED} would only make sense if HR picked the month (to stop a
+     * deliberate back-date into a month already filed on ภ.ง.ด.1). The target month is ALWAYS
+     * January, so that guard would refuse every promotion from February onward — it would not
+     * protect anything, it would make the feature unusable for eleven months of the year. Omitting
+     * it does not retro-alter a filed month:
      * nothing here writes {@code hr.payroll_line}, and a PROCESSED period keeps its persisted
      * figures until someone re-processes that month, which is a separate deliberate HR action.
      */
@@ -589,8 +586,7 @@ public class TaxAllowanceDeclarationService {
         TaxAllowanceDeclarationDto declaration = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found before apply"));
 
-        // Open question (plan doc, "expires_on default"), resolved here (2026-08-01, the yearly-
-        // expiry PR): year-end of the declaration's own tax year. Shared verbatim between the
+        // expires_on default: year-end of the declaration's own tax year. Shared verbatim between the
         // DECLARATION's own expires_on (read by TaxAllowanceExpiryWorker's sweep, via
         // findExpirySweepCandidates) and the PARENT table's verification_deadline -- one LocalDate
         // computed once so the two can never independently drift.
@@ -679,9 +675,8 @@ public class TaxAllowanceDeclarationService {
      * WHOLE year's lineage on the parent table (every dated row, same as expiry flips every dated
      * row) — never just the row {@code declarationId} references.
      *
-     * <p>New deadline policy: twelve months from today. This is a provisional choice (the plan
-     * doc's own "expires_on default" open question was never settled by the owner) — flagged in the
-     * PR body for confirmation, not silently assumed correct.
+     * <p>New deadline policy: twelve months from today. This is a provisional choice, not a
+     * confirmed business rule.
      */
     @Transactional
     public TaxAllowanceDeclarationDto reverify(long declarationId, UserPrincipal actor) {
@@ -703,9 +698,8 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after reverify"));
         auditService.record(actor, "REVERIFY_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
-        // Audit finding (2026-08-31, notification sweep): the mirror image of #expireOverdueVerifications
-        // notifying on EXPIRED never had its own reverse notification -- an employee whose allowance
-        // lapsed and was told so would otherwise never be told it came back. Reuses
+        // The mirror image of #expireOverdueVerifications notifying on EXPIRED -- an employee whose
+        // allowance lapsed and was told so must also be told it came back. Reuses
         // TAX_ALLOWANCE_APPROVED for the same reason createOnBehalf does above: the declaration IS
         // approved again, and the frontend needs no new type to render that correctly.
         notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_APPROVED",
@@ -735,14 +729,13 @@ public class TaxAllowanceDeclarationService {
         }
         int taxYear = request.taxYear();
         PayrollTaxAllowanceInput proposedAllowances = toAllowances(request);
-        // Simulates January, unchanged from before the whole-year ruling: `effectiveMonth` was
-        // optional on the estimate request and defaulted to 1, which is what the form's blank
-        // "มีผลตั้งแต่งวดเดือน" select sent on every estimate the UI has ever made.
+        // Simulates January: `effectiveMonth` is optional on the estimate request and defaults to
+        // 1, which is what the form's blank "มีผลตั้งแต่งวดเดือน" select sends.
         return payrollService.estimateAllowanceEffect(
             actor.employeeId(), taxYear, WHOLE_YEAR_EFFECTIVE_MONTH, proposedAllowances, actor);
     }
 
-    // ---- Evidence attachments (decision #5: owning employee + HR, server-enforced) ---------
+    // ---- Evidence attachments (owning employee + HR, server-enforced) ---------
     //
     // The download gate is the security-critical part of this whole feature. Deliberately NOT
     // AttachmentController#requireAttachmentAccess's shape — that short-circuits for the uploader
@@ -813,7 +806,7 @@ public class TaxAllowanceDeclarationService {
         TaxAllowanceDeclarationRepository.AttachmentFileLocation location =
             repository.findAttachmentFileLocation(attachmentId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
-        // V134 storage-durability fix: availability is checked only AFTER the 404/ownership/
+        // Storage availability (V134) is checked only AFTER the 404/ownership/
         // tombstone checks above, matching LeaveService#resolveAttachmentForDownload's ordering --
         // see that method's javadoc for why the order itself is a security property.
         if (!bytesAvailable(location)) {
@@ -874,9 +867,9 @@ public class TaxAllowanceDeclarationService {
      *
      * <p>Uses {@link NotificationService#notify}, the same call shape leave / overtime / welfare /
      * attendance-correction already use — {@code sendEmail=true} unconditionally, matching every
-     * other call site of that method in this codebase. This replaced a bare {@code
-     * NotificationRepository#insert} call (2026-08-31): that path never reached the mail layer at
-     * all, so every ล.ย.01 event was in-app only regardless of the recipient's inbox. Deliberately
+     * other call site of that method in this codebase. A bare {@code
+     * NotificationRepository#insert} call would never reach the mail layer, leaving every ล.ย.01
+     * event in-app only regardless of the recipient's inbox. Deliberately
      * NOT {@code NotificationRepository}'s ticket-scoped {@code notifyEmployee}/{@code
      * notifyEmployeeForPricingRequest} either: those hardcode a ticket/pricing-request link and
      * resolve their title through the ticket-scoped {@code TICKET_EVENT_TITLES} map, neither of
@@ -893,15 +886,14 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * Notifies HR that a declaration is waiting in their queue — the submit-side gap this class had
-     * before 2026-08-31 (an employee filed and HR was told nothing; the {@code notifyOwner} gap above
-     * was the decision side of the same class of defect). Fires from exactly one place: {@link
-     * #submitOwn}. {@link #createOnBehalf} also calls {@code repository.insert}, but never leaves a
+     * Notifies HR that a declaration is waiting in their queue (without it an employee files and HR
+     * is told nothing; {@code notifyOwner} above covers the decision side). Fires from exactly one
+     * place: {@link #submitOwn}. {@link #createOnBehalf} also calls {@code repository.insert}, but never leaves a
      * PENDING row for anyone to see — it supersedes/approves within the SAME transaction, so nobody
      * is waiting and this must not fire there too.
      *
      * <p>Goes through {@link NotificationRepository#notifyHrAt}, the same {@code "hr"} division
-     * fan-out {@code ProfileRequestService} uses (added #860) — not {@link #notificationService},
+     * fan-out {@code ProfileRequestService} uses — not {@link #notificationService},
      * which only ever addresses one employee and has no role fan-out.
      *
      * <p>The "who filed" text is composed the same way {@code ProfileRequestService.titleAndName}
@@ -935,7 +927,7 @@ public class TaxAllowanceDeclarationService {
     }
 
     /**
-     * แบบ ล.ย.01 must be signed before HR can approve it (owner decision #3, 2026-08-08).
+     * แบบ ล.ย.01 must be signed before HR can approve it.
      *
      * <p>The printed form ends in "ลงชื่อ...ผู้มีเงินได้", and that signature is what makes the
      * declaration a statement the employee is accountable for. Approving an unsigned one records HR
@@ -949,7 +941,7 @@ public class TaxAllowanceDeclarationService {
      * against a declarationId, which does not exist until the submit has already succeeded, so a
      * submit-time gate would be unsatisfiable by construction.
      *
-     * <p>Ordered AFTER the role and status checks so those keep their existing failure modes: a
+     * <p>Ordered AFTER the role and status checks so those keep their own failure modes: a
      * non-HR caller still gets 403 and an already-decided declaration still gets its own conflict,
      * rather than either being masked by a complaint about a missing file.
      *

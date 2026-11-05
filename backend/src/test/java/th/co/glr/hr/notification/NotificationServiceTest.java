@@ -100,15 +100,15 @@ class NotificationServiceTest {
         // the real 5-arg Mailer.sendHtml signature.
         verify(mailer).sendHtml(
             eq("employee@glr.co.th"),
-            eq("[GL&R HR] Leave submitted"),
+            eq("[GL&R Portal] Leave submitted"),
             argThat(html -> html.contains("เรียน คุณสมชาย ใจดี,")
                 && html.contains("Your leave request was submitted.")
                 && html.contains("https://portal.example/leave/1")
-                && html.contains("ระบบบริหารงานบุคคล GL&amp;R")),
+                && html.contains(">GL&amp;R Portal<") && !html.contains("ระบบบริหารงานบุคคล")),
             argThat(text -> text.contains("เรียน คุณสมชาย ใจดี,")
                 && text.contains("Your leave request was submitted.")
                 && text.contains("https://portal.example/leave/1")
-                && text.contains("ระบบบริหารงานบุคคล GL&R")),
+                && text.contains("\nGL&R Portal\n") && !text.contains("ระบบบริหารงานบุคคล")),
             argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
     }
 
@@ -317,7 +317,7 @@ class NotificationServiceOverrideConfiguredTest {
 
         verify(mailer).sendHtml(
             isNull(),
-            eq("[GL&R HR] Leave submitted"),
+            eq("[GL&R Portal] Leave submitted"),
             argThat(html -> html.contains("เรียน คุณสมชาย ใจดี,")
                 && html.contains("Your leave request was submitted.")
                 && !html.contains("Redirected for testing")),

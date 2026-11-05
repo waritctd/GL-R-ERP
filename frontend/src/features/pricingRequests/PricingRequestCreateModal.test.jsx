@@ -6,12 +6,9 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// The component fetches Pricing Request attachments (V69) whenever a persisted id is available
-// (createdId after save, or initialSummary.id in edit mode), and QuotationItemRow's own รุ่น
-// typeahead searches the catalog on typing — neither is under test in most cases here, so both are
-// stubbed to resolve emptily rather than hitting the network and polluting assertions.
-// (The header-terms "เงื่อนไขสำหรับใบเสนอราคา" box that used to fetch dealQuotations.displayNameOptions
-// was removed on 2026-09-30, so that stub is gone with it.)
+// The component fetches attachments whenever a persisted id is available (createdId after save, or
+// initialSummary.id in edit mode), and QuotationItemRow's รุ่น typeahead searches the catalog on
+// typing. Neither is under test in most cases, so both are stubbed to resolve emptily.
 vi.mock('../../api/index.js', () => ({
   api: {
     catalog: { prices: vi.fn().mockResolvedValue({ items: [] }) },
@@ -20,9 +17,8 @@ vi.mock('../../api/index.js', () => ({
       uploadAttachment: vi.fn().mockResolvedValue({ attachment: null }),
       deleteAttachment: vi.fn().mockResolvedValue({ ok: true }),
     },
-    // GLA-125 follow-up: ผู้ติดต่อ (QuotationContactPicker) fetches this whenever a customerId
-    // is present -- most tests here never set one (deal defaults to null), so it stays unmocked
-    // for those; the tests that DO set customerId configure this themselves per-test.
+    // ผู้ติดต่อ (QuotationContactPicker) fetches this whenever a customerId is present. Most tests
+    // never set one (deal defaults to null); those that do configure this per-test.
     customers: {
       contacts: vi.fn().mockResolvedValue({ contacts: [] }),
     },
@@ -58,14 +54,13 @@ function renderModal(overrides = {}) {
   return { createFn, submitFn, onClose, onCreated };
 }
 
-// A row that satisfies every V185 required field (owner ruling: the PCR item form is the
-// direct-deal quotation's TILE row minus price/discount) — used to fill in the gaps
-// emptyItemFromTicketItem's seed leaves blank (thicknessMm has no ticket_item source at all,
-// piecesPerBox likewise), so a "happy path" test can reach createFn/updateFn/createRevisionFn.
+// A row that satisfies every required field (the PCR item form is the direct-deal quotation's
+// TILE row minus price/discount): fills the gaps emptyItemFromTicketItem's seed leaves blank
+// (thicknessMm and piecesPerBox have no ticket_item source), so a happy-path test can reach
+// createFn/updateFn/createRevisionFn.
 function fillRequiredFields(rowIndex = 0) {
-  // Fills every V185-required field a fixture might still be missing — safe to call whether the
-  // row seeded from a ticket item (color/texture/size already present) or started fully blank.
-  // `rowIndex` picks the row on a multi-row form (2026-10-18); the default keeps the one-row tests as they were.
+  // Fills every required field a fixture might be missing, whether the row seeded from a ticket
+  // item (color/texture/size present) or started blank. `rowIndex` picks the row on a multi-row form.
   const field = (re) => screen.getAllByLabelText(re)[rowIndex];
   if (!field(/^สี/).value) fireEvent.change(field(/^สี/), { target: { value: 'ขาว' } });
   if (!field(/^ผิว/).value) fireEvent.change(field(/^ผิว/), { target: { value: 'ด้าน' } });
@@ -75,13 +70,13 @@ function fillRequiredFields(rowIndex = 0) {
   fireEvent.change(field(/^ความหนา \(มม\.\)/), { target: { value: '10' } });
   fireEvent.change(field(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
   fireEvent.change(field(/^แผ่น\/กล่อง/), { target: { value: '4' } });
-  // GLA-125: ประเทศต้นทาง is required -- picking a fixed-list country (not อื่นๆ) also writes the
-  // origin's default lead time onto the row (QuotationItemRow's onOriginChange), which the form
-  // no longer shows (owner ruling 2026-10-18: import gives the time).
+  // ประเทศต้นทาง is required; picking a fixed-list country (not อื่นๆ) also writes the origin's
+  // default lead time onto the row (QuotationItemRow's onOriginChange), which the form does not
+  // show (import gives the time).
   if (!field(/^ประเทศต้นทาง/).value) {
     fireEvent.change(field(/^ประเทศต้นทาง/), { target: { value: 'ไทย-สต็อก' } });
   }
-  // CR-1 (R1 / F4): สกุลเงิน + หน่วยราคา are required per line too (blank for a hand-typed row).
+  // สกุลเงิน + หน่วยราคา are required per line too (blank for a hand-typed row).
   const currency = field(/^สกุลเงิน \(ราคาโรงงาน\)/);
   if (!currency.value) fireEvent.change(currency, { target: { value: 'EUR' } });
   const unit = field(/^หน่วยราคา/);
@@ -111,11 +106,9 @@ describe('PricingRequestCreateModal', () => {
     expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).not.toBe('');
   });
 
-  // Owner ruling 2026-09-18 (reversed from an earlier ยี่ห้อ ruling): the OLD free-text factory
-  // input is gone, but the field that replaces it (QuotationItemRow's brand field, via
-  // `brandLabel="โรงงาน"`) is deliberately LABELLED โรงงาน on this form — see
-  // PricingRequestCreateModal.jsx's own module Javadoc. There is exactly one โรงงาน-labelled
-  // input, and it holds `brand`, not a separate factory field.
+  // The field replacing the old free-text factory input (QuotationItemRow's brand field, via
+  // `brandLabel="โรงงาน"`) is LABELLED โรงงาน on this form (see PricingRequestCreateModal.jsx's
+  // module Javadoc). Exactly one โรงงาน-labelled input exists, and it holds `brand`, not `factory`.
   it('labels the brand field โรงงาน (owner ruling), and renders no unit-basis select or a dedicated รายละเอียดสินค้า box', () => {
     renderModal();
     expect(screen.getAllByLabelText(/^โรงงาน/)).toHaveLength(1);
@@ -141,8 +134,8 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
   });
 
-  // Owner ruling 2026-10-12: any fraction of a piece rounds UP on the server, so a tiny positive
-  // area is 1 piece and is no longer warned about; only a zero/blank area derives nothing.
+  // Any fraction of a piece rounds UP on the server, so a tiny positive area is 1 piece and is not
+  // warned about; only a zero/blank area derives nothing.
   it('does not warn when a tiny AREA-mode quantity rounds up to 1 piece (server rounds every fraction up)', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
@@ -221,9 +214,9 @@ describe('PricingRequestCreateModal', () => {
     expect(item.factory).toBe('โรงงาน A');
   });
 
-  // QA-04 (owner ruling 2026-10-28): SALES flags stock per line when creating the PCR (the CEO types the
-  // price, sales does not). The deal line's sourcedFromStock seeds the flag; the payload carries
-  // stockSource (backend PricingRequestItemRequest: IN_THAILAND | IN_TRANSIT; null = import).
+  // SALES flags stock per line when creating the PCR (the CEO types the price, sales does not).
+  // The deal line's sourcedFromStock seeds the flag; the payload carries stockSource
+  // (backend PricingRequestItemRequest: IN_THAILAND | IN_TRANSIT; null = import).
   describe('stock flag per line (QA-04)', () => {
     const stockCheckbox = () => screen.getByRole('checkbox', { name: /จากสต็อก/ });
     const submitWith = async (overrides) => {
@@ -303,10 +296,9 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn.mock.calls[1][0].clientRequestId).toBe(createFn.mock.calls[0][0].clientRequestId);
   });
 
-  // Fix 1 (review-remediation plan): "Create and submit" used to call createFn
-  // unconditionally, so a create-succeeds-then-submit-fails retry produced a
-  // second orphaned DRAFT. The retry must reuse the id createFn already
-  // returned and push the current form state onto it via updateFn instead.
+  // "Create and submit" must not call createFn unconditionally: a create-succeeds-then-submit-fails
+  // retry would produce a second orphaned DRAFT. The retry reuses the id createFn already returned
+  // and pushes the current form state onto it via updateFn.
   it('does not create a second draft when submitFn fails after create succeeds — retry reuses the same id', async () => {
     const createFn = vi.fn().mockResolvedValue({ pricingRequest: { summary: { id: 42 } } });
     const submitFn = vi.fn()
@@ -347,7 +339,7 @@ describe('PricingRequestCreateModal', () => {
     expect(await screen.findByRole('status')).not.toBeNull();
   });
 
-  // ── GLA-125 items 1-3 ────────────────────────────────────────────────────────────────────
+  // ── origin country, lead time, อื่นๆ ───────────────────────────────────────────────────────
   it('shows no ระยะเวลานำเข้า input (import gives the time, owner ruling 2026-10-18), yet picking a fixed-list ประเทศต้นทาง still sends the origin default for import to adjust', async () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
@@ -367,8 +359,8 @@ describe('PricingRequestCreateModal', () => {
     const { createFn } = renderModal();
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
-    // fillRequiredFields already picked a fixed-list country -- switch to อื่นๆ instead, which
-    // carries no default lead time (ORIGIN_COUNTRY_OPTIONS' own "อื่นๆ" entry).
+    // fillRequiredFields already picked a fixed-list country; switch to อื่นๆ, which carries no
+    // default lead time (ORIGIN_COUNTRY_OPTIONS' "อื่นๆ" entry).
     fireEvent.change(screen.getByLabelText(/^ประเทศต้นทาง/), { target: { value: 'อื่นๆ' } });
     expect(screen.getByLabelText(/^ระบุประเทศต้นทาง/)).not.toBeNull();
 
@@ -377,8 +369,8 @@ describe('PricingRequestCreateModal', () => {
     expect(createFn).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText(/^ระบุประเทศต้นทาง/), { target: { value: 'เวียดนาม' } });
-    // อื่นๆ carries no default lead time and the form no longer asks for one: null is legal
-    // (owner ruling 2026-10-18 — import supplies it).
+    // อื่นๆ carries no default lead time and the form does not ask for one: null is legal (import
+    // supplies it).
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
 
     await waitFor(() => expect(createFn).toHaveBeenCalledTimes(1));
@@ -389,10 +381,9 @@ describe('PricingRequestCreateModal', () => {
     expect(item.leadTimeMaxDays).toBeNull();
   });
 
-  // ── Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box was removed from the form ──
-  // Sales does not set quotation terms at คำขอราคา time. The fields stay on the wire (buildPayload
-  // still carries them) so an existing draft's saved terms survive an edit, but there is no input
-  // for them here anymore — create mode therefore sends them all as null.
+  // The quotation header-terms box is gone (Sales does not set quotation terms at คำขอราคา time).
+  // The fields stay on the wire (buildPayload carries them) so a draft's saved terms survive an
+  // edit; create mode therefore sends them all as null.
   it('no longer renders the "เงื่อนไขสำหรับใบเสนอราคา" box, and create mode sends its fields as null', async () => {
     const { createFn } = renderModal();
     // The whole box and every input inside it is gone.
@@ -407,8 +398,8 @@ describe('PricingRequestCreateModal', () => {
 
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fillRequiredFields();
-    // GLA-125 follow-up: this checkbox lives on the reused QuotationContactPicker (its own
-    // typographic-quote copy, "ไม่เติม “คุณ”..."), independent of the removed box — still works.
+    // This checkbox lives on the reused QuotationContactPicker (its own typographic-quote copy,
+    // "ไม่เติม “คุณ”...").
     fireEvent.click(screen.getByLabelText(/ไม่เติม/));
 
     fireEvent.click(screen.getByRole('button', { name: /ส่งให้ฝ่ายนำเข้า/ }));
@@ -426,15 +417,14 @@ describe('PricingRequestCreateModal', () => {
     });
   });
 
-  // Owner, 2026-10-06: "remove ฝ่าย field completely". The quotation editor, the คำขอราคา page and
-  // every printed form lost it then; this form still collected a value nothing showed or printed,
-  // and the quotation's first save wiped it.
+  // The ฝ่าย field is removed everywhere (quotation editor, คำขอราคา page, printed forms). This form
+  // must not collect a value nothing shows or prints, which the quotation's first save would wipe.
   it('has no ฝ่าย field', () => {
     renderModal();
     expect(screen.queryByLabelText('ฝ่าย')).toBeNull();
   });
 
-  // ── GLA-125 follow-up: ผู้ติดต่อ (QuotationContactPicker reuse; labelled ผู้สั่งซื้อ until 2026-10-18) ──
+  // ── ผู้ติดต่อ (QuotationContactPicker reuse) ──
   it('scopes ผู้ติดต่อ to the deal\'s customer, and sends the contact picked from the list as recipientContactId', async () => {
     api.customers.contacts.mockResolvedValueOnce({
       contacts: [{ id: 77, firstName: 'สมชาย', lastName: 'ทดสอบ', phone: '0812345678', email: 'somchai@example.com' }],
@@ -487,7 +477,7 @@ describe('PricingRequestCreateModal', () => {
         : { items: [] }
     ));
     // Seeded from an Italian catalogue line (อิตาลี, 75-90 days, 9 mm, 2 per box); on this form a pick
-    // means "the database has the information" (owner ruling 2026-10-18), so none of that may survive it.
+    // means "the database has the information", so none of that may survive it.
     const { createFn } = renderModal({ ticketItems: [ticketItem({
       catalogPriceId: 777, catalogCurrency: 'EUR', catalogPriceUnit: 'per_sqm',
       catalogThicknessMm: 9, catalogPcsPerBox: 2, catalogOriginCountryCode: 'IT',
@@ -625,8 +615,8 @@ describe('PricingRequestCreateModal typed โรงงาน → สกุลเ
   });
 });
 
-// QA-12: the backend (GLA-102) 409s a changed recipientType on a revision / on editing a revision draft,
-// so the ผู้รับคำขอราคา radios are locked there and a hint points at "create a new request" instead.
+// The backend 409s a changed recipientType on a revision / on editing a revision draft, so the
+// ผู้รับคำขอราคา radios are locked there and a hint points at "create a new request" instead.
 const RECIPIENT_LOCK_HINT = 'สร้างคำขอราคาใหม่';
 const recipientRadios = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับคำขอราคา' })).getAllByRole('radio');
 const radioByName = (re) => recipientRadios().find((r) => re.test(r.textContent));
@@ -649,10 +639,10 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
         productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60',
         thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
-        // GLA-125: required on this form. A min of 0 fails the lead-time range check, whose error has
-        // no visible field here (hideLeadTime), so it must never block a save.
+        // Required on this form. A min of 0 fails the lead-time range check, whose error has no
+        // visible field here (hideLeadTime), so it must never block a save.
         originCountry: 'ไทย-สต็อก', leadTimeMinDays: 0, leadTimeMaxDays: 7,
-        // CR-1: currency + price unit are required on every line now.
+        // Currency + price unit are required on every line.
         requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
@@ -719,9 +709,9 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(screen.queryByText(new RegExp(RECIPIENT_LOCK_HINT))).toBeNull();
   });
 
-  // Review finding 3: the row remembers the stockSource it was loaded with, so un-ticking and re-ticking จากสต็อก
-  // restores IN_TRANSIT instead of silently turning it into IN_THAILAND. (PricingRequestItemRequest has no
-  // expectedArrivalDate, so the arrival date is not part of the item input and is not carried here.)
+  // The row remembers the stockSource it was loaded with, so un-ticking and re-ticking จากสต็อก
+  // restores IN_TRANSIT instead of silently turning it into IN_THAILAND. (PricingRequestItemRequest
+  // has no expectedArrivalDate, so the arrival date is not carried.)
   it('re-ticking จากสต็อก on a line loaded as IN_TRANSIT restores IN_TRANSIT', async () => {
     const updateFn = vi.fn().mockResolvedValue({});
     const initial = editInitialValue();
@@ -740,9 +730,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     expect(updateFn.mock.calls[0][1].items[0].stockSource).toBe('IN_TRANSIT');
   });
 
-  // Owner request 2026-09-30: the "เงื่อนไขสำหรับใบเสนอราคา" box is gone, but the header terms it
-  // used to edit are still persisted on the wire — editing a draft that already carries them must
-  // NOT null them just because there is no input anymore.
+  // The header terms are still persisted on the wire: editing a draft that already carries them
+  // must NOT null them just because there is no input.
   it('preserves the persisted header terms (payment/validity/display-name/dept-unit) on save even with the box removed', async () => {
     const updateFn = vi.fn().mockResolvedValue({});
     render(
@@ -781,14 +770,14 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       validityDays: 15,
       printedByDisplayId: 8,
       salesRepDisplayId: 9,
-      // ฝ่าย has no field any more (owner 2026-10-06): a stored one is cleared, not preserved.
+      // ฝ่าย has no field any more: a stored one is cleared, not preserved.
       deptCode: null,
       unitCode: 'D01',
     })));
   });
 
-  // The wrong-way-round case for the removed ฝ่าย field: a draft saved before the removal still
-  // carries one, and with no field to show or edit it, it must not ride along on the next save.
+  // Wrong-way-round for the removed ฝ่าย field: a draft saved earlier still carries one, and with no
+  // field to show or edit it, it must not ride along on the next save.
   it('saves a draft that still carries a ฝ่าย WITHOUT it, and shows it nowhere', async () => {
     const updateFn = vi.fn().mockResolvedValue({});
     const stored = editInitialValue();
@@ -880,9 +869,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
           items: [{
             id: 9, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
             productDescription: 'กระเบื้องพื้น SCG A1 (เดิม)', texture: 'ด้าน', size: '60x60',
-            // Deliberately NO quantityMode/areaSqm/piecesInput/thicknessMm/sqmPerPiece/piecesPerBox
-            // at all -- exactly the shape a row saved by the OLD (pre-V185) form has. Only the
-            // legacy wire fields survive.
+            // Deliberately NO quantityMode/areaSqm/piecesInput/thicknessMm/sqmPerPiece/piecesPerBox:
+            // exactly the shape a row saved by the legacy form has. Only the legacy wire fields survive.
             requestedUnitBasis: 'PER_SQM', requestedQty: 144, requestedQtySqm: 144,
             requestedUnit: 'ตร.ม.',
             wastageMode: null, roundToFullBox: true,
@@ -895,8 +883,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
       />,
     );
 
-    // AREA mode selected (not the blank-default's own AREA-with-no-value -- this asserts the
-    // VALUE too), and the จำนวน field shows the legacy quantity, not empty.
+    // AREA mode selected (asserts the VALUE too, not just the blank default's AREA-with-no-value),
+    // and the จำนวน field shows the legacy quantity, not empty.
     expect(screen.getByRole('button', { name: 'ตร.ม.', pressed: true })).not.toBeNull();
     expect(screen.getByDisplayValue('144')).not.toBeNull();
     // Second-pass review finding N1: a PER_SQM row's requestedQtySqm/requestedQty pair is NOT
@@ -972,11 +960,9 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
   });
 });
 
-// Review remediation (COMMIT 5, P1 finding 3): the customer-change revision UI used to copy the
-// current request verbatim (PricingRequestDetailPage's now-deleted revisionPayload()) and only
-// collect a revision reason, so a customer changing product/quantity/recipient/date could never
-// express it — the new DRAFT was always commercially identical to its parent. Revision mode
-// reuses this same modal (seeding, item rows, attachment uploader) instead.
+// The customer-change revision UI must let Sales edit the revision: copying the current request
+// verbatim and collecting only a reason would leave the new DRAFT commercially identical to its
+// parent. Revision mode reuses this modal (seeding, item rows, attachment uploader).
 describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () => {
   function revisionInitialValue(overrides = {}) {
     return {
@@ -994,9 +980,9 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
         productDescription: 'กระเบื้องพื้น SCG A1', texture: 'ด้าน', size: '60x60',
         thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
         wastageMode: 'NONE', piecesPerBox: 4, roundToFullBox: true,
-        // GLA-125: required on this form.
+        // Required on this form.
         originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
-        // CR-1: currency + price unit are required on every line now.
+        // Currency + price unit are required on every line.
         requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED', targetDeliveryDate: null, deliveryLocation: null, specialRequirement: null,
       }],
@@ -1119,9 +1105,8 @@ describe('PricingRequestCreateModal revision mode (COMMIT 5, P1 finding 3)', () 
   });
 });
 
-// V110 fix ("ทุกอย่างควร autofill ตามข้อมูลขั้นตอนนั้น" / "สร้างคำขอราคาไม่ควรต้องกรอกหาจาก
-// catalog ซ้ำ"): this modal seeds its catalog link, ผู้รับ label, and note from the deal it was
-// opened from — CREATE MODE ONLY.
+// This modal seeds its catalog link, ผู้รับ label, and note from the deal it was opened from
+// (CREATE MODE ONLY), so the rep need not re-search the catalog.
 describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
   function dealFixture(overrides = {}) {
     return {
@@ -1202,7 +1187,7 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
   it('seeds note from deal.note', () => {
     renderModal({ deal: dealFixture() });
     expect(screen.getByLabelText(/หมายเหตุถึงฝ่ายนำเข้า/).value).toBe('โน้ตจากขั้นตอนสร้างดีล');
-    // Wrong-way-round: the project name must not have leaked into any surviving input.
+    // Wrong-way-round: the project name must not leak into any surviving input.
     expect(screen.queryByDisplayValue('โครงการทดสอบ A')).toBeNull();
   });
 
@@ -1246,11 +1231,10 @@ describe('PricingRequestCreateModal deal-derived autofill (V110)', () => {
   });
 });
 
-// Removing the four inputs on 2026-08-11 created a data-loss trap that no other test covers:
-// buildPayload writes the FULL item representation, so if the modal had simply stopped tracking
-// those fields, opening any draft created BEFORE the removal and pressing บันทึกการแก้ไข would
-// have silently nulled four persisted columns. The fields are therefore still seeded from the
-// persisted request and echoed straight back.
+// Data-loss trap: buildPayload writes the FULL item representation, so if the modal stopped
+// tracking the four removed inputs (ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ /
+// ข้อกำหนดพิเศษ), opening an older draft and pressing บันทึกการแก้ไข would null four persisted
+// columns. They are therefore still seeded from the persisted request and echoed back.
 describe('PricingRequestCreateModal preserves the removed per-item fields through an edit', () => {
   it('echoes back a persisted quantityType/targetDeliveryDate/deliveryLocation/specialRequirement instead of nulling them', async () => {
     const updateFn = vi.fn().mockResolvedValue({});
@@ -1268,9 +1252,9 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
             thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 20,
             piecesPerBox: 4, quantityType: 'CONFIRMED', targetDeliveryDate: '2026-09-30',
             deliveryLocation: 'ที่ส่งมอบเดิม', specialRequirement: 'ส่งด่วน',
-            // GLA-125: required on this form.
+            // Required on this form.
             originCountry: 'ไทย-สต็อก', leadTimeMinDays: 3, leadTimeMaxDays: 7,
-        // CR-1: currency + price unit are required on every line now.
+        // Currency + price unit are required on every line.
         requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE',
           }],
         }}
@@ -1296,8 +1280,8 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
     fireEvent.change(screen.getByPlaceholderText('เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ'), { target: { value: 'ผู้ออกแบบ ก.' } });
     fireEvent.change(screen.getByLabelText(/รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'สินค้าใหม่ยังไม่มีใน catalog' } });
     fillRequiredFields();
-    // "จำนวน"'s FormField htmlFor points straight at the numeric input (id `qty-0`) — PIECES
-    // mode by default on a blank row, same as ticketItem()'s own PIECE default.
+    // "จำนวน"'s FormField htmlFor points at the numeric input (id `qty-0`); PIECES mode by default
+    // on a blank row, like ticketItem()'s PIECE default.
     fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '10' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
@@ -1312,9 +1296,9 @@ describe('PricingRequestCreateModal preserves the removed per-item fields throug
   });
 });
 
-// CR-1 (GLA-167), rulings R1 + F4: sales fixes the currency and price unit on every line; import
-// cannot change them later. Auto-filled from the catalogue pick; blank + required for a hand-typed
-// line (the factory master's defaults are import/CEO-only, so sales has no source for them).
+// Sales fixes the currency and price unit on every line; import cannot change them later.
+// Auto-filled from the catalogue pick; blank + required for a hand-typed line (the factory
+// master's defaults are import/CEO-only, so sales has no source for them).
 describe('PricingRequestCreateModal — สกุลเงิน + หน่วยราคา per line (R1, F4)', () => {
   const RECIPIENT = 'เช่น ชื่อผู้ออกแบบ หรือชื่อบริษัทผู้ซื้อ';
   const currencySelect = () => screen.getByLabelText(/^สกุลเงิน \(ราคาโรงงาน\)/);
@@ -1448,9 +1432,9 @@ describe('PricingRequestCreateModal — สกุลเงิน + หน่ว�
   });
 });
 
-// Owner ruling 2026-10-22: the deal page's เสนอราคา menu opens this modal with ผู้รับ
-// already set to the next party on the route. `initialRecipientType` seeds the chip AND the ผู้รับ
-// label (from the deal's per-type name) — CREATE MODE ONLY; edit/revision keep the persisted recipient.
+// The deal page's เสนอราคา menu opens this modal with ผู้รับ already set to the next party on the
+// route. `initialRecipientType` seeds the chip AND the ผู้รับ label (from the deal's per-type
+// name); CREATE MODE ONLY, edit/revision keep the persisted recipient.
 describe('PricingRequestCreateModal initialRecipientType (owner ruling 2026-10-22)', () => {
   const deal = {
     designerName: 'สมชาย ผู้ออกแบบ',

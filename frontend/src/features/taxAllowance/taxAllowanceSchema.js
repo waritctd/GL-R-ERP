@@ -138,14 +138,14 @@ export const ALLOWANCE_MONEY_KEYS = [
   'politicalDonation',
 ];
 
-export const ALLOWANCE_COUNT_KEYS = [
+const ALLOWANCE_COUNT_KEYS = [
   'childCount',
   'childCountDouble',
   'disabledCareCount',
   'parentCareCount',
 ];
 
-export const ALLOWANCE_CHECKBOX_KEYS = ['disabilityCardHolder'];
+const ALLOWANCE_CHECKBOX_KEYS = ['disabilityCardHolder'];
 
 export const ALL_ALLOWANCE_KEYS = [...ALLOWANCE_MONEY_KEYS, ...ALLOWANCE_COUNT_KEYS, ...ALLOWANCE_CHECKBOX_KEYS];
 
@@ -162,7 +162,7 @@ export const ALL_ALLOWANCE_KEYS = [...ALLOWANCE_MONEY_KEYS, ...ALLOWANCE_COUNT_K
 export const HR_SUPPLIED_KEYS = ['spouseAllowance', 'disabilityCardHolder'];
 
 /** The nested `lorYor01` payload's own keys — everything on the form that is not an amount. */
-export const LOR_YOR_01_DETAIL_KEYS = [
+const LOR_YOR_01_DETAIL_KEYS = [
   'taxpayerId', 'firstNameTh', 'lastNameTh',
   'maritalState', 'spousalStatus', 'spouseHasIncome',
   'childrenTotal', 'childExtraAllowance',
@@ -426,7 +426,7 @@ export function sectionDeclaredTotal(section, values) {
  * `hr.employee.marital_status` into ข้อ 1's own vocabulary so this stays a straight slot-for-slot
  * copy (see `TaxAllowanceDeclarationService#maritalStateFromMaster`).
  */
-export const LOR_YOR_01_PREFILLABLE_DETAIL_KEYS = [
+const LOR_YOR_01_PREFILLABLE_DETAIL_KEYS = [
   'taxpayerId', 'firstNameTh', 'lastNameTh', 'maritalState',
 ];
 

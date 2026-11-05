@@ -63,7 +63,7 @@ import th.co.glr.hr.notification.SalesMailRecipientRepository.SalesMailRecipient
  * a sales notification for an addressless rep whose manager is also addressless produces no test
  * mail, where a leave notification would. That is the ruling, stated rather than smuggled.
  *
- * <p>Everything else about delivery — the {@code [GL&R HR] } subject prefix, the HTML shell, the
+ * <p>Everything else about delivery — the {@code [GL&R Portal] } subject prefix, the HTML shell, the
  * inline logo, HTML-escaping, {@code app.mail.override-to} and the portal CTA — is
  * {@link NotificationEmailService}'s, unchanged. In particular the CTA link is the point of an
  * actionable notification and comes straight from the in-app row's {@code link}; the last email

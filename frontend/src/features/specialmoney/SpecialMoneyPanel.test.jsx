@@ -9,12 +9,9 @@ import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
-// Bangkok-safe year for test expectations -- mirrors the component's own currentBangkokYear()
-// (Intl.DateTimeFormat with timeZone: 'Asia/Bangkok'), deliberately NOT `new Date().getFullYear()`
-// (local/UTC time). frontend-ci.yml sets no TZ, so CI runs UTC: at e.g.
-// 2026-12-31T18:00:00+00:00 that's still 2026 in UTC but already 2027 in Bangkok, so a test built
-// on `new Date().getFullYear()` would go red against CORRECT Bangkok-aware component code once a
-// year -- the exact `bangkok-timezone-test-flake` trap, recreated in JS if this used local time.
+// Bangkok-safe year for test expectations: mirrors the component's currentBangkokYear()
+// (Intl.DateTimeFormat, Asia/Bangkok), NOT `new Date().getFullYear()`. CI runs UTC, so around
+// 2026-12-31T18:00Z a local-time year would go red against CORRECT Bangkok-aware code.
 function currentBangkokYearForTest() {
   return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' }).format(new Date()));
 }
@@ -125,16 +122,12 @@ function rejectedRequest(overrides = {}) {
   };
 }
 
-// TypePicker (plan §"Type grouping") replaced the flat <select> with a two-step
-// group -> radio disclosure. This helper opens every group (so a caller never has to know which
-// group a given type lives in) and clicks the matching radio, which is what the original
-// selectType()'s `fireEvent.change` on a <select> did functionally -- pick a type and let
-// react-hook-form register the change.
+// TypePicker is a two-step group -> radio disclosure. This helper opens every group (so a caller
+// never has to know which group a type lives in) and clicks the matching radio.
 async function selectType(value) {
   const picker = await screen.findByLabelText(/ประเภทคำขอ/);
   // The label/wrapper renders immediately, but TypePicker's groups only populate once GET /types
-  // resolves — wait for at least one group toggle to exist before trying to open/click anything,
-  // same reasoning as the original select-based helper waiting for its <option>s.
+  // resolves: wait for at least one group toggle before opening/clicking.
   await waitFor(() => expect(within(picker).queryAllByRole('button').length).toBeGreaterThan(0));
   const toggles = within(picker).getAllByRole('button');
   toggles.forEach((toggle) => {
@@ -256,19 +249,17 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // The submit-for picker never had a live path: SpecialMoneyEmployeeOption.directReport is
-  // hardcoded false in Java (SpecialMoneyRepository -- "directReport is now ALWAYS false -- nobody
-  // may file for anybody") and resolveTargetEmployee refuses any target but self for every role,
-  // so even a stale/hypothetical GET /employees payload with a second roster row must never
-  // surface a picker -- there is only ever the requester's own name, disabled.
+  // The submit-for picker has no live path: SpecialMoneyEmployeeOption.directReport is hardcoded
+  // false in Java and resolveTargetEmployee refuses any target but self for every role, so even a
+  // stale GET /employees payload with a second roster row must never surface a picker (only the
+  // requester's own name, disabled).
   describe('submit-for picker: self-only, no on-behalf select', () => {
     function rosterWithStaleSecondEntry() {
       return {
         employees: [
           { employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001', self: true, directReport: false },
-          // Hypothetical stale payload shaped like the old on-behalf list -- directReport: true
-          // (or self: false) can no longer happen for real, but the frontend must not react to it
-          // even if a future regression somehow reintroduced it server-side.
+          // Hypothetical stale payload shaped like the old on-behalf list: the frontend must not
+          // react to it.
           { employeeId: 8, employeeName: 'ผู้จัดการ', employeeCode: 'GLR-008', self: false, directReport: true },
         ],
       };
@@ -346,8 +337,7 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // Plan §"The rule card": generated from the single RULE_CARD table, restating only the
-  // selected type's rules.
+  // The rule card: generated from the single RULE_CARD table, restating only the selected type's rules.
   describe('rule card', () => {
     it('renders the rule card for the selected type, with cap/frequency/evidence rows', async () => {
       renderPanel();
@@ -382,7 +372,7 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // Plan §"Type grouping": fixed, rule-derived, common types first.
+  // Type grouping: fixed, rule-derived, common types first.
   it('groups types with the frequent group first and covers every backend type once', () => {
     expect(TYPE_GROUPS[0].label).toBe('เบิกได้บ่อย');
     expect(TYPE_GROUPS[0].types).toEqual(['TRAVEL_PER_DIEM', 'TRAVEL_LODGING', 'MEDICAL']);
@@ -401,22 +391,13 @@ describe('SpecialMoneyPanel', () => {
     expect(toggles.slice(1).every((toggle) => toggle.getAttribute('aria-expanded') === 'false')).toBe(true);
   });
 
-  // Blocker 2 (browser-verified): the disclosure used to render `aria-expanded="false"` while
-  // every radio underneath stayed fully visible and tabbable, because a `flex` utility class sat
-  // on the panel unconditionally alongside the `hidden` attribute -- Tailwind's `.flex` (utilities
-  // layer) beat the legacy stylesheet's `[hidden]{display:none}` (an earlier layer), so the
-  // attribute lost the cascade in a real browser. This is the test that "covered" the collapse
-  // before (2b): it asserted only `aria-expanded`, which stayed correct throughout, so it passed
-  // with the collapse 100% broken.
-  //
-  // jsdom does not execute Tailwind's generated stylesheet at all, so a real `getComputedStyle`
-  // assertion can't distinguish the two versions here -- both would report `display: ''`. What
-  // CAN be asserted in jsdom, and is exactly what the real bug looked like at the DOM level, is
-  // that the `hidden` attribute and the `flex` class must never both be present on the same
-  // panel: that specific co-occurrence is the whole defect. `queryByRole` on the collapsed
-  // group's radio is kept too, since RTL's accessibility-tree exclusion (which DOES work in
-  // jsdom, driven by the `hidden` IDL attribute, not CSS) is the second thing a real screen
-  // reader would also get right or wrong here.
+  // The disclosure must not render `aria-expanded="false"` while every radio stays visible and
+  // tabbable: a `flex` utility class on the panel alongside the `hidden` attribute beats the legacy
+  // stylesheet's `[hidden]{display:none}` in a real browser. jsdom does not execute Tailwind's
+  // stylesheet, so `getComputedStyle` can't tell the two apart; what CAN be asserted is that the
+  // `hidden` attribute and the `flex` class never co-occur on the same panel (the whole defect).
+  // `queryByRole` on the collapsed group's radio is kept too (RTL's accessibility-tree exclusion
+  // works in jsdom via the `hidden` IDL attribute).
   it('drives a collapsed group panel from state, never combining the hidden attribute with a `flex` class', async () => {
     renderPanel();
 
@@ -472,11 +453,9 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only
-  // while SUBMITTED. The old "or whoever filed on their behalf" (requested_by_id) disjunct was
-  // removed in Java 2026-08-10 (SpecialMoneyScopeIntegrationTest's
-  // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow) -- these pin the frontend button gate
-  // to match, wrong-way-round first.
+  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only while
+  // SUBMITTED (no "whoever filed on their behalf" disjunct). These pin the frontend button gate to
+  // match, wrong-way-round first.
   describe('cancel/attach gate: owner-only, not requester-only', () => {
     it('offers a legacy on-behalf filer (requestedById matches the viewer) no cancel or upload control on someone else\'s row', async () => {
       const hrUser = { employeeId: 7, name: 'ฝ่ายบุคคล', role: 'hr', manager: false };
@@ -529,8 +508,8 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // feat/pending-approver-info: "who this is waiting on" beside the SUBMITTED/MANAGER_APPROVED
-  // status badge -- welfare is CEO-only, single-stage, so the role is always "ceo" here.
+  // "Who this is waiting on" beside the SUBMITTED/MANAGER_APPROVED status badge: welfare is
+  // CEO-only, single-stage, so the role is always "ceo" here.
   describe('pending-approver note', () => {
     it('renders the note for a SUBMITTED request, and omits it for a REJECTED one', async () => {
       api.specialMoney.list.mockResolvedValue({
@@ -541,14 +520,10 @@ describe('SpecialMoneyPanel', () => {
       });
       renderPanel();
 
-      // No "รอ" prefix on the note itself (review #pending-approver-info) -- the status badge
-      // ("รอ CEO อนุมัติ") already conveys pending-ness, so this bare "CEO (คุณราม)" doesn't
-      // duplicate it. The REJECTED row (rejectedRequest, pendingApproverRole: null) renders no
-      // such note at all.
-      //
-      // This is also the case that keeps the sibling test below honest: the note now renders ONLY
-      // when a name resolved, and without this assertion that rule could quietly decay into
-      // "never render the note" with nothing going red.
+      // No "รอ" prefix on the note itself: the status badge ("รอ CEO อนุมัติ") already conveys
+      // pending-ness. The REJECTED row (pendingApproverRole: null) renders no note. This also keeps
+      // the sibling test honest: the note renders ONLY when a name resolved, and without this
+      // assertion that rule could decay into "never render the note" with nothing going red.
       expect(await screen.findByText('CEO (คุณราม)')).not.toBeNull();
     });
 
@@ -562,11 +537,8 @@ describe('SpecialMoneyPanel', () => {
         .closest('.data-row')
         .querySelector('[data-label="สถานะ"]');
 
-      // This REPLACES an assertion that required a bare "CEO" note here, rather than deleting it:
-      // the inverse is now the thing worth pinning. The role-only note was correct when the badge
-      // read a generic pending label, but specialMoneyStatusLabel names the role itself now, so
-      // the note just repeated the badge -- and with no name it carries nothing the badge cannot
-      // already say. Only the badge is left of the "who holds this" story.
+      // The role-only note repeated the badge (specialMoneyStatusLabel names the role itself), so
+      // with no name it carries nothing the badge cannot say: assert it is absent.
       expect(within(statusColumn).getByText('รอ CEO อนุมัติ')).not.toBeNull();
       expect(statusColumn.querySelector('small.text-text-muted')).toBeNull();
       // Scoped to the note's own class deliberately: this fixture (AID_WEDDING, evidenceRequired,
@@ -575,11 +547,9 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // The history table used to call api.specialMoney.list({status}) with no dates at all, which the
-  // REAL backend (SpecialMoneyService.list():66-68) silently defaults to "this calendar month" --
-  // this fixture's mock does not reproduce that filtering itself (same caveat as the review-queue
-  // window test above), so what these pin is that the FRONTEND now always sends an explicit,
-  // user-controllable window instead of relying on any default.
+  // The history table always sends an explicit, user-controllable window: the REAL backend
+  // (SpecialMoneyService.list():66-68) silently defaults a missing one to "this calendar month",
+  // and this mock does not reproduce that filtering.
   describe('history table period selector', () => {
     it('sends a current-year window by default (ปีนี้)', async () => {
       renderPanel();
@@ -601,16 +571,11 @@ describe('SpecialMoneyPanel', () => {
 
       await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(2));
       const [{ from, to }] = api.specialMoney.list.mock.calls[1];
-      // historyWindow's ALL branch builds a local-midnight Date (today's year/month/day +/- N,
-      // via the local `getFullYear()`/`getMonth()`/`getDate()` getters) and then stringifies it
-      // through `dateIso`, which reformats that instant in Asia/Bangkok via Intl. So this test
-      // reproduces BOTH steps exactly -- an expectation built only from local Y/M/D getters (no
-      // Bangkok re-render) would itself drift from the real output on any test runner whose system
-      // timezone isn't Bangkok, since the component's actual stringification always re-renders in
-      // Bangkok regardless of which getters built the Date. Building against `currentYear()`
-      // (Bangkok) at the assertion level would separately reintroduce the UTC/Bangkok year-boundary
-      // flake this suite exists to prevent. Mirroring the pipeline is the only version immune to
-      // both axes at once.
+      // historyWindow's ALL branch builds a local-midnight Date (local getters, +/- N) and
+      // stringifies it through `dateIso`, which reformats that instant in Asia/Bangkok. The test
+      // reproduces BOTH steps: local getters alone would drift on a runner not in Bangkok, and
+      // `currentYear()` (Bangkok) at the assertion level would reintroduce the UTC/Bangkok
+      // year-boundary flake.
       const bangkokDateIso = (date) => new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
       }).format(date);
@@ -677,15 +642,13 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // SpecialMoneyPanel builds the history table's cache-key filters with a BARE `statusFilter`
-  // ('' when unset), while the CEO review queue's key comes from `reviewQueueWindow` -- a plain
-  // {from,to} object with no `status` property at all, so queryKeys.specialMoneyRequests() reads
-  // its `filters.status` as `undefined`. Under historyPeriod 'ALL' with no status filter, the two
-  // queries' date windows are the SAME 10-years-back/1-year-forward shape, so '' vs `undefined` at
-  // that one key slot is the only thing keeping their react-query cache entries apart. This does
-  // not render the component -- it tests queryKeys.specialMoneyRequests() directly against the
-  // exact filter shapes SpecialMoneyPanel constructs, which is what actually protects the
-  // invariant (see the comment on `filters` in SpecialMoneyPanel.jsx).
+  // SpecialMoneyPanel builds the history table's cache-key filters with a BARE `statusFilter` ('' when
+  // unset), while the CEO review queue's key comes from `reviewQueueWindow`, a {from,to} object with
+  // no `status`, so queryKeys.specialMoneyRequests() reads `filters.status` as `undefined`. Under
+  // historyPeriod 'ALL' with no status filter the two date windows are identical, so '' vs
+  // `undefined` at that slot is the only thing keeping their cache entries apart. This tests
+  // queryKeys.specialMoneyRequests() directly against the exact filter shapes SpecialMoneyPanel
+  // constructs (see the comment on `filters` in SpecialMoneyPanel.jsx).
   describe('history/review-queue cache-key separation', () => {
     // Documents the exact key shapes involved (pure, no render) -- pins that '' and `undefined`
     // serialize differently at the `status` slot for every window shape the two queries can take.
@@ -714,21 +677,13 @@ describe('SpecialMoneyPanel', () => {
       }
     });
 
-    // The real guard: exercises SpecialMoneyPanel's ACTUAL `filters` useMemo and the ACTUAL
-    // reviewQueueQuery side by side, as a CEO, under "ทั้งหมด" + no status -- the one combination
-    // where their date windows become identical. If the two queries' cache keys ever collided
-    // (e.g. from the "cleanup" the comment on `filters` warns against), react-query would treat
-    // them as the SAME query: the history table's switch to "ทั้งหมด" would just reuse the review
-    // queue's already-cached result instead of firing its own fetch, so the THIRD
-    // api.specialMoney.list call below would never happen.
-    // Inspects the QueryClient's cache directly rather than counting api.specialMoney.list calls:
-    // an earlier version of this test counted fetches instead, and a mutation-check proved it
-    // vacuous -- react-query's own refetch-on-mount/staleness behaviour means a THIRD fetch fires
-    // when switching to "ทั้งหมด" whether or not the two keys actually collide (switching away
-    // from the THIS_YEAR window is by itself enough to trigger it), so call-counting alone cannot
-    // tell separate-but-both-fetched apart from collided-and-both-fetched. Counting distinct cache
-    // ENTRIES can: a collision merges two observers onto one Query object, so the cache holds one
-    // fewer ['specialMoney','list',...] entry than it should.
+    // The real guard: exercises SpecialMoneyPanel's ACTUAL `filters` useMemo and reviewQueueQuery
+    // side by side, as a CEO, under "ทั้งหมด" + no status (the one combination where their windows
+    // are identical). A cache-key collision would make react-query treat them as one query.
+    // Inspects the QueryClient's cache directly: counting api.specialMoney.list calls is vacuous,
+    // since a third fetch fires on switching to "ทั้งหมด" whether or not the keys collide. A
+    // collision merges two observers onto one Query, leaving one fewer ['specialMoney','list',...]
+    // entry.
     it('keeps the history table\'s "ทั้งหมด" query and the review queue as separate cache entries (real component wiring)', async () => {
       api.specialMoney.list.mockResolvedValue({ requests: [] });
       const { queryClient } = renderPanel(ceoUser);
@@ -761,8 +716,8 @@ describe('SpecialMoneyPanel', () => {
     });
 
     it('offers a ฝ่าย manager no approve button, even for their own division', async () => {
-      // The tempting wrong answer: overtime DOES let a ฝ่าย manager approve, and this panel used
-      // to as well. Welfare has no manager stage at all, so the button must not appear.
+      // The tempting wrong answer: overtime lets a ฝ่าย manager approve, but welfare has no manager
+      // stage, so the button must not appear.
       renderPanel(managerUser);
 
       await screen.findByText(/พนักงาน ทดสอบ ·/);
@@ -786,9 +741,8 @@ describe('SpecialMoneyPanel', () => {
       renderPanel(ceoUser);
 
       const approveButton = await screen.findByRole('button', { name: 'CEO อนุมัติ' });
-      // The same warning also appears on the request's row in the "My requests" history table
-      // below (unchanged pre-existing behaviour there), so this scopes to the review queue card
-      // that actually holds the approve button rather than asserting on the page as a whole.
+      // The same warning also appears on the request's row in the "My requests" history table, so
+      // this scopes to the review queue card that holds the approve button.
       const reviewCard = approveButton.closest('.py-3\\.5');
       expect(within(reviewCard).getByText(/ยังไม่ได้แนบเอกสาร — อนุมัติไม่ได้/)).not.toBeNull();
       expect(approveButton.disabled).toBe(true);
@@ -805,23 +759,20 @@ describe('SpecialMoneyPanel', () => {
       expect(approveButton.disabled).toBe(false);
     });
 
-    // HIGH 3 (browser/API-contract fix): the real backend defaults `from`/`to` to the CURRENT
-    // CALENDAR MONTH when a list() call omits them (SpecialMoneyService.list():66-68). A bare
-    // `list({status})` call for the review queue would therefore silently lose any pending
-    // request whose event_date falls outside "this month" once it hit the real service -- this
-    // mock can't reproduce that filtering itself (mockApi's list() never filters by from/to
-    // unless the caller passes them), so the meaningful assertion here is that the FRONTEND now
-    // actually sends a wide date window for the review queue, wide enough to cover an event date
-    // years in the past (aid claims carry no filing deadline).
+    // The real backend defaults `from`/`to` to the CURRENT CALENDAR MONTH when list() omits them
+    // (SpecialMoneyService.list():66-68), which would silently lose a pending request whose
+    // event_date is outside it. This mock can't reproduce that filtering, so the assertion is that
+    // the FRONTEND sends a wide date window for the review queue, wide enough to cover an event
+    // date years in the past (aid claims carry no filing deadline).
     it('fetches the CEO review queue with an explicit wide date window, not the bare call the backend would default to "this month"', async () => {
       const oldEventRequest = submittedRequest({ id: 4010, eventDate: '2020-01-15', requestType: 'AID_FUNERAL' });
       api.specialMoney.list.mockResolvedValue({ requests: [oldEventRequest] });
       renderPanel(ceoUser);
 
       await screen.findByRole('button', { name: 'CEO อนุมัติ' });
-      // The history table below now ALSO sends an explicit `from`/`to` (its own period selector,
-      // defaulting to the current year) -- distinguish the review queue's call by the absence of a
-      // `status` key, which only the history table's query ever sends (even as `undefined`).
+      // The history table ALSO sends an explicit `from`/`to` (its period selector, defaulting to
+      // the current year): distinguish the review queue's call by the absence of a `status` key,
+      // which only the history table's query sends (even as `undefined`).
       const wideWindowCall = api.specialMoney.list.mock.calls.find(([params]) => params && params.from && !('status' in params));
       expect(wideWindowCall).toBeTruthy();
       const [{ from, to }] = wideWindowCall;
@@ -830,11 +781,10 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // The dead-end SpecialMoneyApproveDeadEndIntegrationTest.java pins server-side: the CEO's only
-  // in-UI approve action used to send an empty review (approve(id, {})), which 400s whenever the
-  // amount exceeds the policy cap and leaves the row stuck SUBMITTED forever. This dialog is the
-  // fix -- it exposes both API-only escape routes the IT demonstrates (a lower approvedAmount, or
-  // a capOverrideReason) to the CEO.
+  // The dead end SpecialMoneyApproveDeadEndIntegrationTest.java pins server-side: an empty review
+  // (approve(id, {})) 400s whenever the amount exceeds the policy cap, leaving the row stuck
+  // SUBMITTED. This dialog exposes both escape routes (a lower approvedAmount, or a
+  // capOverrideReason) to the CEO.
   describe('CEO approve dialog', () => {
     beforeEach(() => {
       // attachmentCount: 1 -- AID_WEDDING is evidenceRequired (see TYPES fixture above), and the
@@ -946,7 +896,7 @@ describe('SpecialMoneyPanel', () => {
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันการอนุมัติ' })).toBeNull());
     });
 
-    // Opus review: a CEO who cancels one row's dialog and opens a DIFFERENT row's must not see the
+    // A CEO who cancels one row's dialog and opens a DIFFERENT row's must not see the
     // first row's half-typed amount or reason leak into the second.
     it('resets to the new request\'s own amount, with an empty reason, when reopened for a different row', async () => {
       const requestA = submittedRequest({ id: 4001, requestedAmount: 5000, attachmentCount: 1 });
@@ -981,9 +931,8 @@ describe('SpecialMoneyPanel', () => {
       expect(api.specialMoney.approve).toHaveBeenCalledWith(4002, { approvedAmount: 800, capOverrideReason: null });
     });
 
-    // Opus review: `busy` (approveMutation.isPending) only flips a render AFTER the first click's
-    // mutateAsync call has actually started, so a burst of clicks landing before that re-render
-    // previously each fired their own approve() call.
+    // `busy` (approveMutation.isPending) only flips a render AFTER the first click's mutateAsync
+    // has started, so a burst of clicks before that re-render would each fire their own approve().
     it('sends exactly one approve call for a rapid burst of clicks on Confirm', async () => {
       const dialog = await openApproveDialog();
       const confirmButton = within(dialog).getByRole('button', { name: 'อนุมัติ' });
@@ -1046,7 +995,7 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // MEDIUM 4/5: fields the evaluator actually reads that the form previously had no way to set.
+  // Fields the evaluator actually reads that the form previously had no way to set.
   describe('uniform form fields the evaluator reads', () => {
     it('UNIFORM_PREPROBATION_KIT: sends needsBackSupport as a STRING, and only that key', async () => {
       renderPanel();
@@ -1085,7 +1034,7 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // MEDIUM 6: submit errors arrive as one 400 string with violations joined by "; ".
+  // Submit errors arrive as one 400 string with violations joined by "; ".
   it('splits a joined submit error into a rendered list instead of one run-on sentence', async () => {
     api.specialMoney.create.mockRejectedValueOnce(
       new Error('พนักงานยังไม่พ้นทดลองงาน; ต้องแนบเอกสารหลักฐาน; จำนวนเงินเกินเพดาน'),
@@ -1128,9 +1077,9 @@ describe('SpecialMoneyPanel', () => {
     expect(screen.queryByText('ต้องแนบเอกสารหลักฐาน')).toBeNull();
   });
 
-  // The submit button fires TWO requests -- POST /special-money, then POST /{id}/attachments --
-  // and they can fail independently. Production 2026-08-31: rows 1 and 2 were filed, audited and
-  // notified while the upload answered 500, and the panel reported "ส่งคำขอไม่สำเร็จ" for both.
+  // The submit button fires TWO requests (POST /special-money, then POST /{id}/attachments) that
+  // can fail independently: when the upload fails (500) the row is already filed, audited and
+  // notified, so the panel must not report "ส่งคำขอไม่สำเร็จ" for it.
   describe('a request that is filed but whose evidence upload fails', () => {
     function evidence() {
       return new File(['x'], 'marriage-cert.pdf', { type: 'application/pdf' });
@@ -1153,8 +1102,8 @@ describe('SpecialMoneyPanel', () => {
 
       expect(await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/)).not.toBeNull();
       expect(screen.getByText(/แต่แนบเอกสารหลักฐานไม่สำเร็จ: เกิดข้อผิดพลาดภายในระบบ/)).not.toBeNull();
-      // The lie this removes: the upload's 500 used to render under "ส่งคำขอไม่สำเร็จ:", telling
-      // the employee nothing had been filed while the row existed.
+      // The upload's 500 must not render under "ส่งคำขอไม่สำเร็จ:", which would tell the employee
+      // nothing had been filed while the row existed.
       expect(screen.queryByText('ส่งคำขอไม่สำเร็จ:')).toBeNull();
       expect(showToast.mock.calls.some(([kind]) => kind === 'error')).toBe(false);
     });

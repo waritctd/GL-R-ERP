@@ -20,53 +20,37 @@ import { selectCurrentDeclaration, selectResumableDeclaration, taxAllowanceStatu
 const EDITABLE_STATUS_KEYS = new Set(['NONE', 'REJECTED', 'EXPIRED']);
 
 /**
- * Already confirmed — and revisable, which this screen used to deny.
+ * Already confirmed, and revisable. An approved or applied declaration needs an action
+ * here, or an employee whose circumstances changed (a child born, a policy lapsed, an amount
+ * imported wrong from the legacy report) could not correct their filing or even get a copy.
  *
- * <p>An approved or applied declaration had NO action at all here: the status region rendered a
- * badge and nothing else, so an employee whose circumstances changed (a child born, a policy
- * lapsed, an amount imported wrong from the legacy report) had no way to correct their own filing
- * and no way to even get a copy of it. The comment this replaces asserted that such a declaration
- * "is superseded through HR's flow, not a silent employee edit" — that is not what the backend
- * does, and it never was:
- *
- * <ul>
- *   <li>{@code TaxAllowanceDeclarationService#submitOwn} refuses ONLY when a PENDING row already
- *       exists ({@code repository.existsPending}). An APPROVED or APPLIED row is no obstacle.</li>
- *   <li>{@code #approve} then calls {@code repository.supersedeApproved(...)} before approving, and
- *       its javadoc cites decision #7 verbatim: <i>"a new submission supersedes the previous once
- *       approved"</i>. Superseding an approved declaration with a newer one is the DESIGNED
- *       lifecycle, which is why {@code SUPERSEDED} is a status at all.</li>
- * </ul>
- *
- * <p>So the server has always accepted this and only the client refused. Nothing about the
- * revision is destructive either: the current declaration keeps applying to payroll until HR
- * approves the replacement, because `supersedeApproved` runs inside `approve`, not at submit.
+ * <p>The server has always accepted a revision: {@code TaxAllowanceDeclarationService#submitOwn}
+ * refuses ONLY when a PENDING row exists ({@code repository.existsPending}), and {@code #approve}
+ * calls {@code repository.supersedeApproved(...)} before approving (decision #7: <i>"a new
+ * submission supersedes the previous once approved"</i>), which is why {@code SUPERSEDED} is a
+ * status at all. A revision is not destructive: the current declaration keeps applying to payroll
+ * until HR approves the replacement, because `supersedeApproved` runs inside `approve`, not at
+ * submit.
  */
 const REVISABLE_STATUS_KEYS = new Set(['APPROVED_UNAPPLIED', 'APPLIED']);
 
-// `?view=` is gone. The screen is now one page of collapsibles in the government form's own order
-// (owner ruling 2026-08-08), so there are no sub-screens left to address by URL — see
-// TaxAllowanceForm's javadoc for why the wizard went.
+// `?view=` is gone: the screen is one page of collapsibles in the government form's own order, so
+// there are no sub-screens left to address by URL (see TaxAllowanceForm's javadoc).
 
-// Status-specific explanation line for the unified status region below (#tax-allowance-ia-hub-review
-// collapses four independent conditional banners into one — see the region's own comment). No entry
-// for APPROVED_UNAPPLIED/APPLIED: `taxAllowanceStatusInfo`'s own badge label is already a complete
-// sentence for those two ("อนุมัติแล้ว — ยังไม่ใช้กับเงินเดือน" / "ใช้กับเงินเดือนแล้ว ทั้งปีภาษี"),
-// so a second line here would just echo the badge back at the reader.
+// Status-specific explanation line for the unified status region below. No entry for
+// APPROVED_UNAPPLIED/APPLIED: `taxAllowanceStatusInfo`'s badge label is already a complete
+// sentence for those two, so a second line would just echo it.
 //
-// Each line must say something the BADGE BESIDE IT does not. NONE's badge already reads
-// "ยังไม่ได้ยื่น" and PENDING's already reads "รอ HR ตรวจสอบ", and both explanations used to open by
-// repeating exactly that back — so the region's two halves said one thing twice and the reader got
-// no more from the sentence than from the chip. These now carry only the next action.
+// Each line must say something the BADGE BESIDE IT does not: NONE's badge already reads
+// "ยังไม่ได้ยื่น" and PENDING's "รอ HR ตรวจสอบ", so these carry only the next action.
 const STATUS_EXPLANATIONS = {
   NONE: 'กรอกแบบฟอร์มด้านล่าง สร้างไฟล์ ล.ย.01 ออกมาลงนาม แล้วแนบกลับเพื่อยื่นให้ฝ่ายบุคคล',
   PENDING: 'แก้ไขไม่ได้ระหว่างนี้ — ต้องการแก้ไขให้ยกเลิกการยื่น แล้วยื่นฉบับใหม่',
   REJECTED: 'แก้ไขแล้วยื่นใหม่ได้ทันที',
   // Points at the button, not "กรอกแบบฟอร์มด้านล่าง": unlike NONE, `editing` does NOT start true for
-  // EXPIRED (only `statusInfo.key === 'NONE'` does, see the effect below) -- every field below stays
-  // disabled until "แก้ไข / ยื่นฉบับใหม่" is actually pressed, so telling the reader to fill in a form
-  // that is not yet fillable would be its own false instruction (review fix). NONE's identical-shape
-  // copy is left alone -- there, the form genuinely is already open.
+  // EXPIRED (only `statusInfo.key === 'NONE'` does), so every field stays disabled until
+  // "แก้ไข / ยื่นฉบับใหม่" is pressed and telling the reader to fill in the form would be a false
+  // instruction. NONE's copy is fine: the form is already open there.
   EXPIRED: 'กด "แก้ไข / ยื่นฉบับใหม่" เพื่อกรอกแบบฟอร์มและยืนยันสิทธิใหม่อีกครั้ง',
 };
 
@@ -81,10 +65,8 @@ export function TaxAllowancePage({ user, showToast }) {
     [currentYear],
   );
 
-  // `year`/`view` live in the URL rather than component state (#tax-allowance-ia-hub-review), same
-  // `updateParams` idiom TaxAllowanceReviewPage.jsx's register already uses for its own filters —
-  // deliberately not a second, different pattern for the same job. Shareable, survives a reload, and
-  // gives HUB/SECTION/REVIEW navigation a real address instead of only existing in memory.
+  // `year`/`view` live in the URL (same `updateParams` idiom as TaxAllowanceReviewPage.jsx's
+  // register): shareable, survives a reload, and gives HUB/SECTION/REVIEW a real address.
   const requestedYear = Number(searchParams.get('year'));
   // An out-of-range or garbage `?year=` falls back to the current year rather than leaving the
   // <select> on a blank option that matches nothing in the list.
@@ -92,15 +74,10 @@ export function TaxAllowancePage({ user, showToast }) {
   const isCurrentYear = taxYear === currentYear;
 
 
-  // `replace` defaults to false (a real history entry, i.e. push) -- the merge/delete-empty logic
-  // itself is the TaxAllowanceReviewPage.jsx idiom, copied verbatim and left alone (review-verified
-  // correct); only whether the resulting `setSearchParams` call pushes or replaces is a per-call
-  // choice now (review fix). HUB/SECTION/REVIEW are real, URL-addressable screens once `?view=`
-  // exists at all, so navigating between them should behave like navigating between pages: Back
-  // should step back through them, not leave `/tax-allowance` entirely and drop everything typed.
-  // Year switches are the one call site that opts BACK into `replace: true` below -- a year is a
-  // filter on the same screen, not a screen of its own, matching how the register
-  // (TaxAllowanceReviewPage.jsx) already treats its own filters.
+  // `replace` defaults to false (a real history entry): HUB/SECTION/REVIEW are URL-addressable
+  // screens, so Back should step through them rather than leave `/tax-allowance` and drop
+  // everything typed. Year switches opt back into `replace: true`: a year is a filter on the same
+  // screen. The merge/delete-empty logic is TaxAllowanceReviewPage.jsx's idiom, copied verbatim.
   const updateParams = useCallback((patch, { replace = false } = {}) => {
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
@@ -130,14 +107,12 @@ export function TaxAllowancePage({ user, showToast }) {
   // never reaches the confirm button cannot reach the API either. See `handleSubmit` below.
   const [pendingSubmitValues, setPendingSubmitValues] = useState(null);
 
-  // Staged (not-yet-uploaded) evidence, keyed by TAX_ALLOWANCE_GROUPS' `key` -- the null key holds
-  // the hub's "general/uncategorized" bucket. See TaxAllowanceEvidencePanel's own javadoc for why
-  // this exists: while `editing` there is no declarationId a real upload could attach to yet (a
-  // brand-new declaration doesn't exist server-side until submit; a REJECTED/EXPIRED one being
-  // re-prepared has only an OLD, no-longer-current declarationId), so files picked mid-fill-in are
-  // held here and actually uploaded once submit succeeds and a real declarationId exists
-  // (see `flushStagedEvidence` below) -- this is the fix for "I couldn't attach a PDF while first
-  // filling in the form".
+  // Staged (not-yet-uploaded) evidence, keyed by TAX_ALLOWANCE_GROUPS' `key` (the null key holds
+  // the hub's "general/uncategorized" bucket). While `editing` there is no declarationId a real
+  // upload could attach to (a brand-new declaration doesn't exist server-side until submit; a
+  // REJECTED/EXPIRED one being re-prepared has only an OLD declarationId), so files picked
+  // mid-fill-in are held here and uploaded once submit succeeds (see `flushStagedEvidence`). See
+  // TaxAllowanceEvidencePanel's javadoc.
   const [stagedEvidence, setStagedEvidence] = useState({});
   const stagedEvidenceKey = (sectionKey) => sectionKey ?? UNCATEGORIZED_EVIDENCE_KEY;
   const hasStagedEvidence = useMemo(
@@ -162,21 +137,18 @@ export function TaxAllowancePage({ user, showToast }) {
     }));
   }
 
-  // Guards the year <select> (#tax-allowance-ia-hub-review): switching years reloads a DIFFERENT
-  // declaration underneath the same form, which resets it (TaxAllowanceForm's own
-  // `reset(defaultValues)` effect) and drops anything staged for the year being left. That used to
-  // happen silently the instant the <select> changed; a dirty form or staged files now get a confirm
-  // first, via `pendingYearChange` below.
+  // Guards the year <select>: switching years reloads a DIFFERENT declaration under the same form,
+  // which resets it (TaxAllowanceForm's `reset(defaultValues)` effect) and drops anything staged
+  // for the year being left, so a dirty form or staged files get a confirm first, via
+  // `pendingYearChange` below.
   function requestYearChange(nextYear) {
     if (nextYear === taxYear) return;
     if (formDirty || hasStagedEvidence) {
       setPendingYearChange(nextYear);
     } else {
-      // Reset back to the hub too -- a section that was open for the OLD year's declaration has no
-      // claim to still being open for a different one (the old per-form reset effect used to apply
-      // this internally; that responsibility now belongs to whoever changes the year, since the page
-      // owns `?view=`). `replace: true`, unlike a plain view change -- a year is a filter on this
-      // screen, not a screen of its own (see `updateParams`' own comment).
+      // Reset back to the hub too: a section open for the OLD year's declaration has no claim to
+      // still being open for a different one. `replace: true`, unlike a plain view change (see
+      // `updateParams`' comment).
       updateParams({ year: nextYear }, { replace: true });
     }
   }
@@ -192,13 +164,12 @@ export function TaxAllowancePage({ user, showToast }) {
   });
   const caps = capsQuery.data ?? [];
 
-  // Keeps the WHOLE envelope rather than mapping straight to `.items`: the same response now
-  // carries `headerPrefill` (owner decision #4's read half). Riding on this one query is
-  // deliberate — a second, independently-timed request would land after the form had mounted and
-  // change `defaultValues`' identity mid-typing, and TaxAllowanceForm's `reset(defaultValues)`
-  // effect would wipe whatever the employee had entered. React Query's structural sharing keeps
-  // this object's identity stable across refetches that return the same JSON, which is what stops
-  // a background refocus from doing the same thing.
+  // Keeps the WHOLE envelope rather than mapping straight to `.items`: the same response carries
+  // `headerPrefill`. Riding on this one query is deliberate: a second, independently-timed request
+  // would land after the form mounted and change `defaultValues`' identity mid-typing, and
+  // TaxAllowanceForm's `reset(defaultValues)` effect would wipe what the employee entered. React
+  // Query's structural sharing keeps this object's identity stable across refetches that return
+  // the same JSON.
   const declarationsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceDeclarationsMe(taxYear),
     queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(taxYear),
@@ -219,7 +190,7 @@ export function TaxAllowancePage({ user, showToast }) {
   // must keep showing what was filed until the employee actually asks to revise it.
   const canRevise = REVISABLE_STATUS_KEYS.has(statusInfo.key) && isCurrentYear;
 
-  // Three-way evidence mode (#tax-allowance-sections) -- see TaxAllowanceEvidencePanel's own
+  // Three-way evidence mode -- see TaxAllowanceEvidencePanel's own
   // javadoc for what each does. `editing` is never true while `current.status === 'PENDING'`
   // (PENDING is outside EDITABLE_STATUS_KEYS), so these two branches are mutually exclusive with
   // the pre-existing `canEdit={current?.status === 'PENDING'}` behaviour this generalizes.
@@ -231,8 +202,8 @@ export function TaxAllowancePage({ user, showToast }) {
     // page to editable for one paint -- live submit button, and a staged-evidence manifest of
     // zeros -- before snapping back to read-only once the real declaration lands. Deep-linking to
     // `?view=review` on a PENDING declaration is where that flash is visible, and a false `0 ไฟล์`
-    // there is exactly what the manifest's own `evidenceMode === 'staging'` gate exists to prevent
-    // (review fix). `isLoading` rather than `isPending`: a disabled query stays pending forever.
+    // there is exactly what the manifest's own `evidenceMode === 'staging'` gate exists to prevent.
+    // `isLoading` rather than `isPending`: a disabled query stays pending forever.
     if (declarationsQuery.isLoading) return;
     setEditing(statusInfo.key === 'NONE' && isCurrentYear);
     // A different declaration (or none) is now current -- any staged-but-unsent evidence belonged
@@ -241,31 +212,26 @@ export function TaxAllowancePage({ user, showToast }) {
     setStagedEvidence({});
   }, [statusInfo.key, current?.declarationId, isCurrentYear, declarationsQuery.isLoading]);
 
-  // `taxYear` is in the dep list ALONGSIDE `current`, not instead of it (review fix): when neither
-  // the old year nor the new one has a declaration, `current` is `null` before AND after the switch
-  // -- same value, so a memo keyed on `current` alone never recomputes, `defaultValues` keeps its old
-  // object identity, TaxAllowanceForm's own `reset(defaultValues)` effect (keyed on that identity)
-  // never fires, and typed-but-unsaved values silently survive into the new year -- directly
-  // contradicting the year-switch confirm dialog's own promise to discard them. Adding `taxYear`
-  // forces recomputation on every switch regardless of whether `current` actually changed value, and
-  // `defaultAllowanceValues` always returns a fresh object literal, so the identity change that
-  // `reset` needs is guaranteed either way. Safe against a render loop: `taxYear` is derived
-  // read-only from `searchParams` each render (see above) and nothing downstream of this memo ever
-  // calls `setSearchParams`, so there is no cycle back into this dependency.
+  // `taxYear` is in the dep list ALONGSIDE `current`: when neither the old year nor the new one has
+  // a declaration, `current` is `null` before AND after the switch, so a memo keyed on `current`
+  // alone never recomputes, `defaultValues` keeps its identity, TaxAllowanceForm's
+  // `reset(defaultValues)` effect never fires, and typed-but-unsaved values would survive into the
+  // new year, contradicting the year-switch confirm dialog's promise to discard them.
+  // `defaultAllowanceValues` always returns a fresh object, so adding `taxYear` guarantees the
+  // identity change `reset` needs. No render loop: `taxYear` is derived read-only from
+  // `searchParams` and nothing downstream of this memo calls `setSearchParams`.
   //
   // `resumable` (the newest WITHDRAWN declaration for this year, see selectResumableDeclaration) is
-  // a genuine input the memo body reads via `current ?? resumable` -- the fix for the defect where
-  // withdrawing a PENDING declaration wiped every value the employee had typed, contradicting the
-  // PENDING banner's own "ยกเลิกการยื่นเพื่อแก้ไข" and the withdraw dialog's "กลับมาแก้ไข" promises.
-  // This is PREFILL ONLY: `current` itself is untouched, so `statusInfo`/`canStartEdit`/`evidenceMode`
-  // below -- all keyed on `current` alone -- keep reporting ยังไม่ได้ยื่น and treating the year as
-  // unfiled exactly as before; only what the form is seeded with changes.
+  // a genuine input via `current ?? resumable`: withdrawing a PENDING declaration must not wipe
+  // what the employee typed (the PENDING banner promises "ยกเลิกการยื่นเพื่อแก้ไข" and the withdraw
+  // dialog "กลับมาแก้ไข"). This is PREFILL ONLY: `current` is untouched, so
+  // `statusInfo`/`canStartEdit`/`evidenceMode` keep reporting ยังไม่ได้ยื่น.
   //
-  // The disable is load-bearing, not noise-suppression: exhaustive-deps calls `taxYear` "unnecessary"
-  // because the memo body never reads it, which is exactly the point -- it is a cache-busting key, not
-  // an input. Taking the rule's advice and deleting it silently restores the bug described above.
+  // The disable is load-bearing, not noise-suppression: exhaustive-deps calls `taxYear`
+  // "unnecessary" because the memo body never reads it, but it is a cache-busting key. Deleting it
+  // silently restores the bug described above.
   // `headerPrefill` is gated on `headerPrefillAllowed` below, and BOTH halves of that expression
-  // are load-bearing (owner decision #4):
+  // are load-bearing:
   //
   //   - It must not reach a READ-ONLY view. A PENDING or APPROVED declaration shows what was
   //     actually filed; seeding its blank header slots from today's master record would show the
@@ -296,7 +262,7 @@ export function TaxAllowancePage({ user, showToast }) {
   );
 
   /**
-   * Owner decision #3: the signed scan gates submit.
+   * The signed scan gates submit.
    *
    * Reads the STAGED bucket, not the server's attachment list, because while `editing` there is no
    * declarationId to have uploaded against yet — the file is held client-side and flushed after
@@ -332,20 +298,16 @@ export function TaxAllowancePage({ user, showToast }) {
   });
 
   /**
-   * The employee's own copy of a declaration they have ALREADY filed — the second half of what
-   * "download my ล.ย.01" means, and the half that was missing.
-   *
-   * <p>`GET /declarations/{id}/form.pdf` and `hrApi.downloadTaxAllowanceForm` have both existed
-   * since the feature shipped and had ZERO call sites anywhere in the frontend, so a declaration
-   * became undownloadable the moment it was submitted: the only PDF button lived in the sign-off
-   * panel, which read-only does not render. An employee could generate the sheet they were about to
-   * sign and never retrieve the one they actually filed.
+   * The employee's own copy of a declaration they have ALREADY filed. `GET /declarations/{id}/form.pdf`
+   * and `hrApi.downloadTaxAllowanceForm` have no other call site: the only other PDF button lives in
+   * the sign-off panel, which read-only does not render, so a filed declaration would be
+   * undownloadable.
    *
    * <p>Distinct from `pdfMutation` above in what it renders: this asks the server for the SAVED
    * row, so HR's ข้อ 13 figure and the original submission date come out, not today's draft.
    * `TaxAllowanceDeclarationService#renderLorYor01` gates it with `requireOwnerOrHr`, so the owning
-   * employee may pull their own at any status — verified against the Java service, not the mock,
-   * whose own handler is an honest "not supported in mock mode" stub.
+   * employee may pull their own at any status (verified against the Java service; the mock's
+   * handler is a "not supported in mock mode" stub).
    */
   const downloadFiledFormMutation = useMutation({
     mutationFn: (declarationId) => api.payroll.downloadTaxAllowanceForm(declarationId),
@@ -416,10 +378,9 @@ export function TaxAllowancePage({ user, showToast }) {
     }
   }
 
-  // The endpoint has been live since issue #387 (DELETE /declarations/{id}) but nothing called it,
-  // so a PENDING declaration was a dead end: read-only here, and only HR rejecting it could
-  // release the employee. Ownership is enforced server-side — a foreign id 404s rather than 403s
-  // (TaxAllowanceDeclarationService#withdrawOwn), covered by
+  // DELETE /declarations/{id}: without it a PENDING declaration is a dead end (read-only here, and
+  // only HR rejecting it releases the employee). Ownership is enforced server-side: a foreign id
+  // 404s rather than 403s (TaxAllowanceDeclarationService#withdrawOwn), covered by
   // TaxAllowanceDeclarationScopeIntegrationTest#employeeCannotWithdrawAnotherEmployeesDeclaration...
   const withdrawMutation = useMutation({
     mutationFn: (id) => api.payroll.withdrawMyTaxAllowanceDeclaration(id),
@@ -436,26 +397,15 @@ export function TaxAllowancePage({ user, showToast }) {
   });
 
   /**
-   * The submit event does NOT file anything. It opens the confirmation (owner ruling 2026-08-09).
+   * The submit event does NOT file anything: it opens the confirmation. Once the signed scan is
+   * staged the submit button is enabled, and HTML's implicit submission gives Enter in any of the
+   * form's text inputs a real `event.submitter`, so `SafeForm`'s two guards both pass and Enter
+   * would file the declaration outright. The guard is not Enter-specific: putting the dialog
+   * between the submit EVENT and the mutation covers every trigger (Enter, click, anything added
+   * later). It also matches this page's other confirms (withdrawing, a year switch that discards a
+   * draft); filing is the most consequential action here and cannot be undone without HR.
    *
-   * <p>The gap this closes was measured in a real browser, not theorised: once the signed scan is
-   * staged the submit button is enabled, and HTML's implicit submission then gives Enter in any of
-   * the form's ~dozen text inputs a real `event.submitter`. `SafeForm`'s two guards both pass in
-   * that state by design — a submitter exists, and `canSubmit` is true — so Enter filed the
-   * declaration outright, with no confirmation, from a field the employee was still editing.
-   *
-   * The ruling was explicitly NOT to add an Enter-specific guard. The hazard is "files with no
-   * confirmation", and an Enter-only fix would leave a stray click on the enabled button exactly as
-   * exposed. Putting the dialog between the submit EVENT and the mutation covers every trigger —
-   * Enter, click, and anything added later — because they all arrive through this one function.
-   *
-   * It also closes an inconsistency rather than inventing a pattern: this page already confirms
-   * before withdrawing a declaration and before a year switch that would discard a draft. Filing —
-   * the most consequential action on the screen, and the only one that cannot be undone without
-   * HR — was the one action that did not ask.
-   *
-   * `SafeForm`'s own guards are deliberately untouched. They still cover the disabled-submit state,
-   * which is where the two historical incidents actually happened.
+   * `SafeForm`'s own guards are untouched; they still cover the disabled-submit state.
    */
   function handleSubmit(values) {
     setPendingSubmitValues(values);
@@ -463,18 +413,15 @@ export function TaxAllowancePage({ user, showToast }) {
 
   function confirmSubmit() {
     if (!pendingSubmitValues) return;
-    // No `employeeId` field, ever — the server resolves the caller from the session (decision
-    // in issue #387's endpoint table: "no employeeId field exists on the body").
+    // No `employeeId` field, ever: the server resolves the caller from the session.
     const body = buildAllowanceSubmitBody(pendingSubmitValues, { taxYear });
     submitMutation.mutate(body);
   }
 
-  // ONE status region replacing four independent conditional banners that used to live directly in
-  // the JSX below (#tax-allowance-ia-hub-review): the status badge, a plain-language explanation of
-  // what that status means right now, and the single next action available. "Single" is not just a
-  // design choice -- withdrawal and edit are mutually exclusive by construction (PENDING is never in
-  // EDITABLE_STATUS_KEYS, so `canStartEdit` is false exactly when the withdraw action applies), so
-  // there is never a second action competing for the same slot.
+  // ONE status region (four conditional banners folded into one): the status badge, a plain-language
+  // explanation of what that status means now, and the single next action. "Single" holds by
+  // construction: withdrawal and edit are mutually exclusive (PENDING is never in
+  // EDITABLE_STATUS_KEYS, so `canStartEdit` is false exactly when the withdraw action applies).
   const statusExplanation = !isCurrentYear
     ? `กำลังดูข้อมูลย้อนหลังของปีภาษี ${taxYear} — ยื่นหรือแก้ไขได้เฉพาะปีภาษี ${currentYear}`
     : STATUS_EXPLANATIONS[statusInfo.key] ?? null;
@@ -484,11 +431,10 @@ export function TaxAllowancePage({ user, showToast }) {
   const submitLabel = statusInfo.key === 'NONE' ? 'ยื่นแบบแจ้ง' : 'ยื่นฉบับใหม่';
 
   /**
-   * Leaving a revision without filing it. Not merely nice-to-have: "ยื่นฉบับแก้ไข" is otherwise a
-   * one-way door out of the view of a declaration that is currently applying to the employee's
-   * payroll, with no way back except a page reload. Nothing server-side has changed at this point —
-   * the filed declaration is untouched until HR approves a replacement — so this only puts the
-   * screen back. It confirms first when there is unsaved work, the same guard the year switch uses.
+   * Leaving a revision without filing it: "ยื่นฉบับแก้ไข" would otherwise be a one-way door out of
+   * the view of a declaration that is applying to payroll, with no way back except a reload.
+   * Nothing server-side has changed at this point, so this only puts the screen back, confirming
+   * first when there is unsaved work (the same guard the year switch uses).
    */
   function requestCancelRevision() {
     if (formDirty || hasStagedEvidence) setCancellingRevision(true);
@@ -555,17 +501,16 @@ export function TaxAllowancePage({ user, showToast }) {
             </Button>
           ) : null}
         </div>
-        {/* The rejection reason folds into this same region as an extra line, rather than the old
-            separate bordered <Panel> of its own -- one status region, not a status region plus a
-            second panel that only sometimes appears beside it. */}
+        {/* The rejection reason folds into this same region as an extra line: one status region,
+            not a status region plus a second panel that only sometimes appears. */}
         {statusInfo.key === 'REJECTED' && statusInfo.note ? (
           <p className="m-0 text-sm font-bold text-danger">เหตุผลที่ปฏิเสธ: {statusInfo.note}</p>
         ) : null}
       </div>
 
-      {/* No `title` here any more -- it used to repeat "ค่าลดหย่อนภาษี..." from the PageHeader above
-          in slightly different words, then TaxAllowanceForm's own HUB/SECTION/REVIEW heading
-          repeated it a third time. The Panel itself stays: the form still earns a bordered card. */}
+      {/* No `title` here: it would repeat the PageHeader above, and TaxAllowanceForm's own
+          HUB/SECTION/REVIEW heading would repeat it a third time. The Panel stays: the form
+          still earns a bordered card. */}
       <Panel>
         <TaxAllowanceForm
           caps={caps}
@@ -593,10 +538,9 @@ export function TaxAllowancePage({ user, showToast }) {
         />
       </Panel>
 
-      {/* Filing is the one action on this page that HR has to undo for you. It now asks first,
-          exactly as withdrawing and discarding a draft already did. The copy states the two
-          consequences plainly rather than asking "are you sure": the declaration goes to HR, and
-          the form locks until it is withdrawn. */}
+      {/* Filing is the one action on this page that HR has to undo for you, so it asks first. The
+          copy states the two consequences plainly rather than asking "are you sure": the
+          declaration goes to HR, and the form locks until it is withdrawn. */}
       <ConfirmDialog
         open={pendingSubmitValues != null}
         title={canRevise ? 'ยื่นแบบแจ้ง ล.ย.01 ฉบับแก้ไข' : 'ยื่นแบบแจ้ง ล.ย.01'}

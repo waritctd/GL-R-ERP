@@ -12,12 +12,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
+import th.co.glr.hr.notification.DealNoticeText;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
- * The STORED ใบแจ้งหนี้ส่วนที่เหลือ (GLA-99 step 2, {@code sales.remaining_invoice}) —
+ * The STORED ใบแจ้งหนี้ส่วนที่เหลือ ({@code sales.remaining_invoice}) —
  * DRAFT → ISSUED → SUPERSEDED, minted on the shared {@code sales.document_sequence} (doc_type
  * {@code AR_GLR}, format {@code GLR<yy><5-digit seq>}, versioned {@code -<n>} suffix).
  *
@@ -31,7 +34,7 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * number over it (issue), then renders an already-issued document straight from its own frozen
  * snapshot ({@link #toRenderable}) rather than ever recomputing it live.
  *
- * <p><b>Authorisation (owner ruling 2026-09-20) is likewise not reinvented here</b> —
+ * <p><b>Authorisation is likewise not reinvented here</b> —
  * create/update/issue/revise/delete all go through {@link
  * DepositNoticeService#requireDepositNoticeIssueGate}, EXACTLY the predicate {@link
  * DepositNoticeService#issue} itself uses to gate issuing the sibling deposit-notice document
@@ -48,13 +51,15 @@ public class RemainingInvoiceService {
     private final DepositNoticeService depositNoticeService;
     private final TicketRepository tickets;
     private final RemainingInvoicePdfRenderer renderer;
+    private final NotificationRepository notifications;
 
     public RemainingInvoiceService(RemainingInvoiceRepository stored, DepositNoticeService depositNoticeService,
-            TicketRepository tickets, RemainingInvoicePdfRenderer renderer) {
+            TicketRepository tickets, RemainingInvoicePdfRenderer renderer, NotificationRepository notifications) {
         this.stored = stored;
         this.depositNoticeService = depositNoticeService;
         this.tickets = tickets;
         this.renderer = renderer;
+        this.notifications = notifications;
     }
 
     // ── Reads (viewer gate) ──────────────────────────────────────────────────────────────────
@@ -100,11 +105,10 @@ public class RemainingInvoiceService {
      * newest qualifying quotation, exactly as the stateless preview does) into a new DRAFT row.
      * Refuses (409) whatever the stateless preview would refuse — no qualifying source, a negative
      * net, over item/note capacity — and refuses (409) a second live (DRAFT or ISSUED) row on this
-     * DEAL up front, as a clear message rather than a raw constraint violation. P1/P2 (Opus
-     * review, GLA-99 step 2 review-round-2, 2026-09-20): that refusal is now also a REAL database
-     * invariant (V188's {@code ux_remaining_invoice_ticket_draft}/{@code _issued}, one row of each
-     * status per {@code ticket_id} — not per chain), so a race that slips past the checks below
-     * still cannot leave two live rows; {@code insertDraft}'s own {@link
+     * DEAL up front, as a clear message rather than a raw constraint violation. That refusal is
+     * also a REAL database invariant (V188's {@code ux_remaining_invoice_ticket_draft}/{@code
+     * _issued}, one row of each status per {@code ticket_id} — not per chain), so a race that slips
+     * past the checks below still cannot leave two live rows; {@code insertDraft}'s own {@link
      * DataIntegrityViolationException} is caught and mapped to the same 409 {@link #revise} already
      * maps its own race to, rather than surfacing an unmapped 500. */
     @Transactional
@@ -135,13 +139,12 @@ public class RemainingInvoiceService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้มีใบแจ้งหนี้ส่วนที่เหลือ (ร่างหรือออกแล้ว) สำหรับใบเสนอราคานี้อยู่แล้ว");
         }
-        // O2 (owner ruling 2026-09-20): ONE live remaining invoice per DEAL, not per chain — a
-        // DRAFT for a DIFFERENT quotation chain is also refused, even though issuing it would be
-        // legal (issue() supersedes any other ISSUED sibling regardless of chain, see below).
-        // Two unresolved DRAFTS on the same deal at once is what this blocks; an ISSUED sibling of
-        // a different chain is fine to draft against (that IS the "new chain replaces the old
-        // one" flow O2 describes) — sameChainLive above already refuses re-drafting the SAME
-        // chain's own ISSUED/DRAFT row.
+        // ONE live remaining invoice per DEAL, not per chain: a DRAFT for a DIFFERENT quotation
+        // chain is also refused, even though issuing it would be legal (issue() supersedes any
+        // other ISSUED sibling regardless of chain, see below). What this blocks is two unresolved
+        // DRAFTS on the same deal at once; an ISSUED sibling of a different chain is fine to draft
+        // against (that IS the "new chain replaces the old one" flow) -- sameChainLive above already
+        // refuses re-drafting the SAME chain's own ISSUED/DRAFT row.
         boolean anotherDraftLive = existingForTicket.stream()
             .anyMatch(d -> "DRAFT".equals(d.status()) && !Objects.equals(d.customerQuotationId(), quotationId));
         if (anotherDraftLive) {
@@ -163,12 +166,11 @@ public class RemainingInvoiceService {
             ? req.depositReference() : resolved.defaultDepositReference();
         LocalDate docDate = req != null && req.docDate() != null ? req.docDate() : LocalDate.now(BANGKOK);
 
-        // P2 (Opus review, GLA-99 step 2 review-round-2): this is the SAME SELECT-then-INSERT shape
-        // #revise already documents a race for — the two checks above (sameChainLive/
-        // anotherDraftLive) can both read "clear" before either of two concurrent createDraft calls
-        // commits, and the SECOND insertDraft then trips one of V188's own partial unique indexes
-        // (ux_remaining_invoice_ticket_draft, now per-DEAL since P1) as a raw Postgres unique
-        // violation. Map it to the same 409 #revise's own race maps to, never an unmapped 500.
+        // This is the same SELECT-then-INSERT shape #revise documents a race for: the two checks
+        // above (sameChainLive/anotherDraftLive) can both read "clear" before either of two
+        // concurrent createDraft calls commits, and the SECOND insertDraft then trips one of V188's
+        // partial unique indexes (ux_remaining_invoice_ticket_draft, per DEAL) as a raw Postgres
+        // unique violation. Map it to the same 409 #revise's own race maps to, never an unmapped 500.
         long id;
         try {
             id = stored.insertDraft(ticketId, quotationId, resolved.matchedDepositNoticeId(),
@@ -229,23 +231,22 @@ public class RemainingInvoiceService {
      * numbering: this document keeps ONE base_number across every revision (only the version
      * suffix moves), where those two mint an entirely new number on every issue.
      *
-     * <p><b>O3 (owner ruling 2026-09-20):</b> before freezing, this method RE-SNAPSHOTS
-     * items/deduction/customer/money from the latest ISSUED deposit notice (+ this draft's own
-     * already-chosen accepted quotation — never re-selects a different chain, same discipline
-     * {@link #updateDraft} already follows) through the exact same {@code
-     * resolveRemainingInvoiceSnapshot} computation createDraft/updateDraft use — a draft that has
-     * gone stale since it was created/last edited (the source deposit notice was re-issued at a
-     * different amount, say) is never issued with its own outdated numbers. The negative-net/
-     * capacity refusals this resolution can produce apply HERE, at issue, exactly as they do at
-     * create/update time. Only the dialog fields the caller already typed (reference/
+     * <p>Before freezing, this method RE-SNAPSHOTS items/deduction/customer/money from the latest
+     * ISSUED deposit notice (+ this draft's own already-chosen accepted quotation — never
+     * re-selects a different chain, same discipline {@link #updateDraft} follows) through the exact
+     * same {@code resolveRemainingInvoiceSnapshot} computation createDraft/updateDraft use — a
+     * draft that has gone stale since it was created/last edited (the source deposit notice was
+     * re-issued at a different amount, say) is never issued with its own outdated numbers. The
+     * negative-net/capacity refusals this resolution can produce apply HERE, at issue, exactly as
+     * they do at create/update time. Only the dialog fields the caller already typed (reference/
      * depositReference/docDate/notes) are preserved verbatim — those are not recomputed.
      *
-     * <p><b>O2 (owner ruling 2026-09-20):</b> ONE live remaining invoice per DEAL — issuing
-     * supersedes EVERY other currently-ISSUED remaining invoice on this ticket, not merely this
-     * chain's own predecessor (which only {@link RemainingInvoiceRepository#lockIssuedPredecessor}
-     * — used for NUMBERING, i.e. "is this a revision of the SAME chain" — can see). A sibling
-     * chain's own ISSUED row is superseded even though it shares no {@code base_number} with this
-     * one; the superseded row is untouched otherwise and stays downloadable. */
+     * <p>ONE live remaining invoice per DEAL: issuing supersedes EVERY other currently-ISSUED
+     * remaining invoice on this ticket, not merely this chain's own predecessor (which only {@link
+     * RemainingInvoiceRepository#lockIssuedPredecessor} — used for NUMBERING, i.e. "is this a
+     * revision of the SAME chain" — can see). A sibling chain's own ISSUED row is superseded even
+     * though it shares no {@code base_number} with this one; the superseded row is untouched
+     * otherwise and stays downloadable. */
     @Transactional
     public RemainingInvoiceDocumentDto issue(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto draft = requireDraft(id);
@@ -253,7 +254,7 @@ public class RemainingInvoiceService {
         TicketSummaryDto s = requireTicketSummary(draft.ticketId());
         depositNoticeService.requireActiveLifecycle(s);
 
-        // O3: refresh the snapshot from the current live state before freezing anything.
+        // Refresh the snapshot from the current live state before freezing anything.
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
             draft.ticketId(), draft.customerQuotationId(), actor);
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
@@ -284,7 +285,7 @@ public class RemainingInvoiceService {
         // Number is minted/carried INSIDE this transaction — same "a refused issue rolls the
         // number back, never wastes it" property DepositNoticeRepository#nextDocNumber documents.
         // lockIssuedPredecessor is scoped to THIS chain (same customer_quotation_id) — it answers
-        // "is this a revision", not "is there any other live sibling" (that is O2's separate
+        // "is this a revision", not "is there any other live sibling" (that is the separate
         // supersede-everyone-else pass below).
         Optional<RemainingInvoiceRepository.PredecessorNumber> predecessor =
             stored.lockIssuedPredecessor(draft.ticketId(), draft.customerQuotationId());
@@ -299,7 +300,7 @@ public class RemainingInvoiceService {
         }
         String docNumber = baseNumber + "-" + version;
 
-        // O2: supersede EVERY other currently-ISSUED remaining invoice on this ticket, whatever
+        // Supersede EVERY other currently-ISSUED remaining invoice on this ticket, whatever
         // chain it belongs to — not just this chain's own predecessor. Done BEFORE this row's own
         // compare-and-set (same forced ordering V154's own Javadoc explains at length for the
         // same-chain case: two rows must never both read ISSUED, not even for the instant between
@@ -319,7 +320,16 @@ public class RemainingInvoiceService {
         tickets.addEvent(draft.ticketId(), actor.id(), actor.name(), TicketEventKind.DOCUMENT_ISSUED,
             s.status(), s.status(), "ใบแจ้งหนี้ส่วนที่เหลือ " + docNumber + " ออกแล้ว");
 
-        return requireStored(id);
+        RemainingInvoiceDocumentDto issued = requireStored(id);
+        // Account collects the balance against this invoice; an EN invoice has no VAT to mention.
+        boolean noVat = issued.vatAmount() != null && issued.vatAmount().signum() == 0;
+        notifications.notifyByRoleAtLink("account", TicketEventKind.REMAINING_INVOICE_ISSUED,
+            actor.name() + " ออกใบแจ้งหนี้ " + docNumber + (version > 1 ? " (ฉบับแก้ไข)" : "") + " แล้ว\n"
+                + DealNoticeText.dealLabel(s.code(), s.customerName()) + " · ยอดชำระรวม "
+                + (noVat ? "" : "VAT ") + ThaiText.money(issued.grandTotal()) + " บาท"
+                + "\nสิ่งที่ต้องทำต่อ: ตรวจรับเงินโอนจากลูกค้า แล้วบันทึกรับชำระในระบบ",
+            "/finance/deals/" + draft.ticketId());
+        return issued;
     }
 
     /** Prepares a correction: a new DRAFT copying the ISSUED document's own body/items VERBATIM
@@ -327,12 +337,11 @@ public class RemainingInvoiceService {
      * before re-issuing). The form being corrected STAYS ISSUED until the replacement is actually
      * issued — see {@link #issue}.
      *
-     * <p><b>P3 (Opus review, GLA-99 step 2 review-round-2, 2026-09-20):</b> refuses (409) a live
-     * DRAFT for a DIFFERENT quotation chain on this same deal too, not only a same-chain one —
-     * the identical cross-chain refusal {@link #createDraft}'s own {@code anotherDraftLive} check
-     * applies, now enforceable as a real DB invariant since P1 scoped
-     * {@code ux_remaining_invoice_ticket_draft} down to one DRAFT per {@code ticket_id}, not per
-     * (ticket, quotation). Without this, revise() could insert a second DRAFT belonging to a
+     * <p>Refuses (409) a live DRAFT for a DIFFERENT quotation chain on this same deal too, not only
+     * a same-chain one — the identical cross-chain refusal {@link #createDraft}'s own {@code
+     * anotherDraftLive} check applies, enforceable as a real DB invariant because
+     * {@code ux_remaining_invoice_ticket_draft} allows one DRAFT per {@code ticket_id}, not per
+     * (ticket, quotation). Without it, revise() could insert a second DRAFT belonging to a
      * different chain than any existing one and immediately trip that index as an unmapped
      * constraint violation instead of the clear 409 below. */
     @Transactional
@@ -349,8 +358,8 @@ public class RemainingInvoiceService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีร่างฉบับแก้ไขของใบแจ้งหนี้ส่วนที่เหลือนี้อยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
         }
-        // P3: cross-chain DRAFT refusal, mirroring createDraft's own anotherDraftLive check — O2 is
-        // ONE live remaining invoice per DEAL, not per chain.
+        // Cross-chain DRAFT refusal, mirroring createDraft's own anotherDraftLive check: ONE live
+        // remaining invoice per DEAL, not per chain.
         boolean anotherDraftLive = existingForTicket.stream()
             .anyMatch(d -> "DRAFT".equals(d.status()) && !Objects.equals(d.customerQuotationId(), issued.customerQuotationId()));
         if (anotherDraftLive) {
@@ -358,12 +367,11 @@ public class RemainingInvoiceService {
                 "ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน");
         }
 
-        // Nit fix (Opus review, GLA-99 step 2 review-round-1): the two checks above are a plain
-        // SELECT-then-INSERT — two concurrent revise() calls (or a concurrent createDraft) can both
-        // read "no live draft" before either commits, and the SECOND insertDraft then trips
-        // ux_remaining_invoice_ticket_draft (V188, one DRAFT per ticket, per P1) as a raw Postgres
-        // unique-violation. ApiExceptionHandler has no generic mapping for that, so it would
-        // otherwise surface as an opaque 500 instead of the 409 this exact race deserves — the
+        // The two checks above are a plain SELECT-then-INSERT: two concurrent revise() calls (or a
+        // concurrent createDraft) can both read "no live draft" before either commits, and the
+        // SECOND insertDraft then trips ux_remaining_invoice_ticket_draft (V188, one DRAFT per
+        // ticket) as a raw Postgres unique-violation. ApiExceptionHandler has no generic mapping for
+        // that, so it would surface as an opaque 500 instead of the 409 this race deserves -- the
         // loser simply lost a race for a slot the winner legitimately holds.
         long draftId;
         try {
@@ -418,11 +426,6 @@ public class RemainingInvoiceService {
             .filter(DocumentNoteTemplateDto::defaultSelected)
             .map(DocumentNoteTemplateDto::text)
             .toList();
-    }
-
-    private BigDecimal sumAmounts(List<RemainingInvoiceItemDto> items) {
-        return items.stream().map(it -> it.amount() != null ? it.amount() : BigDecimal.ZERO)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private BigDecimal nz(BigDecimal v) {
