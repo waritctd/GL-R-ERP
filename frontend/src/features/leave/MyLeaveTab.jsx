@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
-import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -21,6 +20,7 @@ import {
 } from './leaveFormatting.js';
 import { canSubmitOwnLeave } from './leaveSurfaceTabs.js';
 import { LeaveRequestsSection } from './leaveRequestTable.jsx';
+import { summarizeLeaveRequests, useCancelLeave, useLeaveFilters } from './useLeaveTabState.jsx';
 import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
 // How far ahead "วันลาที่กำลังจะถึง" looks. Same ~90-day forward window UpcomingHolidays renders
@@ -198,7 +198,6 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
 }
 
 export function MyLeaveTab({ user, currentEmployee, showToast }) {
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
   // Empty by default (2026-08-10 restructure), NOT monthStartIso()/todayIso(). Two separate
   // problems came from pre-filling these:
@@ -218,9 +217,10 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     to: '',
     status: '',
   };
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [confirmState, setConfirmState] = useState(null);
+  const {
+    filters, appliedFilters, hasCustomFilters, updateFilter, clearFilters, submitFilters,
+  } = useLeaveFilters(initialFilters);
+  const { requestCancel, cancelDialog } = useCancelLeave(showToast);
   const [expandedId, setExpandedId] = useState(null);
 
   // Phase A2 (#485): the request-submission form (employee/type picker, dates, contact block,
@@ -267,7 +267,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
-  const hasCustomFilters = JSON.stringify(appliedFilters) !== JSON.stringify(initialFilters);
 
   const balancesYear = yearFrom();
   const balancesQuery = useQuery({
@@ -298,9 +297,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   const primaryBalanceLoading = !ownEmployeeId || balancesQuery.isPending;
 
   const totals = useMemo(() => {
-    const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
-    const approved = requests.filter((request) => request.status === 'APPROVED');
-    const approvedDays = approved.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+    const { submitted, approved, approvedDays } = summarizeLeaveRequests(requests);
     // EVERYDAY types ONLY -- summing every balance here produced "โควตาคงเหลือ 564 วัน", which is
     // not a number that means anything. MILITARY's annual_quota_days is 366, a deliberate SENTINEL
     // standing for "no annual ceiling, the 60-day PAID cap is the real rule" (V120), not a quota an
@@ -311,7 +308,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     // numbers for the same reason -- this is that rule applied to the aggregate, which was the
     // one place it leaked.
     const remainingDays = everydayBalances.reduce((sum, balance) => sum + Number(balance.remainingDays || 0), 0);
-    return { submitted, approved: approved.length, approvedDays, remainingDays };
+    return { submitted, approved, approvedDays, remainingDays };
   }, [requests, everydayBalances]);
 
   // The forward window shared by BOTH "what's coming up" panels below -- company holidays
@@ -354,54 +351,6 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     const everyday = leaveTypes.find((type) => EVERYDAY_LEAVE_TYPE_CODES.has(type.code));
     setPreviewTypeCode(everyday?.code || leaveTypes[0].code);
   }, [leaveTypes, previewTypeCode]);
-
-  // Issue #422 B3 fix: invalidate the ['leave'] PREFIX, not the exact
-  // queryKeys.leaveRequests(appliedFilters)/leaveBalances(ownEmployeeId, balancesYear) pair --
-  // every other filter combination (a different date range/status/employee, this same tab or
-  // ReviewQueueTab's own unfiltered query) used to stay stale until its own filters were
-  // reapplied.
-  function invalidateLeave() {
-    return queryClient.invalidateQueries({ queryKey: ['leave'] });
-  }
-
-  function invalidatePayrollUpstream() {
-    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
-  }
-
-  function updateFilter(field, value) {
-    setFilters((current) => ({ ...current, [field]: value }));
-  }
-
-  function clearFilters() {
-    setFilters(initialFilters);
-    setAppliedFilters(initialFilters);
-  }
-
-  function submitFilters(event) {
-    event.preventDefault();
-    setAppliedFilters(filters);
-  }
-
-  const cancelMutation = useMutation({
-    mutationFn: ({ id, reviewerNote }) => api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null }).then((response) => response.request),
-    onSuccess: () => {
-      showToast('success', 'ยกเลิกคำขอลาแล้ว');
-      setConfirmState(null);
-      invalidateLeave();
-      invalidatePayrollUpstream();
-    },
-    onError: (error) => showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ'),
-  });
-
-  const saving = cancelMutation.isPending;
-
-  function requestCancel(id) {
-    setConfirmState({ kind: 'cancel', id });
-  }
-
-  function doCancel(id, reviewerNote) {
-    cancelMutation.mutate({ id, reviewerNote });
-  }
 
   return (
     <>
@@ -538,19 +487,7 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
         />
       </Panel>
 
-      <ConfirmDialog
-        open={confirmState?.kind === 'cancel'}
-        title="ยกเลิกคำขอลา"
-        message='ยืนยันการยกเลิกคำขอลานี้? สถานะจะเปลี่ยนเป็น "ยกเลิกแล้ว" ถาวร'
-        confirmLabel="ยกเลิกคำขอ"
-        tone="danger"
-        busy={saving}
-        requireReason
-        optionalReason
-        reasonLabel="หมายเหตุการยกเลิก (ถ้ามี)"
-        onConfirm={(reason) => doCancel(confirmState.id, reason)}
-        onCancel={() => setConfirmState(null)}
-      />
+      {cancelDialog}
     </>
   );
 }

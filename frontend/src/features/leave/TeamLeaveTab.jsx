@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
-import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 // FilterField (#638) for the employee select this tab passes into LeaveFilterBar as a child --
 // see that component's own comment on why a hand-rolled `<label>` here is the bug, not a shortcut.
 import { FilterField, Panel } from '../../components/common/Layout.jsx';
@@ -16,6 +15,7 @@ import {
   formatDays, todayIso,
 } from './leaveFormatting.js';
 import { LeaveRequestsSection } from './leaveRequestTable.jsx';
+import { summarizeLeaveRequests, useCancelLeave, useLeaveFilters } from './useLeaveTabState.jsx';
 import { TeamQuotaSummary } from './TeamQuotaSummary.jsx';
 import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
@@ -41,7 +41,6 @@ const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 // the remaining duplication so a change lands on both surfaces at once.
 
 export function TeamLeaveTab({ user, showToast }) {
-  const queryClient = useQueryClient();
   // Empty dates by default -- same change and same reasoning as MyLeaveTab.jsx's own
   // `initialFilters` (see its comment): `to: todayIso()` made future team leave unreachable, and
   // `from: monthStartIso()` emptied the tab on the 1st of each month. hrApi.js's `withQuery` drops
@@ -52,14 +51,13 @@ export function TeamLeaveTab({ user, showToast }) {
     employeeId: '',
     status: '',
   };
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [confirmState, setConfirmState] = useState(null);
+  const {
+    filters, appliedFilters, hasCustomFilters, updateFilter, clearFilters, submitFilters,
+  } = useLeaveFilters(initialFilters);
+  const { requestCancel, cancelDialog } = useCancelLeave(showToast);
   const [expandedId, setExpandedId] = useState(null);
 
-  // Review fix (2026-08): see TeamRequestsSection's own comment on why this is role-aware --
-  // same predicate, computed again here (this component has its own `user` in scope) for the
-  // Panel title below, which lives outside TeamRequestsSection.
+  // hr/ceo see every active employee here (canViewAllLeave), so titles and copy drop the "direct reports" wording.
   const canViewAllLeave = hasPermission(user?.role, 'canViewAllLeave');
 
   // Shares its cache key with LeaveSurfacePage.jsx's own `teamSignalQuery` (both read
@@ -94,7 +92,6 @@ export function TeamLeaveTab({ user, showToast }) {
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
-  const hasCustomFilters = JSON.stringify(appliedFilters) !== JSON.stringify(initialFilters);
 
   // Own forward window, independent of the filter above -- see UpcomingLeaveList.jsx's own doc
   // comment for why this is a second query rather than a `.filter()` over `requests` (defect D1).
@@ -114,60 +111,15 @@ export function TeamLeaveTab({ user, showToast }) {
   // chosen for what THIS tab is for -- a manager scanning their team, not an employee tracking
   // their own quota, so the fourth slot counts PEOPLE away rather than a personal quota balance.
   const totals = useMemo(() => {
-    const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
-    const approved = requests.filter((request) => request.status === 'APPROVED');
-    const approvedDays = approved.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+    const { submitted, approved, approvedDays } = summarizeLeaveRequests(requests);
     // Distinct employees with any non-cancelled/non-rejected leave in the visible range.
     const peopleAway = new Set(
       requests
         .filter((request) => ['SUBMITTED', 'APPROVED'].includes(request.status))
         .map((request) => request.employeeId),
     ).size;
-    return { submitted, approved: approved.length, approvedDays, peopleAway };
+    return { submitted, approved, approvedDays, peopleAway };
   }, [requests]);
-
-  function invalidateLeave() {
-    return queryClient.invalidateQueries({ queryKey: ['leave'] });
-  }
-
-  function invalidatePayrollUpstream() {
-    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
-  }
-
-  function updateFilter(field, value) {
-    setFilters((current) => ({ ...current, [field]: value }));
-  }
-
-  function clearFilters() {
-    setFilters(initialFilters);
-    setAppliedFilters(initialFilters);
-  }
-
-  function submitFilters(event) {
-    event.preventDefault();
-    setAppliedFilters(filters);
-  }
-
-  const cancelMutation = useMutation({
-    mutationFn: ({ id, reviewerNote }) => api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null }).then((response) => response.request),
-    onSuccess: () => {
-      showToast('success', 'ยกเลิกคำขอลาแล้ว');
-      setConfirmState(null);
-      invalidateLeave();
-      invalidatePayrollUpstream();
-    },
-    onError: (error) => showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ'),
-  });
-
-  const saving = cancelMutation.isPending;
-
-  function requestCancel(id) {
-    setConfirmState({ kind: 'cancel', id });
-  }
-
-  function doCancel(id, reviewerNote) {
-    cancelMutation.mutate({ id, reviewerNote });
-  }
 
   return (
     <>
@@ -248,19 +200,7 @@ export function TeamLeaveTab({ user, showToast }) {
         />
       </Panel>
 
-      <ConfirmDialog
-        open={confirmState?.kind === 'cancel'}
-        title="ยกเลิกคำขอลา"
-        message='ยืนยันการยกเลิกคำขอลานี้? สถานะจะเปลี่ยนเป็น "ยกเลิกแล้ว" ถาวร'
-        confirmLabel="ยกเลิกคำขอ"
-        tone="danger"
-        busy={saving}
-        requireReason
-        optionalReason
-        reasonLabel="หมายเหตุการยกเลิก (ถ้ามี)"
-        onConfirm={(reason) => doCancel(confirmState.id, reason)}
-        onCancel={() => setConfirmState(null)}
-      />
+      {cancelDialog}
     </>
   );
 }
