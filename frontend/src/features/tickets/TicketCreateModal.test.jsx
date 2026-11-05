@@ -596,6 +596,41 @@ describe('TicketCreateModal เจ้าของงาน (deal owner) picker',
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0].ownerEmployeeId ?? currentUser.id).toBe(currentUser.id);
   });
+
+  // Review finding (11-06): a resumed draft must not fall back to the keyer as owner, or the
+  // deal lands under the admin again.
+  it('autosaves the chosen owner into the draft', async () => {
+    renderModal({ user: currentUser, onSubmit: vi.fn() });
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').length).toBeGreaterThan(1));
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText(/ชื่อดีล/), { target: { value: 'ดีลคีย์แทน' } });
+      fireEvent.change(select, { target: { value: '9' } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+    } finally {
+      vi.useRealTimers();
+    }
+    const [draft] = listDrafts();
+    expect(loadDraft(draft.id).ownerEmployeeId).toBe('9');
+  });
+
+  it('a restored draft brings its owner back and submits it as ownerEmployeeId', async () => {
+    saveDraft(null, { dealTitle: 'ดีลคีย์แทน', ownerEmployeeId: '9' });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดต่อ' }));
+
+    const select = await ownerSelect();
+    await waitFor(() => expect(select.value).toBe('9'));
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId).toBe(9);
+  });
 });
 
 describe('TicketCreateModal draft picker (GLA-19)', () => {

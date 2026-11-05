@@ -505,6 +505,7 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
       dealTitle, note: form.note, priority, entryChannel, nextFollowUpAt,
       customer: selectedCustomer, project: selectedProject,
       items,
+      ownerEmployeeId,
     };
   }
   // Kept fresh after every render (react-hooks/refs forbids writing a ref's `.current` directly
@@ -562,7 +563,7 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     // before the next run) — that cancel-and-reschedule is the entire debounce mechanism: rapid
     // edits coalesce into whichever one is still pending 1s after the last of them.
     return () => clearTimeout(timer);
-  }, [dealTitle, form.note, priority, entryChannel, nextFollowUpAt, selectedCustomer, selectedProject, items, showPicker, loading]);
+  }, [dealTitle, form.note, priority, entryChannel, nextFollowUpAt, selectedCustomer, selectedProject, items, ownerEmployeeId, showPicker, loading]);
 
   // beforeunload guard: mirrors PayrollPage.jsx's beforeunload effect. Refs only, registered once,
   // removed on unmount. It first attempts a synchronous flush (localStorage is synchronous) and
@@ -602,7 +603,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
       customer: draft?.customer ?? null,
       project: draft?.project ?? null,
       items: draft?.items?.length ? draft.items : [],
+      ownerEmployeeId: draft?.ownerEmployeeId ?? '',
     };
+    setOwnerEmployeeId(normalized.ownerEmployeeId);
     setForm({ note: normalized.note });
     setDealTitle(normalized.dealTitle);
     setPriority(normalized.priority);
