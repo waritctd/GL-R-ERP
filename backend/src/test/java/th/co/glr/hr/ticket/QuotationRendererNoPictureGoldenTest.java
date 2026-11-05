@@ -37,12 +37,12 @@ import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 
 /**
- * GLA-75 (per-item pictures) regression gate: <b>a quotation whose items carry NO picture must
+ * Per-item pictures regression gate: <b>a quotation whose items carry NO picture must
  * render exactly as it did before pictures existed.</b>
  *
- * <p>The golden files under {@code src/test/resources/quotation-golden/} were written by THIS test
- * against the renderer as it stood on {@code origin/develop} (61b44d60) BEFORE the picture code
- * was added — i.e. they are the old renderer's output, not the new one's. Each is a canonical
+ * <p>The golden files under {@code src/test/resources/quotation-golden/} were first written by THIS
+ * test against the renderer as it stood BEFORE the picture code was added — i.e. they are the old
+ * renderer's output, not the new one's. Each is a canonical
  * text dump of the rendered sheet: every row's height, every cell's type/value/style, every merged
  * region, every row break, the print area and print setup, and every picture's anchor + content
  * hash. The picture feature re-plumbed the row accounting that {@code fillItems},
@@ -54,49 +54,20 @@ import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
  * wrappers' shape. Regenerate ONLY when a change to the no-picture output is intended:
  * {@code ./mvnw -Dtest=QuotationRendererNoPictureGoldenTest -Dquotation.golden.update=true test}.
  *
- * <p><b>Re-baselined 2026-09-12</b> for {@code single-page}/{@code one-page-scaled}/
- * {@code paginated}/{@code english} (not {@code legacy-shape}, which has no signature block): the
- * owner-reported A4 signature-row-width defect (3f80c23c, "ช่วยจัดตำแหน่ง ... ให้พอดีความกว้างหน้า
- * กระดาษ A4" — the four signature labels stopped ~65% across an otherwise full-width form) and the
- * related zero-sized-signature-anchor defect (same commit) deliberately change the signature
- * labels row, the names row, the date row, and the signature picture's anchor — nothing else. This
- * is an INTENTIONAL move of the pinned baseline forward to the post-fix renderer, not baseline
- * drift: it was confirmed by diffing every fixture's regenerated dump against its prior version and
- * finding changes confined to exactly those four regions in each. The XLS byte hashes below were
- * re-derived the same way from a real regenerated run (docker + backend/fonts/ licensed Thai
- * fonts), not copied from elsewhere.
+ * <p><b>Baselines move only deliberately.</b> Each later change to the no-picture output
+ * (signature-row width and anchor, {@code QuotationRenderer#PHONE_ROW} written with
+ * {@code setStrShrinkToFit}, the Thai ISO form number in the tag cell, the ฝ่าย / Dept. line
+ * removed from both forms) was applied by diffing every fixture's regenerated dump against its
+ * prior version and confirming the changes were confined to the intended cells, plus style-table
+ * index shifts (one extra {@code CellStyle} shifts every style index allocated after it by +1).
+ * The XLS byte hashes in the second test were re-derived from a real run with the licensed Thai
+ * fonts (docker + backend/fonts/), not copied from elsewhere.
  *
- * <p><b>Re-baselined 2026-09-14</b> for ALL FIVE fixtures (Opus review of the Thai-address fix,
- * PR #966): {@code QuotationRenderer#PHONE_ROW} (B6) is now written with
- * {@code setStrShrinkToFit} instead of plain {@code setStr} — the merged B6:G6 cell clips overflow
- * rather than wrapping, and the line now regularly carries an address AND a phone number folded
- * together (see {@code DealQuotationRenderAdapter}), which a long address can overrun. Creating
- * that ONE extra {@code CellStyle} shifts every style index the renderer allocates AFTER it by
- * exactly +1 for the rest of that render — confirmed by diffing every regenerated fixture against
- * its prior version: every diff line is EITHER the B6 cell's own style index (a distinct style,
- * not the previously-reused shared one) OR a same-content cell whose style index moved by +1;
- * nothing else (no row height, merge, border, font, page break, or text) changed anywhere in any
- * of the five fixtures. None of these fixtures' phoneLine text itself changed (all five keep the
- * pre-existing "โทร. 02-000-0000" — no address in any of them), which is exactly why this is pure
- * style-table churn and not a content regression.
- *
- * <p><b>Re-baselined 2026-10-06, BY HAND, for two deliberate changes to the printed form</b> (sales
- * feedback Admin 6 and Admin 1d; owner rulings the same day):
- * <ol>
- *   <li>the Thai document prints its ISO form number — the tag cell (column I of the print area's
- *       last row) turns from {@code BLANK} into {@code STRING "F-SM-002 (03)"} in the four Thai
- *       fixtures; {@code english} is untouched (it always printed {@code F-SM-008 (01)});</li>
- *   <li>the ฝ่าย / Dept. line left BOTH forms — in all five fixtures row 2's H cell (the label)
- *       turns {@code BLANK} and its I cell (the value, "P003" here) turns into the empty string.</li>
- * </ol>
- * By hand, because this file cannot be regenerated where those changes were made: that PC has no
- * licensed Thai fonts (column unit 110 twips, not these goldens' 102), so — exactly like CI — the
- * comparison below skips there, and {@code -Dquotation.golden.update=true} would have rewritten
- * all five files under the wrong geometry. Neither change depends on geometry: a before/after
- * canonical dump on that machine differed in exactly those lines per fixture and nothing else (no
- * row height, break, print area, merge or style index moved), and the same lines were edited here.
- * Verified by an actual run on 2026-10-11, on a machine with the fonts: the five files match a
- * real render, and the byte hashes in the second test were re-pinned there.
+ * <p>Goldens may be edited by hand when the change does not depend on geometry and the editing
+ * machine lacks the licensed Thai fonts: such a machine has a different column unit (110 twips,
+ * not these goldens' 102), so — exactly like CI — the comparison skips there, and
+ * {@code -Dquotation.golden.update=true} would rewrite all five files under the wrong geometry.
+ * Verify on a machine with the fonts afterwards.
  */
 class QuotationRendererNoPictureGoldenTest {
     private static final String UPDATE_PROPERTY = "quotation.golden.update";
@@ -126,105 +97,41 @@ class QuotationRendererNoPictureGoldenTest {
 
     /**
      * The stricter half: the XLS BYTES themselves. {@code toXls} is deterministic (two renders of
-     * one model are byte-equal — probed on develop 61b44d60 before this pin was written), so the
+     * one model are byte-equal — probed before this pin was written), so the
      * SHA-256 of each fixture's XLS as rendered by the PRE-PICTURE renderer is pinned here. The
      * dump above says WHAT moved when this fails; this says whether ANYTHING did, including drawing
      * records and style tables the dump does not walk.
      *
-     * <p>These hashes were produced on a scratch checkout of origin/develop 61b44d60, not by this
-     * branch's code, so they cannot be a self-fulfilling render of the new renderer. Same
+     * <p>The original hashes were produced on a scratch checkout of the pre-picture code, not by
+     * the picture branch, so they cannot be a self-fulfilling render of the new renderer. Same
      * column-unit skip as above: the bytes depend on the fonts fontconfig resolves.
      */
     @ParameterizedTest
     @ValueSource(strings = {"single-page", "one-page-scaled", "paginated", "english", "legacy-shape"})
     void aQuotationWithoutPicturesRendersByteIdenticallyToBefore(String fixture) throws Exception {
-        // Re-pinned 2026-09-12 for single-page/one-page-scaled/paginated/english: the owner-reported
-        // A4 signature-row-width fix (3f80c23c) deliberately moves the signature labels/names/date
-        // rows and the signature picture anchor -- see this class's own Javadoc. legacy-shape has
-        // no signature block, so its hash is untouched from the pre-picture baseline.
-        //
-        // Re-pinned AGAIN 2026-09-14 for ALL FIVE (this class's own Javadoc, "Re-baselined
-        // 2026-09-14"): PHONE_ROW (B6) now writes with setStrShrinkToFit instead of plain setStr,
-        // guarding against the address+phone line now printed there overrunning the merged cell.
-        // Every one of these five diffs is a style-table index shift only (one new CellStyle
-        // created earlier in the render bumps every later-created style's index by +1) -- no
-        // fixture's phoneLine TEXT changed (none of these fixtures carry a customer address).
-        //
-        // Re-pinned AGAIN 2026-09-14, owner feedback #3 (pieces-per-box wrap fix): every fixture's
-        // item calculation line ends "...= 37 แผ่น (N กล่อง)" -- e.g. 71 String.length() chars for
-        // the "(1 กล่อง)" case but only 61 VISIBLE ones (see QuotationRenderer#visibleLength's
-        // Javadoc), so it used to wrap into a head row ("...= 37 แผ่น") plus a continuation row
-        // ("(N กล่อง)") under the OLD String.length()-based budget check (62), and now fits on ONE
-        // row under the new visible-length check (still budget 62). Confirmed by diffing every
-        // regenerated fixture (`git diff` on the .txt files)
-        // against its prior version: EVERY diff is that one continuation row disappearing per item
-        // (rows shift up by one per item), the resulting page-break/print-area/scale figures
-        // moving to match the now-shorter sheet, and the style-table indices the removed rows'
-        // styles shift by. legacy-shape is untouched (byte-identical) -- the legacy (non-v2) item
-        // path never runs the width-aware wrap at all (DealQuotationRenderAdapter's `alwaysShowSeq`
-        // is v2-only). No row's TEXT content changed beyond the two lines above merging into one;
-        // no border, font, merge, or unrelated cell moved.
-        // Re-pinned 2026-09-15 (Fix 5, "-1" revision-suffix column clipping): fitColumnToText now
-        // widens column I to fit the ACTUAL เลขที่อ้างอิง/Ref. text at I4, not just the grand-total
-        // figure #sizeMoneyColumns already sized it for -- every one of these fixtures' reference
-        // numbers ("QT-2026-0099"/"QT-2026-0042") needed a hair more room than their (modest) grand
-        // totals did, so column I widens by the same 66 units (3123 -> 3189) on all four; confirmed
-        // by diffing the regenerated .txt goldens above (the ONLY line that changed, anywhere, in
-        // any of the five fixtures, is that one "col 8 w=" line). paginated is excluded from this
-        // list: its case is skipped by the Assumptions.assumeTrue column-unit guard above on this
-        // machine already, independently of this fix.
-        // Re-pinned 2026-09-27 (signature-block equal-length-lines + drift fix, owner feedback):
-        // #writeSignatureBlock now gives every slot's underscore line the SAME character count
-        // (was: pad each label to fill whatever pixel width its OWN slot had left, so the
-        // shortest label got the longest line) and centres the label+line unit, the name and the
-        // date within their slot instead of independently re-deriving each block's own nominal
-        // target — see the class comment above QuotationRenderer#SIG_LABELS and
-        // #appendAtTarget's own Javadoc for why the old per-row-independent centring drifted
-        // left slot by slot. The regenerated .txt dumps for the four signature-bearing fixtures
-        // differ from their prior version ONLY in the labels/names/dates row text (now carrying
-        // leading/interstitial spaces from the per-slot centring) and the signature picture's
-        // horizontal anchor (it still tracks runStart[SIG_APPROVER_INDEX]/runEnd[...], which
-        // moved because the line it anchors to moved) -- confirmed by `git diff` on the golden
-        // .txt files. legacy-shape has no signature block, so its hash is unchanged.
-        // Re-pinned AGAIN 2026-09-27 (same task, second pass): #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE
-        // added after the first re-pin above -- a small empirically-measured correction for the
-        // SPACE glyph's own AWT-vs-LibreOffice rendering gap (see that constant's own Javadoc),
-        // which further reduces the residual name/date left-drift the first pass didn't fully
-        // remove. Confirmed by diffing the regenerated .txt goldens against their first-pass
-        // version: every changed line is the names/dates row text (one leading space more or
-        // fewer per slot) or the signature picture's horizontal anchor (still tracking the same
-        // runStart/runEnd, which shifted by the same small amount); legacy-shape (no signature
-        // block) is byte-identical to the very first pre-feature baseline.
-        // Re-pinned a THIRD time 2026-09-27 (same task, round 2 -- owner supplied the real
-        // production template as a reference and the equal-length-underscore change above was
-        // WRONG): #writeSignatureBlock's shared fixed-count underscore run is REVERTED back to
-        // #padLabelSlotPx's original per-slot leftover-fill (label first, underscores filling the
-        // REST of that slot's own width, cumulative, no leading pad) -- this is what reproduces
-        // the reference's contiguous, ragged-length-but-grid-ended lines. The centred-name/date
-        // anti-drift fix from the first two re-pins (targeting runStart[i]/runEnd[i] via
-        // #appendAtTarget, with the SIGNATURE_SPACE_TO_UNDERSCORE_SCALE correction) is KEPT
-        // unchanged -- it composes cleanly with either underscore-run scheme. Confirmed by
-        // diffing the regenerated .txt goldens: the labels row reverts to exactly its
-        // pre-signature-fix shape (ragged underscore counts, no leading/interstitial spaces); the
-        // names/dates rows and the picture anchor shift by a few pixels/characters (the
-        // runStart/runEnd values they target moved because the underscore run's own sizing rule
-        // changed) but stay centred. legacy-shape (no signature block) is unchanged.
-        // Re-pinned 2026-10-11 for the two changes in this class's Javadoc ("Re-baselined
-        // 2026-10-06": the Thai ISO form number, and the ฝ่าย / Dept. line removed from both forms),
-        // which deliberately change every fixture's bytes. Derived on a machine with the licensed
-        // Thai fonts (column unit 102), where the unchanged renderer still matched the old pins
-        // 10/10 and the hand-edited .txt dumps above matched a real render line for line — so the
-        // only byte difference these new values absorb is those two changes.
+        // Pins move only with a deliberate change to the no-picture output, derived on a machine
+        // with the licensed Thai fonts (column unit 102), never copied. The moves so far:
+        // - signature block: labels/names/dates rows and the signature picture's anchor (names and
+        //   dates are centred in their slot; the label's underscore line fills the REST of its own
+        //   slot's width, which reproduces the reference template's ragged, grid-ended lines).
+        //   legacy-shape has no signature block, so its hash never moved for this.
+        // - PHONE_ROW (B6) written with setStrShrinkToFit: pure style-table index shift (+1).
+        // - the pieces-per-box calculation line ("...= 37 แผ่น (N กล่อง)") fits on ONE row under the
+        //   visible-length budget check (see QuotationRenderer#visibleLength's Javadoc): one
+        //   continuation row fewer per item, and the page-break/print-area/scale figures follow.
+        //   legacy-shape never runs the width-aware wrap, so it is untouched.
+        // - fitColumnToText widens column I to fit the actual Ref. text at I4 (only the "col 8 w="
+        //   line changed; paginated is skipped by the column-unit guard above on this machine).
+        // - the Thai ISO form number in the tag cell, and the ฝ่าย / Dept. line removed from both
+        //   forms: every fixture's bytes change.
         java.util.Map<String, String> preFeatureSha256 = java.util.Map.of(
             "single-page", "dbceb48f49514b6ae4b462970eeff9cccb428be7a5d84e4f0d82f90a1bf77334",
             "one-page-scaled", "854ca4d157091dfb7edff572fba41f375ca9dd85e18966b1bd912c6c0d9f87ba",
             "paginated", "b403e4b3c1c5fa4b51c954f49d2d5a5e518b4a6d43621aca07138d95f65731f9",
-            // Re-pinned on develop 80f2484e: #930 deliberately changed the English form's output.
-            // Re-pinned again 2026-09-13 (owner ruling 2): QuotationRenderer#applyEnglishTotals now
-            // strips every border from the emptied subtotal/VAT rows and hides them, so Grand Total
-            // sits directly under the table box. The regenerated english.txt differs from its prior
-            // version ONLY in those two rows (hidden, b=NONE) plus the style indices the new
-            // borderless styles shift; the four Thai fixtures are byte-identical.
+            // english was deliberately re-pinned: QuotationRenderer#applyEnglishTotals strips
+            // every border from the emptied subtotal/VAT rows and hides them, so Grand Total
+            // sits directly under the table box (those two rows hidden, b=NONE, plus the style
+            // indices the new borderless styles shift); the four Thai fixtures are unaffected.
             "english", "63e62581ce80b8cedf3dca7bff487ae2820fe0dde8bfeb148b09acec03bb42a7",
             "legacy-shape", "0e623ab5fe9cbd81e977b88569882840d4c73ee84f8002d5c4f6d7b8d9169ec0");
         byte[] xls = renderer.toXls(model(fixture));

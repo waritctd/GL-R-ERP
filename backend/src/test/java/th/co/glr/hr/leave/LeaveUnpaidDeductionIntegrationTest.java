@@ -29,7 +29,7 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Leave -&gt; payroll unpaid-day deduction (2026-07-23): real-Postgres coverage of the redesigned
+ * Leave -&gt; payroll unpaid-day deduction: real-Postgres coverage of the
  * {@link LeaveService#submit} gate (approve-with-split instead of auto-reject-on-quota),
  * {@link LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth} (per-month attribution, including
  * the cross-month split), and the cancel-after-close reversal ({@link LeaveService#cancel}) writing
@@ -91,8 +91,8 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-14"),
             employee(employeeId));
 
-        // Leave requires approval (2026-08-05): this test's subject is the SUBMISSION-time split
-        // (fully paid, zero unpaid days) -- a rule-passing request now lands SUBMITTED, not
+        // Leave requires approval: this test's subject is the SUBMISSION-time split
+        // (fully paid, zero unpaid days) -- a rule-passing request lands SUBMITTED, not
         // APPROVED. No #approve() needed for the doesNotContainKey assertion below: it holds
         // trivially either way (zero unpaid days), so it is not evidence either way about the
         // approval seam -- that seam has its own dedicated coverage below.
@@ -109,15 +109,15 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         long employeeId = insertEmployee("VAC-BEYOND");
 
         // Mon 2026-07-13 .. Tue 2026-07-21 covers 7 working days (13,14,15,16,17,20,21), against a
-        // 6-day VACATION quota with nothing used yet: 6 paid + 1 unpaid. The gate must APPROVE this,
-        // not auto-reject it the way the pre-redesign quota gate would have.
+        // 6-day VACATION quota with nothing used yet: 6 paid + 1 unpaid. The gate must accept this
+        // with a split, not auto-reject it for exceeding quota.
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-21"),
             employee(employeeId));
 
-        // Leave requires approval (2026-08-05): the split (paidDays/unpaidDays/quotaRemainingAfter)
+        // Leave requires approval: the split (paidDays/unpaidDays/quotaRemainingAfter)
         // is computed and persisted at #submit and is exactly what this test's title is about --
-        // "approved with a split instead of auto-rejected" now means "reaches SUBMITTED (rule
+        // "approved with a split instead of auto-rejected" means "reaches SUBMITTED (rule
         // passed) with the split already computed", not "reaches APPROVED".
         assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.totalDays()).isEqualByComparingTo("7.00");
@@ -134,15 +134,13 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * Leave requires approval (2026-08-05): THE payroll-critical property this whole branch rests
-     * on, pinned on ONE fixture with BOTH sides asserted -- not two separate tests that could each
-     * pass for the wrong reason. Before this branch, a rule-passing request reached APPROVED (and
-     * therefore payroll-visibility, via {@link LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}'s
-     * {@code WHERE status = 'APPROVED'}) instantly, at submit time -- SUBMITTED was unreachable from
-     * {@link LeaveService#submit} at all. Now a rule-passing request sits SUBMITTED until a human
-     * reviews it, and payroll must not see it until then.
+     * Leave requires approval: THE payroll-critical property, pinned on ONE fixture with BOTH
+     * sides asserted -- not two separate tests that could each pass for the wrong reason. A
+     * rule-passing request sits SUBMITTED until a human reviews it, and payroll (via {@link
+     * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}'s {@code WHERE status = 'APPROVED'})
+     * must not see it until then.
      *
-     * <p>MUTATION-CHECK: widening {@code findUnpaidLeaveDaysByEmployeeForMonth}'s status filter to
+     * <p>Mutation: widening {@code findUnpaidLeaveDaysByEmployeeForMonth}'s status filter to
      * include SUBMITTED (e.g. {@code WHERE lr.status IN ('APPROVED', 'SUBMITTED')}) must turn the
      * FIRST assertion below red (the SUBMITTED-only side) and nothing else in this class.
      */
@@ -185,7 +183,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.paidDays()).isEqualByComparingTo("0.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("2.00");
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered
         // to APPROVED requests -- drive the request there before checking payroll's view of it.
         leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
@@ -196,11 +194,11 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     void aLeaveSpanningTwoCalendarMonthsSplitsItsUnpaidDaysCorrectly() {
         long employeeId = insertEmployee("SPLIT-001");
 
-        // §5 leave-rules-as-data (V116): this scenario used to submit PERSONAL, but PERSONAL now
+        // §5 leave-rules-as-data: this scenario uses VACATION, not PERSONAL, because PERSONAL
         // carries a 3-consecutive-calendar-day cap (§5.2) that a 13-calendar-day span like this one
         // would violate -- see LeaveTypeRuleIntegrationTest for that gate's dedicated coverage. VACATION
-        // has no consecutive-day cap, so it is used here instead; the point of this test is the
-        // cross-month unpaid-day split, not which type triggers it.
+        // has no consecutive-day cap; the point of this test is the cross-month unpaid-day split,
+        // not which type triggers it.
         //
         // Thu 2026-07-23 .. Tue 2026-08-04: working days (chronological) are 7/23, 7/24, 7/27, 7/28,
         // 7/29, 7/30, 7/31 (7 in July) then 8/3, 8/4 (2 in August) -- 9 total... but the 6-day VACATION
@@ -216,7 +214,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(result.paidDays()).isEqualByComparingTo("6.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("3.00");
 
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered
         // to APPROVED requests -- drive the request there before checking payroll's per-month view.
         leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
@@ -227,15 +225,11 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void sickLeaveBeyondQuotaWithNoCertificateIsApprovedButFullyUnpaidUntilTheMonthlyToleranceRunsOut() {
-        // V124 (§5.1): a certificate-less SICK request is no longer an unconditional auto-reject --
-        // it is tolerated up to 3 occasions per calendar month, independent of quota state. This test
-        // used to pin the OLD "certificate rule fires regardless of quota" behaviour
-        // (sickLeaveBeyondQuotaStillAutoRejectsWithoutACertificate, pre-V124: quota-exhausted +
-        // no-certificate => outright AUTO_REJECTED, 0 days). That premise is gone -- quota exhaustion
-        // and the certificate rule are now genuinely independent: quota exhaustion still drives an
-        // APPROVED-but-fully-UNPAID split (the ordinary quota machinery, untouched by this migration),
-        // while the certificate rule now separately gates on the MONTHLY OCCASION COUNT, not on
-        // quota availability at all.
+        // §5.1: a certificate-less SICK request is not an unconditional auto-reject --
+        // it is tolerated up to 3 occasions per calendar month, independent of quota state. Quota
+        // exhaustion and the certificate rule are independent: quota exhaustion drives an
+        // APPROVED-but-fully-UNPAID split (the ordinary quota machinery), while the certificate
+        // rule gates on the MONTHLY OCCASION COUNT, not on quota availability at all.
         long employeeId = insertEmployee("SICK-30PLUS");
         // Exhaust the 30-day SICK quota first, WITH a certificate each time so the fill-up itself is
         // approved.
@@ -263,7 +257,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         }
 
         // The 4th certificate-less occasion this SAME month: the monthly tolerance (not quota) is
-        // what now binds. V164 (owner-approved change, 2026-09-09): SICK_NO_CERT_TOLERANCE_EXHAUSTED
+        // what binds. SICK_NO_CERT_TOLERANCE_EXHAUSTED
         // is WARN_UNPAID_ALL, not BLOCK -- SUBMITTED, unpaid by rule (not merely "quota is 0", though
         // the day count looks the same either way here: quota was already exhausted by the fill-up).
         LeaveRequestDto fourthOccasion = leaveService.submit(
@@ -286,7 +280,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-21"), // 7 working days, 6 paid + 1 unpaid
             employee(employeeId));
         assertThat(approved.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval (2026-08-05): this test's subject is the cancel-after-close
+        // Leave requires approval: this test's subject is the cancel-after-close
         // correction, which LeaveService#recordPayrollCorrectionIfNeeded only records for a request
         // that is APPROVED at cancel time -- drive it there first.
         leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
@@ -308,7 +302,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * Paper-form contact-during-leave autofill (2026-07-25 review fix), authz -- required by
+     * Paper-form contact-during-leave autofill, authz -- required by
      * CLAUDE.md's "Permission changes must ship evidence" rule: {@code GET
      * /api/leave/contact-defaults} exposes another employee's home address + phone, so it needs the
      * same real-DB, wrong-way-round proof as any other scope/filter change. Two employees with no
@@ -336,7 +330,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-21"),
             employee(employeeId));
         assertThat(approved.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval (2026-08-05): approve first so this test's "no processed period ->
+        // Leave requires approval: approve first so this test's "no processed period ->
         // no correction" assertion is genuinely exercising #recordPayrollCorrectionIfNeeded's
         // processed-period check, not trivially passing because the request was never APPROVED at
         // all (that would make this test vacuous -- see CLAUDE.md's fixture-supplies-what-
@@ -381,10 +375,10 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
             VALUES (:code, :code, 'ทดสอบ', 30000, TRUE, :hireDate)
             RETURNING employee_id
             """, new MapSqlParameterSource().addValue("code", code).addValue("hireDate", hireDate), Long.class);
-        // §5.3.5 VACATION carry-forward (V127) interaction: the default 2015 hire date leaves 2025
-        // (fully elapsed by this class's fixed 2026-07-01 clock) reading as "0 of 6 used", which now
-        // legitimately carries 6.00 into 2026 -- correct new behaviour, but not what this class's
-        // pre-existing quota/paid-cap assertions (written before carry-forward existed) are about.
+        // §5.3.5 VACATION carry-forward interaction: the default 2015 hire date leaves 2025
+        // (fully elapsed by this class's fixed 2026-07-01 clock) reading as "0 of 6 used", which
+        // legitimately carries 6.00 into 2026 -- correct behaviour, but not what this class's
+        // quota/paid-cap assertions are about.
         // Neutralised by marking 2025's VACATION quota fully used, so
         // LeaveService#ensureCarryoverGrant computes a real, correct ZERO carry-in for 2026.
         neutralizeVacationCarryForwardFrom2025(employeeId);
