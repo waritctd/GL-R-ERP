@@ -23,9 +23,8 @@ test.describe('real data reaches the browser', () => {
     // below binds to that response — one belonging to the document goto() is about to replace —
     // and Chromium evicts its body during teardown. Reading eagerly inside the predicate (see
     // helpers/network.js) narrows that window but cannot close it: the predicate itself can run
-    // after teardown has begun. This is the flake that hit on 2026-08-08 and again on 2026-08-14,
-    // where a re-run did NOT clear it — twice on one PR, on a request that answered 200 both times.
-    // Draining first means the only match left is the one /employees itself issues.
+    // after teardown has begun. A re-run does NOT reliably clear it, even on a request that
+    // answered 200. Draining first means the only match left is the one /employees itself issues.
     await page.waitForLoadState('networkidle');
 
     // captureJson, not waitForResponse + a later .json(): the eager read is still the right
@@ -107,7 +106,7 @@ test.describe('the route guard and the service agree', () => {
       await loginAs(page, role);
       await page.goto(path);
 
-      // Layer 1 — RequireAccess renders AccessDeniedPage in place (issue #391 keeps the URL).
+      // Layer 1 — RequireAccess renders AccessDeniedPage in place (the URL stays).
       await expect(
         page.getByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })
       ).toBeVisible();

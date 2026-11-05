@@ -13,9 +13,8 @@ import { DEMO_PASSWORD, personaFor } from './accounts.js';
 // isolated from the others — that isolation is what lets one spec hold six concurrent role
 // sessions without them trampling each other.
 //
-// CSRF — this file used to say no X-XSRF-TOKEN dance was needed, on the grounds that
-// SecurityConfig calls `.csrf(AbstractHttpConfigurer::disable)`. That is true of SPRING's CSRF
-// and false of this application's: `CsrfCookieFilter` (@Order(0)) implements the OWASP
+// CSRF — SecurityConfig calls `.csrf(AbstractHttpConfigurer::disable)`, but that disables only
+// SPRING's CSRF, not this application's: `CsrfCookieFilter` (@Order(0)) implements the OWASP
 // double-submit pattern by hand, issuing an `XSRF-TOKEN` cookie and requiring it echoed back in
 // an `X-XSRF-TOKEN` header on every unsafe method. An authenticated write without that header is
 // **403 "Invalid CSRF token"**. Use `writeHeaders()` / the `apiWrite` helpers below for anything

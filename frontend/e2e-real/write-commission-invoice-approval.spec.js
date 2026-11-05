@@ -178,7 +178,7 @@ test.describe('commission invoice approval journey (real stack)', () => {
     const before = await readFinanceDeal('account');
     expect(before.salesStage).toBe('CLOSED_PAID');
     expect(before.commissionInvoice, 'fixture must start with no recorded invoice').toBeNull();
-    // Owner ruling 2026-10-28 (QA-02): the commission gross is the amount received INCLUDING VAT (workbook column L).
+    // The commission gross is the amount received INCLUDING VAT (workbook column L).
     const inclVat = before.money.amountPayable;
     expect(typeof inclVat, 'money.amountPayable served as a number').toBe('number');
 
