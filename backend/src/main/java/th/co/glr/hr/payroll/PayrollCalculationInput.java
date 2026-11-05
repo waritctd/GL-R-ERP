@@ -50,7 +50,7 @@ public record PayrollCalculationInput(
     // remainingPayPeriods: จำนวนคราวที่ต้องจ่าย remaining in this tax year INCLUDING this one, per
     // คำชี้แจง ภ.ง.ด.1 ข้อ 2.1. PayrollService resolves it as 13 - month. It is NOT capped at a
     // leaver's final period: ข้อ 2.10 is a known gap because resignations are not recorded in this
-    // platform at all -- see PayrollService#remainingPayPeriods.
+    // platform at all.
     // Zero means "not supplied"; the calculator falls back to 13 - payrollMonthValue, which is
     // exactly what it computed internally before this field existed.
     int remainingPayPeriods,

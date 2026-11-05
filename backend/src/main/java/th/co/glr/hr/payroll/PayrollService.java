@@ -902,18 +902,10 @@ public class PayrollService {
                 storedAllowancesByEmployee.get(employee.employeeId()),
                 leaveRefundDaysByEmployee.getOrDefault(employee.employeeId(), BigDecimal.ZERO),
                 payrollMonth,
-                // Genuine conflict (rebase, 2026-07-29), not a mechanical merge: branch 117's
-                // remainingPayPeriods/taxpayerAge fed the OLD single-limb payrollCalculator.calculate()
-                // path; branch 118 (task 2) repoints calculateLine onto calculateClassified exclusively
-                // (see PayrollClassifiedCalculationDtos' class javadoc), which has no use for either --
-                // it derives monthsRemaining from payrollMonthValue directly and does not apply the V93
-                // elderly/disabled exemption (exemptIncome/assessAnnualTax are calculate()-only). Kept
-                // as-is rather than threaded through calculateClassified/PayrollClassifiedCalculationInput,
-                // which would be inventing behaviour fa69e4fa does not implement; flagged as a known gap
-                // in docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md,
-                // "Progress -- task 4: rebase report + F1-F7 fixes" section, known risks (F4 correction,
-                // Opus review 2026-07-30: that section did not exist when this comment was written;
-                // it now does).
+                // remainingPayPeriods and taxpayerAge are deliberately not supplied: calculateLine
+                // runs only calculateClassified, which derives monthsRemaining from payrollMonthValue
+                // and does not apply the elderly/disabled exemption (V93), so neither input has a
+                // use there. Known gap: the exemption is not applied on this path.
                 treatmentsFor(employee.employeeId(), treatmentsByEmployee,
                     hasBeenOnboardedForPayroll(employee.employeeId(), ssoInclusionByEmployee)),
                 ssoInclusionFor(employee.employeeId(), ssoInclusionByEmployee)

@@ -287,7 +287,7 @@ public class PayrollCalculator {
         // the ข้อ 2.9 December true-up -- no special-casing needed. It would equally serve ข้อ 2.10's
         // final-period true-up for a leaver, but PayrollService never produces a 1 for that reason:
         // resignations are not recorded in this platform, so ข้อ 2.10 is a known gap and only December
-        // reaches this branch in production. See PayrollService#remainingPayPeriods.
+        // reaches this branch in production.
         //
         // CEILING (added after review): the two limbs are asymmetric by design -- the regular limb's
         // credit is spread over the periods that remain (ข้อ 2.3) while the variable limb's charge
@@ -780,7 +780,7 @@ public class PayrollCalculator {
         // satang here is a satang on the filing and on the bank file. Rounding the TAX (rather than
         // net_amount) is what keeps net = gross - deductions foot: net follows for free once every
         // deduction is whole. Same HALF_UP house convention as SSO (มาตรา 46 วรรคท้าย, see wholeBaht)
-        // and commission (PayrollService#commissionWholeBaht); unlike SSO it has no statutory basis.
+        // and commission (rounded whole-baht in PayrollService); unlike SSO it has no statutory basis.
         //
         // The <=0.50 rounding residual is credited to the REGULAR limb, matching the override path
         // below: the regular limb is the catch-all, and moving it there rather than into the

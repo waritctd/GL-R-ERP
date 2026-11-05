@@ -102,7 +102,7 @@ class PayslipProvisionalNoticeGeometryReviewTest {
     /**
      * The gate boundary. {@code PayslipRenderer} derives "final period" from
      * {@code period.payrollMonth().getMonthValue() >= 12}, which must agree with
-     * {@code PayrollService#remainingPayPeriods}'s {@code 13 - month}: December, and only December,
+     * PayrollService's remaining pay periods ({@code 13 - month}): December, and only December,
      * is the period after which no further withholding can absorb the excess.
      */
     /**
