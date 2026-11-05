@@ -23,7 +23,7 @@ const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').th
 const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
 const SalesOverview = lazy(() => import('./features/dashboard/SalesOverview.jsx').then(toDefault('SalesOverview')));
-// Role-scoped views program (docs/role-scoped-views.md) — CEO's exec-cockpit landing.
+// CEO's exec-cockpit landing (docs/role-scoped-views.md).
 const CeoOverview = lazy(() => import('./features/dashboard/CeoOverview.jsx').then(toDefault('CeoOverview')));
 const ImportOverview = lazy(() => import('./features/dashboard/ImportOverview.jsx').then(toDefault('ImportOverview')));
 const EmployeeSelfService = lazy(() => import('./features/dashboard/EmployeeSelfService.jsx').then(toDefault('EmployeeSelfService')));
@@ -37,12 +37,9 @@ const ProfileRequestsPage = lazy(() => import('./features/profileRequests/Profil
 const ProfilePage = lazy(() => import('./features/profile/ProfilePage.jsx').then(toDefault('ProfilePage')));
 const AttendancePage = lazy(() => import('./features/attendance/AttendancePage.jsx').then(toDefault('AttendancePage')));
 const RequestsPage = lazy(() => import('./features/requests/RequestsPage.jsx').then(toDefault('RequestsPage')));
-// Leave-surface IA rebuild Phase A1: LeavePage.jsx (one flat component) was replaced by a tabbed
-// shell -- see LeaveSurfacePage.jsx's own doc comment.
+// Tabbed leave shell -- see LeaveSurfacePage.jsx's doc comment.
 const LeaveSurfacePage = lazy(() => import('./features/leave/LeaveSurfacePage.jsx').then(toDefault('LeaveSurfacePage')));
-// Leave-request composer, Phase A2 (#485): the 3-step /leave/new route the "ยื่นคำขอลา" CTA now
-// navigates to, replacing the inline form MyLeaveTab.jsx used to render -- see LeaveRequestPage.jsx's
-// own doc comment.
+// The 3-step /leave/new route the "ยื่นคำขอลา" CTA navigates to -- see LeaveRequestPage.jsx's doc comment.
 const LeaveRequestPage = lazy(() => import('./features/leave/LeaveRequestPage.jsx').then(toDefault('LeaveRequestPage')));
 const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
 import { AccountFinanceRedirect, TicketDetailRoute } from './features/tickets/TicketDetailRoute.jsx';
@@ -54,7 +51,7 @@ const FinanceDealPage = lazy(() => import('./features/finance/FinanceDealPage.js
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
 const DeductionConsentsPage = lazy(() => import('./features/payroll/DeductionConsentsPage.jsx').then(toDefault('DeductionConsentsPage')));
-// ล.ย.01 tax-allowance declaration (issue #387): employee self-service form + HR review register.
+// ล.ย.01 tax-allowance declaration: employee self-service form + HR review register.
 const TaxAllowancePage = lazy(() => import('./features/taxAllowance/TaxAllowancePage.jsx').then(toDefault('TaxAllowancePage')));
 const TaxAllowanceReviewPage = lazy(() => import('./features/taxAllowance/TaxAllowanceReviewPage.jsx').then(toDefault('TaxAllowanceReviewPage')));
 const DepositNoticePage = lazy(() => import('./features/deposits/DepositNoticePage.jsx').then(toDefault('DepositNoticePage')));
@@ -65,36 +62,34 @@ const PricingRequestQueuePage = lazy(() => import('./features/pricingRequests/Pr
 const ImportDealPage = lazy(() => import('./features/importDeal/ImportDealPage.jsx').then(toDefault('ImportDealPage')));
 const ImportFulfilmentPage = lazy(() => import('./features/fulfilment/ImportFulfilmentPage.jsx').then(toDefault('ImportFulfilmentPage')));
 const PricingRequestDetailPage = lazy(() => import('./features/pricingRequests/PricingRequestDetailPage.jsx').then(toDefault('PricingRequestDetailPage')));
-// Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09). Sibling
-// feature to the PricingRequest chain above, not a replacement.
+// Quotation v2 — direct deal quotation. Sibling feature to the PricingRequest chain above, not a
+// replacement.
 const QuotationListPage = lazy(() => import('./features/quotations/QuotationListPage.jsx').then(toDefault('QuotationListPage')));
 const QuotationEditorPage = lazy(() => import('./features/quotations/QuotationEditorPage.jsx').then(toDefault('QuotationEditorPage')));
-// Attendance calendar admin (PR #480 shipped the hr.holiday / hr.work_schedule_assignment write
-// API with no UI at all) — HR/CEO only, gated via canManageAttendanceCalendar. Never gated on
-// SALES_ENABLED: this is attendance/HR-core, not the sales/CRM stack.
+// Attendance calendar admin (hr.holiday / hr.work_schedule_assignment write API) — HR/CEO only,
+// gated via canManageAttendanceCalendar. Never gated on SALES_ENABLED: this is attendance/HR-core,
+// not the sales/CRM stack.
 const AttendanceCalendarPage = lazy(() => import('./features/attendanceCalendar/AttendanceCalendarPage.jsx').then(toDefault('AttendanceCalendarPage')));
 const LeavePolicyDocumentPage = lazy(() => import('./features/leave/LeavePolicyDocumentPage.jsx').then(toDefault('LeavePolicyDocumentPage')));
-// e2e-only fixture (#safe-form-primitive review round, F2) — see the component's own doc comment
-// for why it exists. Route registration below is gated on VITE_USE_MOCKS, so this is unreachable
-// in a production build (no VITE_ vars are set there at all) even though the lazy chunk itself
-// still ships, same as every other route in this file.
+// e2e-only fixture — see the component's doc comment for why it exists. Route registration below is
+// gated on VITE_USE_MOCKS, so it is unreachable in a production build (no VITE_ vars are set there)
+// even though the lazy chunk still ships, like every other route in this file.
 const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.jsx').then(toDefault('SafeFormSubmitterProbe')));
 
-// Thin wrappers that source the ticket id from the URL for the frozen sales
-// pages (they already fetch by id internally — branch 5 only rewires how the
-// id and navigation arrive).
-// AuthResponse carries `admin` as a sibling of `user`, not a field on it (see AuthResponse.java:
-// UserPrincipal is session state with 306 test construction sites). Flatten it here so the rest of
-// the app keeps reading one user object. This only decides whether the nav item renders — every
-// admin endpoint re-checks the flag against the database.
+// Thin wrappers that source the ticket id from the URL for the frozen sales pages (they already
+// fetch by id internally).
+// AuthResponse carries `admin` as a sibling of `user`, not a field on it (UserPrincipal is session
+// state with 306 test construction sites). Flatten it here so the rest of the app keeps reading one
+// user object. This only decides whether the nav item renders — every admin endpoint re-checks the
+// flag against the database.
 //
-// `canCreateQuotation` is the same shape, carried by the same record (AuthResponse.java's own
-// javadoc) -- Quotation v2's per-employee "can create quotations" capability (owner ruling, Ploy
-// 2026-09-09). Also a hint only: DealQuotationService re-reads the grant live on every request.
+// `canCreateQuotation` is the same shape, carried by the same record: the per-employee "can create
+// quotations" capability. Also a hint only: DealQuotationService re-reads the grant live on every
+// request.
 //
-// `canIssueBillingNote` is the same shape again -- the per-employee "can issue billing notes"
-// capability (GLA-99/GLA-129, owner ruling, Ploy 2026-09-19). Also a hint only:
-// BillingNoteService.hasWriteGrant re-reads the grant live on every request.
+// `canIssueBillingNote` is the same shape again: the per-employee "can issue billing notes"
+// capability. Also a hint only: BillingNoteService.hasWriteGrant re-reads the grant live on every
+// request.
 function userFromAuthResponse(response) {
   if (!response?.user) return null;
   return {
@@ -154,22 +149,17 @@ export function App() {
   const isEmployeeExperience = hasPermission(user?.role, 'canUseEmployeeExperience');
   const pendingCount = (isEmployeeExperience ? ownRequests : profileRequests).filter((request) => request.status === 'pending').length;
   const dashboardRequests = isEmployeeExperience && !user?.manager ? ownRequests : profileRequests;
-  // A plain, non-managing employee (role==='employee', not a division manager)
-  // lands on the self-service view instead of the shared EmployeeDashboard.
-  // 'warehouse'/'qc' keep EmployeeDashboard for now — they get the same
-  // canUseEmployeeExperience data wiring but this branch is scoped to
-  // role==='employee' only, per this task. `!isDivisionManager(user)` reuses
-  // the single source of truth for "is this a division manager" (permissions.js)
-  // instead of re-deriving `!user?.manager` inline — a manager-flagged
-  // employee lands on DivisionManagerOverview above, never here.
+  // A plain, non-managing employee (role==='employee', not a division manager) lands on the
+  // self-service view instead of the shared EmployeeDashboard. 'warehouse'/'qc' keep
+  // EmployeeDashboard. `!isDivisionManager(user)` reuses the single source of truth (permissions.js);
+  // a manager-flagged employee lands on DivisionManagerOverview above, never here.
   const isPlainEmployee = user?.role === 'employee' && !isDivisionManager(user);
-  // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). False for HR
-  // and CEO, who keep the role -> Overview chain below untouched; true for
-  // every other role, which short-circuits that chain to the self-service
-  // landing. It has to override the chain rather than sit inside it: a sales
-  // rep's SalesOverview, a sales_manager's ManagerOverview and a division
-  // manager's DivisionManagerOverview all render pipeline or team data the
-  // lock is meant to remove, and each is chosen ABOVE the self-service branch.
+  // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). False for HR and CEO, who keep the
+  // role -> Overview chain below; true for every other role, which short-circuits that chain to the
+  // self-service landing. It has to override the chain rather than sit inside it: a sales rep's
+  // SalesOverview, a sales_manager's ManagerOverview and a division manager's DivisionManagerOverview
+  // all render pipeline or team data the lock is meant to remove, and each is chosen ABOVE the
+  // self-service branch.
   const selfServiceLocked = isSelfServiceLocked(user);
 
   useEffect(() => {
@@ -425,7 +415,7 @@ export function App() {
                 />
               )}
             />
-            {/* ล.ย.01 tax-allowance declaration (issue #387). Guarded in permissions.js's
+            {/* ล.ย.01 tax-allowance declaration. Guarded in permissions.js's
                 PATH_GUARDS — `/tax-allowance` needs an employeeId (same shape as /profile),
                 `/tax-allowance-review` needs canViewTaxAllowanceRegister (hr/ceo). */}
             <Route
@@ -449,7 +439,7 @@ export function App() {
               path="/leave"
               element={<LeaveSurfacePage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
             />
-            {/* Leave-request composer, Phase A2 (#485): deep-linkable so the empty state, a
+            {/* Leave-request composer: deep-linkable so the empty state, a
                 rejected row's "ยื่นคำขอใหม่", and the auto-rejection notification can all link
                 straight into a prefilled step (?type=&start=&end=). */}
             <Route
@@ -460,14 +450,14 @@ export function App() {
               path="/payroll"
               element={<PayrollPage user={user} showToast={showToast} />}
             />
-            {/* Garnishment shortfall ledger (issue #376's read surface, exposed for #744). Its own
+            {/* Garnishment shortfall ledger. Its own
                 route rather than a PayrollPage section: the endpoint takes no month parameter and
                 orders across every period, where PayrollPage is scoped to one selected month. */}
             <Route
               path="/payroll/deduction-shortfalls"
               element={<DeductionShortfallsPage />}
             />
-            {/* Written-consent register (issue #376's other read surface, exposed for #744). Its
+            {/* Written-consent register. Its
                 own route for the same reason as the ledger above: the endpoint is cross-month and
                 takes no period, where PayrollPage is scoped to one selected month. Read is hr+ceo;
                 the hr-only write is gated inside the page. */}
@@ -475,12 +465,12 @@ export function App() {
               path="/payroll/deduction-consents"
               element={<DeductionConsentsPage user={user} showToast={showToast} />}
             />
-            {/* Attendance calendar admin (PR #480's API, this branch's UI) — HR/CEO only. */}
+            {/* Attendance calendar admin — HR/CEO only. */}
             <Route
               path="/settings/attendance-calendar"
               element={<AttendanceCalendarPage user={user} showToast={showToast} />}
             />
-            {/* §5 announcement PDF upload (PR #494's API, this branch's UI, issue #744) — HR/CEO
+            {/* §5 announcement PDF upload — HR/CEO
                 only. A settings route rather than a control on /leave: that page is guarded for
                 every employee, and this is an administrative write on the document governing them. */}
             <Route
@@ -510,7 +500,7 @@ export function App() {
                   path="/pricing-requests/:id"
                   element={<PricingRequestDetailPage user={user} showToast={showToast} />}
                 />
-                {/* Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md). Guarded by
+                {/* Quotation v2 — direct deal quotation. Guarded by
                     canViewDealQuotations in PATH_GUARDS. /quotations/new reads ?ticket= (the
                     editor page reads it via useSearchParams itself); /quotations/:id renders
                     the editor when DRAFT + the viewer may edit, otherwise a read-only summary. */}
@@ -586,7 +576,7 @@ export function App() {
             element={<AttendancePage user={user} employees={employees} showToast={showToast} />}
           />
 
-          {/* e2e-only (#safe-form-primitive review round, F2) — see SafeFormSubmitterProbe.jsx's
+          {/* e2e-only — see SafeFormSubmitterProbe.jsx's
               own doc comment. VITE_USE_MOCKS is never 'true' in production (no VITE_ vars are set
               there at all), so this route does not exist outside a local/mock/e2e context. */}
           {import.meta.env.VITE_USE_MOCKS === 'true' && (

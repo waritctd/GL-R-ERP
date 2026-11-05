@@ -10,11 +10,10 @@ import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
-// Slice 2 — flow A (SLICE-2-FLOW-A.md §A-§C): the quotation is linked to its deal from the first
-// screen. Step 1 is "ดีล" (pick an existing deal, or create one), ผู้รับใบเสนอราคา* is required for a
-// DEAL_DIRECT quotation and travels in the create/update payload (persisted only — owner ruling
-// 2026-09-30 took S2-B2's stage move out of this slice), the editor carries a deal header strip, and
-// a PRICING_REQUEST row shows its recipient read-only. A separate file because
+// The quotation is linked to its deal from the first screen. Step 1 is "ดีล" (pick an existing
+// deal, or create one), ผู้รับใบเสนอราคา* is required for a DEAL_DIRECT quotation and travels in
+// the create/update payload (persisted only; no stage move), the editor carries a deal header
+// strip, and a PRICING_REQUEST row shows its recipient read-only. A separate file because
 // QuotationEditorPage.test.jsx is already ~1,500 lines.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -26,7 +25,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // The served stage catalog (with `routes`) — the same guarded fixture mockApi serves.
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
       tickets: { get: vi.fn(), create: vi.fn(), list: vi.fn() },
-      // One pricing route per deal (owner ruling 2026-09-30): the picked deal's pricing requests.
+      // One pricing route per deal: the picked deal's pricing requests.
       pricingRequests: { listForTicket: vi.fn() },
       dealQuotations: {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
@@ -129,7 +128,7 @@ async function fillCompleteQuotationItem() {
   fireEvent.change(screen.getByLabelText(/^ความหนา/), { target: { value: '10' } });
   fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '1.39' } });
   fireEvent.change(screen.getByLabelText(/^แผ่น\/กล่อง/), { target: { value: '3' } });
-  // Per ตร.ม. including VAT on a Thai document (sales feedback #1, 2026-10-06) — main's rule.
+  // Per ตร.ม. including VAT on a Thai document.
   fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '850' } });
   fireEvent.change(screen.getByLabelText(/^จำนวน/), { target: { value: '36' } });
 }
@@ -223,7 +222,7 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(1));
     fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /โครงการ B1/ }));
-    // #1085: a NEW deal needs a real ช่องทางรับงาน too.
+    // A NEW deal needs a real ช่องทางรับงาน too.
     fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
     await fillCompleteQuotationItem();
@@ -237,8 +236,8 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
 });
 
 describe('/quotations/new?ticket= — recipient preselected from the deal stage (slice 2 §A / flow B)', () => {
-  // Reading the deal's stage to PRESELECT is kept; promising a stage move is not (owner ruling
-  // 2026-09-30 dropped the "ดีลจะอยู่ที่ขั้น …" helper line with S2-B2).
+  // Reading the deal's stage to PRESELECT is kept; promising a stage move is not (no "ดีลจะอยู่ที่ขั้น …"
+  // helper line).
   it.each([
     ['QUOTE_DESIGN_SIDE', 'ผู้ออกแบบ'],
     ['QUOTE_OWNER', 'เจ้าของโครงการ'],
@@ -316,9 +315,9 @@ describe('editor header strip — ดีล <code> · customer · stage · เ�
     expect(api.tickets.get).not.toHaveBeenCalled();
   });
 
-  // Regression (found in the browser, slice 2): following เปิดดีล from the editor crashed the deal
-  // page — this page cached the bare ticket SUMMARY under queryKeys.ticketDetail(id), the key where
-  // TicketDetailPage expects (and renders) the whole TicketDto. The editor must never write there.
+  // Regression: following เปิดดีล from the editor crashed the deal page. This page cached the bare
+  // ticket SUMMARY under queryKeys.ticketDetail(id), the key where TicketDetailPage expects (and
+  // renders) the whole TicketDto. The editor must never write there.
   it('never caches its deal summary under the bare ticketDetail key the deal page renders from', async () => {
     renderEditor('/quotations/new?ticket=18');
     await screen.findByTestId('quotation-deal-strip');
@@ -398,11 +397,11 @@ describe('recipient on an existing DRAFT (slice 2 §C)', () => {
   });
 });
 
-// Found in the browser while capturing the slice-2 screenshots: the deal page's sticky CTA and the
-// worklist key on TicketSummaryDto.liveDirectQuotation (S2-B4), so every docStatus change of a
-// direct quotation changes the DEAL's data too. The editor invalidated only ['dealQuotations'] after
-// submit/approve/…, so the deal page kept showing "ส่งขออนุมัติใบเสนอราคา" after the rep had already
-// submitted. Each such action must invalidate the deal caches (['tickets', …]) as well.
+// The deal page's sticky CTA and the worklist key on TicketSummaryDto.liveDirectQuotation, so every
+// docStatus change of a direct quotation changes the DEAL's data too. The editor invalidated only
+// ['dealQuotations'] after submit/approve/…, so the deal page kept showing "ส่งขออนุมัติใบเสนอราคา"
+// after the rep had already submitted. Each such action must invalidate the deal caches
+// (['tickets', …]) as well.
 describe('a direct-quotation status change refreshes the deal (liveDirectQuotation, S2-B4)', () => {
   const ceoUser = { id: 1, name: 'CEO', role: 'ceo', employeeId: null };
 
@@ -451,10 +450,10 @@ describe('a direct-quotation status change refreshes the deal (liveDirectQuotati
   });
 });
 
-// Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions: a deal with a LIVE pricing
-// request (any status but CANCELLED / SUPERSEDED) may not start a direct quotation. Picking one shows
-// the same inline-notice pattern as a live direct quotation, and บันทึกร่าง is disabled with the
-// reason (DESIGN.md §14).
+// ONE PRICING ROUTE PER DEAL, both directions: a deal with a LIVE pricing request (any status but
+// CANCELLED / SUPERSEDED) may not start a direct quotation. Picking one shows the same
+// inline-notice pattern as a live direct quotation, and บันทึกร่าง is disabled with the reason
+// (DESIGN.md §14).
 describe('/quotations/new?ticket= — a deal with a live pricing request (one pricing route per deal)', () => {
   const LIVE_PR_MESSAGE = 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
   const pr = (status) => ({ id: 501, requestCode: 'PCR-2026-0501', ticketId: 18, status });
@@ -486,7 +485,7 @@ describe('/quotations/new?ticket= — a deal with a live pricing request (one pr
 const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
 const checkedRecipients = () => within(recipientGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-checked'));
 
-// Owner ruling 2026-09-30 #2 — on the NEW-deal card the channel pre-fills the recipient
+// On the NEW-deal card the channel pre-fills the recipient
 // (DESIGNER_LED→ผู้ออกแบบ, OWNER_DIRECT→เจ้าของโครงการ, BUYER_DIRECT→ผู้ซื้อ / ผู้รับเหมา), editable. A later
 // channel change re-fills it ONLY while the rep hasn't picked a recipient themselves. Two fields stay.
 describe('new-deal card — ช่องทางรับงาน pre-fills ผู้รับใบเสนอราคา (owner ruling #2)', () => {
