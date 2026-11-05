@@ -17,13 +17,13 @@ public record LeaveRequestDto(
     String leaveTypeNameEn,
     LocalDate startDate,
     LocalDate endDate,
-    // Sub-day leave (2026-07-25): both null for legacy/whole-day leave. See LeaveDayMath.
+    // Sub-day leave: both null for legacy/whole-day leave. See LeaveDayMath.
     LocalTime startTime,
     LocalTime endTime,
     BigDecimal totalDays,
-    // Leave -> payroll unpaid-day deduction (2026-07-23): totalDays split into what statutory quota
+    // Leave -> payroll unpaid-day deduction: totalDays split into what statutory quota
     // covered (paidDays) vs. what went unpaid (unpaidDays); paidDays + unpaidDays == totalDays for
-    // any request the rule chain did not block. Leave requires approval (2026-08-05): computed and
+    // any request the rule chain did not block. Leave requires approval: computed and
     // persisted at SUBMIT time (LeaveService#computeQuotaSplit), not at approval -- #approve/#reject
     // never touch these columns, so a SUBMITTED request already carries the real figures that will
     // apply once a human approves it. Payroll only ever reads them once status flips to APPROVED
@@ -37,11 +37,10 @@ public record LeaveRequestDto(
     Long attachmentId,
     String attachmentFileName,
     String status,
-    // V118 cross-year quota fix (2026-08-02): for a request that spans a calendar-year boundary
-    // (e.g. a long MATERNITY request), these two figures reflect ONLY quotaYear (the request's START
-    // year) -- see hr.leave_request's V118 column comments. The full per-year breakdown is not
-    // exposed on this DTO; it lives in hr.leave_request_quota_year (LeaveRepository#findQuotaYearSplits).
-    // Unchanged meaning for the common (same-year) case, which is still the vast majority of requests.
+    // For a request that spans a calendar-year boundary (e.g. a long MATERNITY request), these
+    // two figures reflect ONLY quotaYear (the request's START year) -- see hr.leave_request's
+    // column comments. The full per-year breakdown is not exposed on this DTO; it lives in
+    // hr.leave_request_quota_year (LeaveRepository#findQuotaYearSplits).
     BigDecimal quotaRemainingBefore,
     BigDecimal quotaRemainingAfter,
     String systemNote,
@@ -99,18 +98,18 @@ public record LeaveRequestDto(
     // why a single name cannot be picked in that case.
     String pendingApproverRole,
     String pendingApproverName,
-    // §5 WARN_UNPAID_* gates (V164, owner-approved change, 2026-09-09): every warning that fired for
+    // §5 WARN_UNPAID_* gates: every warning that fired for
     // this request but did not block it -- see LeaveRuleWarningDto/LeaveRuleCode#enforcement()/
-    // LeaveService#autoRejectNote. Owner ruling #2: the approver must see this before approving --
+    // LeaveService#autoRejectNote. The approver must see this before approving --
     // this is that surface. NEVER null (LeaveRepository#mapRequest maps a NULL rule_warnings column
     // to List.of()), so a caller can always iterate it without a null check; empty for the common case
-    // (no warning fired) and for every row created before this migration (NO BACKFILL).
+    // (no warning fired) and for every row created before the warnings existed (NO BACKFILL).
     List<LeaveRuleWarningDto> ruleWarnings,
-    // §5 WARN_UNPAID_* gates (V164): how many of totalDays are unpaid because a WARN_UNPAID_ALL/
+    // §5 WARN_UNPAID_* gates: how many of totalDays are unpaid because a WARN_UNPAID_ALL/
     // WARN_UNPAID_EXCESS gate fired, as opposed to ordinary quota exceedance -- see
-    // LeaveService#computeQuotaSplit's Javadoc and hr.leave_request.unpaid_by_rule_days' V164 column
+    // LeaveService#computeQuotaSplit's Javadoc and hr.leave_request.unpaid_by_rule_days' column
     // comment. A SUBSET of unpaidDays above, never a third bucket that would break paidDays +
-    // unpaidDays == totalDays. 0 when no WARN gate fired, or for a pre-V164 row (NO BACKFILL).
+    // unpaidDays == totalDays. 0 when no WARN gate fired, or for a row older than the gates (NO BACKFILL).
     BigDecimal unpaidByRuleDays
 ) {
 }

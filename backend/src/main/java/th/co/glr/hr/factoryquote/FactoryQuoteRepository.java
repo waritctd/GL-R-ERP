@@ -41,7 +41,7 @@ public class FactoryQuoteRepository {
         return "FQ-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
-    /** {@code defaultCurrency} is seeded from the lines' Sales-requested currency (CR-1); null = THB as before. */
+    /** {@code defaultCurrency} is seeded from the lines' Sales-requested currency; null = THB. */
     public long createDraft(long pricingRequestId, Long factoryId, String factoryName, String emailTo,
                             String subject, String body, long actorId, String defaultCurrency) {
         Long id = jdbc.queryForObject("""
@@ -81,15 +81,15 @@ public class FactoryQuoteRepository {
                 .addValue("pricingRequestItemId", pricingRequestItemIds.get(i))
                 .addValue("sortOrder", i);
         }
-        // CR-1 (R1): when Sales locked a price unit / currency on the line, the draft item starts from
+        // When Sales locked a price unit / currency on the line, the draft item starts from
         // THOSE (unit_basis = requested_price_unit_basis, currency = requested_currency); a legacy line
-        // (both NULL) seeds exactly as before. quoted_quantity/quoted_unit stay the request quantity and
-        // the PER_SQM/PER_BOX/PER_LINEAR_M dimension fields stay NULL for import to fill, as today.
-        // unit_basis is otherwise copied verbatim from the request item's own canonical
-        // requested_unit_basis (V68) rather than re-derived from the free-text requested_unit —
-        // a text guess has no way to express PER_BOX / PER_LINEAR_M and used to silently seed
-        // both as PER_PIECE. No COALESCE needed: V68 makes requested_unit_basis NOT NULL and
-        // CHECK-constrained to the same four codes this column already requires (V63), so a
+        // (both NULL) seeds from the request item's own unit basis. quoted_quantity/quoted_unit stay
+        // the request quantity and the PER_SQM/PER_BOX/PER_LINEAR_M dimension fields stay NULL for
+        // import to fill. unit_basis is otherwise copied verbatim from the request item's own
+        // canonical requested_unit_basis rather than re-derived from the free-text requested_unit —
+        // a text guess has no way to express PER_BOX / PER_LINEAR_M and would silently seed
+        // both as PER_PIECE. No COALESCE needed: requested_unit_basis is NOT NULL and
+        // CHECK-constrained to the same four codes this column already requires, so a
         // direct copy always satisfies both sides.
         jdbc.batchUpdate("""
             INSERT INTO sales.factory_quote_item
@@ -106,7 +106,7 @@ public class FactoryQuoteRepository {
     /**
      * Appends newly-resolved pricing-request items onto an EXISTING DRAFT quote, continuing its
      * {@code sort_order} sequence. Companion to {@link #insertDraftItems} for {@code
-     * FactoryQuoteService#generateDrafts}'s BLOCKER 1 fix: a re-run that resolves MORE lines onto
+     * FactoryQuoteService#generateDrafts}: a re-run that resolves MORE lines onto
      * a factory that already has a DRAFT quote must not strand them, but must also not disturb
      * the lines the draft already has. Callers MUST pre-filter {@code pricingRequestItemIds} down
      * to ids not already present on the quote (see {@code
@@ -170,11 +170,11 @@ public class FactoryQuoteRepository {
     }
 
     /**
-     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" -- DRAFT -> REQUESTED with the contacted fields. Guarded on
+     * "ติดต่อโรงงานแล้ว" -- DRAFT -> REQUESTED with the contacted fields. Guarded on
      * {@code status = 'DRAFT'} so a double click / race is a 0-row no-op (caller throws 409) and the
-     * first contacted date can never be overwritten (no undo, no edit -- owner ruling R7).
+     * first contacted date can never be overwritten (no undo, no edit).
      * {@code email_sent_at}/{@code sent_by} are kept in step with the new columns because older
-     * readers (and the V198 backfill's own reading of "sent") still key on them.
+     * readers (and the backfill's own reading of "sent") still key on them.
      */
     public int markContacted(long quoteId, LocalDate contactedOn, String note, long actorId) {
         return jdbc.update("""
@@ -215,15 +215,11 @@ public class FactoryQuoteRepository {
      * non-cancellable until someone deliberately opts it in, where a denylist would silently
      * admit it.
      *
-     * <p><strong>It did not always read this way.</strong> Until the cancel-cutoff change (owner
-     * ruling 2026-08-13) this method matched only {@code ('DRAFT','REQUESTED')} — a quote nobody
-     * had answered yet — and it was a verbatim duplicate of SQL inlined in {@code
-     * PricingRequestRepository#cancelOpenStep2Children}, which is why nothing called it. That
-     * narrow set was survivable only because cancel itself was unreachable past
-     * AWAITING_FACTORY_RESPONSE. Now that {@link th.co.glr.hr.pricingrequest.PricingRequestStatus}
-     * permits cancel through APPROVED_FOR_QUOTATION, the common case is a request whose quotes are
-     * all {@code READY_FOR_COSTING} — precisely the ones the old predicate missed — and missing
-     * them would leave live, {@code is_current = TRUE} quotes hanging off a CANCELLED request.
+     * <p><strong>Why not just {@code ('DRAFT','REQUESTED')}.</strong> {@link
+     * th.co.glr.hr.pricingrequest.PricingRequestStatus} permits cancel through
+     * APPROVED_FOR_QUOTATION, so the common case is a request whose quotes are all {@code
+     * READY_FOR_COSTING} — and missing them would leave live, {@code is_current = TRUE} quotes
+     * hanging off a CANCELLED request.
      *
      * <p>Setting {@code is_current = FALSE} alongside the status is required, not cosmetic:
      * {@code chk_factory_quote_current_terminal} permits {@code is_current = FALSE} only for
@@ -236,7 +232,7 @@ public class FactoryQuoteRepository {
      */
     public int cancelOpenForPricingRequest(long pricingRequestId, String reason, long actorId) {
         int cancelled = cancelOpenQuoteRows(pricingRequestId, reason, actorId);
-        // CR-1: pending lead-time changes on the dead request are withdrawn with it. Unconditional: a
+        // Pending lead-time changes on the dead request are withdrawn with it. Unconditional: a
         // change can be PENDING even when this call cancelled no quote row (e.g. the quotes were
         // already NOT_AVAILABLE).
         jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
@@ -339,7 +335,7 @@ public class FactoryQuoteRepository {
                 .addValue("parentId", previous.id())
                 .addValue("revisionNo", nextRevision)
                 .addValue("createdBy", actorId)
-                // CR-1: a price revision is the same conversation with the same factory, so who
+                // A price revision is the same conversation with the same factory, so who
                 // contacted it, when and the note ride along (they are never re-entered).
                 .addValue("contactedOn", previous.contactedOn())
                 .addValue("contactedNote", previous.contactedNote())
@@ -350,8 +346,7 @@ public class FactoryQuoteRepository {
     }
 
     /**
-     * Refuses to supersede a quote that has already left the live/negotiable lifecycle. Owner
-     * ruling: a LIVE quote may be superseded (that's the normal revision path), a DEAD one may
+     * Refuses to supersede a quote that has already left the live/negotiable lifecycle. A LIVE quote may be superseded (that's the normal revision path), a DEAD one may
      * not. The three excluded statuses are each terminal — no repository method in this file
      * transitions OUT of any of them: {@code NOT_AVAILABLE} (set by {@link #markNotAvailable}),
      * {@code SUPERSEDED} (set by this method itself — so a second call is an idempotent no-op,
@@ -388,7 +383,7 @@ public class FactoryQuoteRepository {
                AND status IN ('DRAFT','REQUESTED','RESPONSE_RECEIVED','NEGOTIATING','READY_FOR_COSTING')
             """, Map.of("quoteId", quoteId));
         if (rows > 0) {
-            // CR-1: a lead-time change raised on a row that is no longer current dies with it.
+            // A lead-time change raised on a row that is no longer current dies with it.
             jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
                 .formatted("c.factory_quote_id = :quoteId"), Map.of("quoteId", quoteId,
                     "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
@@ -469,7 +464,7 @@ public class FactoryQuoteRepository {
             """, Map.of("quoteId", quoteId));
     }
 
-    /** A PENDING lead-time change on this quote (CR-1), read before supersede/markNotAvailable auto-withdraws it. */
+    /** A PENDING lead-time change on this quote, read before supersede/markNotAvailable auto-withdraws it. */
     public boolean hasPendingLeadTimeChange(long quoteId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM sales.lead_time_change WHERE factory_quote_id = :quoteId AND status = 'PENDING')",
@@ -479,7 +474,7 @@ public class FactoryQuoteRepository {
     public int markNotAvailable(long quoteId, String reason, long actorId) {
         int rows = markNotAvailableRows(quoteId, reason, actorId);
         if (rows > 0) {
-            // CR-1: the quote is retired (still "current", but dead), so a change raised on it dies too.
+            // The quote is retired (still "current", but dead), so a change raised on it dies too.
             jdbc.update(th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_SQL
                 .formatted("c.factory_quote_id = :quoteId"), Map.of("quoteId", quoteId,
                     "autoReason", th.co.glr.hr.pricingrequest.LeadTimeChangeRepository.AUTO_WITHDRAW_REASON));
@@ -584,7 +579,7 @@ public class FactoryQuoteRepository {
      * {@code toPricingRequestId}, remapping each quote item's {@code pricing_request_item_id}
      * through {@code itemIdMapping} (parent item id -&gt; child item id).
      *
-     * <p>Reissue-through-CEO-chain (owner ruling 2026-08-13): when a customer-change revision
+     * <p>Reissue-through-CEO-chain: when a customer-change revision
      * renegotiates only the commercial terms — every product and every requested quantity
      * identical to the parent's — Import is not made to re-ask the factory for prices that did not
      * change. {@code FactoryQuoteCarryForward} is the only caller and owns the decision about
@@ -772,7 +767,7 @@ public class FactoryQuoteRepository {
     }
 
     /**
-     * V134 storage-durability fix: {@code filePath} here is the bare correlation key {@code
+     * Storage durability: {@code filePath} here is the bare correlation key {@code
      * FileStorageService#storeInDatabase} computed, and {@code content} is inserted into {@code
      * hr.file_attachment_blob} in the SAME transaction as the {@code hr.file_attachment} insert
      * below ({@code FactoryQuoteService#uploadAttachment} is {@code @Transactional}), flipping
@@ -821,7 +816,7 @@ public class FactoryQuoteRepository {
         }
     }
 
-    /** V134: {@code (filePath, storageState)} pair for the download path's availability check. */
+    /** {@code (filePath, storageState)} pair for the download path's availability check. */
     public Optional<AttachmentFileLocation> findAttachmentFileLocation(long attachmentId) {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
@@ -840,9 +835,9 @@ public class FactoryQuoteRepository {
     }
 
     /**
-     * Audited tombstone (V69, review remediation COMMIT 4): keeps the row and the stored file,
-     * only records who deleted it, when, and why. Replaces the old hard {@code DELETE} +
-     * {@code Files.deleteIfExists} — supplier evidence is append-only once recorded; only
+     * Audited tombstone: keeps the row and the stored file,
+     * only records who deleted it, when, and why (no hard {@code DELETE} or
+     * {@code Files.deleteIfExists}) — supplier evidence is append-only once recorded; only
      * {@code FactoryQuoteService.deleteAttachment}'s guards (not {@code READY_FOR_COSTING}, not
      * referenced by a {@code SUBMITTED} costing — see {@link #existsSubmittedCostingReferencingQuote})
      * decide whether tombstoning is even permitted. Guarded by {@code deleted_at IS NULL} so a
