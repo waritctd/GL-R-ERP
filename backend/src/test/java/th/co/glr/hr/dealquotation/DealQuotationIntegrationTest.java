@@ -259,7 +259,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .anyMatch(n -> n.type().equals("DEAL_QUOTATION_APPROVED"));
 
         // Owner request (2026-09-15): approval used to ALSO send a second, plain-text email with
-        // the PDF attached (via #sendApprovalEmail's own mailer) alongside the branded HTML one
+        // the PDF attached (via the approval email's own mailer) alongside the branded HTML one
         // notifyRepAndCreator already sends — the same recipient got two emails for one approval.
         // That second send is now gone; only the in-app row (and its own HTML email, asserted via
         // notifyRepAndCreator above) fires.

@@ -84,17 +84,16 @@ public class OrderConfirmationService {
     private final CustomerQuotationRepository quotations;
     private final DepositNoticeService depositNotices;
     private final NotificationRepository notifications;
-    // GLA-123 slice S3 BLOCKER 2 fix — read-only dependency onto the new engine, used by
-    // #reconcileTicketItems to prefer an ACCEPTED PRICING_REQUEST-origin quotation's own line
-    // quantities over the PR item's authored ones, and by #createDepositNoticeFromQuotation to
-    // find the pricing request's ACCEPTED new-engine quotation. SETTER-injected (not a
-    // constructor parameter), matching DealQuotationService's own established device (see its
-    // #wirePricingRequestDependencies Javadoc): 12 existing hand-wired
+    // Read-only dependency onto the new engine, used by #reconcileTicketItems to prefer an ACCEPTED
+    // PRICING_REQUEST-origin quotation's own line quantities over the PR item's authored ones, and
+    // by #createDepositNoticeFromQuotation to find the pricing request's ACCEPTED new-engine
+    // quotation. SETTER-injected (not a constructor parameter), matching DealQuotationService's own
+    // established device (see its #wirePricingRequestDependencies Javadoc): the hand-wired
     // `new OrderConfirmationService(...)` test call sites keep compiling unchanged, Spring wires
     // it automatically via the @Autowired setter in production, and #reconcileTicketItems
-    // null-guards so an unwired test (every one of the 12 that never exercises a
-    // PRICING_REQUEST-origin PR) is unaffected either way — falling back to the PR item's own
-    // quantity, which is what those tests' legacy-origin fixtures need regardless.
+    // null-guards so an unwired test (any that never exercises a PRICING_REQUEST-origin PR) is
+    // unaffected either way -- falling back to the PR item's own quantity, which is what those
+    // tests' legacy-origin fixtures need regardless.
     private th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations;
 
     public OrderConfirmationService(PricingRequestRepository pricingRequests, TicketRepository tickets,
@@ -108,10 +107,10 @@ public class OrderConfirmationService {
         this.notifications = notifications;
     }
 
-    /** GLA-123 slice S3 BLOCKER 2 fix — see {@link #dealQuotations}'s own Javadoc for why this is
-     * setter- rather than constructor-injected. {@code required = false}: an unwired instance
-     * falls back to the PR item's own quantity in confirmOrder, and answers 409 on the new-engine
-     * branch of createDepositNoticeFromQuotation. */
+    /** See {@link #dealQuotations}'s own Javadoc for why this is setter- rather than
+     * constructor-injected. {@code required = false}: an unwired instance falls back to the PR
+     * item's own quantity in confirmOrder, and answers 409 on the new-engine branch of
+     * createDepositNoticeFromQuotation. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
         this.dealQuotations = dealQuotations;
@@ -156,7 +155,7 @@ public class OrderConfirmationService {
 
         // Gate BEFORE the first write: the bridge below can only handle a ticket sitting at
         // 'draft' (it advances it) or already at 'quotation_issued' (a later accepted revision).
-        // Any other status used to be discovered only AFTER markOrderConfirmed had committed,
+        // Any other status would be discovered only AFTER markOrderConfirmed had committed,
         // stranding the deal half-confirmed. Refuse up front, naming the status.
         String ticketStatus = requireTicketSummary(locked.ticketId()).status();
         if (!isBridgeableTicketStatus(ticketStatus)) {
@@ -220,9 +219,9 @@ public class OrderConfirmationService {
         TicketSummaryDto currentTicketState = requireTicketSummary(locked.ticketId());
         TicketDto ticketDto;
         if (currentTicketState.paymentStatus() == null) {
-            // The accepted new-engine quotation's percent decides the deposit policy (owner ruling
-            // 2026-10-22, see TicketService#applyCustomerConfirmation; a blank percent means 30, ruling 10-23).
-            // A legacy quotation carries none, so the policy is left alone.
+            // The accepted new-engine quotation's percent decides the deposit policy (see
+            // TicketService#applyCustomerConfirmation; a blank percent means 30). A legacy
+            // quotation carries none, so the policy is left alone.
             th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto confirmed = dealQuotations == null
                 ? null
                 : dealQuotations.findAcceptedForPricingRequest(pricingRequestId)
@@ -325,11 +324,11 @@ public class OrderConfirmationService {
      */
     private void reconcileTicketItems(long pricingRequestId, long ticketId, UserPrincipal actor) {
         List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
-        // GLA-123 slice S3 BLOCKER 2 fix — see DealQuotationRepository
-        // #findAcceptedItemQuantitiesByPricingRequest's own Javadoc. Empty (not merely unwired)
-        // whenever this PR's accepted quotation is on the LEGACY engine or there is none yet — the
-        // legacy engine has no per-line quantity edit at all, so falling back to the PR item's own
-        // requestedQty()/requestedQtySqm() below is correct there, not a compromise.
+        // See DealQuotationRepository#findAcceptedItemQuantitiesByPricingRequest's Javadoc. Empty
+        // (not merely unwired) whenever this PR's accepted quotation is on the LEGACY engine or
+        // there is none yet -- the legacy engine has no per-line quantity edit at all, so falling
+        // back to the PR item's own requestedQty()/requestedQtySqm() below is correct there, not a
+        // compromise.
         java.util.Map<Long, th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty> acceptedByPrItemId =
             dealQuotations != null
                 ? dealQuotations.findAcceptedItemQuantitiesByPricingRequest(pricingRequestId)
@@ -343,16 +342,14 @@ public class OrderConfirmationService {
             th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty accepted =
                 acceptedByPrItemId.get(item.id());
             BigDecimal reconciledQty = accepted != null ? accepted.qty() : item.requestedQty();
-            // GLA-123 slice S3 MAJOR-B fix (Opus review against real Postgres, 2026-09-23): qty
-            // used to move (BLOCKER 2's own fix) while qty_sqm silently kept the PR's ORIGINAL,
-            // pre-edit area — reproduced live: qty=25.00 (correct) alongside qty_sqm=3.6000 (still
-            // the stale 10-piece area), a genuine contradiction between the two columns on the
-            // SAME row. Derives qty_sqm from the SAME accepted qty via the shared {@code
+            // qty_sqm must move with qty: if it kept the PR's ORIGINAL, pre-edit area, qty=25.00
+            // would sit beside qty_sqm=3.6000 (the stale 10-piece area) on the SAME row. So derive
+            // qty_sqm from the SAME accepted qty via the shared {@code
             // WastageCalculator#sqmQuantityFromPieces} (never reimplemented here) whenever a
-            // sqm/piece basis is available on the accepted line; falls back to the PR item's own
-            // requestedQtySqm() when there is no accepted new-engine quotation (legacy engine —
+            // sqm/piece basis is available on the accepted line; fall back to the PR item's own
+            // requestedQtySqm() when there is no accepted new-engine quotation (legacy engine --
             // correct already, see comment above) or the accepted line has no sqm/piece basis
-            // (defensive only — every TILE row on this origin has one).
+            // (defensive only -- every TILE row on this origin has one).
             BigDecimal reconciledQtySqm = (accepted != null && accepted.sqmPerPiece() != null)
                 ? th.co.glr.hr.dealquotation.WastageCalculator.sqmQuantityFromPieces(
                     reconciledQty.intValueExact(), accepted.sqmPerPiece())
@@ -432,17 +429,16 @@ public class OrderConfirmationService {
      * sales.ticket_item row" assertions inside {@code OrderConfirmationIntegrationTest
      * .fullChain_quotationAcceptedThroughDepositPaid_composesWithoutShortcuts}.
      *
-     * <p><strong>Post-diagnosis update:</strong> {@code DepositNoticeService.createDraft} itself
-     * DID need a fix — every deal created purely through this chain reaches this method with
-     * {@code ticket_item.approved_price} still NULL on every line (that column is written only by
-     * the {@code @Deprecated}, routeless {@code TicketService.approve}), and the header fields
-     * ({@code customerTaxId}/{@code customerAddress}/{@code projectName}) were never autofilled at
-     * all. This call site is unaffected by that fix (it always supplies non-empty {@code items}
-     * itself, and leaves the header fields {@code null} for {@code createDraft} to autofill from
-     * the ticket's own customer/project, same as the ticket-level route) — see {@code
-     * DepositNoticeService.createDraft}'s own comments for what changed and why.
+     * <p>{@code DepositNoticeService.createDraft} has to cope with this chain: every deal created
+     * purely through it reaches this method with {@code ticket_item.approved_price} still NULL on
+     * every line (that column is written only by the {@code @Deprecated}, routeless {@code
+     * TicketService.approve}), and the header fields ({@code customerTaxId}/{@code
+     * customerAddress}/{@code projectName}) are not supplied. This call site always supplies
+     * non-empty {@code items} itself, and leaves the header fields {@code null} for {@code
+     * createDraft} to autofill from the ticket's own customer/project, same as the ticket-level
+     * route.
      *
-     * <p><strong>Deposit percent (owner rulings 2026-09-29, 2026-10-23):</strong> {@code
+     * <p><strong>Deposit percent:</strong> {@code
      * request.depositPercent()} is never read: the percent is the one the chosen quotation's PDF
      * printed, passed as {@code sourceDepositPercent}. For the legacy branch that is always {@link
      * QuotationRenderer#LEGACY_DEPOSIT_PERCENT}, because the legacy PDF never reads the stored
@@ -492,9 +488,9 @@ public class OrderConfirmationService {
                 throw new ApiException(HttpStatus.CONFLICT, "ยังไม่มีใบเสนอราคาที่ลูกค้ายอมรับสำหรับคำขอราคานี้");
             }
             // A zero-deposit quotation (DealQuotationService#isZeroDeposit: "ไม่รับมัดจำ", paid in
-            // full under fullPaymentTerm) has nothing to bill. Since #1173 the confirmation above
-            // moves such a deal to NOT_REQUIRED and createDraftFromQuotation refuses a bypass policy;
-            // this check stays for deals confirmed before that sync existed (still REQUIRED).
+            // full under fullPaymentTerm) has nothing to bill. The confirmation above moves such a
+            // deal to NOT_REQUIRED and createDraftFromQuotation refuses a bypass policy; this check
+            // stays for deals confirmed before that sync existed (still REQUIRED).
             if (Integer.valueOf(0).equals(newEngine.depositPercent())) {
                 throw DepositNoticeService.zeroDepositRefusal(newEngine.number());
             }
