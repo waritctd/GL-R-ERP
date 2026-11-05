@@ -32,8 +32,8 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
 @Repository
 public class LeaveRepository {
-    // Legacy fallback (2026-08-03): the hardcoded Mon-Fri/no-holiday assumption LeaveDayMath used
-    // to carry everywhere, now scoped to ONLY the 1-arg constructor below -- see that constructor's
+    // Legacy fallback: the hardcoded Mon-Fri/no-holiday assumption, scoped to ONLY the 1-arg
+    // constructor below -- see that constructor's
     // javadoc. Built through the SAME WorkScheduleResolver/HolidayCalendar interfaces the real
     // schedule/holiday-aware path uses, so #workingDayPredicate needs no legacy-vs-real branch.
     private static final WorkSchedule LEGACY_MON_FRI_SCHEDULE = new WorkSchedule(
@@ -77,9 +77,8 @@ public class LeaveRepository {
     private final HolidayCalendar holidayCalendar;
 
     /**
-     * Test-convenience overload (2026-08-03): defaults to {@link #LEGACY_SCHEDULE_RESOLVER}/
-     * {@link #LEGACY_NO_HOLIDAYS} -- Mon-Fri counts as working, no date is ever a holiday, exactly
-     * {@code LeaveDayMath}'s pre-schedule-aware behaviour. This exists ONLY so the ~30 payroll/leave
+     * Test-convenience overload: defaults to {@link #LEGACY_SCHEDULE_RESOLVER}/
+     * {@link #LEGACY_NO_HOLIDAYS} -- Mon-Fri counts as working, no date is ever a holiday. This exists ONLY so the ~30 payroll/leave
      * integration tests that construct {@code new LeaveRepository(jdbc)} directly (they need SOME
      * working repository to satisfy PayrollService/LeaveService's constructor, but do not exercise
      * six-day-schedule or holiday day-counting) are not forced into an unrelated diff. Production
@@ -100,9 +99,9 @@ public class LeaveRepository {
     }
 
     /**
-     * Schedule/holiday-aware "is this date a working day for this employee" predicate (2026-08-03)
-     * -- see {@code LeaveDayMath}'s javadoc for the six-day-department and holiday defects this
-     * closes. {@code LeaveService#submit}/{@code #cancel} call this ONCE per request (not per day)
+     * Schedule/holiday-aware "is this date a working day for this employee" predicate
+     * -- see {@code LeaveDayMath}'s javadoc for the six-day-department and holiday handling.
+     * {@code LeaveService#submit}/{@code #cancel} call this ONCE per request (not per day)
      * to build the predicate every {@code LeaveDayMath} day-counting call for that request then
      * shares. Costs exactly two queries regardless of the range's length: the employee's
      * division/department (for schedule resolution) and the range's holidays, both batch reads --
@@ -548,25 +547,24 @@ public class LeaveRepository {
     }
 
     /**
-     * V118 cross-year quota fix (2026-08-02): reads from {@code hr.leave_request_quota_year}, NOT the
-     * parent's own {@code total_days}/{@code quota_year} -- a request's days may now be attributed to
+     * Reads from {@code hr.leave_request_quota_year} (V118), NOT the
+     * parent's own {@code total_days}/{@code quota_year} -- a request's days may be attributed to
      * more than one calendar year (§5.4 MATERNITY), so quota consumption for a given year must sum
      * only the days that year's own child row records, not a whole multi-year request's total just
      * because it happens to touch this year at all. For every pre-V118 (necessarily single-year)
-     * request this is byte-identical to the old parent-column query, since V118's backfill gave each
+     * request this equals the parent-column figure, since V118's backfill gave each
      * one exactly one child row carrying its own total_days.
      *
-     * <p><b>V164 unpaid-by-rule exclusion (owner-approved change, 2026-09-09, owner ruling #1):</b>
-     * sums {@code lrqy.total_days - lrqy.unpaid_by_rule_days}, NOT plain {@code total_days} -- this is
-     * the fix that keeps unpaid-by-rule days from silently re-entering quota consumption through the
+     * <p><b>Unpaid-by-rule exclusion (V164):</b>
+     * sums {@code lrqy.total_days - lrqy.unpaid_by_rule_days}, NOT plain {@code total_days} -- this
+     * keeps unpaid-by-rule days from silently re-entering quota consumption through the
      * back door of a LATER request in the same year. {@link LeaveService#computeQuotaSplit} already
      * excludes them from the CURRENT request's own {@code quotaBoundedPaidDaysYear}; without this
      * subtraction here too, a fully-unpaid-by-rule WARN request's whole {@code total_days} would still
-     * have counted as "used" the next time THIS method ran (e.g. for a second request the same
-     * employee/type/year), silently reducing quota the current request never actually consumed --
-     * exactly the failure ruling #1 names explicitly ("must not appear in sumUsedDays... consumption").
-     * {@code unpaid_by_rule_days} is 0 for every pre-V164 row (that column's own NO BACKFILL, and this
-     * subtraction is then a no-op), so this is behaviour-preserving for every row that predates V164.
+     * count as "used" the next time THIS method ran (e.g. for a second request the same
+     * employee/type/year), silently reducing quota the current request never actually consumed.
+     * {@code unpaid_by_rule_days} is 0 for every pre-V164 row (that column has NO BACKFILL, and this
+     * subtraction is then a no-op).
      */
     public BigDecimal sumUsedDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
@@ -826,7 +824,7 @@ public class LeaveRepository {
     }
 
     /**
-     * Leave -&gt; payroll unpaid-day deduction (2026-07-23): per employee, the unpaid WORKING days of
+     * Leave -&gt; payroll unpaid-day deduction: per employee, the unpaid WORKING days of
      * APPROVED leave that fall inside payroll month {@code monthStart} (a first-of-month date). Reads
      * every APPROVED, unpaid-day-bearing request whose date range overlaps the month, then attributes
      * days to the month in Java via {@link LeaveDayMath#unpaidWorkingDaysByMonth} so a leave spanning
@@ -834,36 +832,35 @@ public class LeaveRepository {
      * month count here, not the request's full unpaid_days total. Consumed by {@code
      * PayrollService#suggestedInputs} (additive; never touches {@code preview()}/{@code process()}).
      *
-     * <p>V118 cross-year quota fix: reads {@code paid_days}/{@code total_days} from the
+     * <p>Cross-year (V118): reads {@code paid_days}/{@code total_days} from the
      * {@code hr.leave_request_quota_year} row for {@code year(monthStart)} specifically -- NOT the
      * parent's aggregate columns -- and clips the date range to that same calendar year before
      * handing it to {@link LeaveDayMath#unpaidWorkingDaysByMonth}. A payroll month always belongs to
      * exactly one calendar year, so this year's own child row is always sufficient (an unpaid day in
      * month M can only ever come from year(M)'s own attribution -- see {@link
      * LeaveQuotaYearSplit}'s Javadoc on why paid-day consumption resets at a year boundary, which is
-     * exactly why the PARENT's aggregate paid_days/total_days can no longer be used here). For every
-     * pre-V118 (necessarily single-year) request this is byte-identical to the old behaviour, since
-     * the year-clip is a no-op when the whole range already sits inside one year.
+     * exactly why the PARENT's aggregate paid_days/total_days cannot be used here). For a
+     * single-year request the year-clip is a no-op, since the whole range already sits inside one year.
      *
      * <p>§5.4 MATERNITY calendar-day counting (V119): joins {@code hr.leave_type} for {@code
      * day_count_basis} and passes it through to {@link LeaveDayMath#unpaidWorkingDaysByMonth}.
-     * DECISION (see LeaveService's submit()/recordPayrollCorrectionIfNeeded() Javadoc for the full
-     * reasoning): the payroll base/30 deduction uses the SAME basis as the leave type's own
+     * See LeaveService's submit()/recordPayrollCorrectionIfNeeded() Javadoc for the full
+     * reasoning: the payroll base/30 deduction uses the SAME basis as the leave type's own
      * quota/paid-cap counting, not always WORKING_DAYS. For MATERNITY this means an unpaid day that
      * falls on a Saturday/Sunday inside the leave IS deducted -- because {@code paid_days}/{@code
      * total_days} were themselves computed on a calendar-day basis (§5.4), so a working-days-only
      * reading here would silently drop weekend/holiday days from the deduction even though they were
      * counted as consumed leave, breaking the {@code paidDays + unpaidDays == totalDays} invariant
      * this method's ranking logic depends on. For every WORKING_DAYS type (everything except
-     * MATERNITY) this is byte-identical to the pre-V119 behaviour.
+     * MATERNITY) this is plain working-day counting.
      *
-     * <p>Schedule/holiday-aware working-day counting (2026-08-03): also joins {@code hr.employee}
+     * <p>Schedule/holiday-aware working-day counting: also joins {@code hr.employee}
      * for {@code division_id}/{@code department_id} (schedule resolution) and batch-loads the
      * MONTH's holidays ONCE via {@code holidayCalendar.holidaysBetween} -- not once per span, and
      * definitely not once per day -- then builds one {@link LeaveDayMath#workingDayPredicate} per
      * span from that employee's own division/department. A WORKING_DAYS-basis span for a
-     * {@code OPS_6D} (six-day) employee now correctly counts an unpaid Saturday inside it; a span
-     * overlapping a seeded {@code hr.holiday} row no longer counts that date at all, for any
+     * {@code OPS_6D} (six-day) employee counts an unpaid Saturday inside it; a span
+     * overlapping a seeded {@code hr.holiday} row does not count that date at all, for any
      * employee. MATERNITY (CALENDAR_DAYS) is unaffected -- see {@link LeaveDayCountBasis}.
      */
     public Map<Long, BigDecimal> findUnpaidLeaveDaysByEmployeeForMonth(LocalDate monthStart) {
@@ -939,8 +936,8 @@ public class LeaveRepository {
                 });
                 unpaidInMonth = LeaveDayMath.unpaidByMonthFromFractions(yearFractions, span.paidDays()).get(monthStart);
             } else {
-                // Sub-day leave (2026-07-25): reads the BigDecimal LeaveDayMath computes directly --
-                // no more setScale(0, DOWN) floor, which used to discard a sub-day fraction entirely.
+                // Sub-day leave: reads the BigDecimal LeaveDayMath computes directly --
+                // a setScale(0, DOWN) floor would discard a sub-day fraction entirely.
                 unpaidInMonth = LeaveDayMath
                     .unpaidWorkingDaysByMonth(
                         clipped[0], clipped[1], span.paidDays(), span.totalDays(), span.basis(), isWorkingDay)
@@ -954,7 +951,7 @@ public class LeaveRepository {
     }
 
     /**
-     * Leave requires approval (2026-08-05): count of SUBMITTED (pending-approval) leave requests
+     * Leave requires approval: count of SUBMITTED (pending-approval) leave requests
      * whose date range overlaps {@code [monthStart, monthStart+1month-1]} -- SAME month-overlap
      * predicate {@link #findUnpaidLeaveDaysByEmployeeForMonth} uses ({@code start_date <=
      * monthEndInclusive AND end_date >= monthStart}), deliberately not narrowed to
@@ -965,8 +962,8 @@ public class LeaveRepository {
      * <p>Read-only advisory surfaced by {@code PayrollService#suggestedInputs} (see that method's
      * Javadoc) so HR sees, before running payroll, that some leave overlapping the month is still
      * awaiting a human decision and therefore is NOT YET reflected in {@link
-     * #findUnpaidLeaveDaysByEmployeeForMonth}'s figures -- approval is now a real payroll deadline
-     * that did not exist before this change (a SUBMITTED request only feeds the unpaid-day deduction
+     * #findUnpaidLeaveDaysByEmployeeForMonth}'s figures -- approval is a real payroll deadline
+     * (a SUBMITTED request only feeds the unpaid-day deduction
      * once it flips to APPROVED). This never feeds {@code preview()}/{@code process()}; it is purely
      * additive, the same guarantee every other field {@code suggestedInputs} adds already carries.
      */
@@ -987,7 +984,7 @@ public class LeaveRepository {
     }
 
     /**
-     * Cancel-after-close reversal (2026-07-23): of the given candidate months, which already have a
+     * Cancel-after-close reversal: of the given candidate months, which already have a
      * PROCESSED payroll_period -- i.e. which of the cancelled leave's months are "closed" and can no
      * longer simply un-happen. Called from {@code LeaveService#cancel}.
      */
@@ -1006,10 +1003,9 @@ public class LeaveRepository {
     }
 
     /**
-     * Cancel-after-close reversal (2026-07-23): records that {@code unpaidDaysToRefund} unpaid days
+     * Cancel-after-close reversal: records that {@code unpaidDaysToRefund} unpaid days
      * already deducted for {@code payrollMonth} belong to a leave request that has since been
-     * cancelled, so the credit is still owed to the employee. Never auto-resolved by this codebase yet
-     * -- see the V85 migration comment and the branch handoff for why.
+     * cancelled, so the credit is still owed to the employee. See the V85 migration comment.
      */
     public void recordPayrollCorrection(long leaveRequestId, long employeeId, LocalDate payrollMonth, BigDecimal unpaidDaysToRefund) {
         jdbc.update("""
@@ -1026,13 +1022,13 @@ public class LeaveRepository {
     }
 
     /**
-     * Cancel-after-close reversal (2026-07-23): unresolved (not yet {@code resolved_at}) correction
+     * Cancel-after-close reversal: unresolved (not yet {@code resolved_at}) correction
      * totals per employee, across all months -- surfaced by {@code PayrollService#suggestedInputs}
      * as an early "heads up, something is outstanding" figure for HR, independent of any specific
      * payroll run. This is deliberately UNSCOPED (no give-back-on-re-run logic) and never mutates
-     * anything -- the actual auto-refund + resolve now lives in {@link
+     * anything -- the actual auto-refund + resolve lives in {@link
      * #findRefundableUnpaidDaysByEmployee} / {@link #resolvePendingCorrections}, used by {@code
-     * PayrollService#preview}/{@code #process} directly. Keep this one as-is; it is a separate,
+     * PayrollService#preview}/{@code #process} directly. This is a separate,
      * lighter-weight signal, not the source of truth for what a given run will actually refund.
      */
     public Map<Long, BigDecimal> findPendingPayrollCorrectionsByEmployee() {
@@ -1048,7 +1044,7 @@ public class LeaveRepository {
     }
 
     /**
-     * Cancel-after-close reversal, AUTO-REFUND (2026-07-23): total unpaid days to refund per
+     * Cancel-after-close reversal, AUTO-REFUND: total unpaid days to refund per
      * employee that THIS payroll calculation should credit back -- pending corrections
      * ({@code resolved_at IS NULL}) PLUS, if {@code givingBackPeriodId} is non-null, any correction
      * already resolved BY THAT SAME period. The give-back half is what makes re-processing a month
@@ -1076,7 +1072,7 @@ public class LeaveRepository {
     }
 
     /**
-     * Cancel-after-close reversal, AUTO-REFUND (2026-07-23): marks every correction consumed by
+     * Cancel-after-close reversal, AUTO-REFUND: marks every correction consumed by
      * {@code periodId}'s just-computed calculation as resolved. The WHERE clause is deliberately
      * the exact same shape as {@link #findRefundableUnpaidDaysByEmployee}'s read for this same
      * {@code periodId} -- run in the same DB transaction (see {@code PayrollService#process},
@@ -1216,12 +1212,12 @@ public class LeaveRepository {
     }
 
     /**
-     * §5 WARN_UNPAID_* gates (V164, owner-approved change, 2026-09-09): persists the accumulated
+     * §5 WARN_UNPAID_* gates (V164): persists the accumulated
      * warnings and the resulting unpaid-by-rule day count for a request that submitted normally
      * despite one or more WARN_UNPAID_ALL/WARN_UNPAID_EXCESS gates firing -- a small follow-up UPDATE
      * by id, same shape as {@link #markEmergencyFiling}/{@link #recordAutoRejectReason} above and for
-     * the identical reason: kept OUT of {@link #create}'s own parameter list so every pre-existing
-     * caller/test of that method is unaffected by this addition. Called ONLY when {@code warnings} is
+     * the identical reason: kept OUT of {@link #create}'s own parameter list so every
+     * caller/test of that method is unaffected. Called ONLY when {@code warnings} is
      * non-empty -- {@code rule_warnings} stays NULL and {@code unpaid_by_rule_days} stays its SQL
      * DEFAULT of 0 otherwise (the common case: no WARN gate fired), the same "no separate clear path
      * needed" reasoning {@link #recordAutoRejectReason}'s Javadoc gives for {@code system_note_code}.

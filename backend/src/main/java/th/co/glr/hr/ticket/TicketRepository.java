@@ -73,24 +73,24 @@ public class TicketRepository {
     // deal is never in scope, even at a late stage (mirrors dealInScope's `closed` guard).
     //
     // ── Why ORDER_RECEIVED and not PROCUREMENT ────────────────────────────────
-    // This started at PROCUREMENT, which made the scope self-defeating: a deal is only ever
-    // written to PROCUREMENT by TicketService.issueImportRequest itself, so import could not see
-    // the deal until after it had done the very thing it needed the deal in order to do.
+    // A deal is only ever written to PROCUREMENT by TicketService.issueImportRequest itself, so a
+    // PROCUREMENT floor would hide the deal from import until after it had done the very thing it
+    // needed the deal in order to do.
     //
-    // Both disjuncts were false in exactly the state that matters. A deal awaiting its IR sits at
-    // ORDER_RECEIVED (confirmOrder) or DEPOSIT_RECEIVED (payment reconciliation), both BELOW
-    // PROCUREMENT; and by then the customer has accepted, so its pricing request is
-    // QUOTATION_ACCEPTED — one of the three terminal values below. Import's list came back empty
-    // and its worklist rendered "all import work complete" while IRs were outstanding.
+    // A deal awaiting its IR sits at ORDER_RECEIVED (confirmOrder) or DEPOSIT_RECEIVED (payment
+    // reconciliation), both BELOW PROCUREMENT; and by then the customer has accepted, so its
+    // pricing request is QUOTATION_ACCEPTED — one of the three terminal values below. Neither
+    // disjunct would match, import's list would be empty and its worklist would render
+    // "all import work complete" while IRs were outstanding.
     //
     // ORDER_RECEIVED is the correct floor, not DEPOSIT_RECEIVED: issueImportRequest accepts
     // DEPOSIT_NOTICE_ISSUED and the deposit-bypass policy's CUSTOMER_CONFIRMED as well as
     // DEPOSIT_PAID, and a deal in either of those payment states is still standing at
     // ORDER_RECEIVED — the stage only advances to DEPOSIT_RECEIVED once money actually lands.
-    // Starting at DEPOSIT_RECEIVED would leave the same hole open for every bypass-policy deal.
+    // A DEPOSIT_RECEIVED floor would hide every bypass-policy deal.
     //
-    // This WIDENS what the import role may read, by two stages. That is an authorization change:
-    // see TicketScopeIntegrationTest#importSeesADealAwaitingItsImportRequest, which builds the
+    // This floor widens what the import role may read; it is an authorization change.
+    // See TicketScopeIntegrationTest#importSeesADealAwaitingItsImportRequest, which builds the
     // real pre-IR state against real Postgres through the real service, and its sibling refusals
     // which prove the widening did not become "import sees everything".
     private static final List<String> IMPORT_STAGE_SCOPE =
@@ -104,11 +104,11 @@ public class TicketRepository {
     // overdue on an outstanding balance. Mirrors TicketEventKind's payment-status values.
     private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
         List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
-    // account (H1): every live order from ORDER_RECEIVED (S10) through CLOSED_PAID (S20), stage
-    // alone. The payment-status disjunct above missed a deal sitting at DEPOSIT_PAID through
+    // account: every live order from ORDER_RECEIVED (S10) through CLOSED_PAID (S20), by stage
+    // alone. The payment-status disjunct above misses a deal sitting at DEPOSIT_PAID through
     // PROCUREMENT (S12-S17), a deposit-bypass deal (null / CUSTOMER_CONFIRMED), FULLY_PAID-but-not-
     // close-confirmed, and CLOSED_PAID history -- all of which the account worklist must show. The
-    // old disjuncts stay as a UNION so nothing account saw before disappears. CLOSED_PAID is
+    // payment-status disjuncts stay as a UNION so nothing already listed disappears. CLOSED_PAID is
     // deliberately IN (history); a `closed` STATUS (CEO close-confirm) is NOT excluded either --
     // only lost / cancelled deals are, matching the import scope's terminal guard minus 'closed'.
     private static final List<String> ACCOUNT_ORDER_STAGE_SCOPE =
@@ -128,7 +128,7 @@ public class TicketRepository {
 
     /**
      * @param salesStage optional {@link DealStage} filter (e.g. {@code CLOSED_PAID}), additive to
-     *                    {@code status} — used by the Step 9 commission "Linked Deal" picker to list
+     *                    {@code status} — used by the commission "Linked Deal" picker to list
      *                    only deals that have actually reached final payment.
      * @param actorRole when {@code "import"} or {@code "account"}, applies that role's list-scoping
      *                  predicate (see the class-level comment above); any other value (including
@@ -149,10 +149,9 @@ public class TicketRepository {
         // The ticket_id tiebreaker is load-bearing, not decoration: created_at alone is not a
         // total order, and this query is paged with LIMIT/OFFSET below. Ties make each page a
         // separate arbitrary slice, so a row can appear on two pages while another never appears
-        // at all. Measured before the tiebreaker, against a seed where every ticket shares one
-        // created_at: paging size=1 returned ticket 1 on both page 0 and page 1 and NEVER
-        // returned ticket 2 — reproducibly, five runs out of five. Ties are not a seed artefact;
-        // tickets created in one batch tie the same way in production.
+        // at all (with every ticket sharing one created_at, size=1 returned ticket 1 on both page 0
+        // and page 1 and never ticket 2). Ties are not a seed artefact; tickets created in one
+        // batch tie the same way in production.
         sql.append("""
              GROUP BY t.ticket_id, ec.first_name_th, ec.last_name_th,
                       ea.first_name_th, ea.last_name_th,
@@ -259,7 +258,7 @@ public class TicketRepository {
      */
     public boolean isInAccountScope(long ticketId) {
         // Trailing space is load-bearing: the account fragment appended below is a text block that starts
-        // flush with "AND (", so without it the SQL reads ":idAND" (it used to borrow PIPELINE_ONLY's space).
+        // flush with "AND (", so without it the SQL reads ":idAND".
         StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM sales.ticket t WHERE t.ticket_id = :id ");
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("id", ticketId);
         appendRoleScope(sql, params, "account");
@@ -277,7 +276,7 @@ public class TicketRepository {
     }
 
     /**
-     * READ-ONLY widening of {@link #isInImportScope} (owner ruling 2026-11-04): a lost or cancelled deal that still
+     * READ-ONLY widening of {@link #isInImportScope}: a lost or cancelled deal that still
      * has an ISSUED ใบขอซื้อ (IR) is outside import's list scope, but import must be able to OPEN it (the link in the
      * "deal lost/cancelled" notice). Callers OR this with {@link #isInImportScope} for DETAIL reads only -- never for
      * the list, a count or a write, which keep the strict predicate.
@@ -304,7 +303,7 @@ public class TicketRepository {
     }
 
     /**
-     * Lean accessor for the commission-submission gate (Step 9): resolves just the deal's current
+     * Lean accessor for the commission-submission gate: resolves just the deal's current
      * pipeline stage without pulling a full ticket-detail load. Empty means the ticket does not
      * exist; {@code sales_stage} itself is {@code NOT NULL} (V50), so a present row always yields a
      * non-empty stage.
@@ -323,8 +322,8 @@ public class TicketRepository {
     /** Ticket ownership (created_by) for a BATCH of ticket ids in ONE query — used by {@code
      * BillingNoteService#list} to check a `sales` rep's own ownership across every ticket
      * referenced by a whole customer's worth of billing notes, instead of one {@link #findById}
-     * (a heavy join-everything load) per referenced ticket per note (review nit, GLA-99 step 3
-     * round 2). Missing ids are simply absent from the returned map, never an error. */
+     * (a heavy join-everything load) per referenced ticket per note. Missing ids are simply
+     * absent from the returned map, never an error. */
     public Map<Long, Long> findCreatedByIds(java.util.Collection<Long> ticketIds) {
         if (ticketIds.isEmpty()) {
             return Map.of();
@@ -397,7 +396,7 @@ public class TicketRepository {
                 // Null stays legal (a draft may genuinely not have a date yet); it simply leaves
                 // the deal un-advanceable until one is set, which is the pre-existing behaviour.
                 .addValue("nextFollowUpAt", request.nextFollowUpAt())
-                // GLA-136: only the quotation editor's inline create sends TRUE; null/false (every
+                // Only the quotation editor's inline create sends TRUE; null/false (every
                 // other caller) is an ordinary pipeline deal. See CreateTicketRequest#quotationOnly.
                 .addValue("quotationOnly", Boolean.TRUE.equals(request.quotationOnly()))
                 // V144: an omitted channel lands UNSPECIFIED ("not stated"), not DESIGNER_LED.
@@ -442,20 +441,18 @@ public class TicketRepository {
                                    String message, String itemSnapshotJson,
                                    String documentType, Long documentId) {
         if (toStatus != null) {
-            // Logging an event NO LONGER WRITES sales.ticket.status. It used to: the column was
-            // set to toStatus whenever TicketStatus.isValid(toStatus), which is a MEMBERSHIP
-            // check, not a transition guard — so any event carrying any valid status silently
-            // overwrote the column from any current state, while DepositNoticeService and
-            // TicketService.requireClosePrerequisites read that same column as a guard. Every
-            // genuine transition now goes through #transitionStatus, which validates the edge
-            // against TicketStatus.ALLOWED and compare-and-sets on the expected value.
+            // Logging an event does NOT write sales.ticket.status. TicketStatus.isValid(toStatus) is
+            // a MEMBERSHIP check, not a transition guard, so writing the column here would let any
+            // event carrying any valid status overwrite it from any current state, while
+            // DepositNoticeService and TicketService.requireClosePrerequisites read that same column
+            // as a guard. Every genuine transition goes through #transitionStatus, which validates
+            // the edge against TicketStatus.ALLOWED and compare-and-sets on the expected value.
             //
-            // The updated_at / closed_at / pickup side-effects deliberately STAY here and fire
-            // for every event exactly as before — including closed_at, which keys off toStatus
-            // being CLOSED/CANCELLED rather than off the row's current value, so a caller that
-            // transitions then logs gets the same closed_at it always did. (isValid is no longer
-            // consulted for `closing`: CLOSED and CANCELLED are members of VALUES by
-            // construction, so the old `writeStatus &&` conjunct could never change the result.)
+            // The updated_at / closed_at / pickup side-effects fire for every event, including
+            // closed_at, which keys off toStatus being CLOSED/CANCELLED rather than off the row's
+            // current value, so a caller that transitions then logs gets the same closed_at.
+            // (CLOSED and CANCELLED are members of VALUES by construction, so `closing` needs no
+            // isValid check.)
             boolean closing =
                 TicketStatus.CLOSED.equals(toStatus) || TicketStatus.CANCELLED.equals(toStatus);
             boolean isPickup = TicketEventKind.PICKED_UP.equals(kind);
@@ -515,7 +512,7 @@ public class TicketRepository {
     // (proposedPrice/approvedPrice/calcedCost/calcedPrice/calcConfigVersion/manualPrice/
     // manualOverrideReason/currency) exactly as TicketService merged them — sales editing
     // descriptive fields must never silently discard import's proposed price or CEO's
-    // approved/manual price (2026-07-16 pricing-integrity audit, finding #4).
+    // approved/manual price.
     @Transactional
     public void replaceItemsPreservingPricing(long ticketId, List<TicketItemDto> items) {
         jdbc.update("DELETE FROM sales.ticket_item WHERE ticket_id = :id", Map.of("id", ticketId));
@@ -838,7 +835,7 @@ public class TicketRepository {
         }
     }
 
-    // Slice F (ticket-workspace IA programme): ราคาตั้ง on the deal's item rows. pp.price/currency/
+    // ราคาตั้ง on the deal's item rows. pp.price/currency/
     // price_unit/sqm_per_piece resolve the SAME 4 inputs TicketCreateModal's catalog picker stashes
     // as UI-only state on a not-yet-saved item (catalogPrice/catalogCurrency/catalogPriceUnit/
     // sqmPerPiece) -- see TicketItemDto's own doc comment for why the field names match exactly.
@@ -847,7 +844,7 @@ public class TicketRepository {
     // own header): a "custom" line never had a catalog identity, and ON DELETE SET NULL clears it
     // when a catalog price is retired. An INNER JOIN would silently drop both kinds of row out of
     // the items list -- a line item vanishing from a deal, not merely a missing price. The factory
-    // join (origin country for the PCR form's seeded ประเทศต้นทาง, 2026-10-18) is LEFT for the same reason.
+    // join (origin country for the PCR form's seeded ประเทศต้นทาง) is LEFT for the same reason.
     private List<TicketItemDto> findItemsByTicketId(long ticketId) {
         return jdbc.query("""
             SELECT ti.item_id, ti.ticket_id, ti.brand, ti.model, ti.color, ti.texture, ti.size, ti.factory,
@@ -919,11 +916,11 @@ public class TicketRepository {
     }
 
     /**
-     * B5 fix ("รายการสินค้า shows 0 รายการ while a deal is still in the pricing/quotation
-     * phase"): {@code sales.ticket_item} stays empty until order confirmation writes it (see
+     * Fallback so "รายการสินค้า" does not show 0 รายการ while a deal is still in the pricing/quotation
+     * phase: {@code sales.ticket_item} stays empty until order confirmation writes it (see
      * {@code OrderConfirmationService#reconcileTicketItems}), so a deal still working its
      * pricing-request/quotation chain has no rows for {@link #findItemsByTicketId} to return even
-     * though its real items already exist on {@code sales.quotation_item}. Owner ruling: when
+     * though its real items already exist on {@code sales.quotation_item}. When
      * {@code ticket_item} is empty, the READ path (only -- see {@link TicketDto#fromPricingChain}'s
      * own Javadoc on why this must not reach {@link #findById}/mutation call sites) falls back to
      * the deal's live quotation's line items, rendered READ-ONLY.
@@ -931,14 +928,14 @@ public class TicketRepository {
      * <p>"Live" is a display pick over new-engine rows only: ACCEPTED beats ISSUED beats APPROVED,
      * across both PRICING_REQUEST and DEAL_DIRECT origins, most recent id wins a tie. It is NOT the
      * ticket-route deposit notice's pick ({@code DepositNoticeRepository#findGoverningQuotation}),
-     * which also reads legacy rows and, by owner ruling 2026-10-23, counts a DEAL_DIRECT approval
+     * which also reads legacy rows and counts a DEAL_DIRECT approval
      * as the answer, level with ACCEPTED. The two agree on a ticket with one live new-engine
      * quotation. They differ when the ticket also has a live legacy quotation. Two DEAL_DIRECT
      * cases exist only on pre-lock data (a DEAL_DIRECT quotation beside a pricing-request one,
      * which {@code DirectQuotationLocks} now refuses): an ACCEPTED quotation followed by a newer
      * DEAL_DIRECT APPROVED one ({@code DealQuotationRepository#supersedeOtherLiveOnTicket} never
      * supersedes an ACCEPTED row), where this shows the ACCEPTED lines and a ticket-route draft
-     * bills the DEAL_DIRECT one; and data from before 2026-10-17 that still holds both a
+     * bills the DEAL_DIRECT one; and older data that still holds both a
      * DEAL_DIRECT APPROVED and a PRICING_REQUEST ISSUED row.
      * The UI drafts any deal with a QUOTATION_ACCEPTED pricing request through the
      * pricing-request route, which bills that request's accepted quotation instead.
@@ -952,7 +949,7 @@ public class TicketRepository {
      * practice today -- neither CustomerQuotationRepository#insertItems nor
      * DealQuotationRepository's item INSERT writes those two legacy columns (both write qty +
      * raw_unit only), so the grid's SQM sub-line simply does not render for a fallback row; this
-     * is an accepted, pre-existing quotation_item data gap, not something this fix invents.
+     * is an accepted, pre-existing quotation_item data gap.
      */
     public List<TicketItemDto> findPricingChainFallbackItems(long ticketId) {
         List<Long> liveQuotationId = jdbc.query("""
@@ -1289,7 +1286,7 @@ public class TicketRepository {
             outstanding = BigDecimal.ZERO;
         }
         String stage = derivePaymentStage(s, payable, paid, outstanding, f.balanceReceipt());
-        // OVERDUE comes from the payable quotation's terms + the delivery date (owner ruling 2026-09-30),
+        // OVERDUE comes from the payable quotation's terms + the delivery date,
         // never from the stored billing due_date. An unpaid deposit is never overdue.
         PaymentDue due = f.due();
         boolean overdue = due != null && due.date() != null
@@ -1297,7 +1294,7 @@ public class TicketRepository {
             && outstanding.signum() > 0
             && !"DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus());
         // Staleness only means anything for a deal actively being worked — a DRAFT that hasn't
-        // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged (Slice B1, handoff 103).
+        // started or a CLOSED_LOST/CANCELLED/COMPLETED deal is never flagged.
         boolean stale = DealLifecycle.ACTIVE.equals(s.lifecycle()) && f.stale();
         CommissionAndLiveQuotation facts = f.extras();
         return new TicketSummaryDto(
@@ -1419,7 +1416,7 @@ public class TicketRepository {
 
     private String derivePaymentStage(TicketSummaryDto s, BigDecimal payable, BigDecimal paid,
                                       BigDecimal outstanding, boolean balanceReceipt) {
-        // QA-16 (owner ruling 2026-10-29): the chip follows the payment track. Before the order is confirmed
+        // The chip follows the payment track. Before the order is confirmed
         // (no payment_status, nothing paid, stage before ORDER_RECEIVED) there is no payment step to speak of;
         // a legacy deal already past that with a null track keeps the derivation below.
         if (s.paymentStatus() == null && paid.signum() <= 0
@@ -1523,8 +1520,7 @@ public class TicketRepository {
 
     /**
      * Whether this deal has at least one live (DRAFT or ISSUED, not SUPERSEDED) row in the per-factory
-     * {@code sales.import_request} aggregate (V184; widened from ISSUED-only by W3-04, owner ruling
-     * 2026-10-29) — the same refuse-don't-delegate guard {@link #hasLivePurchaseOrders} provides
+     * {@code sales.import_request} aggregate (V184) — the same refuse-don't-delegate guard {@link #hasLivePurchaseOrders} provides
      * for the (dormant) PO path, used by {@code TicketService#markIrSent}/{@code #markShipping}/
      * {@code #markGoodsReceived} to refuse a ticket-level click that cannot say which factory it
      * concerns once the deal is actually tracked per-factory.
@@ -1551,11 +1547,11 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-123 slice S3 (R8 — one finalized quotation per deal, across BOTH คำขอราคา origins):
+     * One finalized quotation per deal, across BOTH คำขอราคา origins:
      * {@code true} when {@code sales.quotation} already carries an {@code ACCEPTED} row for this
      * ticket, regardless of {@code origin} — the legacy chain ({@code origin IS NULL}), the new
      * PricingRequest-chain engine ({@code origin = 'PRICING_REQUEST'}) and the direct engine
-     * ({@code origin = 'DEAL_DIRECT'}, which in practice never reaches ACCEPTED — R10, it never
+     * ({@code origin = 'DEAL_DIRECT'}, which in practice never reaches ACCEPTED because it never
      * joins this pipeline) all write the ONE shared {@code sales.quotation} table, so a single
      * origin-agnostic EXISTS check is the whole guard; see {@code
      * CustomerQuotationService#recordOutcome} and {@code DealQuotationService#recordOutcome},
@@ -1596,9 +1592,8 @@ public class TicketRepository {
     /**
      * Reopen a lost deal — **without erasing why it was lost**.
      *
-     * This used to null lost_reason/lost_at, leaving a row indistinguishable
-     * from one that was never lost; the reason survived only inside a Thai
-     * free-text event message. The values now stay readable and reopened_at /
+     * lost_reason/lost_at stay readable (nulling them would leave a row
+     * indistinguishable from one that was never lost) and reopened_at /
      * reopen_count record that the deal came back, so "reopened deals we
      * previously lost on PRICE" is a plain query.
      *
@@ -1745,8 +1740,7 @@ public class TicketRepository {
     }
 
     /**
-     * The PRE-VAT quotation total — exactly what {@link #payableAmount} returned before payable became
-     * VAT-inclusive (owner ruling 2026-09-30). COMMISSION reads this and only this: commission is
+     * The PRE-VAT quotation total (the payable amount itself is VAT-inclusive). COMMISSION reads this and only this: commission is
      * computed on the ex-VAT figure and must not move when payable does.
      */
     public BigDecimal payableAmountExVat(long ticketId) {
@@ -1762,7 +1756,7 @@ public class TicketRepository {
     }
 
     /**
-     * QA-03, ONE rule for "the answered quotation" (payableAmountSelect, paymentTermsRowSql and
+     * ONE rule for "the answered quotation" (payableAmountSelect, paymentTermsRowSql and
      * {@code FinanceDealRepository#findPayableQuotation} all use it): ACCEPTED, or an APPROVED DEAL_DIRECT quotation
      * that a DEAL_PROMOTED_FROM_QUOTATION event names -- confirm-order leaves a DEAL_DIRECT quotation APPROVED, and
      * the event (related QUOTATION = q.quotation_id) is the per-quotation fact that its order was confirmed. An
@@ -1775,7 +1769,7 @@ public class TicketRepository {
         + " AND pe.related_document_type = 'QUOTATION' AND pe.related_document_id = q.quotation_id)))";
 
     /**
-     * SK-07 (owner ruling 2026-10-28): once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
+     * Once a remaining invoice is ISSUED, what the customer owes follows the ISSUED
      * documents -- the deposit notice's total_payable plus the remaining invoice's grand_total -- because each tax
      * invoice rounds its own VAT, so the sum may sit a satang away from the deal's computed total. Trailing comma
      * included; VAT-inclusive variant only (the ex-VAT figure stays the quotation's subtotal).
@@ -1879,7 +1873,7 @@ public class TicketRepository {
 
     /**
      * One row (or none) describing WHEN the balance is due, from the payable quotation's own terms
-     * (owner ruling 2026-09-30). The quotation is the same one {@link #payableAmountSelect} picks (accepted
+     * The quotation is the same one {@link #payableAmountSelect} picks (accepted
      * first, else issued/sent; same recipient ordering); a deposit-notice / ticket-item payable has no terms,
      * so no row. Terms:
      * <ul>
@@ -2237,29 +2231,29 @@ public class TicketRepository {
     }
 
     /**
-     * Step 6 (V76): the ONE deliberate bridge write outside the legacy ticket status state
+     * The ONE deliberate bridge write outside the legacy ticket status state
      * machine — see {@code th.co.glr.hr.orderconfirmation.OrderConfirmationService}'s class
      * Javadoc for the full reasoning. Since {@link th.co.glr.hr.ticket.TicketService#submit}
-     * permanently 409s (Step 1), a deal driven entirely through the new PricingRequest chain can
+     * permanently 409s, a deal driven entirely through the new PricingRequest chain can
      * never leave {@link TicketStatus#DRAFT} via the legacy flow, so this guarded compare-and-set
      * (FROM {@code draft} only) can never collide with a live legacy transition. A ticket that
-     * already carries a real legacy status (created before Step 1, or otherwise mid-flow) is
+     * already carries a real legacy status (created before the pricing-request chain, or otherwise mid-flow) is
      * never silently overwritten — 0 rows signals "not eligible", which the caller turns into a
      * 409 unless the current status already happens to be {@code quotation_issued} (an idempotent
      * replay of this same bridge).
      *
-     * <p>Now expressed as a {@link #transitionStatus} call rather than its own hand-written SQL,
-     * so this bridge is subject to the same machine as every other write and {@code draft ->
-     * quotation_issued} is a DECLARED edge instead of an untracked exception. Behaviour is
-     * unchanged: the {@code expected} value is hardcoded to {@code draft}, so the edge check is
-     * a constant that always passes and a non-draft row still yields 0 rows, never a throw.
+     * <p>Expressed as a {@link #transitionStatus} call, so this bridge is subject to the same
+     * machine as every other write and {@code draft -> quotation_issued} is a DECLARED edge
+     * instead of an untracked exception. The {@code expected} value is hardcoded to
+     * {@code draft}, so the edge check is a constant that always passes and a non-draft row
+     * still yields 0 rows, never a throw.
      */
     public int markQuotationIssuedForOrderConfirmation(long ticketId) {
         return transitionStatus(ticketId, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED);
     }
 
     /**
-     * Quotation ↔ deal linking slice 1 — does this deal have a LIVE direct quotation: a
+     * Quotation ↔ deal linking — does this deal have a LIVE direct quotation: a
      * {@code DEAL_DIRECT} row in {@code DRAFT}, {@code PENDING_APPROVAL} or {@code APPROVED}? The one
      * predicate behind {@link DirectQuotationLocks#requireNoLiveDirectQuotation}. CANCELLED,
      * SUPERSEDED and REJECTED rows are not live; PRICING_REQUEST and legacy rows never count.
@@ -2275,8 +2269,8 @@ public class TicketRepository {
 
     /**
      * The ONE definition of a "live" direct quotation, shared as SQL text by
-     * {@link #hasLiveDirectQuotation} (slice 1's lock) and {@link #findLiveDirectQuotation} (slice 2's
-     * N6 refusal and {@link TicketSummaryDto#liveDirectQuotation}) so the two can never disagree about
+     * {@link #hasLiveDirectQuotation} (the lock) and {@link #findLiveDirectQuotation} (the
+     * refusal and {@link TicketSummaryDto#liveDirectQuotation}) so the two can never disagree about
      * which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
      */
     private static final String LIVE_DIRECT_QUOTATION_PREDICATE = """
@@ -2299,7 +2293,7 @@ public class TicketRepository {
     private static final String LIVE_DIRECT_QUOTATION_SELECT = liveDirectQuotationSelect(":ticketId");
 
     /**
-     * Quotation ↔ deal linking slice 2 (S2-B3 / S2-B4) — the NEWEST live direct quotation on the
+     * Quotation ↔ deal linking — the NEWEST live direct quotation on the
      * deal (highest {@code quotation_id}), or empty. Newest matters because a deal can legitimately
      * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
      * reorder clone — and the client acts on the one being worked on.
@@ -2316,7 +2310,7 @@ public class TicketRepository {
     }
 
     /**
-     * Quotation ↔ deal linking slice 2 — one pricing route per deal (owner ruling 2026-09-30): does
+     * Quotation ↔ deal linking — one pricing route per deal: does
      * this deal have a LIVE pricing request, i.e. any {@code sales.pricing_request} whose status is
      * neither {@code CANCELLED} nor {@code SUPERSEDED}? A private {@code DRAFT} and a finished
      * {@code QUOTATION_ACCEPTED} both count. The one predicate behind
@@ -2336,8 +2330,8 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-136 — clears the V193 {@code quotation_only} provenance flag, as a compare-and-set
-     * ({@code TRUE -> FALSE}). Since quotation ↔ deal linking slice 1 the flag is provenance only
+     * Clears the V193 {@code quotation_only} provenance flag, as a compare-and-set
+     * ({@code TRUE -> FALSE}). The flag is provenance only
      * (nothing reads it), and this is called BEST-EFFORT by
      * {@code DealQuotationService#confirmOrderFromDirectQuotation}, under {@link #lockTicketForUpdate}:
      * 1 on a quotation-first deal, 0 on an ordinary one — the caller ignores the rowcount. Never sets
@@ -2365,7 +2359,7 @@ public class TicketRepository {
     }
 
     /**
-     * GLA-136 — has this deal's order already been confirmed from a direct quotation
+     * Has this deal's order already been confirmed from a direct quotation
      * ({@link TicketEventKind#DEAL_PROMOTED_FROM_QUOTATION}, written exactly once per confirmation by
      * {@code DealQuotationService#confirmOrderFromDirectQuotation})? The discriminator for that
      * method's idempotent replay: if the event exists, a replay returns the current state and
@@ -2417,7 +2411,7 @@ public class TicketRepository {
         } catch (IllegalStateException e) {
             throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของดีลนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
-        // WALK, and PERSIST every hop (owner ruling): a multi-hop advance writes each intermediate
+        // WALK, and PERSIST every hop: a multi-hop advance writes each intermediate
         // state in turn rather than jumping straight to the target. confirmFinalPayment on a
         // REQUIRED deal goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID, and the row
         // genuinely sits at AWAITING_FINAL_PAYMENT in between so the deal's history shows it.
@@ -2428,7 +2422,7 @@ public class TicketRepository {
         // continues writing from a state it did not actually observe. All hops run inside the
         // caller's transaction, so a failure part-way rolls the whole walk back in production.
         // NOTE: @Transactional is inert in this repo's hand-wired integration tests, so the suite
-        // does NOT prove that atomicity — see the finding on the integration harness.
+        // does NOT prove that atomicity.
         List<String> hops = PaymentTrack.stepsBetween(policy, expected, next);
         String from = expected;
         int rows = 0;
@@ -2490,11 +2484,11 @@ public class TicketRepository {
             Map.of("id", ticketId, "v", value));
     }
 
-    // ── Step 8 (V78): ticket_item <-> pricing-request-chain quantity reconciliation ─────────
+    // ── ticket_item <-> pricing-request-chain quantity reconciliation ─────────
     //
     // sales.ticket_item.qty is set exactly ONCE, at ticket creation (insertItems above), and is
-    // never written by the PricingRequest chain (Steps 1-6 deliberately never touch this table's
-    // legacy price columns — that same discipline turned out to have silently extended to qty
+    // never written by the PricingRequest chain (which deliberately never touches this table's
+    // legacy price columns, and that discipline silently extended to qty
     // too). A pricing_request_item's own requested_qty can differ from the ticket_item it traces
     // back to via source_ticket_item_id from the very first submission, and can diverge further
     // still after a customer-change revision (PricingRequestService.createCustomerChangeRevision
@@ -2552,7 +2546,7 @@ public class TicketRepository {
      * revision ({@code currentPricingRequestId}) — a line the customer dropped entirely via a
      * customer-change revision.
      *
-     * <p>Bug found on review (not by the implementing pass): {@link #reconcileItemQty} only
+     * <p>Why this exists: {@link #reconcileItemQty} only
      * touches items still PRESENT in the current revision, so a dropped line's {@code ticket_item}
      * row keeps its stale {@code qty} forever. {@code TicketService.completeDelivery}/{@code
      * reserveStock} iterate {@code ticket.items()} unconditionally (no filter by "is this item
@@ -2560,8 +2554,7 @@ public class TicketRepository {
      * ({@code qty > qty_delivered}) makes {@code completeDelivery}'s "any remaining?" check see a
      * phantom undeliverable balance FOREVER, since nobody can ever deliver units of a product the
      * customer no longer ordered. The deal can never reach {@code FulfilmentStatus.FULLY_DELIVERED}
-     * / {@code DealStage.DELIVERED}. This is a real, deal-blocking correctness bug, not a cosmetic
-     * gap — found and fixed as part of this same step, not deferred.
+     * / {@code DealStage.DELIVERED}. This is a deal-blocking correctness bug, not a cosmetic gap.
      *
      * <p>Closes by setting {@code qty = qty_delivered} (never below — the boundary case is always
      * legal under {@code chk_ticket_item_qty_delivered}/{@code chk_ticket_item_qty_from_stock},
@@ -2573,7 +2566,7 @@ public class TicketRepository {
      *
      * <p>Deliberately scoped to the {@code rootPricingRequestId} CHAIN, not the whole ticket — a
      * ticket can carry independent pricing requests for different recipients (designer/owner/
-     * buyer; Step 1's "0..N Pricing Requests per deal" model), and this must never touch a
+     * buyer; 0..N pricing requests per deal), and this must never touch a
      * ticket_item that legitimately belongs only to a DIFFERENT recipient's quote just because it
      * is absent from the one being confirmed right now.
      *
@@ -2641,7 +2634,7 @@ public class TicketRepository {
             Long.class);
     }
 
-    // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report" — handoff 103) ──────
+    // ── Deal tracking + activity (V83) ──────
 
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
                                String ownerName, String buyerName, LocalDate nextFollowUpAt) {
