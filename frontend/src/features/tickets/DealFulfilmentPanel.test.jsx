@@ -7,11 +7,9 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// PR-B: the "ใบขอซื้อรายโรงงาน" section (V184 stored aggregate) added to DealFulfilmentPanel.
-// Covers role visibility, the country-required create flow, the CEO-only footer, mark-sent, and
-// the lead-time edit — see import-request-per-factory-PLAN.md's Verify section. Everything else
-// on this panel (delivery/stock/legacy IR chain) is exercised indirectly via TicketDetailPage's
-// own suite; this file is scoped to the new section only.
+// Covers the "ใบขอซื้อรายโรงงาน" section (stored aggregate): role visibility, the country-required
+// create flow, the CEO-only footer, mark-sent, and the lead-time edit. The rest of the panel
+// (delivery/stock/legacy IR chain) is exercised via TicketDetailPage's own suite.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -110,8 +108,8 @@ const CEO = { id: 1, name: 'ราม', role: 'ceo' };
 const IMPORT = { id: 2, name: 'ฝ่ายนำเข้า', role: 'import' };
 const SALES_MANAGER = { id: 3, name: 'ผจก.ขาย', role: 'sales_manager' };
 
-// W3-11 (owner ruling 2026-10-30): ออกใบขอซื้อ (IR) mints one numbered IR per factory and cannot be
-// undone, so the click only opens this confirm; createDrafts runs when it is confirmed.
+// ออกใบขอซื้อ (IR) mints one numbered IR per factory and cannot be undone, so the click only opens
+// this confirm; createDrafts runs when it is confirmed.
 const IR_CONFIRM_TITLE = 'ยืนยันการออกใบขอซื้อ (IR)';
 // Opening the confirm re-checks which factories are uncovered; the dialog is ready once that settles.
 const IR_COVERAGE_LOADING = 'กำลังตรวจสอบโรงงาน';
@@ -129,7 +127,7 @@ async function createIrAndConfirm(button) {
   fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
 }
 
-// W3-11 (owner ruling 2026-10-30): ออกเลข on a draft IR mints its document number, so it asks first.
+// ออกเลข on a draft IR mints its document number, so it asks first.
 const IR_ISSUE_CONFIRM_TITLE = 'ยืนยันการออกเลขใบขอซื้อ';
 async function issueIrAndConfirm(issueButton) {
   fireEvent.click(issueButton);
@@ -159,7 +157,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(screen.queryByRole('dialog', { name: IR_CONFIRM_TITLE })).toBeNull());
     });
 
-    // Ploy 2026-10-30: the confirm names what will be issued — the server's uncovered factories.
+    // The confirm names what will be issued: the server's uncovered factories.
     it('names the count and the factories the server says are uncovered', async () => {
       renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] });
       await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalled());
@@ -356,9 +354,9 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // QA BUG-21 (S12/S15): a DRAFT ใบขอซื้อ has no step tracker — a row only gets an import step once
-  // it is ISSUED — so a bare DRAFT card read as "per-factory นำเข้าเลื่อนไม่ได้/พัง". The card says
-  // why, in words that hold in every state a draft can be in.
+  // A DRAFT ใบขอซื้อ has no step tracker (a row only gets an import step once ISSUED), so a bare DRAFT
+  // card read as "per-factory นำเข้าเลื่อนไม่ได้/พัง". The card says why, in words that hold in every
+  // state a draft can be in.
   describe('DRAFT ใบขอซื้อ explains itself (BUG-21)', () => {
     it.each([['the owning rep', OWNER], ['CEO', CEO], ['sales_manager', SALES_MANAGER]])(
       '%s reads why a first-version DRAFT has no import step, and is never told to wait',
@@ -450,9 +448,9 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // W3-04 (owner ruling 2026-10-29): the deal-level chain (ส่งคำขอนำเข้าแล้ว → ออกเดินทาง → รับสินค้า)
-  // is refused by the server once ANY live per-factory row exists, DRAFT included
-  // (TicketRepository#hasLiveImportRequests), so the buttons are hidden on a draft too.
+  // The deal-level chain (ส่งคำขอนำเข้าแล้ว → ออกเดินทาง → รับสินค้า) is refused by the server once ANY
+  // live per-factory row exists, DRAFT included (TicketRepository#hasLiveImportRequests), so the
+  // buttons are hidden on a draft too.
   describe('deal-level import chain vs per-factory drafts', () => {
     const legacyInFlight = { ...summary, fulfillmentStatus: 'IR_SENT' };
     const shipping = [{ action: 'SHIPPING' }];
@@ -510,9 +508,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // W3-03 follow-up (owner ruling 2026-10-29): a free-text line on a direct-quotation deal has no
-  // factory, so sales picks one when creating the IR. ONE handler (requestCreateIrDrafts) serves the
-  // panel button and any external caller.
+  // A free-text line on a direct-quotation deal has no factory, so sales picks one when creating the
+  // IR. ONE handler (requestCreateIrDrafts) serves the panel button and any external caller.
   describe('factory picker for factory-less lines', () => {
     afterEach(() => api.storedImportRequests.createDrafts.mockReset());
     const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
@@ -612,8 +609,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // 10-29 ruling B: a new factory with no lead time (quotation or country default) is askable, not a
-  // dead end. The 409 carries a parseable prefix; the popup collects min-max per listed factory.
+  // A new factory with no lead time (quotation or country default) is askable, not a dead end. The
+  // 409 carries a parseable prefix; the popup collects min-max per listed factory.
   describe('lead-time popup (10-29)', () => {
     beforeEach(() => api.storedImportRequests.createDrafts.mockReset());
     const LT = (names) => Object.assign(new Error(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${names}`), { status: 409 });
@@ -704,7 +701,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // Review fix: the create button mirrors TicketService#requireImportRequestIssuable(summary, true)
+  // The create button mirrors TicketService#requireImportRequestIssuable(summary, true)
   // (DEPOSIT_NOTICE_ISSUED / DEPOSIT_PAID / AWAITING_FINAL_PAYMENT / FULLY_PAID, or a not-required
   // deposit policy that has reached CUSTOMER_CONFIRMED) instead of offering a click that can only 409.
   describe('deposit-ready gate on the create button', () => {
@@ -785,7 +782,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(submit.disabled).toBe(false));
     });
 
-    // PR-B REVIEW ROUND 1, S5's own fix, given its own direct coverage (nit).
+    // A failed stored-IR fetch surfaces as an error (direct coverage).
     it('shows the countries-load error message and keeps the submit button disabled when priceImport.countries fails', async () => {
       api.priceImport.countries.mockRejectedValueOnce(new Error('เชื่อมต่อไม่ได้'));
       api.storedImportRequests.createDrafts
@@ -799,12 +796,11 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.getByTestId('new-factory-country-submit').disabled).toBe(true);
     });
 
-    // Nit: NewFactoryCountryModal's `entries` state is seeded once from `factoryNames` via
-    // useState's lazy initializer — it does not re-derive when the PROP changes. A retry that
-    // comes back with a DIFFERENT (wider) missing-factory set than the one the modal opened with
-    // must not read `entries[newName]` (undefined, no optional chaining at the `<select>`'s
-    // `value={entries[name].countryCode}`) and crash. Keying the modal by the retry key forces
-    // React to remount it fresh instead of reusing stale state built for the old name list.
+    // NewFactoryCountryModal's `entries` state is seeded once from `factoryNames` via useState's lazy
+    // initializer and does not re-derive when the PROP changes. A retry with a DIFFERENT (wider)
+    // missing-factory set must not read `entries[newName]` (undefined, no optional chaining at the
+    // `<select>`'s `value={entries[name].countryCode}`) and crash. Keying the modal by the retry key
+    // remounts it fresh.
     it('does not crash when a retry 409s back with a DIFFERENT (wider) missing-factory set', async () => {
       api.storedImportRequests.createDrafts
         .mockRejectedValueOnce(Object.assign(new Error('กรุณาระบุประเทศให้กับโรงงานใหม่: Rex Ceramics'), { status: 409 }))
@@ -846,7 +842,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   });
 
   describe('mark-sent', () => {
-    // Owner ruling 2026-10-29: the order email is import's job (งานนำเข้า / import deal page); the sales deal tab shows none of it.
+    // The order email is import's job (งานนำเข้า / import deal page); the sales deal tab shows none of it.
     it('the owning sales rep: the factory card has no order-email button and no "อีเมลสั่งซื้อ:" line', async () => {
       renderPanel(OWNER, [issuedRow()]);
       await screen.findByTestId('ir-factory-card-11');
@@ -878,8 +874,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
         .toHaveBeenCalledWith(10, { leadTimeMinDays: 20, leadTimeMaxDays: 30 }));
     });
 
-    // ImportRequestService#update reads a null/null lead time as "no change", so a both-blank save
-    // on a DRAFT clears nothing — toasting "saved" over an unchanged 30–45 was a false success.
+    // ImportRequestService#update reads a null/null lead time as "no change", so a both-blank save on
+    // a DRAFT clears nothing; toasting "saved" over an unchanged 30–45 was a false success.
     it('a both-blank lead-time save on a DRAFT is refused with a validation message, not reported as saved', async () => {
       const showToast = vi.fn();
       renderPanel(OWNER, [draftRow()], { showToast });
@@ -891,8 +887,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(api.storedImportRequests.update).not.toHaveBeenCalled();
     });
 
-    // PR-B REVIEW ROUND 1, S1: a viewer with no write path renders PLAIN TEXT, not a look-alike
-    // disabled input — import cannot touch lead time until the row is ISSUED.
+    // A viewer with no write path renders PLAIN TEXT, not a look-alike disabled input: import cannot
+    // touch lead time until the row is ISSUED.
     it('import cannot edit lead time on a DRAFT row (post-issue only) — renders read-only text, not a disabled input', async () => {
       renderPanel(IMPORT, [draftRow()]);
       await screen.findByTestId('ir-factory-card-10');
@@ -900,10 +896,9 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(await screen.findByTestId('ir-lead-readonly-10')).not.toBeNull();
     });
 
-    // S1's other two wrong-way cases: sales (non-owning excluded already; owning rep IS
-    // canFullWrite so use sales_manager here) and sales_manager on an ISSUED row — neither is
-    // import/CEO (canAdvance) nor the owning rep on a draft (canFullWrite), so both get read-only
-    // text on the ISSUED row too.
+    // Two more wrong-way cases: sales_manager (the owning rep IS canFullWrite, so use sales_manager)
+    // and sales_manager on an ISSUED row: neither is import/CEO (canAdvance) nor the owning rep on a
+    // draft (canFullWrite), so both get read-only text on the ISSUED row too.
     it('sales_manager sees read-only lead-time text on an ISSUED row, never a disabled input', async () => {
       renderPanel(SALES_MANAGER, [issuedRow()]);
       await screen.findByTestId('ir-factory-card-11');
@@ -931,9 +926,9 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // PR-B REVIEW ROUND 1, S7: the missing-country picker parses factory names out of a 409
-  // message string (there is no structured field). A retry that comes back with the SAME missing
-  // set must not reopen the modal forever.
+  // The missing-country picker parses factory names out of a 409 message string (there is no
+  // structured field). A retry that comes back with the SAME missing set must not reopen the modal
+  // forever.
   describe('missing-country retry guard (S7)', () => {
     it('does not reopen the picker a second time when the retry 409s with the same missing names again', async () => {
       const showToast = vi.fn();
@@ -962,7 +957,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // PR-B REVIEW ROUND 1, nit: CEO footer editable from DRAFT, visible read-only to everyone else.
+  // CEO footer editable from DRAFT, visible read-only to everyone else.
   describe('CEO footer on a DRAFT row (nit)', () => {
     it('CEO can open the footer editor on a DRAFT row, not just ISSUED', async () => {
       renderPanel(CEO, [draftRow({ vesselEtaNote: 'ประมาณ 10/10/26' })]);
@@ -975,8 +970,9 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // The footer form used to be seeded once at mount, so a note the server derived AFTER mount (issue()
-  // writes vesselEtaNote) opened as a blank input, and saving any other field wrote '' over it.
+  // The footer form is not seeded once at mount: a note the server derived AFTER mount (issue()
+  // writes vesselEtaNote) would open as a blank input, and saving any other field would write ''
+  // over it.
   describe('CEO footer editor re-seeds from the row each time it opens', () => {
     it('shows the vessel ETA the server derived at issue, and saves it back unchanged', async () => {
       const note = 'ประมาณ 01/11/26 – 16/11/26 (30–45 วัน)';
@@ -995,7 +991,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // PR-B REVIEW ROUND 1, nit: window.confirm() replaced with the app's ConfirmDialog.
+  // The app's ConfirmDialog, not window.confirm().
   describe('delete-draft confirmation (nit)', () => {
     it('deleting a draft goes through the ConfirmDialog, not window.confirm', async () => {
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -1012,7 +1008,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // PR-B REVIEW ROUND 1, nit: the create button relabels once the deal already has rows.
+  // The create button relabels once the deal already has rows.
   describe('create-button relabel (nit)', () => {
     it('reads "ออกใบขอซื้อ (IR)" with no rows yet, and "ออกใบขอซื้อ (IR) โรงงานที่ยังไม่มี" once rows exist (CR-1 rename)', async () => {
       const { rerender } = renderPanel(OWNER, []);
@@ -1030,9 +1026,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     });
   });
 
-  // PR-B REVIEW ROUND 1, S5: a failed storedIrQuery fetch must not read as "no IR yet" nor bring
-  // back the legacy per-brand buttons.
-  // Owner rulings 2026-10-29 (deal page, ขั้น 12 tab).
+  // A failed storedIrQuery fetch must not read as "no IR yet" nor bring back the legacy per-brand
+  // buttons.
   describe('tab layout before the first IR (5a)', () => {
     const precedes = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
@@ -1059,7 +1054,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
     const stored = await screen.findByTestId('deal-fulfilment-stored-ir');
     const weight = await screen.findByTestId('deal-fulfilment-set-item-weight');
     expect(Boolean(stored.compareDocumentPosition(weight) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-    // No reserve-from-stock feature (owner ruling 2026-10-29), even if the server still advertised it.
+    // No reserve-from-stock feature, even if the server still advertised it.
     expect(screen.queryByTestId('deal-fulfilment-reserve-stock')).toBeNull();
     fireEvent.click(weight);
     expect(await screen.findByTestId('deal-fulfilment-set-item-weight-submit')).not.toBeNull();
@@ -1125,7 +1120,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   describe('storedIrQuery failure (S5)', () => {
     it('shows an error, not "ยังไม่มีใบขอซื้อสำหรับดีลนี้", and does not resurrect the legacy IR block', async () => {
       // IMPORT (isFulfilment): the role the legacy per-brand block is gated on
-      // (`isFulfilment && !hasStoredIrs`) — the case that must NOT reappear on a fetch error.
+      // (`isFulfilment && !hasStoredIrs`): the case that must NOT reappear on a fetch error.
       api.storedImportRequests.listForTicket.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
       render(
@@ -1140,9 +1135,9 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   });
 });
 
-// CR-1 (GLA-167) R6 / R9: sales presses ออกใบขอซื้อ (IR) once the quotation is approved; one IR per
-// factory is created and each PDF downloads straight away so sales can hand it over; import then
-// downloads the same IR from /fulfilment.
+// Sales presses ออกใบขอซื้อ (IR) once the quotation is approved; one IR per factory is created and
+// each PDF downloads straight away so sales can hand it over; import then downloads the same IR from
+// /fulfilment.
 describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloads every created PDF (CR-1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1231,9 +1226,9 @@ describe('DealFulfilmentPanel — ออกใบขอซื้อ (IR) downloa
   });
 });
 
-// QA-29e / W4-08: the ส่งมอบสินค้า step used to print the raw codes — "WAREHOUSE" and "6: 250" in the
-// history, WAREHOUSE/STOCK in the บันทึกการส่งสินค้า select. The wire value (what recordDelivery
-// sends) stays the code; only what the person reads changes.
+// The ส่งมอบสินค้า step must not print raw codes ("WAREHOUSE", "6: 250") in the history or the
+// บันทึกการส่งสินค้า select. The wire value (what recordDelivery sends) stays the code; only what the
+// person reads changes.
 describe('DealFulfilmentPanel — ส่งมอบสินค้า shows words, not codes', () => {
   const deliveryItems = [
     { id: 6, brand: 'Brand X', model: 'Model Y', size: '60x60', qty: 500, qtyDelivered: 0 },

@@ -2,12 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { SALES_ACTION, nextSalesAction, sortWorklist } from './salesActions.js';
 import { bangkokTodayIso } from '../../utils/format.js';
 
-// First direct unit-test file for this module (previously only exercised indirectly through
-// workState.test.js's resolveWorkState cases — see that file's own "nextSalesAction — CREATE_PCR
-// gate" describe block, which predates and still covers the bucket-1 UAT-bug guard on its own).
-// Focus here is the newest bucket, RECORD_DELIVERY (stages 13-14 ส่งมอบสินค้า, owner ruling
-// 2026-08-17), and its interaction with the rest of the cascade — plus a baseline pass over every
-// other bucket so this file stands on its own as the module's primary test.
+// Direct unit tests for this module, focused on the RECORD_DELIVERY bucket (stages 13-14
+// ส่งมอบสินค้า) and its interaction with the rest of the cascade, plus a baseline pass over every
+// other bucket. workState.test.js's "nextSalesAction — CREATE_PCR gate" describe still covers the
+// bucket-1 guard on its own.
 
 function baseDeal(overrides = {}) {
   return {
@@ -62,18 +60,13 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
     expect(action.followUp).toBeUndefined();
   });
 
-  // ── Bucket-1 interaction — checked deliberately, per this branch's plan ("do not silently change
-  // bucket 1"), not left to whatever the code happened to do. ─────────────────────────────────────
+  // ── Bucket-1 interaction ───────────────────────────────────────────────────
   //
-  // Decision: bucket 1 KEEPS priority over bucket 4. A delivery-ready deal with ZERO pricing
-  // requests and no price evidence at all (no quoted status, no paymentStatus) still asks for a
-  // pricing request rather than offering to record a delivery. This is arguably correct, not a gap:
-  // the only realistic way to reach a delivery-ready fulfillmentStatus with NO pricing evidence
-  // whatsoever is TicketService.reserveStock's FROM_STOCK auto-advance, which bucket 1's own
-  // comment in salesActions.js already documents as having "no pricing precondition at all" — i.e.
-  // exactly the genuinely-never-priced deal the CREATE_PCR UAT-bug guard exists to catch, not the
-  // "already had a price and got asked again" case the guard was built to fix. Changing bucket 1's
-  // priority over bucket 4 is out of scope for this change.
+  // Bucket 1 KEEPS priority over the delivery bucket: a delivery-ready deal with ZERO pricing
+  // requests and no price evidence (no quoted status, no paymentStatus) still asks for a pricing
+  // request. That is correct: the only realistic way to reach a delivery-ready fulfillmentStatus
+  // with NO pricing evidence is TicketService.reserveStock's FROM_STOCK auto-advance (no pricing
+  // precondition at all), i.e. a never-priced deal, which bucket 1 exists to catch.
   it('bucket 1 (CREATE_PCR) wins over RECORD_DELIVERY when a delivery-ready deal has zero pricing requests and no price evidence', () => {
     const deal = baseDeal({ salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' });
     // No status/paymentStatus at all — genuinely never priced. Same shape as
@@ -83,13 +76,11 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
     expect(nextSalesAction(deal, [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
   });
 
-  // The counterpart, so the guard above reads as a real decision and not an accident of always
-  // losing: once there IS price evidence — even with zero live (or zero total) pricing requests,
-  // the pricedOutsidePcrChain legacy-deal case — bucket 1 steps aside and RECORD_DELIVERY fires.
-  // This is the exact shape of the two sales-owned demo fixtures already in demoData.js (tickets 13
-  // "Mega Bangna Retail" and 14 "IconSiam Riverside": createdById 6, zero PricingRequest rows,
-  // status quotation_issued, fulfillmentStatus GOODS_RECEIVED, a non-null paymentStatus) — see this
-  // branch's own report for how that was confirmed against the mock seed.
+  // The counterpart: once there IS price evidence, even with zero live (or zero total) pricing
+  // requests (the pricedOutsidePcrChain legacy-deal case), bucket 1 steps aside and RECORD_DELIVERY
+  // fires. This is the shape of the two sales-owned demo fixtures in demoData.js (tickets 13 "Mega
+  // Bangna Retail" and 14 "IconSiam Riverside": createdById 6, zero PricingRequest rows, status
+  // quotation_issued, fulfillmentStatus GOODS_RECEIVED, a non-null paymentStatus).
   it('RECORD_DELIVERY fires once there is price evidence, even with zero pricing requests (legacy pre-PCR-chain deal)', () => {
     const deal = baseDeal({
       status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT',
@@ -123,9 +114,8 @@ describe('nextSalesAction — RECORD_QUOTATION_OUTCOME (bucket 4, deal-page CTA 
   });
 });
 
-// Baseline pass over the rest of the cascade — establishes that inserting buckets 4/5 did not
-// disturb buckets 1-3/6-7, each exercised through a deal/PR shape that clears every earlier bucket
-// without matching it.
+// Baseline pass over the rest of the cascade: each bucket exercised through a deal/PR shape that
+// clears every earlier bucket without matching it.
 describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
   it('CREATE_PCR — no live pricing request, no price evidence', () => {
     expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
@@ -138,9 +128,9 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
     });
   });
 
-  // Spec D2 (2026-10-27): the deal page hands in its quotation list (`quotationByRequest`, a Map of
-  // pricingRequestId -> the newest PRICING_REQUEST-origin quotation). A DRAFT already written for the
-  // approved request is opened, never written a second time.
+  // The deal page hands in its quotation list (`quotationByRequest`, a Map of pricingRequestId ->
+  // the newest PRICING_REQUEST-origin quotation). A DRAFT already written for the approved request
+  // is opened, never written a second time.
   it('ISSUE_QUOTATION — the approved request\'s DRAFT quotation is already written: "เสนอใบราคา<party>" points at that draft', () => {
     const prs = [{ id: 7, ticketId: 1, status: 'APPROVED_FOR_QUOTATION', recipientType: 'OWNER' }];
     const quotationByRequest = new Map([[7, { id: 9107, number: 'QT-2026-0107-1', docStatus: 'DRAFT' }]]);
@@ -187,7 +177,7 @@ describe('nextSalesAction — full cascade baseline (buckets 1-3, 6-7)', () => {
   });
 });
 
-// Review fix 1 (walk 4): stock goods leave only once the deposit is settled (paid, or a no-deposit policy).
+// Stock goods leave only once the deposit is settled (paid, or a no-deposit policy).
 describe('nextSalesAction — RECORD_DELIVERY waits for the deposit on a stock deal', () => {
   const fromStock = (overrides = {}) => baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK', ...overrides });
   it('FROM_STOCK on a REQUIRED deal still at CUSTOMER_CONFIRMED -> no delivery action', () => {
@@ -251,10 +241,10 @@ describe('sortWorklist — RECORD_DELIVERY rank relative to CONFIRM_ORDER and FO
   });
 });
 
-// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, IA §4): a deal whose direct quotation (DEAL_DIRECT) is
-// live is being priced BY HAND. Its CTA follows that quotation — ส่งขออนุมัติ / รออนุมัติ / ยืนยัน
-// คำสั่งซื้อ — and must NEVER be "สร้างคำขอราคา": the three buckets sit BEFORE CREATE_PCR. Keyed on
-// `deal.liveDirectQuotation` (TicketSummaryDto S2-B4 — the newest live DEAL_DIRECT row, or null).
+// A deal whose direct quotation (DEAL_DIRECT) is live is being priced BY HAND. Its CTA follows that
+// quotation (ส่งขออนุมัติ / รออนุมัติ / ยืนยันคำสั่งซื้อ) and must NEVER be "สร้างคำขอราคา": the three
+// buckets sit BEFORE CREATE_PCR. Keyed on `deal.liveDirectQuotation` (TicketSummaryDto: the newest
+// live DEAL_DIRECT row, or null).
 describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', () => {
   function liveDirect(docStatus, overrides = {}) {
     return { id: 77, number: 'QT-2026-0077-1', docStatus, recipientType: 'DESIGNER', ...overrides };
@@ -291,7 +281,7 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
   });
 
   it('wins over CREATE_PCR — a zero-pricing-request deal with a live direct quotation is never told to open a คำขอราคา', () => {
-    // Exactly bucket 1's shape (no PR at all, no price evidence) — this is the ordering test.
+    // Exactly bucket 1's shape (no PR at all, no price evidence): this is the ordering test.
     const keys = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED']
       .map((docStatus) => nextSalesAction(baseDeal({ liveDirectQuotation: liveDirect(docStatus) }), [])?.key);
     expect(keys).toEqual([
@@ -300,10 +290,10 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
     expect(keys).not.toContain(SALES_ACTION.CREATE_PCR);
   });
 
-  // Found in the browser: confirmOrderFromDirectQuotation 409s unless the deal's status is still
-  // 'draft' (slice 1, 2ed3468e). A legacy deal already past it (e.g. demo deal 1: status 'approved',
-  // payment under way) must NOT be offered a ยืนยันคำสั่งซื้อ the server refuses — it falls through
-  // to the ordinary cascade instead. A list row always carries `status`; absent reads as 'draft'.
+  // confirmOrderFromDirectQuotation 409s unless the deal's status is still 'draft'. A legacy deal
+  // already past it (e.g. demo deal 1: status 'approved', payment under way) must NOT be offered a
+  // ยืนยันคำสั่งซื้อ the server refuses: it falls through to the ordinary cascade. A list row always
+  // carries `status`; absent reads as 'draft'.
   it('APPROVED on a deal already PAST draft is not offered CONFIRM_ORDER_DIRECT (the server would 409)', () => {
     for (const status of ['approved', 'quotation_issued', 'document_issued']) {
       const action = nextSalesAction(baseDeal({ status, liveDirectQuotation: liveDirect('APPROVED') }), []);
@@ -353,14 +343,14 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
   });
 });
 
-// PR A — แก้ใบเสนอราคา (REVISE_QUOTATION). nextSalesAction is list-row-only and cannot see
-// quotation rows or who owns them, so the CALLER resolves the revisable quotation (via
-// canReviseDealQuotation, which PR B widens) and hands it in as `{ reviseTarget }`:
+// แก้ใบเสนอราคา (REVISE_QUOTATION). nextSalesAction is list-row-only and cannot see quotation rows
+// or who owns them, so the CALLER resolves the revisable quotation (via canReviseDealQuotation) and
+// hands it in as `{ reviseTarget }`:
 //   { quotationId, number, openDraftId? }   — openDraftId = an open revision child already exists.
-// Two places the cascade consumes it: (1) a live DEAL_DIRECT quotation already APPROVED on a deal
+// The cascade consumes it in two places: (1) a live DEAL_DIRECT quotation already APPROVED on a deal
 // past 'draft' (the confirm-order bucket refuses it) and (2) the owner/buyer quote stages
-// (QUOTE_OWNER / QUOTE_BUYER) with an issued PR-origin quotation, which used to dead-end on
-// RECORD_QUOTATION_OUTCOME. Everything else in the cascade is unchanged.
+// (QUOTE_OWNER / QUOTE_BUYER) with an issued PR-origin quotation, which would dead-end on
+// RECORD_QUOTATION_OUTCOME.
 describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
   const REVISE = 'revise_quotation'; // literal on purpose: SALES_ACTION.REVISE_QUOTATION is undefined until implemented
   const target = { quotationId: 90, number: 'QT-2026-0090-1' };
@@ -431,10 +421,10 @@ describe('nextSalesAction — REVISE_QUOTATION (PR A)', () => {
   });
 });
 
-// Owner ruling 2026-10-15: ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3.
-// On LEAD_APPROACH and PRESENTATION the main action is always เลื่อนขั้น — a due follow-up, a stale
-// deal or an older price request does not take it over. Only a live direct quotation (bucket 0)
-// still comes first. From SPEC_APPROVED onwards nothing changes.
+// ขั้น 1 → 2 → 3 are moved by hand, and the price request starts at ขั้น 3. On LEAD_APPROACH and
+// PRESENTATION the main action is always เลื่อนขั้น: a due follow-up, a stale deal or an older price
+// request does not take it over. Only a live direct quotation (bucket 0) still comes first. From
+// SPEC_APPROVED onwards nothing changes.
 describe('ขั้น 1–2: the main action is always เลื่อนขั้น', () => {
   it.each(['LEAD_APPROACH', 'PRESENTATION'])('%s with no price request -> ADVANCE_STAGE', (salesStage) => {
     expect(nextSalesAction(baseDeal({ salesStage }), [])).toEqual({ key: SALES_ACTION.ADVANCE_STAGE, label: 'เลื่อนขั้น' });
@@ -486,10 +476,9 @@ describe('ขั้น 1–2: the main action is always เลื่อนขั
   });
 });
 
-// Owner ruling 2026-10-27 (PR #1168 made safe to ship): the rep picks the next party when the
-// designer's or owner's quotation is SENT, not after an acceptance. An acceptance is the order:
-// ยืนยันคำสั่งซื้อ, exactly as on main, whoever accepted (the server refuses a second acceptance on a
-// deal, R8, so a route that waited for one could never finish).
+// The rep picks the next party when the designer's or owner's quotation is SENT, not after an
+// acceptance. An acceptance is the order (ยืนยันคำสั่งซื้อ), whoever accepted: the server refuses a
+// second acceptance on a deal, so a route that waited for one could never finish.
 //
 // Passed the way the deal page and the dashboard pass them:
 //   offRouteParties    — a Set of the parties the deal's served route skips (an empty Set = every
@@ -521,9 +510,9 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     },
   );
 
-  // Ruling 2026-10-27 (redo): a quotation being redone is written again for the same party — a
-  // fresh one from the request after a change request, or the redo draft already open. (One
-  // awaiting approval is a waiting line instead — see workState.test.js.)
+  // A quotation being redone is written again for the same party: a fresh one from the request after
+  // a change request, or the redo draft already open. (One awaiting approval is a waiting line
+  // instead; see workState.test.js.)
   it.each([
     ['REVISION_REQUESTED', {}],
     ['DRAFT', { to: '/quotations/9101' }],
@@ -533,7 +522,7 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     });
   });
 
-  // Ruling 2026-10-27 (a): no row for the request means its status alone decides, as on main.
+  // No row for the request means its status alone decides.
   it.each([
     ['the dashboard, which has no quotation list', undefined],
     ['a list with no row for it (a legacy old-engine quotation, or the list not loaded)', new Map()],
@@ -569,7 +558,7 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(action).toMatchObject({ key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'] });
   });
 
-  // Ruling 2026-10-27 (b): a designer/owner outcome is never prompted, route known or not.
+  // A designer/owner outcome is never prompted, route known or not.
   it('the route has to be known: without offRouteParties a sent designer quotation gets nothing (no route choice, no outcome prompt); an empty set means every party is on it', () => {
     const quotationByRequest = quotations([1, 'ISSUED']);
     expect(nextSalesAction(deal(), [designerSent], { quotationByRequest })).toBeNull();
@@ -577,7 +566,7 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
       .toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
   });
 
-  // Ruling 2026-10-27 (e): with two later drafts, the first in route order (not list order).
+  // With two later drafts, the first in route order (not list order).
   it('a later party\'s request still a private DRAFT -> "ส่งคำขอราคาถึงเจ้าของโครงการ" (the first draft in route order), ranked ahead of a follow-up in the worklist', () => {
     const prs = [designerSent, request(3, 'BUYER', 'DRAFT'), request(2, 'OWNER', 'DRAFT')];
     const action = nextSalesAction(deal(), prs, known([1, 'ISSUED']));
@@ -590,7 +579,7 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(sorted.map((row) => row.deal.id)).toEqual([1, 9]);
   });
 
-  // A designer/owner who said no is never quoted again: the route moved on (ruling 2026-10-27).
+  // A designer/owner who said no is never quoted again: the route moved on.
   it.each([
     ['SUBMITTED', 'ISSUED'],
     ['CEO_REVIEWING', 'REJECTED'],
@@ -598,8 +587,8 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(nextSalesAction(deal(), [designerSent, request(2, 'OWNER', status)], known([1, designerDoc]))).toBeNull();
   });
 
-  // Ruling 2026-10-27 (redo): the buyer said no, let it expire or asked for changes -> a fresh
-  // quotation from the same request (DealQuotationService#createFromPricingRequest's re-quote).
+  // The buyer said no, let it expire or asked for changes -> a fresh quotation from the same request
+  // (DealQuotationService#createFromPricingRequest's re-quote).
   it.each(['REJECTED', 'EXPIRED', 'REVISION_REQUESTED'])(
     'a buyer quotation %s -> "เสนอใบราคาผู้ซื้อ" writes a fresh one from the same request, not บันทึกผลใบเสนอราคา',
     (docStatus) => {
@@ -613,8 +602,8 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, 'SUPERSEDED']))).toBeNull();
   });
 
-  // The owner's went out after the designer's: the owner being redone holds the route choice back
-  // and is redone itself.
+  // The owner's went out after the designer's: the owner being redone holds the route choice back and
+  // is redone itself.
   it.each([
     ['REVISION_REQUESTED', {}],
     ['DRAFT', { to: '/quotations/9102' }],
@@ -682,9 +671,9 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
   });
 });
 
-// Owner rulings 2026-10-28: the deal page's main button creates the deposit notice (ขั้น 10) and the
-// remaining invoice (ขั้น 13). `depositNotice` / `remainingInvoice` are page-only options; an
-// absent `remainingInvoice` (the dashboard worklist) never offers the invoice.
+// The deal page's main button creates the deposit notice (ขั้น 10) and the remaining invoice
+// (ขั้น 13). `depositNotice` / `remainingInvoice` are page-only options; an absent `remainingInvoice`
+// (the dashboard worklist) never offers the invoice.
 describe('nextSalesAction — สร้างใบแจ้งยอดเงินรับมัดจำ / สร้างใบแจ้งหนี้ (owner rulings 2026-10-28)', () => {
   const confirmedDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', ...overrides });
   const CREATE_DEPOSIT = { key: 'create_deposit_notice', label: 'สร้างใบแจ้งยอดเงินรับมัดจำ' };
@@ -748,7 +737,7 @@ describe('nextSalesAction — สร้างใบแจ้งยอดเง�
   });
 });
 
-// QA-09: ขั้น 11 (DEPOSIT_RECEIVED) — the owning rep's one main button creates the import request.
+// ขั้น 11 (DEPOSIT_RECEIVED): the owning rep's one main button creates the import request.
 describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั้น 11 (owner rulings QA-09)', () => {
   const paidDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, ...overrides });
   const CREATE_IR = { key: 'create_import_request', label: 'ออกใบขอซื้อ (IR)' };
@@ -786,8 +775,9 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
       .not.toBe('create_import_request');
   });
 
-  // Review fix 5: a deal whose lines are all covered from stock orders nothing from a factory. The page passes its
-  // items (the deal summary has none); a legacy deal not yet routed to FROM_STOCK must still not be told to make an IR.
+  // A deal whose lines are all covered from stock orders nothing from a factory. The page passes its
+  // items (the deal summary has none); a legacy deal not yet routed to FROM_STOCK must still not be
+  // told to make an IR.
   it('items all covered from stock -> no create_import_request; some uncovered, or no items passed -> still offered', () => {
     const covered = [{ qty: 10, qtyFromStock: 10 }, { qty: 4, qtyFromStock: 4 }];
     const partly = [{ qty: 10, qtyFromStock: 10 }, { qty: 8, qtyFromStock: 0 }];
@@ -798,9 +788,9 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
     expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
   });
 
-  // Walk 4 (W4-05): a no-deposit deal never gets a deposit notice, so nothing moves its payment status past
-  // CUSTOMER_CONFIRMED - the backend gate (requireImportRequestIssuable) already lets it issue an IR there.
-  // The main button must offer the IR, not fall through to "nothing to do".
+  // A no-deposit deal never gets a deposit notice, so nothing moves its payment status past
+  // CUSTOMER_CONFIRMED; the backend gate (requireImportRequestIssuable) already lets it issue an IR
+  // there. The main button must offer the IR, not fall through to "nothing to do".
   it.each(['NOT_REQUIRED', 'WAIVED'])(
     'depositPolicy %s at CUSTOMER_CONFIRMED + no fulfilment yet -> สร้างใบขอซื้อ (IR) (no deposit to wait for)', (depositPolicy) => {
       const deal = paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy });
