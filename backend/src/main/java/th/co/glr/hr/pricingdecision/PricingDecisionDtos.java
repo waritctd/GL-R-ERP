@@ -31,8 +31,8 @@ public final class PricingDecisionDtos {
         Instant approvedAt,
         Instant returnedAt,
         List<PricingDecisionItemDto> items,
-        // ── Phase 2, CEO pricing method (owner rulings 2026-09-18/19, V187) ─────────────────
-        // NULL = legacy decision (predates this migration) or a new decision the CEO has not
+        // ── CEO pricing method ──────────────────────────────────────────────────────────────
+        // NULL = legacy decision (predates the pricing-method columns) or a new decision the CEO has not
         // picked a mode for yet — either way PricingDecisionService keeps driving price from the
         // margin/"ปรับราคาเอง" formula path. CEO-ONLY: stripped to null for every other role that
         // can reach get()/list() (import) — see PricingDecisionService#stripPriceModeFieldsForNonCeo.
@@ -70,7 +70,7 @@ public final class PricingDecisionDtos {
         String decisionNote,
         Instant createdAt,
         Instant updatedAt,
-        // ── CEO selling-price override ("ปรับราคาเอง", Phase 1 UI simplification) ────────────
+        // ── CEO selling-price override ("ปรับราคาเอง") ───────────────────────────────────────
         // Sits BESIDE proposedSellingPricePerRequestedUnit above, which keeps holding the
         // FORMULA's own computed output forever — an override never overwrites it. NULL means
         // "no override, the formula drives this line"; non-null is the CEO's fixed final price,
@@ -83,8 +83,8 @@ public final class PricingDecisionDtos {
         // recomputed on every read (PricingDecisionRepository#mapItem) so it can never drift out
         // of sync with the two columns it is derived from.
         BigDecimal effectiveSellingPricePerRequestedUnit,
-        // ── Phase 2, CEO pricing method (owner rulings 2026-09-18/19, V187) ─────────────────
-        // ตร.ม./แผ่น from the bound pricing_request_item (V185) -- NOT new/CEO-only info (Sales
+        // ── CEO pricing method ──────────────────────────────────────────────────────────────
+        // ตร.ม./แผ่น from the bound pricing_request_item -- NOT new/CEO-only info (Sales
         // already typed it on the item form), joined in here so the SPECIAL_SQM derivation
         // (WastageCalculator#netPerPieceFromSpecialSqm) and the "is this a new-form item"
         // eligibility check both have it without a second query. Never stripped for non-CEO.
@@ -101,14 +101,13 @@ public final class PricingDecisionDtos {
         // freezes into approvedSellingPricePerRequestedUnit AND
         // minimumSellingPricePerRequestedUnit on approve() of a new-form decision. CEO-only.
         BigDecimal netUnitPrice,
-        // ── Slice 1 of the stock-line feature (V194), read from the bound pricing_request_item ──
+        // ── Stock lines, read from the bound pricing_request_item ───────────────────────────
         // null = สั่งนำเข้า; IN_THAILAND / IN_TRANSIT = a stock line (no costing link, no cost).
         String stockSource,
         // วันที่คาดว่าจะถึง - IN_TRANSIT lines only. Read-only here; import sets it on the request.
         LocalDate expectedArrivalDate
     ) {
-        /** The pre-stock-line shape - every construction site before slice 1. Defaults both new
-         * fields to null. */
+        /** The shape without the stock-line fields. Defaults both of them to null. */
         public PricingDecisionItemDto(
             long id, long pricingDecisionId, long pricingRequestItemId, long pricingCostingItemId,
             String brand, String model, String productDescription, String factoryName,
@@ -147,40 +146,36 @@ public final class PricingDecisionDtos {
         String currency,
         Instant approvedAt,
         List<PricingDecisionSalesItemDto> items,
-        // GLA-123 slice S1 M2 fix (Opus review, 2026-09-20), NARROWED by MINOR-1 (owner ruling,
-        // confirmed 2026-09-20, second re-review): this field USED TO be the CEO's chosen pricing
-        // METHOD label itself (`String priceMode`, NET/SPECIAL_SQM/DIRECT_NET). That was still a
-        // price-shaped fact, and this endpoint is legitimately callable by `import` for an
-        // UNRELATED reason (PricingDecisionService.SALES_VIEW_ROLES — import needs the approved
-        // selling price for its own factory-costing workflow), so `import` was picking up the
-        // CEO's pricing method as a side effect of a field this feature added for a completely
-        // different caller (sales, deciding which create button to show). Narrowed to a plain
-        // boolean that leaks NOTHING about which method the CEO chose or any other price-shaped
-        // fact — "is this decision new-form" is the ONLY question
-        // PricingRequestDetailPage#createDealQuotationFromRequest's button-hiding logic actually
+        // A plain boolean, not the CEO's pricing METHOD label (NET/SPECIAL_SQM/DIRECT_NET): the
+        // label is a price-shaped fact, and this endpoint is legitimately callable by `import`
+        // for an UNRELATED reason (PricingDecisionService.SALES_VIEW_ROLES — import needs the
+        // approved selling price for its own factory-costing workflow), so it must not learn the
+        // CEO's pricing method as a side effect of a field added for a different caller (sales,
+        // deciding which create button to show). This boolean leaks NOTHING about which method
+        // the CEO chose or any other price-shaped fact — "is this decision new-form" is the ONLY
+        // question PricingRequestDetailPage#createDealQuotationFromRequest's button-hiding logic
         // needs answered (server gate: DealQuotationService#createFromPricingRequest refuses a
-        // legacy decision with 409 — see legacyDecision_refused409). Deliberately safe to return
-        // to EVERY SALES_VIEW_ROLES caller uniformly (sales/sales_manager/ceo/import alike) —
-        // exactly why a boolean was chosen over stripping the old string field for import only:
-        // one shape, no role-conditional stripping logic to keep correct on this one field.
+        // legacy decision with 409 — see legacyDecision_refused409). Safe to return to EVERY
+        // SALES_VIEW_ROLES caller uniformly (sales/sales_manager/ceo/import alike): one shape,
+        // no role-conditional stripping logic to keep correct on this one field.
         boolean newFormPricing
     ) {}
 
     public record PricingDecisionSalesItemDto(
         long pricingRequestItemId,
-        // Step 4 (Customer Quotation Generation and Issuance) needs this to snapshot the FK
-        // onto sales.quotation_item.pricing_decision_item_id — an id, not a cost/margin/FX
-        // value, so exposing it here does not weaken design correction 2's "no cost leak".
+        // Quotation issuance needs this to snapshot the FK onto
+        // sales.quotation_item.pricing_decision_item_id — an id, not a cost/margin/FX
+        // value, so exposing it here does not leak cost.
         long pricingDecisionItemId,
         String brand,
         String model,
         // color/texture/size exist here for the same reason brand/model do: no cost/margin/FX
-        // value, so no weakening of design correction 2. They exist SOLELY so Step 4
+        // value, so no cost leak. They exist SOLELY so quotation issuance
         // (CustomerQuotationService#buildItem) can populate sales.quotation_item's legacy
-        // brand/model/color/texture/size columns per V74's own migration comment ("the legacy
-        // ... columns, which stay populated too, so the existing renderer's buildDesc() has
-        // something to read") — see QuotationRenderer#buildDesc(TicketItemDto), the method that
-        // actually reads them back out at render time.
+        // brand/model/color/texture/size columns, which stay populated so the existing
+        // renderer's buildDesc() has something to read — see
+        // QuotationRenderer#buildDesc(TicketItemDto), the method that reads them back out at
+        // render time.
         String color,
         String texture,
         String size,
