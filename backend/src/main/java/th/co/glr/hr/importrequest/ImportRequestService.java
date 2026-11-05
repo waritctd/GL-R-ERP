@@ -52,31 +52,25 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  *   <li><b>Preview</b> ({@link #render}, {@link #brands}, {@link #pageCount}) — generated live from
  *       the deal, storing nothing, still grouped PER BRAND via {@link
  *       ImportRequestQueryRepository#brandLinesForTicket}. Gated on {@link #IR_ROLES}
- *       ({@code import}/{@code ceo}) exactly as before V184. Deliberately UNTOUCHED by this
- *       migration: these routes are being demoted to {@code SERVER_ONLY} (owner decision 4,
- *       import-request-per-factory-PLAN.md) and superseded by the stored aggregate's own
- *       {@code /file} route rather than rewritten, so rebasing their grain onto factories is not
- *       this branch's job and would only add risk to a surface already being retired.
+ *       ({@code import}/{@code ceo}). These routes are being demoted to {@code SERVER_ONLY}
+ *       (import-request-per-factory-PLAN.md) and superseded by the stored aggregate's own
+ *       {@code /file} route, so their per-brand grain is not rebased onto factories.
  *   <li><b>The stored aggregate</b> ({@link #createDrafts} onward) — a real row per (deal,
- *       FACTORY) as of V184 (was per-brand), DRAFT → ISSUED → SUPERSEDED, with {@code IR<yy><nnn>}
+ *       FACTORY) (V184), DRAFT → ISSUED → SUPERSEDED, with {@code IR<yy><nnn>}
  *       minted from the shared {@code sales.document_sequence} at issue, per-factory progress
- *       (S12-S17, {@link ImportRequestStep}), and a rewritten role model — see {@link
+ *       (S12-S17, {@link ImportRequestStep}), and its own role model — see {@link
  *       #FULL_WRITE_ROLES}/{@link #FOOTER_ONLY_ROLES}/{@link #ADVANCE_STEP_ROLES} below.
  * </ul>
  *
- * <p><b>Authorisation on the STORED path changed (owner decision 1, 2026-09-18; footer tightened by
- * owner decision 09-19) — an AUTHORIZATION CHANGE per CLAUDE.md, shipped with real-DB
- * wrong-way-round tests and mutation checks.</b> It used to be the same {@code import}/{@code ceo}
- * pair as the preview path. It is now:
+ * <p><b>Authorisation on the STORED path</b> (an authorization surface per CLAUDE.md: changes need
+ * real-DB wrong-way-round tests and mutation checks):
  * <ul>
  *   <li>the deal's OWNING sales rep and the CEO: create, edit the BODY (project/customer/rep/items/
  *       lead time while DRAFT), issue, revise, delete;
- *   <li>the CEO ALONE: the printed form's footer (Checked By/date, Approve By/date, vessel ETA —
- *       owner decision 09-19, 2026-09-19, supersedes decision 1's original wording that had let the
- *       owning rep and import touch it too);
+ *   <li>the CEO ALONE: the printed form's footer (Checked By/date, Approve By/date, vessel ETA);
  *   <li>{@code import}: read, advance steps, the post-issue lead-time route, edit/mark-sent on the
- *       order-email draft (owner decision 09-18 #3 §B — a DIFFERENT "footer"-shaped surface,
- *       untouched by 09-19; see {@link #requireFooterWrite}'s own Javadoc);
+ *       order-email draft (a DIFFERENT "footer"-shaped surface from the printed footer;
+ *       see {@link #requireFooterWrite}'s own Javadoc);
  *   <li>{@code sales_manager}: read only.
  * </ul>
  */
@@ -88,14 +82,14 @@ public class ImportRequestService {
 
     private static final Set<String> REQUIRED_BY_ROLES = Set.of("sales", "ceo");
 
-    // ── STORED aggregate roles (owner decision 1, footer tightened by owner decision 09-19) ───────
+    // ── STORED aggregate roles ────────────────────────────────────────────────────────────────────
     /** Create / edit the BODY / issue / revise / delete. Sales here means the DEAL OWNER only. The
-     * printed form's FOOTER is no longer part of this set's write surface — see {@link
-     * #requirePrintedFooterWrite} (CEO only, owner decision 09-19). */
+     * printed form's FOOTER is not part of this set's write surface — see {@link
+     * #requirePrintedFooterWrite} (CEO only). */
     private static final Set<String> FULL_WRITE_ROLES = Set.of("sales", "ceo");
     /** The ORDER-EMAIL draft's edit/mark-sent gate, in addition to {@link #FULL_WRITE_ROLES} — see
      * {@link #requireFooterWrite}'s Javadoc for why this is a DIFFERENT surface from the printed
-     * form's footer (which {@link #requirePrintedFooterWrite} now gates, CEO only). */
+     * form's footer (which {@link #requirePrintedFooterWrite} gates, CEO only). */
     private static final Set<String> FOOTER_ONLY_ROLES = Set.of("import");
     /** Advance a step. Global — import has no per-deal "ownership" concept, unlike sales. */
     private static final Set<String> ADVANCE_STEP_ROLES = Set.of("import", "ceo");
@@ -262,15 +256,14 @@ public class ImportRequestService {
     }
 
     /**
-     * Raises AND ISSUES one ใบขอซื้อ per FACTORY on the deal that does not already have a live one (owner
-     * ruling 10-29: no DRAFT is left behind; each row comes back ISSUED with a doc number and step
+     * Raises AND ISSUES one ใบขอซื้อ per FACTORY on the deal that does not already have a live one
+     * (no DRAFT is left behind; each row comes back ISSUED with a doc number and step
      * CONTACTED, and the first one moves the deal to PROCUREMENT). All-or-nothing: a missing lead time,
      * an empty item list or the payment gate refuses the whole call with a 409 before anything is
-     * written. Resolving each
+     * written. Resolves each
      * line's factory per {@link ImportRequestQueryRepository#factoryResolutionCandidates}'s cascade —
      * see that method's Javadoc for the order and {@link #resolveFactoryGroups} for the match-or-create
-     * step (owner decision 2, revised 09-18: auto-create now requires {@code request}'s {@code
-     * newFactoryCountries}).
+     * step (auto-create requires {@code request}'s {@code newFactoryCountries}).
      *
      * <p>Idempotent in the way that matters: a factory with a (leftover) DRAFT or an ISSUED form is skipped
      * rather than duplicated, so calling this twice does not produce two forms for the same factory —
@@ -308,11 +301,11 @@ public class ImportRequestService {
             .map(ImportRequestDto::factoryId)
             .collect(Collectors.toSet());
 
-        // CR-1 (D, B-R4/B-R5): each factory's IR takes the lead time on the deal's current QUOTATION items.
+        // Each factory's IR takes the lead time on the deal's current QUOTATION items.
         List<ImportRequestQueryRepository.QuotationLeadTimeRow> quotationLeadTimes =
             repository.currentQuotationLeadTimes(ticketId);
 
-        // ALL-OR-NOTHING (owner ruling 10-29): create also ISSUES, so every issue check runs for every
+        // ALL-OR-NOTHING: create also ISSUES, so every issue check runs for every
         // NEW factory BEFORE the first write. (Not left to the @Transactional rollback alone: it is
         // inert in the hand-wired integration suite, and the checks are cheap.)
         record NewRow(FactoryGroup group, LeadTimeDefaults.Range derived, LeadTimeDefaults.Range leadTime) { }
@@ -328,7 +321,7 @@ public class ImportRequestService {
                 throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อยังไม่มีรายการสินค้า");
             }
             if (leadTime == null) {
-                // Owner ruling 10-29: a caller-supplied lead time (keyed by factory name) fills it in.
+                // A caller-supplied lead time (keyed by factory name) fills it in.
                 var supplied = suppliedLeadTimes.get(normalizeFactoryName(group.factoryName()));
                 if (supplied == null) {
                     missingLeadTime.add(group.factoryName());
@@ -351,8 +344,8 @@ public class ImportRequestService {
             FactoryGroup group = n.group();
             long id = stored.insertDraft(ticketId, group.factoryId(), group.factoryName(),
                 group.brandLabel(), stored.highestVersion(ticketId, group.factoryId()) + 1,
-                snapshot, n.leadTime().minDays(), n.leadTime().maxDays(), null, // S-E: nothing to carry, fresh row
-                null, // REVIEW ROUND 3, item 2: nothing to carry either -- requiredByNote comes from the deal snapshot only.
+                snapshot, n.leadTime().minDays(), n.leadTime().maxDays(), null, // nothing to carry, fresh row
+                null, // nothing to carry either -- requiredByNote comes from the deal snapshot only.
                 actor.id(), actor.name());
             stored.replaceItems(id, group.items());
             if (n.derived() != null) {
@@ -367,27 +360,25 @@ public class ImportRequestService {
      * PATCH semantics — an absent field is left alone, never blanked. Body fields ({@link
      * #FULL_WRITE_ROLES} only) move only while the form is a DRAFT.
      *
-     * <p><b>The printed footer (Checked By/date, Approve By/date, vessel ETA) is CEO ONLY</b> (owner
-     * decision 09-19, supersedes decision 1's original footer wording — import previously shared
-     * this write). Import keeps advancing steps, the post-issue lead-time route, and marking the
+     * <p><b>The printed footer (Checked By/date, Approve By/date, vessel ETA) is CEO ONLY.</b>
+     * Import advances steps, uses the post-issue lead-time route, and marks the
      * order-email sent; none of those go through this method. {@code vesselEtaNote} is still
      * auto-prefilled by the SYSTEM at {@link #issue} — that is a service-internal write, not a
      * user-supplied one, and is unaffected by this gate.
      *
      * <p>Body and footer are checked and applied INDEPENDENTLY of each other — a single PATCH may
      * carry both, and each half is authorised on its own terms rather than the request's authz
-     * being decided by whichever half happens to be present. (Previously a single {@code
-     * wantsBodyChange} branch decided which check ran, which meant a body edit's footer fields,
-     * if any were also sent in the same call, were applied with no footer-specific check at all —
-     * harmless while footer roles were a superset of body roles, but not any more now that they are
-     * disjoint.) The repository's {@code WHERE} clauses enforce the DRAFT-only body rule too, not
+     * being decided by whichever half happens to be present. (A single body-change check deciding
+     * which authz ran would apply a body edit's footer fields with no footer-specific check — the
+     * footer and body role sets are disjoint.) The repository's {@code WHERE} clauses enforce the
+     * DRAFT-only body rule too, not
      * just this method, so a wrong status is a 409 rather than a silent no-op.
      */
     @Transactional
     public ImportRequestDto update(long id, UpdateImportRequestRequest request, UserPrincipal actor) {
         ImportRequestDto existing = requireStored(id);
         boolean wantsLeadTimeChange = request.leadTimeMinDays() != null || request.leadTimeMaxDays() != null;
-        // REVIEW ROUND 2, S-F: requiredByNote is a BODY field (this form's own "กำหนดวันที่ต้องการของ",
+        // requiredByNote is a BODY field (this form's own "กำหนดวันที่ต้องการของ",
         // editable by the owning rep/CEO while DRAFT) — see UpdateImportRequestRequest#requiredByNote's
         // own Javadoc for why this is separate from SetRequiredByNoteRequest (the DEAL-level value new
         // drafts snapshot FROM).
@@ -408,8 +399,8 @@ public class ImportRequestService {
             // at least SEE this row — read access, the lowest bar any branch above already clears.
             requireRead(existing.ticketId(), actor);
         }
-        // REVIEW ROUND 1, S4: refuse on an inactive deal (LOST/ON_HOLD/DORMANT) like every legacy
-        // ticket-mutating method already does (TicketService#requireActive) — a stored ใบขอซื้อ must
+        // Refuse on an inactive deal (LOST/ON_HOLD/DORMANT) like every legacy
+        // ticket-mutating method (TicketService#requireActive) — a stored ใบขอซื้อ must
         // not be editable once the deal it belongs to is no longer live.
         requireDealActive(requireTicket(existing.ticketId()));
 
@@ -433,15 +424,15 @@ public class ImportRequestService {
             if (wantsLeadTimeChange) {
                 requireValidLeadTimePair(request.leadTimeMinDays(), request.leadTimeMaxDays());
                 stored.updateLeadTime(id, request.leadTimeMinDays(), request.leadTimeMaxDays());
-                // REVIEW ROUND 3, item 1 (S-E regression): a DRAFT has no firstIssuedDate yet (only
+                // A DRAFT has no firstIssuedDate yet (only
                 // set at #issue), so there is no anchor here to re-derive a fresh CONCRETE
                 // vesselEtaNote string the way #setLeadTime can on an already-ISSUED row. But a
                 // carried-forward note that is still exactly an AUTO-DERIVED text (for ANY range —
                 // see #looksAutoDerivedVesselEta) is now stale for the range just written above, and
                 // #issue's own re-derivation only fires when the stored text matches THIS draft's
                 // CURRENT range exactly -- a stale-but-still-auto text would otherwise be mistaken
-                // for a CEO-typed custom note and survive issue() unchanged (the exact bug: v1
-                // 75-90 -> revise -> v2 edited to 60-70 -> issue kept "(75-90 วัน)"). Blanking it
+                // for a CEO-typed custom note and survive issue() unchanged (e.g. v1
+                // 75-90 -> revise -> v2 edited to 60-70 -> issue keeps "(75-90 วัน)"). Blanking it
                 // here (an explicit "" is a real COALESCE-safe write, unlike null) lets #issue's own
                 // null-or-blank branch derive it fresh, with the correct anchor, at issue time. A
                 // genuinely CEO-typed custom note never matches the auto pattern, so it is left
@@ -464,10 +455,10 @@ public class ImportRequestService {
     /**
      * Sets lead time on an ISSUED row — {@code import}/{@code ceo} only (the DRAFT-stage edit for
      * the owning rep/CEO goes through {@link #update} instead — see {@link
-     * ImportRequestRequests.SetLeadTimeRequest}'s own Javadoc). Owner decision 09-18 #2's post-issue
-     * half of "editable by the owning rep/CEO while DRAFT, and by import/CEO after issue".
+     * ImportRequestRequests.SetLeadTimeRequest}'s own Javadoc): the lead time is editable by the
+     * owning rep/CEO while DRAFT, and by import/CEO after issue.
      *
-     * <p><b>REVIEW ROUND 2, S-D:</b> a new range moves {@code expectedArrivalFrom}/{@code To} (both
+     * <p>A new range moves {@code expectedArrivalFrom}/{@code To} (both
      * derived — {@link #withPageCount}), so the two OTHER places that quote the same estimate must
      * move with it or they go stale: {@code vesselEtaNote}, if it is STILL exactly the text {@link
      * #defaultVesselEtaNote} would have produced for the OLD range (i.e. nobody, CEO included, has
@@ -482,14 +473,14 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         ImportRequestDto existing = requireStored(id);
-        requireDealActive(requireTicket(existing.ticketId())); // REVIEW ROUND 1, S4
+        requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "แก้ไขระยะเวลานำเข้าได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
         }
         requireValidLeadTimePair(request.leadTimeMinDays(), request.leadTimeMaxDays());
         stored.updateLeadTime(id, request.leadTimeMinDays(), request.leadTimeMaxDays());
 
-        // S-D, tightened by REVIEW ROUND 3 item 1: re-derive whenever the OLD vesselEtaNote LOOKS
+        // Re-derive whenever the OLD vesselEtaNote LOOKS
         // auto-derived (matches the generic template for ANY range/anchor — see
         // #looksAutoDerivedVesselEta), not only when it equals the exact text this method itself
         // would have produced for the OLD range. A CEO-typed custom note never matches the pattern,
@@ -500,11 +491,10 @@ public class ImportRequestService {
             stored.updateFooter(id, newDerived, null, null, null, null);
         }
 
-        // REVIEW ROUND 3, item 3 (S-D regression): the PREVIOUS code regenerated the unsent
-        // order-email draft UNCONDITIONALLY whenever unsent, and re-signed it as THIS method's own
-        // caller (import/CEO editing an estimate) — silently clobbering a hand-edit made via {@link
-        // #updateEmailDraft}, and misattributing the email to whoever happened to touch the lead
-        // time rather than whoever actually issued the form. Fixed two ways:
+        // The unsent order-email draft must not be regenerated unconditionally or re-signed as
+        // THIS method's own caller (import/CEO editing an estimate): that would clobber a
+        // hand-edit made via {@link #updateEmailDraft}, and misattribute the email to whoever
+        // touched the lead time rather than whoever actually issued the form. So:
         //  1. Regenerate ONLY when the stored body is STILL exactly what generation would have
         //     produced for the OLD lead time — i.e. nobody has hand-edited it since issue (or since
         //     the last regeneration). A hand-edited draft is left exactly alone.
@@ -513,8 +503,8 @@ public class ImportRequestService {
         //     silently re-sign an email as themselves.
         if (existing.emailSentAt() == null) {
             FactoryConfigDto factory = freshFactoryLookup(existing.factoryId()).orElse(null);
-            // The ORIGINAL signer is a STORED SNAPSHOT (issuedByName/issuedByEmail, V184 REVIEW
-            // ROUND 3 item 3) taken at #issue, never re-resolved fresh here — a fresh lookup of
+            // The ORIGINAL signer is a STORED SNAPSHOT (issuedByName/issuedByEmail, V184)
+            // taken at #issue, never re-resolved fresh here — a fresh lookup of
             // "the issuing user's CURRENT email" could legitimately differ from what was actually
             // embedded in the text this method compares against (an employee's email can change,
             // and a UserPrincipal's email is not guaranteed to equal today's hr.employee.email row),
@@ -537,13 +527,13 @@ public class ImportRequestService {
     }
 
     /**
-     * REVIEW ROUND 3, item 1: whether {@code note} matches the GENERIC shape {@link
+     * Whether {@code note} matches the GENERIC shape {@link
      * #defaultVesselEtaNote} always produces, for ANY anchor/range — not only the one specific
-     * string a caller happens to have computed to compare against. The narrower "equals the text
-     * derived for THIS draft's own CURRENT range" check missed the case where a carried-forward note
-     * was auto-derived for a DIFFERENT (the predecessor's, or an earlier edit's) range: after a
+     * string a caller happens to have computed to compare against. Comparing to "the text
+     * derived for THIS draft's own CURRENT range" would miss a carried-forward note
+     * auto-derived for a DIFFERENT (the predecessor's, or an earlier edit's) range: after a
      * lead-time change the note's literal text no longer matches a freshly-recomputed derivation, so
-     * the narrower check wrongly treated an auto note as a CEO-typed custom one and left it stale. A
+     * an auto note would be wrongly treated as a CEO-typed custom one and left stale. A
      * human typing a genuinely custom note is not going to accidentally match this rigid,
      * machine-generated template.
      */
@@ -604,7 +594,7 @@ public class ImportRequestService {
         ImportRequestDto draft = requireStored(id);
         requireFullWrite(draft.ticketId(), actor);
         TicketSnapshot dealSnapshot = requireTicket(draft.ticketId());
-        requireDealActive(dealSnapshot); // REVIEW ROUND 1, S4
+        requireDealActive(dealSnapshot);
         if (!ImportRequestStatus.DRAFT.equals(draft.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "ใบขอซื้อฉบับนี้ออกเลขไปแล้ว");
         }
@@ -617,7 +607,7 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ใบขอซื้อนี้มีรายการที่ครอบคลุมจากสต็อกแล้ว — ไม่ต้องสั่งนำเข้า กรุณาลบฉบับร่างนี้แล้วสร้างใบขอซื้อใหม่");
         }
-        // Owner decision 09-18 #2: "อื่นๆ/unknown must be typed by sales" — a form with no estimate
+        // "อื่นๆ/unknown" lead times must be typed by sales — a form with no estimate
         // at all may not be issued. Both-or-neither is already the DB invariant
         // (chk_import_request_lead_time), so checking one implies the other.
         if (draft.leadTimeMinDays() == null || draft.leadTimeMaxDays() == null) {
@@ -626,11 +616,11 @@ public class ImportRequestService {
         }
 
         TicketSummaryDto ticketSummary = requireTicketSummary(draft.ticketId());
-        // REVIEW ROUND 2, S-C: the STORED per-factory path uses the WIDENED gate (any payment status
+        // The STORED per-factory path uses the WIDENED gate (any payment status
         // at or after deposit-ready, including AWAITING_FINAL_PAYMENT/FULLY_PAID) — a deal's second,
         // third, ... factory's first issue, or ANY factory's revision issue, must not be blocked just
         // because the customer finished paying in the meantime. The legacy one-shot
-        // TicketService#issueImportRequest keeps the ORIGINAL narrower gate (its own call, unchanged)
+        // TicketService#issueImportRequest keeps the narrower gate
         // for the deal's very-first-IR semantics — see TicketService#requireImportRequestIssuable's
         // own Javadoc for why the two share one predicate with a widening flag rather than diverging.
         ticketService.requireImportRequestIssuable(ticketSummary, true);
@@ -672,7 +662,7 @@ public class ImportRequestService {
             stepById = p.importStepById();
             stepByName = p.importStepByName();
             stepNote = p.importStepNote();
-            // REVIEW ROUND 1, S7 (owner default, flagged): carried forward UNCHANGED — a revision's
+            // Carried forward UNCHANGED — a revision's
             // issue must never move the arrival anchor, even a same-day typo correction.
             firstIssuedDate = p.firstIssuedDate();
             stored.supersede(p.id(), id);
@@ -685,24 +675,22 @@ public class ImportRequestService {
             firstIssuedDate = today;
         }
 
-        // Owner decision 09-18 #3 §A, re-derivation rule tightened by REVIEW ROUND 2 S-E: vesselEtaNote
-        // defaults to the derived arrival estimate when the draft's OWN value is either unset, or is
-        // STILL exactly what auto-derivation would produce for this draft's own (possibly since-edited
-        // by update(), or carried forward unchanged by revise()) anchor+range. Anchored on
-        // firstIssuedDate, matching expectedArrivalFrom/To (S7) so the printed note and the derived
-        // fields never disagree. A CEO-typed CUSTOM note — anything that does NOT match what
-        // auto-derivation would currently produce — is left exactly alone; {@link #setLeadTime} (S-D)
+        // vesselEtaNote defaults to the derived arrival estimate when the draft's OWN value is either
+        // unset, or LOOKS auto-derived (for this draft's own, possibly since-edited by update() or
+        // carried forward unchanged by revise(), anchor+range). Anchored on
+        // firstIssuedDate, matching expectedArrivalFrom/To so the printed note and the derived
+        // fields never disagree. A CEO-typed CUSTOM note — anything that does NOT match the
+        // auto-derived shape — is left exactly alone; {@link #setLeadTime}
         // applies the identical rule for the post-issue lead-time edit.
         String derivedVesselEtaNote = defaultVesselEtaNote(firstIssuedDate, draft.leadTimeMinDays(),
             draft.leadTimeMaxDays());
-        // REVIEW ROUND 3, item 1: {@code looksAutoDerivedVesselEta} replaces the narrower "equals
-        // THIS draft's own current derivation" check — see that method's own Javadoc for why an
-        // exact-string comparison missed a stale-but-still-auto note surviving a lead-time edit.
+        // looksAutoDerivedVesselEta, not an exact-string comparison with this draft's own current
+        // derivation — see that method's Javadoc for why the latter misses a stale-but-still-auto note.
         String vesselEtaNote = (draft.vesselEtaNote() == null || draft.vesselEtaNote().isBlank()
             || looksAutoDerivedVesselEta(draft.vesselEtaNote()))
             ? derivedVesselEtaNote : draft.vesselEtaNote();
 
-        // REVIEW ROUND 2, S-F: this FORM's own requiredByNote is re-snapshotted from the DEAL's
+        // This FORM's own requiredByNote is re-snapshotted from the DEAL's
         // current value at issue time whenever it is still blank — the owning rep/CEO may instead
         // have already typed one directly onto this draft via update() (UpdateImportRequestRequest
         // #requiredByNote), which is never overwritten here.
@@ -710,18 +698,16 @@ public class ImportRequestService {
             ? draft.requiredByNote() : dealSnapshot.requiredByNote();
 
         FactoryConfigDto factory = freshFactoryLookup(draft.factoryId()).orElse(null);
-        // OWNER DECISION 09-19 #2: doc number + "GL&R" ONLY -- no project name. A project name often
+        // Doc number + "GL&R" ONLY -- no project name. A project name often
         // identifies the customer (e.g. "Ban Khun Somchai"), and this line goes to a supplier who
         // must never learn who GL&R's customer is (the same reasoning behind blanking the FACTORY
         // copy's customer/deposit fields -- see ImportRequestFormAssembler#fromStored's factoryCopy
-        // param). This USED to read "Purchase order <doc> - GL&R (<project>)"; the parenthetical is
-        // gone, not merely conditional, because a project name is exactly the thing that must never
-        // reach this subject line.
+        // param). The project name must never reach this subject line, not even conditionally.
         String emailSubject = "Purchase order " + docNumber + " - GL&R";
-        // REVIEW ROUND 3, item 4 (S-F email half): pass the ALREADY-RESOLVED requiredByNote (the
+        // Pass the ALREADY-RESOLVED requiredByNote (the
         // draft's own typed value, or the fresh deal snapshot when it was still blank) rather than
-        // letting buildEmailDraft re-read draft.requiredByNote() itself -- that read a value that
-        // could be BLANK on the draft even though the deal-snapshot fallback above is what actually
+        // letting buildEmailDraft re-read draft.requiredByNote() itself -- that value could be
+        // BLANK on the draft even though the deal-snapshot fallback above is what actually
         // gets written onto the issued row, so the printed form and the "Required by:" email line
         // could silently disagree.
         String emailBody = buildEmailDraft(draft, docNumber, today, firstIssuedDate, requiredByNote,
@@ -741,7 +727,7 @@ public class ImportRequestService {
         return withPageCount(requireStored(id));
     }
 
-    /** P1 hand-off: tell import a new IR is waiting (or that an issued one was revised). */
+    /** Hand-off: tell import a new IR is waiting (or that an issued one was revised). */
     private void notifyImportOfIssuedIr(ImportRequestDto draft, String docNumber, TicketSnapshot deal,
                                         UserPrincipal actor, boolean revision) {
         String message = revision
@@ -756,7 +742,7 @@ public class ImportRequestService {
             message, "/import/deals/" + draft.ticketId());
     }
 
-    /** P1 hand-off: tell the deal's rep how the import is going — once per deal: at the start (first IR off CONTACTED) and when all goods are received. */
+    /** Hand-off: tell the deal's rep how the import is going — once per deal: at the start (first IR off CONTACTED) and when all goods are received. */
     private void notifyRepOfImportProgress(TicketSummaryDto deal, String type, String firstLine, String lastLine) {
         notifications.notifyEmployeeAtLink(deal.createdById(), type,
             firstLine + "\n" + DealNoticeText.dealLabel(deal.code(), deal.customerName()) + "\n" + lastLine,
@@ -764,8 +750,8 @@ public class ImportRequestService {
     }
 
     /**
-     * "ประมาณ dd/MM/yy – dd/MM/yy (min–max วัน)" — the default {@code vesselEtaNote} (owner decision
-     * 09-18 #3 §A), from the SAME anchor+range {@link #withPageCount} derives {@code
+     * "ประมาณ dd/MM/yy – dd/MM/yy (min–max วัน)" — the default {@code vesselEtaNote},
+     * from the SAME anchor+range {@link #withPageCount} derives {@code
      * expectedArrivalFrom}/{@code To} from, so the printed note and the DTO's derived fields can
      * never read two different estimates for the same row. Null (nothing to default) when either
      * bound is unset — unreachable in practice since {@link #issue} already refuses to issue with a
@@ -781,11 +767,10 @@ public class ImportRequestService {
     }
 
     /**
-     * The per-factory order-email draft (owner decision 09-18 #3 §B; item layout redone in the
-     * 09-18 #3 second pass) — mirrors the numbered-block layout that merged for the factory
-     * price-request email ({@code FactoryQuoteService#emailBody}/{@code #appendItemBlock} on
-     * {@code origin/develop}, PR #1003): a greeting, one numbered block per line, then required-by/
-     * expected-arrival/attachment/signature. {@code FactoryQuoteService} itself is untouched — its
+     * The per-factory order-email draft — mirrors the numbered-block layout of the factory
+     * price-request email ({@code FactoryQuoteService#emailBody}/{@code #appendItemBlock}): a
+     * greeting, one numbered block per line, then required-by/
+     * expected-arrival/attachment/signature. {@code FactoryQuoteService}'s
      * item shape ({@code PricingRequestItemDto}, with separate brand/model/specialRequirement
      * fields) is different enough from this class's {@code ImportRequestItemDto} that a shared
      * helper would need its own abstraction over both, which is more machinery than copying four
@@ -813,7 +798,7 @@ public class ImportRequestService {
             }
             appendItemBlock(body, lineNo++, items.get(i));
         }
-        // REVIEW ROUND 3, item 4 (S-F email half): the CALLER resolves requiredByNote (draft's own
+        // The CALLER resolves requiredByNote (draft's own
         // value, or the deal-snapshot fallback) and passes it in — see #issue's own comment for why
         // reading draft.requiredByNote() directly here could disagree with what actually gets
         // snapshotted onto the row.
@@ -827,11 +812,11 @@ public class ImportRequestService {
                 .append(" - ").append(firstIssuedDate.plusDays(draft.leadTimeMaxDays()).format(fmt))
                 .append("\n");
         }
-        // Cheap nit (REVIEW ROUND 2, tightened by REVIEW ROUND 3): must equal the REAL download
+        // Must equal the REAL download
         // filename, or a human copying this line into their mail client names an attachment that
-        // does not match what they actually downloaded. Now a SHARED helper ({@link
-        // #downloadFileName}) rather than a second hand-copied literal — ImportRequestController
-        // #storedFile calls the very same method, so the two can no longer drift independently. The
+        // does not match what they actually downloaded. A SHARED helper ({@link
+        // #downloadFileName}) — ImportRequestController
+        // #storedFile calls the very same method, so the two cannot drift independently. The
         // FACTORY name used is this row's OWN stored snapshot ({@code draft.factoryName()}), not the
         // (possibly since-renamed) fresh lookup used for the greeting above — the download route
         // itself only ever reads the snapshot, so the filename must match that, not today's factory
@@ -850,11 +835,10 @@ public class ImportRequestService {
 
     /**
      * The stored form's download filename — SHARED by {@link ImportRequestController#storedFile}
-     * and {@link #buildEmailDraft}'s "Attached:" line (cheap nit, REVIEW ROUND 3), so a human
+     * and {@link #buildEmailDraft}'s "Attached:" line, so a human
      * copying that line into a mail client always names the exact file the download route hands
      * them; the "Attached:" line always names the FACTORY copy specifically ({@code
-     * factoryCopy=true}), the one actually meant to go out with the order email (owner decision
-     * 09-19 #2).
+     * factoryCopy=true}), the one actually meant to go out with the order email.
      */
     static String downloadFileName(String docNumber, long id, String factoryName, String brand,
             boolean factoryCopy) {
@@ -881,7 +865,7 @@ public class ImportRequestService {
             details.add("Surface: " + item.texture());
         }
         if (item.size() != null && !item.size().isBlank()) {
-            details.add("Size: " + SizeUnit.withCmUnit(item.size())); // cm ruling 2026-10-30
+            details.add("Size: " + SizeUnit.withCmUnit(item.size()));
         }
         if (!details.isEmpty()) {
             body.append("   ").append(String.join(" | ", details)).append("\n");
@@ -897,7 +881,7 @@ public class ImportRequestService {
             body.append("\n");
         }
 
-        // REVIEW ROUND 2, S-A: skip the note line outright when it is EXACTLY the auto-derived
+        // Skip the note line outright when it is EXACTLY the auto-derived
         // "สี X · ผิว Y" colour/surface sentence (ImportRequestLinePrefill#buildColorSurfaceNote) --
         // that is already shown one line up as "Colour: X | Surface: Y", so printing it again here
         // would say the same thing twice in an email a factory actually reads. The printed Thai
@@ -915,7 +899,7 @@ public class ImportRequestService {
     }
 
     /**
-     * "<Brand> <Model>  (Code: X)" (REVIEW ROUND 2, S-A) — mirrors {@code
+     * "<Brand> <Model>  (Code: X)" — mirrors {@code
      * FactoryQuoteService#appendItemBlock}'s own header/fallback shape: brand+model together when
      * either is present, the code appended in parentheses only when it is ALSO present (never a
      * bare, empty "()"); when NEITHER brand nor model is known, the code stands alone with no
@@ -928,7 +912,7 @@ public class ImportRequestService {
             .filter(s -> s != null && !s.isBlank())
             .collect(Collectors.joining(" "));
         boolean hasCode = code != null && !code.isBlank();
-        // Cheap nit (REVIEW ROUND 3): skip the "(Code: X)" suffix when X is IDENTICAL to the model
+        // Skip the "(Code: X)" suffix when X is IDENTICAL to the model
         // already shown a few words earlier in brandModel — "... Lithos Nero  (Code: Lithos Nero)"
         // tells a factory the same thing twice for no reason. A code that genuinely differs (the
         // common catalog-linked case) still prints.
@@ -946,8 +930,8 @@ public class ImportRequestService {
      * the issued form's body so the corrector edits from what was actually sent rather than from the
      * deal's current state.
      *
-     * <p>Refused once the predecessor has reached {@link ImportRequestStep#RECEIVED} (owner decision
-     * 4 default: "refuse revising after RECEIVED") — the goods are already in, so there is nothing
+     * <p>Refused once the predecessor has reached {@link ImportRequestStep#RECEIVED}
+     * — the goods are already in, so there is nothing
      * left a correction could still affect operationally, only the paper record.
      *
      * <p>The form being corrected STAYS ISSUED until the replacement is issued — see {@link #issue}.
@@ -957,7 +941,7 @@ public class ImportRequestService {
         ImportRequestDto issued = requireStored(id);
         requireFullWrite(issued.ticketId(), actor);
         TicketSnapshot snapshot = requireTicket(issued.ticketId());
-        requireDealActive(snapshot); // REVIEW ROUND 1, S4
+        requireDealActive(snapshot);
         if (!ImportRequestStatus.ISSUED.equals(issued.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "ออกฉบับแก้ไขได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
         }
@@ -966,20 +950,20 @@ public class ImportRequestService {
         }
         // Lead time is CARRIED FORWARD from the predecessor's actual (possibly hand-edited) values,
         // not re-autofilled from the factory's country — a correction should not silently discard
-        // an estimate import already refined (owner decision 09-18 #2, same "carried forward" rule
-        // the progress step already follows just above). vesselEtaNote is carried forward the same
-        // way (REVIEW ROUND 2, S-E) — issue() re-derives it only if it is STILL exactly the
+        // an estimate import already refined (same "carried forward" rule
+        // the progress step follows just above). vesselEtaNote is carried forward the same
+        // way — issue() re-derives it only if it is STILL exactly the
         // auto-derived text for this draft's own range at that point; a CEO-typed custom note
         // survives the revision untouched.
-        // REVIEW ROUND 3, item 2 (S-F regression): the issued form's OWN requiredByNote must carry
-        // forward too — leaving this out fell all the way back to `insertDraft`'s
+        // The issued form's OWN requiredByNote must carry
+        // forward too — leaving it out falls back to `insertDraft`'s
         // snap.requiredByNote() default (the DEAL's CURRENT value), silently dropping anything the
-        // rep had typed directly onto THIS form (e.g. "Before Songkran") the moment it was revised.
-        // CR-1 (B-R4/B-R5): the lead time follows the deal's current QUOTATION. The quotation-derived
+        // rep had typed directly onto THIS form (e.g. "Before Songkran") the moment it is revised.
+        // The lead time follows the deal's current QUOTATION. The quotation-derived
         // value an IR was built from is stored on it (derived_lead_time_*); on revise a freshly derived
         // value that EQUALS the stored one means the quotation did not change, so the predecessor's
-        // possibly hand-edited lead time (POST /import-requests/{id}/lead-time) is carried forward
-        // exactly as before; a DIFFERENT derived value means a new quotation changed it, so that wins.
+        // possibly hand-edited lead time (POST /import-requests/{id}/lead-time) is carried forward;
+        // a DIFFERENT derived value means a new quotation changed it, so that wins.
         // No quotation lead time at all (or a row that predates the column) also carries forward. An
         // approved lead-time change with no new quotation therefore never reaches the IR.
         LeadTimeDefaults.Range freshDerived = leadTimeFromQuotation(
@@ -1026,15 +1010,14 @@ public class ImportRequestService {
     public void deleteDraft(long id, UserPrincipal actor) {
         ImportRequestDto existing = requireStored(id);
         requireFullWrite(existing.ticketId(), actor);
-        // Cheap nit (REVIEW ROUND 2): matches every other write in this class — deleteDraft was the
-        // one write left without the REVIEW ROUND 1 S4 inactive-deal refusal.
+        // Like every other write in this class, refuse on an inactive deal.
         requireDealActive(requireTicket(existing.ticketId()));
         if (stored.deleteDraft(id) == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "ลบได้เฉพาะใบขอซื้อที่ยังไม่ออกเลข");
         }
     }
 
-    // ── order-email draft (owner decision 09-18 #3 §B) ──────────────────────────────────────────
+    // ── order-email draft ───────────────────────────────────────────────────────────────────────
 
     /**
      * Edits the drafted order-email — owning rep/CEO/import, while it has not yet been marked sent.
@@ -1054,7 +1037,7 @@ public class ImportRequestService {
         if (existing.emailSentAt() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "อีเมลนี้ถูกส่งไปแล้ว แก้ไขไม่ได้");
         }
-        // Cheap nit (REVIEW ROUND 2): the repository's WHERE clause now ALSO compare-and-sets on
+        // The repository's WHERE clause ALSO compare-and-sets on
         // status/unsent (see its own Javadoc) — checking 0 here, rather than ignoring it, is what
         // actually makes that guard mean something instead of a silently-swallowed lost update.
         if (stored.updateEmailDraft(id, request == null ? null : request.emailTo(),
@@ -1067,9 +1050,9 @@ public class ImportRequestService {
 
     /**
      * Records that a human has sent the drafted order-email by hand — import/CEO OR the deal's own
-     * owning sales rep (owner decision 09-18 #3 §B: "POST mark-sent (import/CEO + owning rep)").
+     * owning sales rep.
      * Idempotent: a second call on an already-sent draft 409s rather than re-stamping who/when, the
-     * same compare-and-set discipline every other write in this class already follows.
+     * same compare-and-set discipline every other write in this class follows.
      */
     @Transactional
     public ImportRequestDto markEmailSent(long id, UserPrincipal actor) {
@@ -1092,11 +1075,11 @@ public class ImportRequestService {
     }
 
     /**
-     * Advances an ISSUED row's per-factory progress by ONE step (V184, GLA-100/S12-S17) —
+     * Advances an ISSUED row's per-factory progress by ONE step (V184, S12-S17) —
      * {@link #ADVANCE_STEP_ROLES} ({@code import}/{@code ceo}) only.
      *
-     * <p>Forward-only, and a skip is allowed (owner decision 4: "forward skips allowed, never
-     * backwards — correct via revision"), so the target need only be STRICTLY AHEAD of the row's
+     * <p>Forward-only, and a skip is allowed (forward skips allowed, never
+     * backwards — correct via revision), so the target need only be STRICTLY AHEAD of the row's
      * current step, not the immediate next one.
      *
      * <p>Compare-and-set at the repository ({@link ImportRequestRepository#advanceStep}): 0 rows
@@ -1115,7 +1098,7 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         ImportRequestDto existing = requireStored(id);
-        requireDealActive(requireTicket(existing.ticketId())); // REVIEW ROUND 1, S4
+        requireDealActive(requireTicket(existing.ticketId()));
         if (!ImportRequestStatus.ISSUED.equals(existing.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "อัปเดตขั้นตอนได้เฉพาะใบขอซื้อที่ออกเลขแล้ว");
         }
@@ -1130,7 +1113,7 @@ public class ImportRequestService {
                 "เลื่อนขั้นตอนได้เฉพาะไปข้างหน้าเท่านั้น — แก้ไขย้อนหลังด้วยการออกฉบับแก้ไข");
         }
         LocalDate eventDate = request.eventDate() != null ? request.eventDate() : LocalDate.now(BANGKOK);
-        // REVIEW ROUND 1 nit: a backdatable step may still not be dated in the FUTURE (Asia/Bangkok,
+        // A backdatable step may still not be dated in the FUTURE (Asia/Bangkok,
         // matching this class's own BANGKOK zone), nor before the row's own first-issue date — a
         // step cannot have happened before the factory was even contacted.
         if (eventDate.isAfter(LocalDate.now(BANGKOK))) {
@@ -1147,10 +1130,10 @@ public class ImportRequestService {
         }
         String noteSuffix = request.note() != null && !request.note().isBlank()
             ? " — " + request.note() : "";
-        // REVIEW ROUND 1, S5: the ticket must be LOCKED (FOR UPDATE) BEFORE the event insert below,
+        // The ticket must be LOCKED (FOR UPDATE) BEFORE the event insert below,
         // not after — addEventWithDocument's FK to sales.ticket takes a KEY SHARE lock on the ticket
         // row, and two concurrent advanceStep calls that both later try to upgrade to FOR UPDATE
-        // (the RECEIVED branch, previously below) would each be waiting on the other's KEY SHARE,
+        // (the RECEIVED branch, below) would each be waiting on the other's KEY SHARE,
         // a classic FK lock-order deadlock. Locking FIRST, unconditionally, establishes one strict
         // order (lock, then insert) so at most one caller can ever be in that position at a time —
         // the second simply blocks until the first commits and releases the lock.
@@ -1180,8 +1163,8 @@ public class ImportRequestService {
         return withPageCount(requireStored(id));
     }
 
-    /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, as before OWNER DECISION
-     * 09-19 #2 added the FACTORY copy. See {@link #renderStored(long, UserPrincipal, boolean)}. */
+    /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, unlike the FACTORY copy.
+     * See {@link #renderStored(long, UserPrincipal, boolean)}. */
     public byte[] renderStored(long id, UserPrincipal actor) {
         return renderStored(id, actor, false);
     }
@@ -1189,7 +1172,7 @@ public class ImportRequestService {
     /**
      * Prints a stored form from ITS OWN snapshot, not from the deal's current state.
      *
-     * <p><b>OWNER DECISION 09-19 #2:</b> the copy actually attached to the factory-facing order
+     * <p>The copy actually attached to the factory-facing order
      * email must not show "สั่งมาให้" (customer name), the project name, or "วันที่ได้รับมัดจำ"
      * (deposit received date) — a supplier has no business knowing who GL&R's customer is, and a
      * project name usually identifies them. {@code factoryCopy=true} blanks exactly those three fields ({@link ImportRequestFormAssembler#fromStored(ImportRequestDto,
@@ -1209,11 +1192,11 @@ public class ImportRequestService {
     }
 
     /**
-     * "กำหนดวันที่ต้องการของ" on the DEAL — SALES's field, by owner ruling, which is why this is the
+     * "กำหนดวันที่ต้องการของ" on the DEAL — SALES's field, which is why this is the
      * one method here not gated on the stored-aggregate roles above.
      *
      * <p>Gated on {@link #REQUIRED_BY_ROLES} AND deal ownership AND a stage floor of
-     * {@code ORDER_RECEIVED}: the owner's instruction was that sales fills this in "when the order is
+     * {@code ORDER_RECEIVED}: sales fills this in "when the order is
      * already confirmed". Free text, and nullable so it can be cleared.
      */
     @Transactional
@@ -1235,7 +1218,7 @@ public class ImportRequestService {
         stored.setRequiredByNote(ticketId, note);
     }
 
-    // ── factory resolution (owner decision 2) ────────────────────────────────────────────────────
+    // ── factory resolution ────────────────────────────────────────────────────────────────────────
 
     /** One factory's group of resolved lines, ready to become one DRAFT row. */
     private record FactoryGroup(long factoryId, String factoryName, String countryCode, String brandLabel,
@@ -1271,12 +1254,11 @@ public class ImportRequestService {
      * Resolves every deal line with remaining (non-stock-covered) quantity to a factory, per {@link
      * ImportRequestQueryRepository#factoryResolutionCandidates}'s cascade, and groups them. Refuses
      * with 409, naming the line, when NEITHER a direct factory id NOR a name is found anywhere for it
-     * (2026-09-18 correction to the plan: never derive or create a factory from {@code brand} — see
+     * (never derive or create a factory from {@code brand} — see
      * {@link ImportRequestQueryRepository#factoryResolutionCandidates}'s own Javadoc for why).
      *
-     * <p><strong>Two-phase for the auto-create path</strong> (owner decision 2, revised 09-18:
-     * "Sales should be forced to select country ... if there is unknown make it อื่นๆ and let the
-     * input"). Every line whose typed name matches NOTHING existing is collected FIRST (read-only —
+     * <p><strong>Two-phase for the auto-create path</strong> (sales is forced to select a country,
+     * or อื่นๆ with a typed-in name when it is unknown). Every line whose typed name matches NOTHING existing is collected FIRST (read-only —
      * nothing written yet), matched against {@code request.newFactoryCountries()} by the SAME {@link
      * #normalizeFactoryName}, and validated ({@link #requireValidNewFactoryCountry}: country
      * required, {@code 'ZZ'} paired with {@code countryOther}). If even ONE pending name has no
@@ -1381,7 +1363,7 @@ public class ImportRequestService {
                 .filter(b -> b != null && !b.isBlank())
                 .distinct()
                 .collect(Collectors.joining(", "));
-            // Owner decision 09-18 #3 §A: the note sub-row is auto-derived from colour/surface at
+            // The note sub-row is auto-derived from colour/surface at
             // creation (mergeNote against a null existing note always resolves to the derived one
             // here — see ImportRequestLinePrefill#mergeNote's own Javadoc for why the merge is
             // still written generally rather than inlined as "just use the derived value").
@@ -1399,7 +1381,7 @@ public class ImportRequestService {
     }
 
     /**
-     * CR-1 (D): the LONGEST lead time among this factory's current-quotation items -- {@code min = max
+     * The LONGEST lead time among this factory's current-quotation items -- {@code min = max
      * of the mins}, {@code max = max of the maxes}, each independently -- or {@code null} when none of
      * them carries one (the caller then falls back to the country default / the predecessor's value).
      * A PR-route row counts when its ticket item belongs to {@code items}; a direct-route row counts
@@ -1425,8 +1407,8 @@ public class ImportRequestService {
     }
 
     /**
-     * Sales' factory pick for a deal line that has none (free-text line on a direct quotation, owner
-     * ruling 2026-10-29). Validated first (unknown factory / a line outside this deal -> 400), applied
+     * Sales' factory pick for a deal line that has none (free-text line on a direct quotation).
+     * Validated first (unknown factory / a line outside this deal -> 400), applied
      * only to a line that resolves to no factory at all — a catalogue, PCR or typed-name line keeps
      * its own. The name is written to {@code ticket_item.factory} so the normal cascade resolves it to
      * the existing factory; a line still without one afterwards hits today's 409.
@@ -1460,7 +1442,7 @@ public class ImportRequestService {
     }
 
     /**
-     * Validates one pending factory name's caller-supplied country (owner decision 09-18): required,
+     * Validates one pending factory name's caller-supplied country: required,
      * must exist in {@code price_catalog.country}, and {@code 'ZZ'} (อื่นๆ) paired with a non-blank,
      * ≤100-char {@code countryOther} — the same rule {@code price_catalog.factories}' own paired
      * CHECK constraints backstop (V184) and {@code PriceImportService#requireValidCountryOther}
@@ -1525,7 +1507,7 @@ public class ImportRequestService {
     }
 
     /**
-     * Normalizes a factory name for matching (owner decision 2b): NFC Unicode normalization (Thai
+     * Normalizes a factory name for matching: NFC Unicode normalization (Thai
      * text may be entered with combining marks in either composed or decomposed form), trim, collapse
      * internal whitespace, lower-case. Deliberately Java, not SQL — Postgres has no built-in Unicode
      * NFC normalization without an extension this codebase does not otherwise need, and the factory
@@ -1620,12 +1602,12 @@ public class ImportRequestService {
     /** Fills the DTO's {@code pageCount}, which the repository leaves at 0 — layout is not its job. */
     private ImportRequestDto withPageCount(ImportRequestDto r) {
         int pages = ImportRequestRenderer.pagesRequired(ImportRequestFormAssembler.fromStored(r));
-        // Derived, not stored (owner decision 09-18 #2): null while DRAFT (no firstIssuedDate yet) or
+        // Derived, not stored: null while DRAFT (no firstIssuedDate yet) or
         // while either lead-time bound is unset — both are the "not estimated yet" state, not zero
         // days. This is the one place both derived fields are computed; see ImportRequestDto's own
         // Javadoc.
         //
-        // REVIEW ROUND 1, S7 (owner default, flagged for confirmation): anchored on firstIssuedDate
+        // Anchored on firstIssuedDate
         // — the FIRST issue date of this (deal, factory)'s whole revision chain — NOT r.issueDate(),
         // which is re-stamped to "today" on every issue including a same-day correction. Anchoring
         // on issueDate would silently push a customer-facing arrival estimate out by however long a
@@ -1653,7 +1635,7 @@ public class ImportRequestService {
         }
     }
 
-    /** STORED-aggregate read gate (owner decision 1): CEO/import/sales_manager unrestricted; sales
+    /** STORED-aggregate read gate: CEO/import/sales_manager unrestricted; sales
      * only the deal's own owner. */
     private void requireRead(long ticketId, UserPrincipal actor) {
         String role = actor.role();
@@ -1666,7 +1648,7 @@ public class ImportRequestService {
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
     }
 
-    /** STORED-aggregate full-write gate (owner decision 1): CEO, or the deal's own owning sales rep. */
+    /** STORED-aggregate full-write gate: CEO, or the deal's own owning sales rep. */
     private void requireFullWrite(long ticketId, UserPrincipal actor) {
         if (!canFullWrite(ticketId, actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -1679,11 +1661,11 @@ public class ImportRequestService {
     }
 
     /**
-     * The ORDER-EMAIL draft's write gate (owner decision 09-18 #3 §B) — full-write roles, PLUS
-     * import. Unaffected by owner decision 09-19: that ruling is about the PRINTED form's footer
+     * The ORDER-EMAIL draft's write gate — full-write roles, PLUS
+     * import. Not the gate for the PRINTED form's footer
      * (Checked/Approved + vessel ETA — see {@link #requirePrintedFooterWrite}), a different surface
      * that happens to share the word "footer" only because of the printed form's own layout. Do
-     * NOT reuse this for the printed footer — that is exactly the bug 09-19 fixes.
+     * NOT reuse this for the printed footer: import must not write it.
      */
     private void requireFooterWrite(long ticketId, UserPrincipal actor) {
         if (canFullWrite(ticketId, actor) || FOOTER_ONLY_ROLES.contains(actor.role())) {
@@ -1693,12 +1675,10 @@ public class ImportRequestService {
     }
 
     /**
-     * The PRINTED form's footer (Checked By/date, Approve By/date, vessel ETA) — CEO ONLY (owner
-     * decision 09-19, 2026-09-19, supersedes decision 1's original footer wording, which had let
-     * the owning sales rep and import touch it too). Neither the deal's owning sales rep, nor
-     * {@code import}, nor {@code sales_manager} may write these fields any more; only reads a role
-     * already had are unaffected — {@link #requireRead} still governs those. See {@link
-     * #requireFooterWrite} for the DIFFERENT gate that still governs the order-email draft.
+     * The PRINTED form's footer (Checked By/date, Approve By/date, vessel ETA) — CEO ONLY. Neither the deal's
+     * owning sales rep, nor {@code import}, nor {@code sales_manager} may write these fields;
+     * reads are unaffected — {@link #requireRead} governs those. See {@link
+     * #requireFooterWrite} for the DIFFERENT gate that governs the order-email draft.
      */
     private void requirePrintedFooterWrite(UserPrincipal actor) {
         if (!"ceo".equals(actor.role())) {

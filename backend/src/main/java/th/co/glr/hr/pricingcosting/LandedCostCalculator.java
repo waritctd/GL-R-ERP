@@ -34,16 +34,14 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 
 /**
- * V109 ENGINE SWAP (owner-authorised, 2026-08-16): computes each pricing-request item's landed
+ * Computes each pricing-request item's landed
  * cost using the CEO's real selling-price formula (see {@link PricingFormulaEngine}'s class
- * Javadoc for the formula itself), read from {@code sales.pricing_formula_config}. Previously this
- * class read {@code sales.price_calc_config} (V26) — that table is untouched by this change (still
- * reachable via its own CRUD, {@code PriceCalcConfigController}) but is no longer read by the
- * pricing engine; see this branch's commit message for the "does anything else still read it"
- * audit.
+ * Javadoc for the formula itself), read from {@code sales.pricing_formula_config}. The
+ * {@code sales.price_calc_config} table (V26) is no longer read by the pricing engine; it is
+ * still reachable via its own CRUD, {@code PriceCalcConfigController}.
  *
  * <h2>"Factory shipment" — how a pricing request maps to one</h2>
- * V109's formula defines {@code F} (freight) and {@code S} (clearance fee) as "flat THB, per
+ * The formula (V109) defines {@code F} (freight) and {@code S} (clearance fee) as "flat THB, per
  * factory shipment", and {@code Q} as "that factory shipment's total sqm" — quantities that must
  * be shared across every item the shipment actually contains, not recomputed per item (doing the
  * latter would multiply-count a fixed shipping/customs cost once per item instead of splitting it
@@ -82,53 +80,38 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
  * landed-cost row per {@link PricingRequestItemDto}, never one blended shipment-wide figure applied
  * uniformly to every item it contains.
  *
- * <h2>P1a/P1b fixes (2026-09, authorised sales-pricing-workflow changes): aggregate the two
- * problem-sources below into one 422 each, and stop re-fetching the same rows per item.</h2>
- * <b>P1a — aggregate, don't abort on the first problem — but NOT every problem in this class; see
- * the correction below.</b> {@link #resolveSources} and {@link #resolveItemPhysicals} used to
- * throw on the FIRST missing factory/quote/price/conversion-factor they met, so a CEO with three
- * bad lines fixed one, re-ran, and met the next — one round trip per defect instead of one round
- * trip total. Both now collect every problem across every item (the former within its own loop;
- * the latter via a single accumulating pass in {@link #calculate} across ALL shipments, not just
- * one) and throw exactly ONE 422 listing all of them. {@link #missingFactor} additionally now
- * names the item by its human label (never the bare id) and the missing factor in Thai alongside
- * its technical identifier, plus where it is entered ({@code sales.factory_quote_item}), so the
- * CEO knows what to fix and who to ask without a second guess. {@link #isFullyResolvable}'s
- * semantics are unchanged by this — it still wraps only {@link #resolveSources}, exactly as
- * before.
+ * <h2>Error aggregation and batched fetching</h2>
+ * <b>Aggregation — but NOT every problem in this class; see below.</b> {@link #resolveSources}
+ * and {@link #resolveItemPhysicals} collect every missing factory/quote/price/conversion-factor
+ * problem across every item (the former within its own loop; the latter via a single accumulating
+ * pass in {@link #calculate} across ALL shipments, not just one) and throw exactly ONE 422
+ * listing all of them, so a CEO with three bad lines fixes them in one round trip.
+ * {@link #missingFactor} names the item by its human label (never the bare id) and the missing
+ * factor in Thai alongside its technical identifier, plus where it is entered
+ * ({@code sales.factory_quote_item}), so the CEO knows what to fix and who to ask without a
+ * second guess. {@link #isFullyResolvable} wraps only {@link #resolveSources}.
  *
- * <p><b>F2 correction — what this class does NOT aggregate, and a masking change that came free
- * with the restructure.</b> An earlier version of this Javadoc's headline claimed the calculator
- * "reports every problem at once". That overstates what shipped: aggregation covers exactly
- * {@link #resolveSources} and the physicals-resolution pass in {@link #calculate} described
- * above — nothing else. Four 422 clusters inside {@link #costShipment} still abort on the FIRST
- * problem, unaggregated: {@code factoryConfigs.findByName}, and {@code
+ * <p><b>What this class does NOT aggregate.</b> Aggregation covers exactly
+ * {@link #resolveSources} and the physicals-resolution pass in {@link #calculate} — nothing
+ * else. Four 422 clusters inside {@link #costShipment} still abort on the FIRST problem,
+ * unaggregated: {@code factoryConfigs.findByName}, and {@code
  * PricingFormulaEngine#selectFreightRate}/{@code #selectClearanceFee}/{@code #selectDutyRate}.
- * Extending aggregation to those four is a separate, larger change, tracked as a known limitation
- * in this branch's PR body rather than done here.
+ * Extending aggregation to those four is a separate, larger change and a known limitation.
  *
- * <p>The restructure also changed which error wins when more than one kind of problem exists in
- * the same request. Before the restructure, the old per-shipment loop called {@code costShipment}
- * — factory-config check included — immediately for each shipment in turn, so a factory-config
- * problem in an EARLIER shipment could surface and 422 before a physicals problem in a LATER one
- * was ever reached. Now, because {@link #calculate} resolves physicals for EVERY shipment before
- * ANY {@link #costShipment} call runs (P1a.4 below), the ordering is reversed unconditionally: a
- * physicals problem in ANY shipment always surfaces before a factory-config or formula-lookup
- * problem in ANY shipment, even one that used to win the race. A physicals problem therefore now
- * masks a factory-config problem that used to surface first; both are still real defects the CEO
- * must fix, just not reported in the same order release-to-release.
+ * <p>Which error wins when more than one kind of problem exists in the same request: because
+ * {@link #calculate} resolves physicals for EVERY shipment before ANY {@link #costShipment} call
+ * runs, a physicals problem in ANY shipment always surfaces before a factory-config or
+ * formula-lookup problem in ANY shipment. The physicals problem therefore masks the
+ * factory-config one; both are real defects the CEO must fix.
  *
- * <p><b>P1b — the same rows were being re-fetched once per item.</b> {@link #resolveSources} used
- * to call {@code FactoryQuoteRepository#findCurrentByFactory} once per pricing-request item (a
- * 4-query round trip each — the quote row plus {@code findItems}/{@code findAttachments}/{@code
- * findLatestDispatch}), so N items from the same factory re-fetched the identical quote N times;
- * it now memoizes that lookup by factory name in a call-local map. {@link #resolveItemPhysicals}
- * used to call {@code CatalogRepository#findThicknessMm} (deleted, F1)/the old per-row
- * origin-country lookup (also deleted) once per item (2 more round trips each); {@link #calculate}
- * now prefetches both, for every source's price id, in {@link CatalogRepository#findPricingKeys}
- * — ONE batched round trip per field, regardless of item count. Neither change alters what
- * resolves or does not: a null/absent value still becomes an {@code uncostableReason} (V156) or a
- * thrown 422 exactly as before — see each method's own Javadoc.
+ * <p><b>Batched fetching.</b> {@link #resolveSources} memoizes
+ * {@code FactoryQuoteRepository#findCurrentByFactory} by factory name in a call-local map (the
+ * lookup is a 4-query round trip — the quote row plus {@code findItems}/{@code
+ * findAttachments}/{@code findLatestDispatch}), so it runs once per DISTINCT factory in the
+ * request, not once per item. {@link #calculate} prefetches thickness and origin country for
+ * every source's price id in {@link CatalogRepository#findPricingKeys} — ONE batched round trip
+ * per field, regardless of item count. A null/absent value still becomes an
+ * {@code uncostableReason} (V156) or a thrown 422 — see each method's own Javadoc.
  */
 @Component
 public class LandedCostCalculator {
@@ -159,22 +142,21 @@ public class LandedCostCalculator {
         PricingFormulaConfigDto formulaConfig = formulaEngine.requireCurrentConfig();
         List<ResolvedSource> sources = resolveSources(summary);
 
-        // P1b.2: one batched catalog round trip per field, for every source's price id, instead of
-        // the 2 x N (findThicknessMm + the old findOriginCountryCode) round trips
-        // resolveItemPhysicals used to make below. See CatalogRepository#findPricingKeys.
+        // One batched catalog round trip per field, for every source's price id, rather than
+        // per-item lookups inside resolveItemPhysicals. See CatalogRepository#findPricingKeys.
         Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys = prefetchCatalogKeys(sources);
 
-        // P1a.4: resolve EVERY item's physicals up front, in one accumulating pass across ALL
+        // Resolve EVERY item's physicals up front, in one accumulating pass across ALL
         // shipments/factories in this request — not per shipment, and not aborting on the first
         // problem. costShipment below receives the already-resolved list for its shipment and
-        // never re-resolves it (also removes the duplicated work the old per-shipment call did).
+        // never re-resolves it.
         List<ItemPhysicals> allPhysicals = new ArrayList<>();
         Set<String> problems = new LinkedHashSet<>();
         for (ResolvedSource source : sources) {
             try {
                 allPhysicals.add(resolveItemPhysicals(source, formulaConfig, catalogKeys));
             } catch (ApiException e) {
-                // F4 hardening: every throw reachable on this path is a 422 today (see
+                // Every throw reachable on this path is a 422 today (see
                 // resolveItemPhysicals and its callees), so this rethrow is currently inert — but
                 // folding a problem into the aggregated bullet list below is only safe for a 422.
                 // A future nested call that 409s or 500s must propagate as itself, not be silently
@@ -229,7 +211,7 @@ public class LandedCostCalculator {
     }
 
     /** Every distinct catalog price id referenced by {@code sources}, resolved in ONE batched
-     * call — see {@link CatalogRepository#findPricingKeys} (P1b.2). */
+     * call — see {@link CatalogRepository#findPricingKeys}. */
     private Map<Long, CatalogRepository.CatalogPricingKey> prefetchCatalogKeys(List<ResolvedSource> sources) {
         Set<Long> priceIds = new LinkedHashSet<>();
         for (ResolvedSource source : sources) {
@@ -250,19 +232,18 @@ public class LandedCostCalculator {
 
     /**
      * See the class Javadoc for the grouping/allocation rules this implements. {@code allItems} is
-     * ALREADY resolved (P1a.4) — by {@link #calculate}'s own accumulating pass, across every
+     * ALREADY resolved by {@link #calculate}'s own accumulating pass, across every
      * shipment in the request, not just this one — so this method never calls {@link
-     * #resolveItemPhysicals} itself any more; it only groups/allocates/costs what it is handed.
+     * #resolveItemPhysicals} itself; it only groups/allocates/costs what it is handed.
      */
     private List<PricingCostingWriteItem> costShipment(List<ItemPhysicals> allItems,
                                                         PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
         FactoryQuoteDto quote = allItems.get(0).source().quote();
         String factoryName = quote.factoryName();
-        // Existence check only, now — V151 moved the freight lookup's origin-country input to the
-        // catalog link (see resolveOriginCountryCode / the class Javadoc's V151 section), so this
-        // RFQ-settings row's own (free-text, never-normalised) country is no longer read. The
-        // check itself is unchanged: the factory this quote is FOR must still be a configured RFQ
-        // factory.
+        // Existence check only: the freight lookup's origin country comes from the catalog link
+        // (see resolveOriginCountryCode / the class Javadoc's V151 section), so this
+        // RFQ-settings row's own (free-text, never-normalised) country is not read. The
+        // factory this quote is FOR must still be a configured RFQ factory.
         factoryConfigs.findByName(factoryName)
             .orElseThrow(() -> new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "ไม่พบ factory config สำหรับโรงงาน: " + factoryName));
@@ -350,7 +331,7 @@ public class LandedCostCalculator {
             BigDecimal lineTotal = money4(landedCostPerUnitThb.multiply(item.qtyPieces()));
 
             // "Breakdown" columns (goods/freight/insurance/duty/cif/clearance) are stored PER
-            // PIECE, matching this schema's pre-V109 convention (goods_cost_thb etc. were always
+            // PIECE, matching this schema's convention (goods_cost_thb etc. are
             // per-piece — only landed_cost_per_unit_thb/total_landed_cost_thb name their own
             // basis) — derived here by dividing each already-computed TOTAL by qtyPieces, which
             // is exactly consistent with the per-piece pipeline above by linearity (division
@@ -389,8 +370,8 @@ public class LandedCostCalculator {
                 item.fx().source(),
                 item.fx().effectiveDate(),
                 item.fx().fetchedAt(),
-                // V152: repointed from sales.price_calc_config to sales.pricing_formula_config —
-                // see V152's migration header for why this column pair is reused, not replaced.
+                // These columns reference sales.pricing_formula_config (V152 repointed them from
+                // sales.price_calc_config; see V152's migration header).
                 formulaConfig.formulaConfigId(),
                 formulaConfig.version(),
                 item.goodsCostPerPiece(),
@@ -498,8 +479,8 @@ public class LandedCostCalculator {
                 sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem()));
             qtyPieces = quantityToPieces(source.requestItem().requestedQty(),
                 source.requestItem().requestedUnitBasis(), sqmPerPiece, piecesPerBox, linearMPerUnit, source.requestItem());
-            // sqmPerPiece is null for a line whose sqm could not be resolved (resolveSqmPerPiece's P0
-            // hardening). It is then UNCOSTABLE: set aside in costShipment, never routed through the
+            // sqmPerPiece is null for a line whose sqm could not be resolved (see resolveSqmPerPiece).
+            // It is then UNCOSTABLE: set aside in costShipment, never routed through the
             // freight grouping that is qtySqm's only consumer, so a null qtySqm here is correct.
             qtySqm = sqmPerPiece == null ? null : sqmPerPiece.multiply(qtyPieces);
             // C = P x E, goods cost in THB, for this item's FULL requested quantity (a TOTAL, not a
@@ -520,26 +501,22 @@ public class LandedCostCalculator {
      * back to the live {@code product_id} (both columns point at the SAME target,
      * {@code price_catalog.product_prices.price_id}, V68) when the snapshot has not run yet —
      * never guessed, never defaulted. An item with no resolvable catalog link at all is a
-     * legitimate case (Import may submit a free-text line with no catalog match, owner ruling
-     * 2026-08-11 — {@code PricingRequestService#submit}'s own comment), and a matched catalog row
+     * legitimate case (Import may submit a free-text line with no catalog match — see
+     * {@code PricingRequestService#submit}), and a matched catalog row
      * can still have a NULL {@code thickness_mm} — 41.7% of the production catalogue does, and for
      * some products (Bode's whole range, REFIN's OUT2.0) NO source carries it, so it cannot be
      * fixed by better data alone.
      *
-     * <p><b>Returns null rather than throwing (V156).</b> It used to throw 422 here, which aborted
+     * <p><b>Returns null rather than throwing (V156).</b> Throwing 422 here would abort
      * {@code PricingDecisionService#startReview} before a single costing row was written — and
      * therefore before the CEO could reach the very screen that owns the manual cost override
-     * ({@code manual_landed_cost_per_unit_thb}, V141) that resolves this. The capability existed
-     * and the route to it was blocked. A null now marks the item UNCOSTABLE, it persists with a
-     * stated reason, and {@code approve()} is what refuses to let it through un-resolved. Nothing
-     * is ever priced on a guessed thickness — the guarantee moved, it did not weaken.
+     * ({@code manual_landed_cost_per_unit_thb}, V141) that resolves this. A null marks the item
+     * UNCOSTABLE, it persists with a stated reason, and {@code approve()} is what refuses to let
+     * it through un-resolved. Nothing is ever priced on a guessed thickness.
      *
-     * <p><b>P1b.2:</b> reads {@code catalogKeys}, a map {@link #calculate} prefetches ONCE per
+     * <p>Reads {@code catalogKeys}, a map {@link #calculate} prefetches ONCE per
      * request via {@link CatalogRepository#findPricingKeys} (batched over every source's price
-     * id), rather than calling {@code CatalogRepository#findThicknessMm} (F1: deleted — its only
-     * caller was its own test, repointed at {@code findPricingKeys}) here per item. Resolution
-     * semantics are byte-identical to that deleted single-row method (same view, same
-     * ACTIVE-version filter) — only the round-trip count changed.
+     * id) rather than querying per item (same view, same ACTIVE-version filter).
      */
     private BigDecimal resolveThicknessMm(PricingRequestItemDto requestItem,
                                           Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
@@ -567,12 +544,11 @@ public class LandedCostCalculator {
      * pricing). An item with no resolvable catalog link fails costing LOUDLY here, naming the
      * item, for the same reason a missing thickness does.
      *
-     * <p><b>P1b.2:</b> reads the SAME prefetched {@code catalogKeys} map {@link
-     * #resolveThicknessMm} does — see that method's own P1b.2 note. Resolution semantics are
-     * byte-identical to the single-row lookup this replaced (the base {@code product_prices}/
+     * <p>Reads the SAME prefetched {@code catalogKeys} map {@link
+     * #resolveThicknessMm} does. Resolution uses the base {@code product_prices}/
      * {@code factories} join, deliberately with NO active-version filter — see {@link
      * CatalogRepository#findPricingKeys}'s Javadoc for why that must stay a SEPARATE query from
-     * thickness's, not a shared one over the ACTIVE-filtered view).
+     * thickness's, not a shared one over the ACTIVE-filtered view.
      */
     private String resolveOriginCountryCode(PricingRequestItemDto requestItem,
                                             Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
@@ -588,8 +564,8 @@ public class LandedCostCalculator {
      * Why this item cannot be costed, in the CEO's own language, or null when it can. All three
      * inputs feed the freight calculation ({@code sales.pricing_freight_rate} is keyed on thickness
      * and origin country; its {@code Q} is in sqm), so missing any one makes the freight lookup
-     * impossible rather than merely inaccurate — see V156 (thickness/origin) and the P0 sqm
-     * hardening (2026-10). sqm-per-piece has a DIFFERENT source from thickness/origin (the factory
+     * impossible rather than merely inaccurate — see V156 (thickness/origin).
+     * sqm-per-piece has a DIFFERENT source from thickness/origin (the factory
      * quote's {@code sqm_per_unit} or the request's own {@code requested_qty_sqm}, NOT the Price
      * Catalog), so it carries its own clause.
      */
@@ -620,7 +596,7 @@ public class LandedCostCalculator {
             + "ที่มีข้อมูลครบ";
     }
 
-    /** Owner ruling 2026-08-16: {@code product_type} has no source in deal data today, so every
+    /** {@code product_type} has no source in deal data today, so every
      * item defaults to TILE; the CEO may override this per item
      * ({@code PricingDecisionService#overrideItemProductType}) — e.g. โมเสคแก้ว, which must NOT be
      * taxed at TILE's 30% when 10% is correct. */
@@ -661,9 +637,8 @@ public class LandedCostCalculator {
                                  BigDecimal freightShare, BigDecimal freightGroupQtySqm, BigDecimal clearanceAmount,
                                  BigDecimal clearanceShare, BigDecimal shipmentQtySqm, BigDecimal dutyPct,
                                  PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
-        // Every value quoted as a JSON STRING (never a bare number) — mirrors the pre-V109
-        // snapshot's own convention (it quoted requestedUnitBasis/normalizedQuantityPieces the
-        // same way) specifically to avoid any BigDecimal-formatting edge case producing a token
+        // Every value quoted as a JSON STRING (never a bare number), like requestedUnitBasis and
+        // normalizedQuantityPieces, to avoid any BigDecimal-formatting edge case producing a token
         // the jsonb column would reject at insert time.
         return "{\"formula\":\"V109\""
             + ",\"calculatedAt\":\"" + calculatedAt + "\""
@@ -686,13 +661,12 @@ public class LandedCostCalculator {
     }
 
     /**
-     * P1a.1: accumulates every problem across every item and throws ONE 422 listing all of them,
-     * rather than exiting on the first — see the class Javadoc. P1b.1: memoizes the
+     * Accumulates every problem across every item and throws ONE 422 listing all of them,
+     * rather than exiting on the first — see the class Javadoc. Memoizes the
      * factory-quote lookup by factory name in a map LOCAL to this call (never cached across
      * calls) — {@code FactoryQuoteRepository#findCurrentByFactory} is a 4-query round trip (the
-     * quote row plus {@code findItems}/{@code findAttachments}/{@code findLatestDispatch}), so N
-     * items sourced from the SAME factory used to repeat all 4 N times; now it runs once per
-     * DISTINCT factory in the request.
+     * quote row plus {@code findItems}/{@code findAttachments}/{@code findLatestDispatch}), so it
+     * runs once per DISTINCT factory in the request, not once per item.
      */
     public List<ResolvedSource> resolveSources(PricingRequestSummaryDto summary) {
         List<ResolvedSource> result = new ArrayList<>();
@@ -729,11 +703,9 @@ public class LandedCostCalculator {
             FactoryQuoteItemDto quoteItem = maybeQuoteItem.get();
             if (quoteItem.rawUnitPrice() == null || quoteItem.currency() == null
                     || quoteItem.quotedUnit() == null || quoteItem.unitBasis() == null) {
-                // F5: this used to name quoteItem.id() (sales.factory_quote_item) here; it now
-                // names the pricing-request-item id via itemLabel(item) instead, matching every
-                // other message in this class. Consistency improvement, but a real change: anyone
-                // looking an id up from THIS message now lands on sales.pricing_request_item, not
-                // sales.factory_quote_item as before.
+                // Names the pricing-request item via itemLabel(item), like every other message in
+                // this class: an id looked up from THIS message is a sales.pricing_request_item,
+                // not a sales.factory_quote_item.
                 problems.add(itemLabel(item) + " ในใบเสนอราคาโรงงานยังไม่มีราคา สกุลเงิน หรือหน่วยนับ");
                 continue;
             }
@@ -764,7 +736,7 @@ public class LandedCostCalculator {
     }
 
     /**
-     * Stock lines (V194, IA 1.2): THE readiness predicate for a request to reach the CEO -- every
+     * Stock lines (V194): THE readiness predicate for a request to reach the CEO -- every
      * IMPORT line is resolvable ({@link #isFullyResolvable}, which skips stock lines) AND every
      * {@code IN_TRANSIT} line has an ETA. Re-checked after markReadyForCosting and after each ETA
      * save, so whichever of the two finishes last advances the request.
@@ -779,8 +751,7 @@ public class LandedCostCalculator {
     }
 
     /**
-     * Delegates to {@link th.co.glr.hr.pricing.FxResolver#resolve} (Step 3 extraction — see that
-     * class's Javadoc). Behaviour unchanged from before the extraction.
+     * Delegates to {@link th.co.glr.hr.pricing.FxResolver#resolve}; see that class's Javadoc.
      */
     private FxSnapshot resolveFx(String currencyValue) {
         FxRateDto rate = th.co.glr.hr.pricing.FxResolver.resolve(fxRates, currencyValue);
@@ -796,14 +767,14 @@ public class LandedCostCalculator {
      * silently default to 1 when neither source has data — that would cost every piece as if it
      * were exactly 1 sqm, very rarely true.
      *
-     * <p><b>Returns null rather than throwing (P0 hardening, 2026-10).</b> It used to throw 422
-     * here, which — exactly like the pre-V156 missing-thickness defect — aborted the WHOLE
+     * <p><b>Returns null rather than throwing.</b> Throwing 422 here would — like a missing
+     * thickness (V156) — abort the WHOLE
      * calculation before any costing row was written, poisoning every other (costable) line in the
-     * request and blocking the CEO from the manual-cost override screen that resolves it. A null now
+     * request and blocking the CEO from the manual-cost override screen that resolves it. A null
      * marks the line UNCOSTABLE (see {@link #uncostableReason}): it is set aside with a stated reason
      * and NULL freight-dependent costs, the rest of the request still costs, and
      * {@code PricingDecisionService#approve} is what refuses to let the uncostable line through
-     * un-resolved. Nothing is ever priced on a guessed sqm — the guarantee moved, it did not weaken.
+     * un-resolved. Nothing is ever priced on a guessed sqm.
      *
      * <p>This is a LEGACY-data path: V185 derives {@code requested_qty_sqm} on every new request, and
      * {@code FactoryQuoteService#receive} requires {@code sqmPerUnit} for a PER_SQM quote, so a new
@@ -891,7 +862,7 @@ public class LandedCostCalculator {
      * Names the item by its human label (never the bare id), the missing factor in Thai alongside
      * its technical identifier ({@link #factorLabelTh}), and where it is entered — the factory
      * quote item Import recorded ({@code sales.factory_quote_item}) — so the CEO knows both what
-     * to fix and who to ask. Per the financial-integrity review's requirement.
+     * to fix and who to ask.
      */
     private ApiException missingFactor(PricingRequestItemDto requestItem, String factorName) {
         return new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
