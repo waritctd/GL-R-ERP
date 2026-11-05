@@ -24,8 +24,8 @@ import { apiWrite } from './api.js';
 //     summary.lifecycle   DealLifecycle   UPPERCASE   'ACTIVE', 'CANCELLED', 'CLOSED_LOST'
 //     summary.salesStage  DealStage       UPPERCASE   'LEAD_APPROACH', 'ORDER_RECEIVED'
 //
-// Found the hard way in slice 2: `lifecycle` came back CANCELLED and `status` came back
-// `cancelled` in the same response. It matters most at the confirm-order bridge, where the
+// A cancelled deal returns `lifecycle` CANCELLED and `status` `cancelled` in the same response.
+// It matters most at the confirm-order bridge, where the
 // precondition is `ticket.status == 'quotation_issued'` — lowercase — while the stage it produces
 // is 'ORDER_RECEIVED'. Use the constants below rather than inline literals.
 export const TICKET_STATUS = {
@@ -213,7 +213,7 @@ export async function cancelDeal(sessions, ticketId) {
   }
 }
 
-// ── Slice 3: the pricing-request chain ──────────────────────────────────────────────────────
+// ── The pricing-request chain ──────────────────────────────────────────────────────
 //
 // createDeal (above) gets a deal to LEAD_APPROACH. Everything below drives it from there to
 // ORDER_RECEIVED through the PricingRequest -> FactoryQuote -> PricingDecision ->
@@ -439,10 +439,10 @@ export async function generateFactoryEmailDrafts(sessions, pricingRequestId) {
  * (FactoryQuoteService.receive, factoryquote/FactoryQuoteService.java:464-586 — the
  * DRAFT/REQUESTED branch at :499-538 that a freshly-drafted quote always takes).
  *
- * CR-1 (GLA-167, B-R2): receive() now 409s on a still-DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"),
+ * receive() 409s on a still-DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"),
  * so this helper first records the factory as contacted (POST /api/factory-quotes/{id}/contacted,
- * today in Asia/Bangkok) — the real-stack equivalent of Import pressing ติดต่อโรงงานแล้ว. The old
- * POST .../send endpoint is gone. A quote that is already past DRAFT is left alone.
+ * today in Asia/Bangkok) — the real-stack equivalent of Import pressing ติดต่อโรงงานแล้ว.
+ * A quote that is already past DRAFT is left alone.
  *
  * currency is pinned THB (see this file's header). sqmPerUnit is supplied even though the
  * chosen unitBasis is PER_PIECE — see this file's header on why that field is unconditional.
@@ -515,7 +515,7 @@ export async function markFactoryQuoteReadyForCosting(sessions, factoryQuoteId) 
  * READY_FOR_CEO_REVIEW -> CEO_REVIEWING. The landed cost is computed HERE
  * (PricingDecisionService.startReview, pricingdecision/PricingDecisionService.java:98-186 —
  * `LandedCostCalculator.calculate(summary)` at line 139); Import never submits a costing of its
- * own (V141, "CEO owns costing" — PricingCostingService is read-only).
+ * own (the CEO owns costing — PricingCostingService is read-only).
  *
  * Body shape StartPricingDecisionRequest (pricingdecision/PricingDecisionRequests.java:11-12) —
  * every field optional. currency is pinned THB again, independently of the factory-quote item's
@@ -595,10 +595,10 @@ export async function approvePricingDecision(sessions, decisionId) {
  * body shape CreateCustomerQuotationRequest (customerquotation/CustomerQuotationRequests.java:
  * 13-20) — every field optional. Requires the PCR at APPROVED_FOR_QUOTATION with a current
  * APPROVED decision (CustomerQuotationService.create, :101-145) and sources every line's price
- * from PricingDecisionSalesViewDto — never from cost (design correction 2: sales can never see
- * cost/margin, only the approved selling price).
+ * from PricingDecisionSalesViewDto — never from cost (sales can never see cost/margin, only the
+ * approved selling price).
  *
- * Never moves the PCR status (rule 6 — a DRAFT quotation is not yet a commitment); a caller
+ * Never moves the PCR status (a DRAFT quotation is not yet a commitment); a caller
  * should re-read the PCR afterward to confirm that, rather than assume it.
  */
 export async function createCustomerQuotation(sessions, pricingRequestId) {
@@ -699,7 +699,7 @@ export async function readPricingRequest(sessions, role, pricingRequestId) {
   return pricingRequest;
 }
 
-// ── Slice 4: the refusal matrix ─────────────────────────────────────────────────────────────
+// ── The refusal matrix ─────────────────────────────────────────────────────────────
 //
 // Everything above proves a deal CAN reach a stage. This proves the guards that decide it CANNOT.
 // TicketService.updateStage (ticket/TicketService.java:1497-1534) evaluates, in order:
@@ -804,7 +804,7 @@ export async function stageDecisions(sessions, role, ticketId) {
   return decisions;
 }
 
-// ── Slice 5: the four route journeys (Cases A-D) ────────────────────────────────────────────
+// ── The four route journeys (Cases A-D) ────────────────────────────────────────────
 //
 // DealStage.java:78-100 (Javadoc on ORDER's own Javadoc block, "the owner's four real sales
 // routes") names four routes through the 15-stage pipeline that are NOT a straight walk through
@@ -840,7 +840,7 @@ export async function stageDecisions(sessions, role, ticketId) {
  *   4. PROVENANCE — `expectedMessages[i]` is compared against `history[i].message`.
  *      {@link AUTO_STAGE_MESSAGE} for a hop the SYSTEM advanced (issuing a quotation,
  *      confirming an order, receiving goods, completing delivery, confirming final payment);
- *      the caller's literal note (`null` throughout every case in this slice) for a hop a human
+ *      the caller's literal note (`null` throughout every case here) for a hop a human
  *      drove through POST /stage. Proves the SYSTEM walked the auto hops rather than the test
  *      clicking them there by hand — a route with the right stages but every hop manual would be
  *      a materially different, and wrong, claim about this pipeline.
@@ -849,7 +849,7 @@ export async function stageDecisions(sessions, role, ticketId) {
  * @param expectedStages   the full walked sequence, starting stage included —
  *                          `[start, hop1.to, hop2.to, ...]`. One longer than `history`.
  * @param expectedMessages one entry per hop (same length as `history`) — {@link AUTO_STAGE_MESSAGE}
- *                          or the exact note (`null` for every manual hop in this slice).
+ *                          or the exact note (`null` for every manual hop here).
  */
 export function expectRoute(history, expectedStages, expectedMessages) {
   expect(
@@ -930,7 +930,7 @@ export function expectNeverEntered(history, stages) {
  * entryChannel), so `changingExistingNonDefault` is false and the 400 never fires.
  *
  * @param value one of EntryChannel's three real routes — DESIGNER_LED / OWNER_DIRECT / BUYER_DIRECT
- *              — the exact three literals Cases A/B/C are named after in this slice's spec.
+ *              — the exact three literals Cases A/B/C are named after in the spec.
  */
 export async function setEntryChannel(sessions, ticketId, value, { note = null } = {}) {
   const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/entry-channel`, {
@@ -945,26 +945,24 @@ export async function setEntryChannel(sessions, ticketId, value, { note = null }
 /**
  * POST /api/tickets/{id}/deposit-policy — TicketController.depositPolicy (ticket/
  * TicketController.java:271-277); TicketService.waiveDeposit requires the OWNING sales rep, or
- * sales_manager as a backup (GLA-118, owner ruling 2026-09-20, part B — see
- * TicketService#canSetDepositPolicy; the original 2026-09-17 ruling was owner-only) and a
+ * sales_manager as a backup (see TicketService#canSetDepositPolicy) and a
  * non-blank reason, and refuses (409) once a real deposit notice has actually been issued —
  * paymentStatus must still be null or CUSTOMER_CONFIRMED (DepositPolicy.NON_REQUIRED =
  * {NOT_REQUIRED, WAIVED, CREDIT_CUSTOMER}).
  *
- * ⚠️ This used to read `sessions.account` (the pre-GLA-118 gate was ACCOUNT_ROLES — account/ceo).
- * It is now `sessions.sales`, which is correct and not a workaround: every deal this file drives
+ * ⚠️ This is called as `sessions.sales`, not `sessions.account`, and that is not a workaround: every deal this file drives
  * is created via createDeal(sessions.sales, ...) (see the comment on completeDelivery below —
  * "sessions.sales is therefore always the deal's createdById"), so sessions.sales is also always
  * the OWNING rep TicketService#canSetDepositPolicy requires.
  *
- * ⚠️ Needed BEFORE, not merely "at some point before", any deposit-gated step this slice reaches
+ * ⚠️ Needed BEFORE, not merely "at some point before", any deposit-gated step these journeys reach
  * without ever running the real DepositNoticeService document flow:
  *   - issuing a per-factory ใบขอซื้อ (issueImportRequestDraft) is gated on the same deposit
  *     condition (TicketService#requireImportRequestIssuable), so waive BEFORE issuing.
  *   - confirmFinalPayment's canConfirmFinalPaymentNow (:1470-1481) accepts the identical
  *     bypass — `bypassesDepositNotice(depositPolicy) && paymentStatus === CUSTOMER_CONFIRMED`.
  *
- * @param opts.policy default 'NOT_REQUIRED' — the literal every case in this slice uses.
+ * @param opts.policy default 'NOT_REQUIRED' — the literal every case here uses.
  */
 export async function waiveDeposit(sessions, ticketId, { policy = 'NOT_REQUIRED', reason }) {
   const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deposit-policy`, {
@@ -978,9 +976,9 @@ export async function waiveDeposit(sessions, ticketId, { policy = 'NOT_REQUIRED'
 
 /**
  * POST /api/tickets/{id}/import-requests — ImportRequestController.createDrafts: one ใบขอซื้อ,
- * created AND ISSUED in the same call (owner ruling 2026-10-29), per FACTORY (V184). This is how every deal starts its import now: the one-click legacy
- * `POST /api/tickets/{id}/import-request` (issueImportRequest) answers 409 for every deal (W3-04,
- * owner ruling 2026-10-29). Needs the deal's OWNING sales rep (or ceo) and DealStage >= ORDER_RECEIVED;
+ * created AND ISSUED in the same call, per FACTORY. This is how every deal starts its import: the
+ * one-click legacy `POST /api/tickets/{id}/import-request` (issueImportRequest) answers 409 for
+ * every deal. Needs the deal's OWNING sales rep (or ceo) and DealStage >= ORDER_RECEIVED;
  * each line must resolve to a factory (PCR item factory, catalogue link or typed name), else 409
  * "รายการนี้ยังไม่ได้ระบุโรงงาน". A deal whose lines are all covered from stock answers 409
  * "ดีลนี้ไม่มีรายการที่ต้องออกใบขอซื้อ".
@@ -1034,8 +1032,7 @@ export async function advanceImportStep(sessions, importRequestId, targetStep) {
  * inventory system" warning. TicketController.reserveStock (ticket/TicketController.java:106-114);
  * TicketService.reserveStock (:984-1034) is gated by canDeclareStockCoverage (:2517-2520 — the
  * deal OWNER, or import, or ceo; sales_manager is deliberately excluded) AND floored at
- * DealStage.ORDER_RECEIVED (stockCoverageStageReached, :2551-2553 — a 409 below it, matching this
- * slice's brief: "reserveStock is floored at ORDER_RECEIVED").
+ * DealStage.ORDER_RECEIVED (stockCoverageStageReached, :2551-2553 — a 409 below it).
  *
  * When every line is FULLY covered (qtyFromStock >= qty on every item), sets fulfillment_status
  * FROM_STOCK and auto-advances straight to DealStage.DELIVERY_SCHEDULING (:1020-1031) — skipping
@@ -1050,7 +1047,7 @@ export async function advanceImportStep(sessions, importRequestId, targetStep) {
  *               `readDeal(...).items`, never invented. Ticket items are populated by
  *               confirmOrder's own reconciliation (OrderConfirmationService.reconcileTicketItems,
  *               orderconfirmation/OrderConfirmationService.java:269-307) — createDeal's `items`
- *               option is NOT what ends up here, since none of this slice's PCR items carry a
+ *               option is NOT what ends up here, since none of these PCR items carry a
  *               sourceTicketItemId (see createPricingRequest's own doc), so reconcileTicketItems
  *               always takes its INSERT branch and creates a wholly new ticket_item row from the
  *               confirmed pricing request's own quantity.
@@ -1077,13 +1074,12 @@ export async function declareStockCoverage(sessions, role, ticketId, lines) {
  *
  * Auto-advances to DealStage.DELIVERED once every item is fully delivered (:1198), and — same
  * call, same transaction — re-checks maybeAdvanceClosedPaid in case the deal was somehow already
- * fully paid before delivery finished (:1199-1203; never the case in this slice, since
+ * fully paid before delivery finished (:1199-1203; never the case here, since
  * {@link confirmFinalPayment} always runs after this).
  */
-// REVIEW ROUND 1, B1 (2026-09-18): called as sessions.sales, not sessions.import. TicketService#
-// canWriteDelivery is now CEO, or the deal's OWN owning sales rep -- import's write access to
-// ส่งมอบสินค้า was a TRANSFER to Sales (owner ruling 2026-08-17), not an addition, so calling this
-// as import now 403s. Every deal this file drives is created via createTicket(sessions.sales, ...)
+// Called as sessions.sales, not sessions.import. TicketService#canWriteDelivery is CEO, or the
+// deal's OWN owning sales rep -- import has no write access to ส่งมอบสินค้า, so calling this
+// as import 403s. Every deal this file drives is created via createTicket(sessions.sales, ...)
 // (sessions.sales is therefore always the deal's createdById), so sessions.sales is also always
 // the owning rep for every call site in this suite.
 export async function completeDelivery(sessions, ticketId, { note, recipientName } = {}) {
@@ -1098,11 +1094,9 @@ export async function completeDelivery(sessions, ticketId, { note, recipientName
 
 /**
  * POST /api/finance/deals/{id}/final-payment — FinanceDealController.confirmFinalPayment (finance/), which
- * delegates to TicketService.confirmFinalPayment. H1 lockdown (2026-09-30): the old
- * POST /api/tickets/{id}/final-payment route was REMOVED, and the response is now the finance view
- * `{ deal }` (deal.salesStage, deal.money.*) instead of `{ ticket }`. TicketService.confirmFinalPayment requires PAYMENT_RECORD_ROLES
- * (GLA-118, owner ruling 2026-09-20, part A: account ONLY, no CEO fallback — this used to be
- * ACCOUNT_ROLES) and canConfirmFinalPaymentNow (paymentStatus AWAITING_FINAL_PAYMENT or
+ * delegates to TicketService.confirmFinalPayment. The response is the finance view
+ * `{ deal }` (deal.salesStage, deal.money.*), not `{ ticket }`. TicketService.confirmFinalPayment
+ * requires PAYMENT_RECORD_ROLES (account ONLY, no CEO fallback) and canConfirmFinalPaymentNow (paymentStatus AWAITING_FINAL_PAYMENT or
  * DEPOSIT_PAID, or a bypass deposit policy with paymentStatus CUSTOMER_CONFIRMED — see
  * {@link waiveDeposit}). Always called as sessions.account below — never sessions.ceo.
  *
@@ -1122,14 +1116,14 @@ export async function confirmFinalPayment(sessions, ticketId) {
 }
 
 /**
- * Runs the slice-3 pricing-request chain (steps 1-10: createPricingRequest through
+ * Runs the pricing-request chain (steps 1-10: createPricingRequest through
  * issueCustomerQuotation) for ONE recipient, stopping right after `issue` — the call that trips
  * TicketService.advanceStageForCustomerQuotationIssue (STAGE_FOR_RECIPIENT). Does NOT accept the
  * quotation or confirm the order; see {@link runPricingChainToOrder} for the version that also
- * does the slice-3 tail.
+ * does the tail.
  *
  * Exists because Case A drives THREE independent chains (DESIGNER -> OWNER -> BUYER) on one deal
- * — "a deal has one sales_stage and one live PCR at a time" (this slice's own brief) is a business
+ * — "a deal has one sales_stage and one live PCR at a time" is a business
  * discipline this helper enforces by construction (each call is a fresh, self-contained chain),
  * not a constraint PricingRequestService.createDraft itself checks (it has none — confirmed by
  * reading it: no gate on any OTHER pricing request the ticket may already carry).
@@ -1163,7 +1157,7 @@ export async function runPricingChainToIssue(
 }
 
 /**
- * {@link runPricingChainToIssue} plus the slice-3 tail (recordOutcome ACCEPTED -> confirm-order) —
+ * {@link runPricingChainToIssue} plus the tail (recordOutcome ACCEPTED -> confirm-order) —
  * the only way S10+ (ORDER_RECEIVED and beyond) becomes reachable at all: ORDER_RECEIVED is
  * fact-gated on payment_status, whose only writer is confirmCustomer, reachable only via
  * confirm-order from PCR QUOTATION_ACCEPTED (see confirmOrder's own doc above in this file).

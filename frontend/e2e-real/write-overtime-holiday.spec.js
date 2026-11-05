@@ -2,99 +2,75 @@ import { test, expect } from '@playwright/test';
 import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// feat/ot-nonworkday-rate-suggestion (branch B of the OT UAT defect #2 fix) rewrote the decision
-// table this file pins. THREE distinct values now exist where there used to be one:
+// Three distinct day-type values exist:
 //
 //   suggested day type | system: hr.holiday OR the caller's resolved WorkSchedule non-workday | never pay
 //   requested day type | the employee's own claim -- pre-filled from the suggestion, freely     | never pay
-//                       | editable, accepted EITHER way (see the removed-refusal note below)    |
+//                       | editable, accepted EITHER way                                         |
 //   approved day type  | the approver's decision (ApproveOvertimeRequest.dayType), defaulted to | BECOMES PAY
 //                       | the suggestion when absent                                            |
 //
-// Old decision table (pre-branch, what this file used to pin -- see git history):
-//
-//   calendar loaded     | claim        | outcome
-//   ------------------- | ------------ | ------------------------------------------------------
-//   yes (>=1 row/year)  | HOLIDAY      | date IS a holiday  -> accept, HOLIDAY / 3.00
-//   yes                 | HOLIDAY      | date is NOT one    -> 400, NO row created   <- REMOVED
-//   yes                 | WORKDAY      | date IS a holiday  -> accept, HOLIDAY / 3.00
-//   yes                 | WORKDAY/none | ordinary day       -> accept, WORKDAY / 1.50, no flag
-//   zero rows for year  | (any)        | --                 -> accept + "[รอตรวจสอบ]" flag
-//
-// What changed, on explicit owner ruling (2026-08-08):
-//   - The "claim contradicted -> 400" row is GONE. A HOLIDAY claim the calendar can actively
-//     disprove is now ACCEPTED and FLAGGED ("[ไม่ตรงกับที่ระบบแนะนำ]"), never refused -- the
-//     employee's field is a REQUEST, not a pay input, so there is nothing for it to get away
-//     with by disagreeing.
+// Rules this file pins:
+//   - A claim is never refused for disagreeing with the calendar. A HOLIDAY claim the calendar
+//     can actively disprove is ACCEPTED and FLAGGED ("[ไม่ตรงกับที่ระบบแนะนำ]") -- the employee's
+//     field is a REQUEST, not a pay input, so there is nothing for it to get away with.
 //   - A weekend (or any other day the caller's OWN resolved WorkSchedule marks as a non-workday)
-//     now ALSO suggests HOLIDAY, with no hr.holiday row needed at all -- this is new territory
-//     this file's PREDECESSOR never exercised (grep this directory for "dayType", "holiday",
-//     "multiplier", "3.00" or "1.50" before this file existed and none of them touch weekends).
-//   - The "[รอตรวจสอบ]" calendar-unverified flag is NARROWED: it now fires only when the
-//     SUGGESTION is WORKDAY (schedule says ordinary workday) and the calendar year has zero
-//     rows -- a weekend's HOLIDAY suggestion no longer needs the calendar to be certain.
-//   - What actually becomes pay at approval is the APPROVER's decision
-//     (ApproveOvertimeRequest.dayType), defaulted to the suggestion -- see Cases 6-7 below.
+//     suggests HOLIDAY, with no hr.holiday row needed at all.
+//   - The "[รอตรวจสอบ]" calendar-unverified flag fires only when the SUGGESTION is WORKDAY
+//     (schedule says ordinary workday) and the calendar year has zero rows -- a weekend's HOLIDAY
+//     suggestion does not need the calendar to be certain.
+//   - What becomes pay at approval is the APPROVER's decision (ApproveOvertimeRequest.dayType),
+//     defaulted to the suggestion -- see Cases 6-7 below.
 //
 // The Java-level proof (including its own mutation-check) lives in
-// OvertimeDayTypeDerivedFromCalendarIntegrationTest; this file's job is proving the same
-// properties survive the real HTTP layer (JSON serialization of the new `suggestedDayType`
-// field, the real HolidayController CRUD, the real OvertimeController approve endpoint), not
-// re-deriving the whole Java-level proof a second time.
+// OvertimeDayTypeDerivedFromCalendarIntegrationTest; this file proves the same properties
+// survive the real HTTP layer (JSON serialization of `suggestedDayType`, the real
+// HolidayController CRUD, the real OvertimeController approve endpoint), not the whole
+// Java-level proof a second time.
 //
 // day_type is re-derived and FROZEN at managerApprove/ceoDirectApprove (Case 5 below); ceoApprove
 // deliberately does NOT re-derive, and the SECOND approve call (the final CEO sign-off on the
 // two-stage route) deliberately never honours an ApproveOvertimeRequest.dayType either -- both
-// already proven at the Java level
+// proven at the Java level
 // (OvertimeDayTypeDerivedFromCalendarIntegrationTest#aCalendarChangeAfterManagerApprovalIsNotPickedUpByTheFinalCeoSignOff
 // / #theCeosFinalSignOffCannotOverrideWhatTheManagerAlreadyFroze) and not repeated here.
 //
-// THE PRECONDITION THIS FILE LIVES OR DIES ON: hr.holiday SHIPS EMPTY (V115's own Javadoc -- HR
-// populates it once the BOT list is available, or manually through this same CRUD). If the
-// calendar genuinely has zero rows for the work date's year, HolidayCalendar#hasHolidaysForYear
-// is false and the calendar-unverified flag fires instead of a clean "no flag" answer. So every
-// case below that needs "the calendar is loaded for this year" creates a real row through the
-// real HolidayController first and reads it back through a SEPARATE GET before relying on it --
-// never trusts its own create response, same discipline write-overtime.spec.js applies to
-// readOvertime. If that read-back ever came up empty, the precondition assertion fails loudly
-// right there, at setup, instead of the real assertion later failing for a reason that looks
-// unrelated to the actual defect.
+// PRECONDITION: hr.holiday SHIPS EMPTY (V115's Javadoc -- HR populates it once the BOT list is
+// available, or manually through this same CRUD). If the calendar genuinely has zero rows for the
+// work date's year, HolidayCalendar#hasHolidaysForYear is false and the calendar-unverified flag
+// fires instead of a clean "no flag" answer. So every case below that needs "the calendar is
+// loaded for this year" creates a real row through the real HolidayController first and reads it
+// back through a SEPARATE GET before relying on it -- never trusts its own create response, same
+// discipline write-overtime.spec.js applies to readOvertime. If that read-back ever came up
+// empty, the precondition assertion fails loudly at setup, instead of the real assertion later
+// failing for a reason that looks unrelated.
 //
 // SECOND PRECONDITION: whether "today" reads as an ordinary workday or a non-workday-suggested
 // HOLIDAY depends on which day of the week the suite runs on AND on which WorkSchedule the OWNER
-// persona resolves that day -- which this file's own "always use today" design (below) cannot
-// avoid. expectedSuggestionFor/expectedMultiplierFor compute the RIGHT answer for whichever day
-// it is; nearestScheduledWorkdayOnOrBefore steps back to a genuinely ORDINARY day for the two
-// cases (the over-claim-disagreement case and the "frozen at approval" case) that need one to
-// isolate what they are testing from the non-workday rule. All three read the persona's schedule
-// from the BACKEND rather than assuming it -- see their definitions inside the describe block.
+// persona resolves that day. expectedSuggestionFor/expectedMultiplierFor compute the RIGHT answer
+// for whichever day it is; nearestScheduledWorkdayOnOrBefore steps back to a genuinely ORDINARY
+// day for the two cases (the over-claim-disagreement case and the "frozen at approval" case) that
+// need one to isolate what they are testing from the non-workday rule. All three read the
+// persona's schedule from the BACKEND rather than assuming it -- see their definitions inside the
+// describe block.
 //
-// THAT INDIRECTION IS THE FIX FOR A REAL FAILURE, not decoration. These helpers used to hardcode
-// "Saturday and Sunday are non-working" (an `isWeekendInBangkok` predicate). That is a claim about
-// COMPANY POLICY, which does not live in this file: it lives in hr.work_schedule_assignment, it is
-// DATA, and the row deciding it has been rewritten twice for this persona already. V115 seeded
-// ฝ่ายขาย (division 'SA') on OFFICE_5D; V117 moved it to SALES_5D -- the same Mon-Fri day set, so
-// the hardcode survived and only the comment above it went stale; V160 moved it to SALES_6D,
-// Mon-SATURDAY, effective 2026-09-01. From that date the real backend correctly derives
-// WORKDAY/1.50 for a sales Saturday while this file still expected HOLIDAY/3.00, so the two cases
-// below that assert the SUGGESTION for today's date (Cases 4 and 6 -- the others either create a
-// holiday on it, which wins regardless, or read the suggestion back as their own baseline) failed
-// on Saturdays and ONLY on Saturdays -- first red on Sat
-// 2026-09-05 (CI run 33966932264), on a PR touching nothing in this area. develop's last green run
-// was Tue 2026-09-01, which is why merging V160 did not catch it.
+// Why the schedule is read back rather than hardcoded ("Saturday and Sunday are non-working"):
+// that is a claim about COMPANY POLICY, which lives in hr.work_schedule_assignment as DATA and is
+// rewritten over time. ฝ่ายขาย (division 'SA') moved from a Mon-Fri schedule to SALES_6D
+// (Mon-SATURDAY) effective 2026-09-01, after which a hardcoded Saturday-is-HOLIDAY expectation
+// failed on Saturdays and ONLY on Saturdays.
 //
-// WHAT READING THE SCHEDULE BACK DOES AND DOES NOT PROVE, stated plainly rather than left for the
-// next reader to work out: it makes this file AGREE with whatever TieredWorkScheduleResolver
-// resolves instead of independently proving it -- the "a test that mirrors the computation is not
-// evidence about that computation" shape CLAUDE.md warns about. That trade is deliberate and
-// narrow. The resolver's own correctness has real-Postgres proof of its own, written wrong-way-
-// round: SalesDivisionSaturdayWorkdayIntegrationTest pins ฝ่ายขาย's Saturday AND that Sunday did
+// What reading the schedule back does and does not prove: it makes this file AGREE with whatever
+// TieredWorkScheduleResolver resolves instead of independently proving it -- the "a test that
+// mirrors the computation is not evidence about that computation" shape CLAUDE.md warns about.
+// That trade is deliberate and narrow. The resolver's own correctness has real-Postgres proof of
+// its own: SalesDivisionSaturdayWorkdayIntegrationTest pins ฝ่ายขาย's Saturday AND that Sunday did
 // not move, that a date before 2026-09-01 still resolves the five-day schedule, and that a
 // five-day division was left alone; OrgNormalizationScheduleIntegrationTest does the same for
 // V121. What THIS file is for is the OT pipeline built ON TOP of that resolution -- suggestion,
-// employee claim, approver override, and their JSON serialization over the real HTTP layer.
-// Keeping a second, hardcoded copy of company working-time policy here bought no extra evidence
-// about any of that, and cost a red suite the next time the owner ruled on working hours.
+// employee claim, approver override, and their JSON serialization over the real HTTP layer. A
+// second, hardcoded copy of company working-time policy here would buy no extra evidence and cost
+// a red suite whenever working hours change.
 //
 // SAFETY / RE-RUNNABILITY, same rules as write-overtime.spec.js (this file mutates a real,
 // possibly shared database too):
@@ -147,8 +123,7 @@ const ISO_DAY_OF_WEEK = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7
  * parses the bare string as UTC midnight, which is the PREVIOUS Bangkok-local day whenever the
  * runner's zone is west of UTC+0 for part of the day -- silently computing the wrong weekday.
  *
- * This REPLACES an `isWeekendInBangkok` predicate. The timezone care above survives unchanged; the
- * "Sat/Sun are non-working" assumption layered on top of it did not -- see this file's header.
+ * No "Sat/Sun are non-working" assumption is layered on top of this -- see this file's header.
  * Throwing on an unrecognised weekday rather than returning a falsy 0 is the same discipline: an
  * Intl locale-data change would otherwise silently make every date resolve as a non-workday.
  */
@@ -309,7 +284,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
    * backend answers workdays [1..5] for 2026-08-29 and [1..6] for 2026-09-05. Dates a couple of
    * days apart genuinely can resolve different schedules, which is exactly the window
    * nearestScheduledWorkdayOnOrBefore steps across, so caching one answer for all of them would
-   * reintroduce a smaller version of the bug this whole change removes.
+   * reintroduce the hardcoded-policy bug described in this file's header.
    */
   const ownWorkdaysByDate = new Map();
 
@@ -423,13 +398,12 @@ test.describe('overtime day type: system suggestion, employee request, approver 
   }
 
   // -------------------------------------------------------------------------------------------
-  // Case 1: THE row this branch changes. A HOLIDAY claim the calendar can actively disprove --
-  // the year is loaded (a sentinel proves it) but the work date specifically is not in it, AND
-  // the work date is one the OWNER's own schedule counts as a working day
-  // (nearestScheduledWorkdayOnOrBefore, so the non-workday rule cannot also explain a HOLIDAY
-  // suggestion here) -- used to be refused outright (400, no row). Owner ruling 2026-08-08:
-  // accepted and flagged instead. Wrong-way-round through to a full approval with NO override:
-  // the claimed 3.00 must never reach pay_rate_multiplier.
+  // Case 1: a HOLIDAY claim the calendar can actively disprove -- the year is loaded (a sentinel
+  // proves it) but the work date specifically is not in it, AND the work date is one the OWNER's
+  // own schedule counts as a working day (nearestScheduledWorkdayOnOrBefore, so the non-workday
+  // rule cannot also explain a HOLIDAY suggestion here) -- is accepted and flagged, never
+  // refused. Wrong-way-round through to a full approval with NO override: the claimed 3.00 must
+  // never reach pay_rate_multiplier.
   // -------------------------------------------------------------------------------------------
   test('a HOLIDAY claim contradicted by the calendar is accepted, flagged, and never becomes pay', async () => {
     const workDate = await nearestScheduledWorkdayOnOrBefore(todayInBangkok());
@@ -460,7 +434,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
       expect(response.status(), await response.text()).toBe(200);
       ({ request: created } = await response.json());
 
-      // A row WAS created (contrast with the old 400 behaviour this replaces).
+      // A row WAS created (the claim is not refused).
       const after = await countOwnOvertime();
       expect(after, 'the claim is accepted -- exactly one new row').toBe(before + 1);
 
@@ -676,7 +650,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
   });
 
   // -------------------------------------------------------------------------------------------
-  // Case 6 (feat/ot-nonworkday-rate-suggestion, NEW): the approver's explicit decision wins over
+  // Case 6: the approver's explicit decision wins over
   // the suggestion, in whichever direction actually differs from it -- proved generically so it
   // holds regardless of which day of the week the suite runs on.
   // -------------------------------------------------------------------------------------------
@@ -713,7 +687,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
   });
 
   // -------------------------------------------------------------------------------------------
-  // Case 7 (feat/ot-nonworkday-rate-suggestion, NEW): an actor forbidden from approving this
+  // Case 7: an actor forbidden from approving this
   // request cannot move money through the new dayType field either -- wrong-way-round. The
   // submitter attempting to approve their OWN request must be refused before dayType is ever
   // read, leaving the row completely untouched.
@@ -734,7 +708,7 @@ test.describe('overtime day type: system suggestion, employee request, approver 
       ({ request: created } = await submitResponse.json());
       const suggested = created.dayType;
 
-      // The exact P0 shape this suite exists to close, replayed through the NEW field: the
+      // The pay-inflation hole this suite exists to close, through the approver-decision field: the
       // submitter tries to approve their OWN request, forcing HOLIDAY to inflate their own pay.
       const selfApproveResponse = await approve(sessions[OWNER], created.id, 'HOLIDAY');
       expect(selfApproveResponse.status(), await selfApproveResponse.text()).toBe(403);
