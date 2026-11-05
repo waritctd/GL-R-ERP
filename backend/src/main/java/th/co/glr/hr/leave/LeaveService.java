@@ -1905,11 +1905,11 @@ public class LeaveService {
      * FALSE once it does (V1's comment on that column), at which point {@link #validateEmployee}
      * already refuses the submission before this method is ever reached.
      *
-     * <p><b>KNOWN GAP found while inspecting this table:</b> {@code PayrollService#remainingPayPeriods}
-     * (2026-07-29) documents that resignations are not currently recorded in this platform at all --
-     * they live in another system, so nothing populates {@code hr.resignation} in production today.
-     * This gate is correct but DORMANT until that changes; flagged here so a green test suite is not
-     * mistaken for "verified against real resignation data".
+     * <p><b>KNOWN GAP:</b> payroll's remaining-pay-periods calculation documents that resignations
+     * are not currently recorded in this platform at all -- they live in another system, so nothing
+     * populates {@code hr.resignation} in production today. This gate is correct but DORMANT until
+     * that changes; flagged here so a green test suite is not mistaken for "verified against real
+     * resignation data".
      *
      * <p><b>Handover-confirmation escape hatch: DOCUMENTED NON-ENFORCEMENT, not a system override.</b>
      * "ได้รับอนุมัติจากหัวหน้างานว่า...เรียบร้อยแล้ว" is a human judgement this system cannot verify --

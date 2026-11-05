@@ -48,14 +48,14 @@ public class SpecialMoneyPolicyEvaluator {
      * actually prevents the two rules drifting apart the way {@link #DEFAULT_PROBATION_DAYS} being
      * shared already prevented the fallback constant from drifting.
      *
-     * <p>Owner ruling (2026-08-03): HR's recorded {@code hr.employee.confirm_date}, when present, is
-     * authoritative -- read it rather than re-deriving probation from {@code hire_date +
-     * probation_days}. The employee becomes eligible the day AFTER {@code confirm_date}: verified
-     * against production, {@code confirm_date} counts the hire date as day 1, while the computed
-     * {@code hire_date + probationDays} form below counts it as day 0, so the two disagree by
-     * exactly one day if {@code confirm_date} itself were treated as already-passed. When {@code
-     * confirm_date} is NULL, falls back to {@code hire_date + probationDays}, where {@code
-     * probationDays} defaults to {@link #DEFAULT_PROBATION_DAYS} only when NULL on the employee row.
+     * <p>HR's recorded {@code hr.employee.confirm_date}, when present, is authoritative -- read it
+     * rather than re-deriving probation from {@code hire_date + probation_days}. The employee
+     * becomes eligible the day AFTER {@code confirm_date}: {@code confirm_date} counts the hire
+     * date as day 1, while the computed {@code hire_date + probationDays} form below counts it as
+     * day 0, so the two would disagree by one day if {@code confirm_date} itself were treated as
+     * already-passed. When {@code confirm_date} is NULL, falls back to {@code hire_date +
+     * probationDays}, where {@code probationDays} defaults to {@link #DEFAULT_PROBATION_DAYS} only
+     * when NULL on the employee row.
      *
      * <p>Fails closed (returns {@code false}) when both {@code confirmDate} and {@code hireDate} are
      * NULL -- the caller must treat that as "cannot verify", never as passed.
@@ -78,9 +78,8 @@ public class SpecialMoneyPolicyEvaluator {
     /**
      * §2.1.3's eligible job functions, as CSV lists of {@code hr.department.source_code} and
      * {@code hr.position.source_code}. Plural and two-dimensional because the document's four
-     * functions do not sit at one level of the org data — verified against production 2026-08-03:
-     * สนับสนุนฝ่ายขาย is TWO departments (SALES, SALES2), while ขับรถ is a POSITION. The previous
-     * single {@code sales_support_department_code} could express neither.
+     * functions do not sit at one level of the org data: สนับสนุนฝ่ายขาย is TWO departments
+     * (SALES, SALES2), while ขับรถ is a POSITION.
      */
     static final String PREPROBATION_KIT_DEPARTMENT_CODES_KEY = "preprobation_kit_department_codes";
     static final String PREPROBATION_KIT_POSITION_CODES_KEY = "preprobation_kit_position_codes";
@@ -130,12 +129,12 @@ public class SpecialMoneyPolicyEvaluator {
     /**
      * The หมายเหตุ's eligibility conditions: (1) เป็นพนักงานประจำ, (2) ผ่านการทดลองงาน.
      *
-     * <p><b>Condition (1) is intentionally folded into (2), on the owner's ruling of 2026-08-03:
-     * passing probation is treated as sufficient evidence of being พนักงานประจำ.</b> {@code
-     * hr.employment_status} exists and is ETL-populated, so a stricter gate is possible later, but
-     * it is not applied today. This is a deliberate simplification, recorded here rather than left
-     * as a silent gap — if the company starts employing contract staff who pass probation without
-     * becoming ประจำ, this method is where that has to change.
+     * <p><b>Condition (1) is intentionally folded into (2): passing probation is treated as
+     * sufficient evidence of being พนักงานประจำ.</b> {@code hr.employment_status} exists and is
+     * ETL-populated, so a stricter gate is possible later, but it is not applied today. This is a
+     * deliberate simplification, recorded here rather than left as a silent gap — if the company
+     * starts employing contract staff who pass probation without becoming ประจำ, this method is
+     * where that has to change.
      *
      * <p>(3) หัวหน้าฝ่ายอนุมัติ is not a policy rule and is not evaluated here — welfare approval is
      * CEO-only, enforced in {@code SpecialMoneyService}.
@@ -154,13 +153,13 @@ public class SpecialMoneyPolicyEvaluator {
      *
      * <p>Matches on EITHER an eligible department OR an eligible position, because the four
      * functions genuinely live at different levels of the org data (see the key constants above).
-     * Either list being non-empty enables the type; both empty keeps it disabled, as it shipped.
+     * Either list being non-empty enables the type; both empty keeps it disabled.
      *
      * <p><b>Two of the four functions cannot be gated yet.</b> Production carries no department or
-     * position for พนักงานติดรถส่งของ or พนักงานฝ่ายโมเสค (checked 2026-08-03), so there is nothing to
-     * match them on. They are not silently included — an employee in one of those roles is refused
-     * until HR gives the role a department or position and adds its code here. Including them by
-     * widening to a whole division would hand the kit to everyone in it.
+     * position for พนักงานติดรถส่งของ or พนักงานฝ่ายโมเสค, so there is nothing to match them on. They
+     * are not silently included — an employee in one of those roles is refused until HR gives the
+     * role a department or position and adds its code here. Including them by widening to a whole
+     * division would hand the kit to everyone in it.
      */
     private void evaluatePreprobationKitEligibility(
             EmployeeEligibilitySnapshot employee, PolicyAmounts amounts, List<String> violations) {
@@ -214,10 +213,9 @@ public class SpecialMoneyPolicyEvaluator {
             List<String> violations) {
         BigDecimal cap = amounts.amountOrZero("cap");
 
-        // There is deliberately NO claim deadline for aid. A three-months-from-event window used to
-        // live here; it was never in the welfare document -- which states a deadline only for
-        // ค่ารักษาพยาบาล (2.3, one month from the receipt) -- and it was refusing genuine claims.
-        // Removed on the owner's ruling, 2026-08-03. Do not reintroduce one without a written rule.
+        // There is deliberately NO claim deadline for aid. The welfare document states a deadline
+        // only for ค่ารักษาพยาบาล (2.3, one month from the receipt), and a three-months-from-event
+        // window not in the document would refuse genuine claims. Do not add one without a written rule.
 
         if (type == SpecialMoneyType.AID_WEDDING || type == SpecialMoneyType.AID_ORDINATION) {
             if (usage.activeCountLifetime(type) >= 1) {
@@ -264,7 +262,7 @@ public class SpecialMoneyPolicyEvaluator {
      *
      * <p>The May receipt date applies to the SELF_BUY route ONLY. The document ties May to the
      * self-buy case ("ซื้อ...ในเดือนพฤษภาคม...แล้วนำใบเสร็จมาเบิก...ในเดือนมิถุนายน") and says nothing
-     * about when the tailor bills for the ร้านคุณลำพอง route. Requiring May of both used to refuse a
+     * about when the tailor bills for the ร้านคุณลำพอง route, so requiring May of both would refuse a
      * perfectly valid tailored claim receipted in June.
      */
     private BigDecimal evaluateUniformAnnual(
@@ -298,8 +296,8 @@ public class SpecialMoneyPolicyEvaluator {
         int shirtCount = parseIntOrZero(request.detailValue("shirtCount"));
         int trouserCount = parseIntOrZero(request.detailValue("trouserCount"));
         // The 4-piece limit is the document's, not the self-buy route's: "เสื้อหรือกางเกงหรือกระโปรง
-        // ก็ได้รวมกัน 4 ชิ้น" is stated for the tailored route and repeated for self-buy. It used to
-        // be checked in SELF_BUY only, so a tailored claim for 10 pieces under ฿1,300 passed.
+        // ก็ได้รวมกัน 4 ชิ้น" is stated for the tailored route and repeated for self-buy, so it is
+        // checked on both (a tailored claim for 10 pieces under ฿1,300 must not pass).
         if (shirtCount + trouserCount > maxPieces) {
             violations.add("เบิกเครื่องแบบประจำปีได้ไม่เกิน " + maxPieces + " ชิ้น");
         }
@@ -327,13 +325,12 @@ public class SpecialMoneyPolicyEvaluator {
     /**
      * §2.1.2 — "เริ่มตัดชุดฟอร์มให้ตัดได้ 3 ชุด (หรือ 6 ชิ้น) สำหรับปีแรกที่เข้าทำงาน".
      *
-     * <p>Both limits are now enforced. This used to pass the requested amount straight through with
-     * no checks at all: the seeded {@code max_pieces = 6} was ignored, and nothing tied the claim to
-     * the first year of employment, so it was reachable forever and for any number of pieces.
+     * <p>Both limits are enforced: the seeded {@code max_pieces = 6}, and the first year of
+     * employment (otherwise the claim would stay reachable forever and for any number of pieces).
      *
      * <p>No baht figure is given for new staff anywhere in the document, so the amount stays
-     * uncapped rather than borrowing §2.1.1's rates — but it is no longer unguarded either: the CEO
-     * must now justify approving more than was requested (see {@code SpecialMoneyService}).
+     * uncapped rather than borrowing §2.1.1's rates. It is not unguarded, though: the CEO must
+     * justify approving more than was requested (see {@code SpecialMoneyService}).
      */
     private BigDecimal evaluateUniformNewStaff(
             SubmitSpecialMoneyRequest request,
@@ -366,8 +363,8 @@ public class SpecialMoneyPolicyEvaluator {
      * §2.1.3 — the fixed pre-probation kit: เสื้อยืด ×3, กางเกง ×3, รองเท้า ×1, and สายรัดหลัง ×1.
      *
      * <p>สายรัดหลัง is conditional in the document — "กรณีของเดิมที่มีไม่เพียงพอ" — so it is added only
-     * when the request says one is needed. It used to be added unconditionally, which over-stated
-     * every kit by the belt's ฿700 whether or not one was issued.
+     * when the request says one is needed; adding it unconditionally would over-state every kit by
+     * the belt's ฿700 whether or not one was issued.
      */
     private BigDecimal evaluateUniformPreprobationKit(
             SubmitSpecialMoneyRequest request, PolicyAmounts amounts, List<String> violations) {
