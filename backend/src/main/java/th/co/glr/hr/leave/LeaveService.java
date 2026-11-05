@@ -46,33 +46,31 @@ public class LeaveService {
         "image/png"
     );
     private static final Set<String> VIEW_ALL_ROLES = Set.of("hr", "ceo");
-    // CEO leave-approval reach (2026-09-01), owner ruling: "make it so that ceo can approve
-    // everyone leaves". Closes a long-standing asymmetry -- VIEW_ALL_ROLES above already let the
-    // CEO see every ใบลา, but REVIEW_ALL_ROLES being hr-only meant they could approve none of them.
+    // The CEO can approve everyone's leave: VIEW_ALL_ROLES already lets the CEO see every ใบลา,
+    // so review reach matches it.
     // Deliberately no self-exclusion here: SELF_SUBMIT_BLOCKED_ROLES already contains "ceo", so a
     // CEO cannot file their own leave in the first place. The residual edge case -- HR files leave
     // FOR a CEO, who then approves it themselves via this same blanket reach -- is the same shape
     // HR already has (HR could always approve leave HR filed for someone else) and is left unruled.
     private static final Set<String> REVIEW_ALL_ROLES = Set.of("hr", "ceo");
-    // Leave HR-submit gate (2026-08-03), owner ruling: "HR and บริหาร oversee leave but do not
-    // request it for themselves." Same role bucket as VIEW_ALL_ROLES (`ผู้บริหาร` -> hr,
+    // HR and บริหาร oversee leave but do not request it for themselves.
+    // Same role bucket as VIEW_ALL_ROLES (`ผู้บริหาร` -> hr,
     // `ผู้บริหารระดับสูง` -> ceo -- see frontend/src/app/roles.js), matching the "CEO/HR are
     // queue-side, they never file their own requests" precedent already established for OT and
     // welfare approvals in this codebase. Deliberately SELF-submission only -- see
     // #resolveTargetEmployee's own comment for why HR-for-a-subordinate must keep working.
     private static final Set<String> SELF_SUBMIT_BLOCKED_ROLES = Set.of("hr", "ceo");
     private static final Set<LeaveStatus> ACTIVE_QUOTA_STATUSES = Set.of(LeaveStatus.SUBMITTED, LeaveStatus.APPROVED);
-    // Leave-surface IA restructure (2026-08-10), owner-authorised API behaviour change. #list's
-    // null-date default used to be [today.withDayOfMonth(1), today.plusMonths(1)] -- a window that
-    // dropped still-pending rows off BOTH edges, because findRequests matches on overlap
+    // #list's null-date default window is +/-12 months. A narrower window (this month to next)
+    // would drop still-pending rows off BOTH edges, because findRequests matches on overlap
     // (`start_date <= :toDate AND end_date >= :fromDate`), not on submission time:
     //
-    //   - a SUBMITTED request whose leave ENDED before this month failed `end_date >= :fromDate`,
-    //     so it vanished from its approver's queue the moment the month rolled over;
-    //   - a vacation booked more than a month ahead failed `start_date <= :toDate`, so it was
-    //     invisible to that approver until the month it started.
+    //   - a SUBMITTED request whose leave ENDED before this month would fail `end_date >= :fromDate`,
+    //     so it would vanish from its approver's queue the moment the month rolled over;
+    //   - a vacation booked more than a month ahead would fail `start_date <= :toDate`, so it would
+    //     be invisible to that approver until the month it started.
     //
-    // Neither is a filter anyone asked for -- both are a browse default leaking into an approval
+    // Neither is a filter anyone wants -- both are a browse default leaking into an approval
     // queue. FIVE call sites pass no dates at all and inherit this: ReviewQueueTab (the queue
     // itself), LeaveSurfacePage's `รอพิจารณา` tab-visibility signal, CeoOverview,
     // DivisionManagerOverview and EmployeeSelfService. A symmetric +/-12mo window closes both edges
@@ -83,17 +81,15 @@ public class LeaveService {
     // so passing only `from` still gets the default `to` and vice versa. mockApi.js's leave.list
     // mirrors this same default; keep the two in step.
     private static final int DEFAULT_WINDOW_MONTHS = 12;
-    // Sub-day / partial-day-span leave (2026-07-25, widened to multi-day V166 2026-09-10):
+    // Sub-day / partial-day-span leave:
     // day-fraction = (clock-minutes(start,end) MINUS overlap with the 12:30-13:30 company-wide
-    // lunch break) / 480 (8 WORKED hours), rounded HALF_UP to 2dp, each day capped at 1.00 -- the
-    // FINAL owner ruling (2026-09-10, after four supersessions; see LeaveDayMath's "Partial-day
-    // span" section header for the full worked-example table and why an earlier draft that divided
-    // by the day's own resolved WorkSchedule span, with no break subtraction, was wrong). Valid TIME
+    // lunch break) / 480 (8 WORKED hours), rounded HALF_UP to 2dp, each day capped at 1.00. See
+    // LeaveDayMath's "Partial-day span" section header for the full worked-example table and why
+    // dividing by the day's own resolved WorkSchedule span, with no break subtraction, is wrong. Valid TIME
     // BOUNDS (not the fraction itself) are still read from LeaveRepository#resolveOwnSchedule per
     // boundary date -- see #computeTotalDays/#validateSubDayTimes and
-    // LeaveDayMath#spanDayFractions's Javadoc for the full rule and why this is a deliberate
-    // behaviour change even for an existing single-day timed request.
-    // §5.2/§5.3 pro-ration (V120, defect 1 fix): a first-year employee's quota is scaled by
+    // LeaveDayMath#spanDayFractions's Javadoc for the full rule.
+    // §5.2/§5.3 pro-ration: a first-year employee's quota is scaled by
     // completed months of service out of a full 12 -- see #employeeAnnualQuota.
     private static final int FULL_SERVICE_MONTHS = 12;
     private static final BigDecimal HALF_DAY_INCREMENT = new BigDecimal("0.5");
@@ -120,8 +116,8 @@ public class LeaveService {
     // relaxations layered onto the literal text, not this branch's own interpretation:
     //   1. the "&gt;1 year tenure" qualifier is dropped (owner ruling, see #departmentCoverageRuleOutcome).
     //   2. the gate only APPLIES when the department has at least this many ACTIVE employees
-    //      (owner ruling, 2026-08-03, given after CI showed the un-floored gate blocking realistic
-    //      2-person departments -- e.g. a warehouse pair where one is already off could never let the
+    //      (owner ruling; without the floor, realistic
+    //      2-person departments were blocked -- e.g. a warehouse pair where one is already off could never let the
     //      other take SICK leave at all). Departments below this floor are EXEMPT ENTIRELY, not just
     //      down to one person; do not "fix" this back to a 1-person floor or the literal text.
     private static final int MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE = 3;
@@ -147,24 +143,21 @@ public class LeaveService {
     private final FileStorageService fileStorage;
     private final AuditService auditService;
     private final NotificationService notificationService;
-    // Leave requires approval (2026-08-05): resolves the HR fallback recipient set for
-    // #notifyPendingApproval when a SUBMITTED request's employee has no manager of record.
-    // EmployeeRepository#findHrEmployeeIds was added by this same change for that purpose --
+    // Resolves the HR fallback recipient set for #notifyPendingApproval when a SUBMITTED
+    // request's employee has no manager of record.
+    // EmployeeRepository#findHrEmployeeIds exists for that purpose --
     // #notifyPendingApproval is its only caller. No other method on this class touches it.
     private final EmployeeRepository employeeRepository;
-    // Auto-generated leave-submission email (2026-09): renders the ใบลา PDF and mails it to the shared
+    // Auto-generated leave-submission email: renders the ใบลา PDF and mails it to the shared
     // HR inbox, CC'ing requester + manager. Wired only through the @Autowired constructor; the
     // package-private test constructor leaves it null so unit tests exercise submit without email (see
     // #notifyPendingApproval, which no-ops the send when this is null).
     private final LeaveSubmissionMailer leaveSubmissionMailer;
     private final Clock clock;
 
-    // §5 leave-rules-as-data (V116): advance notice used to be a single global
-    // app.leave.advance-notice-days property (AppProperties.Leave), which was wrong for every type
-    // except roughly VACATION's neighbourhood. That dependency is removed cleanly here in favour of
-    // LeaveTypeDto#advanceNoticeDays -- there is no longer any global fallback to preserve, since
-    // hr.leave_type.advance_notice_days is NOT NULL DEFAULT 0 and every row (including the ones this
-    // migration adds) has an explicit value.
+    // §5 leave-rules-as-data: advance notice comes from LeaveTypeDto#advanceNoticeDays, per type.
+    // There is no global fallback, since hr.leave_type.advance_notice_days is
+    // NOT NULL DEFAULT 0 and every row has an explicit value.
     @Autowired
     public LeaveService(LeaveRepository leaveRepository,
                         LeaveAttachmentRepository leaveAttachments,
@@ -177,13 +170,12 @@ public class LeaveService {
             employeeRepository, Clock.system(BUSINESS_ZONE), leaveSubmissionMailer);
     }
 
-    // Existing test constructor signatures kept intact so the integration/unit tests that call them
-    // need no change: some construct with the six collaborators only (the pre-2026-09 @Autowired
-    // shape), others add a fixed Clock. Neither wires a LeaveSubmissionMailer -- those tests drive
+    // Test constructors: some construct with the six collaborators only, others add a fixed Clock.
+    // Neither wires a LeaveSubmissionMailer -- those tests drive
     // submit under mocked collaborators and assert the in-app notifications / leave logic, not the
     // email fan-out (which #notifyPendingApproval no-ops when the mailer is null). Public because some
-    // callers live in other packages (e.g. payroll integration tests) -- this is the pre-2026-09
-    // @Autowired six-arg shape, now unannotated so Spring uses the mailer-carrying constructor above.
+    // callers live in other packages (e.g. payroll integration tests). The six-arg shape is
+    // unannotated so Spring uses the mailer-carrying constructor above.
     public LeaveService(LeaveRepository leaveRepository,
                         LeaveAttachmentRepository leaveAttachments,
                         FileStorageService fileStorage,
@@ -279,9 +271,9 @@ public class LeaveService {
     }
 
     /**
-     * GET /api/leave/balances/team (manager team-quota summary, 2026-09): {@link #balanceFor} for
+     * GET /api/leave/balances/team (manager team-quota summary): {@link #balanceFor} for
      * every leave type, for every employee the actor is allowed to see as "their team" -- direct
-     * reports only (owner ruling: NOT the whole division), or every active employee for HR/CEO,
+     * reports only (NOT the whole division), or every active employee for HR/CEO,
      * exactly parity with {@link #employeeOptions}'s own reach.
      *
      * <p>Deliberately reuses {@link LeaveRepository#findEmployeeOptions} for the scope decision
@@ -289,16 +281,15 @@ public class LeaveService {
      * e.employee_id = :managerEmployeeId OR e.reports_to_employee_id = :managerEmployeeId} is the
      * SAME {@code reports_to_employee_id} comparison {@link #isDirectManager} makes for the
      * single-employee {@link #balances} endpoint, just expressed as a batch WHERE clause instead of
-     * a per-row Java branch -- see this method's own doc note on why that distinction matters. The
+     * a per-row Java branch. The
      * {@code !option.self()} filter below is NOT a security decision (every row {@code
      * findEmployeeOptions} returns is already access-permitted for this actor); it only drops the
      * actor's own row so "my team" does not include the actor reporting on themselves. A manager
      * with no active direct reports gets an empty list, not an error -- {@code findEmployeeOptions}
      * still returns their own (self-only) row, which the filter then removes.
      *
-     * <p>This repository query never restates the scope in a NEW predicate the way {@code
-     * managesEmployee} was once independently restated in three separate SQL statements that never
-     * called it (see that defect's writeup) -- {@link #employeeOptions} and this method call the
+     * <p>The scope is never restated in a second SQL predicate (independent copies of {@code
+     * managesEmployee} logic drift apart) -- {@link #employeeOptions} and this method call the
      * exact same {@link LeaveRepository} method.
      */
     public List<LeaveTeamMemberBalanceDto> teamBalances(UserPrincipal user, Integer requestedYear) {
@@ -318,7 +309,7 @@ public class LeaveService {
     }
 
     /**
-     * GET /api/leave/reports/me.pdf (printable leave-records report, 2026-09): the CALLING
+     * GET /api/leave/reports/me.pdf (printable leave-records report): the CALLING
      * employee's own section for {@code year}/optional {@code month} -- always exactly one
      * {@link LeaveReportEmployeeDto}, since there is no {@code employeeId} parameter anywhere on
      * this path (the employee id comes from the session, same self-scoping shape as
@@ -343,8 +334,8 @@ public class LeaveService {
     }
 
     /**
-     * GET /api/leave/reports/team.pdf (printable leave-records report, 2026-09): ONE grouped PDF's
-     * worth of per-employee sections, owner ruling -- every direct report in a single document, not
+     * GET /api/leave/reports/team.pdf (printable leave-records report): ONE grouped PDF's
+     * worth of per-employee sections -- every direct report in a single document, not
      * one PDF per person. Deliberately built on {@link #teamBalances} rather than a fresh scope
      * query: {@code teamBalances} already resolves "who is my team" via {@link
      * LeaveRepository#findEmployeeOptions} (self OR {@code reports_to_employee_id} = actor, or every
@@ -449,11 +440,11 @@ public class LeaveService {
         validateEmployee(employeeId);
         LeaveTypeDto leaveType = requireLeaveType(request.leaveTypeCode());
         validateDateRange(request.startDate(), request.endDate());
-        // Schedule/holiday-aware working-day counting (2026-08-03): built ONCE per submission and
+        // Schedule/holiday-aware working-day counting: built ONCE per submission and
         // shared by every LeaveDayMath call below (validateSubDayTimes, computeTotalDays,
         // totalDaysByYear) -- see LeaveRepository#workingDayPredicate's javadoc for the fixed query
         // cost (two queries, not one per day) and LeaveDayMath's javadoc for the six-day-department/
-        // holiday defects this closes. Range starts at today+1 when earlier than the start date so the
+        // holiday handling. Range starts at today+1 when earlier than the start date so the
         // advance-notice gate can reuse it (widening only adds holidays outside the leave).
         LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
         LocalDate predicateFrom = request.startDate().isBefore(noticeFrom) ? request.startDate() : noticeFrom;
@@ -492,9 +483,9 @@ public class LeaveService {
             leaveType, isWorkingDay);
         int quotaYear = request.startDate().getYear();
         boolean hasAttachment = attachment != null && !attachment.isEmpty();
-        // Leave -> payroll unpaid-day deduction (2026-07-23); §5 leave-rules-as-data (V116) added the
-        // once-per-employment/min-service/max-consecutive-days/per-type-notice gates. The gate no
-        // longer auto-rejects purely for exceeding quota. A rule-passing request splits the requested
+        // Leave -> payroll unpaid-day deduction; the §5 gates are
+        // once-per-employment/min-service/max-consecutive-days/per-type-notice. The gate does
+        // not auto-reject purely for exceeding quota. A rule-passing request splits the requested
         // days into paidDays (bounded by both the remaining statutory quota AND, if the type has one,
         // the remaining paid-days-cap allowance -- see boundByPaidCap) and unpaidDays (no-work-no-pay,
         // deducted downstream in payroll at base/30 per unpaid WORKING day -- see
@@ -502,45 +493,41 @@ public class LeaveService {
         // auto-reject reasons. See docs/agent-handoffs for the HR/legal sign-off caveat the
         // quota-based split still needs before it drives a real payroll run.
         // evaluateDepartmentCoverage = true, always -- a real submission must evaluate the FULL gate
-        // chain, exactly as before Phase A0b added the QUICK-preview skip; see AutoRejectResult's
+        // chain (only the QUICK preview skips it); see AutoRejectResult's
         // Javadoc and #preview's Javadoc for the only caller that ever passes `false`.
         AutoRejectResult autoReject = autoRejectNote(leaveType, employeeId, request.startDate(), request.endDate(),
             hasAttachment, totalDays, purposeCode, requestedAsEmergency, true, isWorkingDay);
-        // Phase A0a (structured rejection outcome): `blocking` carries the machine-readable
-        // LeaveRuleCode + params alongside the same Thai sentence that used to be the ONLY thing
-        // #autoRejectNote returned -- systemNote/status derive from it exactly as before, since
+        // Structured rejection outcome: `blocking` carries the machine-readable
+        // LeaveRuleCode + params alongside the Thai sentence --
+        // systemNote/status derive from it, since
         // `outcome == null` (rule chain passed) and `outcome.messageTh() == null` never happens (see
         // LeaveRuleOutcome#of, which always renders a non-null sentence for a non-null code).
         LeaveRuleOutcome outcome = autoReject.blocking();
         String systemNote = outcome == null ? null : outcome.messageTh();
-        // Leave requires approval (2026-08-05, owner ruling): a rule-passing request used to become
-        // APPROVED here, instantly, with no human in the loop -- SUBMITTED was unreachable from this
-        // method. It now lands SUBMITTED and waits for #approve/#reject (both already guard
-        // requireStatus(existing, SUBMITTED), and were dead code from this path until now). A
-        // rule-BREAKING request is unaffected: it still lands AUTO_REJECTED, exactly as before -- the
-        // owner ruling explicitly keeps every auto-reject gate as-is and changes only the rule-passing
-        // branch. Back-dated filing (ส่งลาย้อนหลัง) still submits fine; it simply also waits for a
+        // Leave requires approval: a rule-passing request lands SUBMITTED and waits for
+        // #approve/#reject (both guard requireStatus(existing, SUBMITTED)), never APPROVED
+        // instantly. A rule-BREAKING request lands AUTO_REJECTED.
+        // Back-dated filing (ส่งลาย้อนหลัง) still submits fine; it simply also waits for a
         // human to approve it, same as any other request.
         LeaveStatus status = systemNote == null ? LeaveStatus.SUBMITTED : LeaveStatus.AUTO_REJECTED;
 
-        // V118 cross-year quota fix (2026-08-02): extracted (Phase A0b) to #computeQuotaSplit -- see
+        // The quota split lives in #computeQuotaSplit -- see
         // that method's Javadoc. #preview calls the same method, so a previewed figure and what
         // #submit persists can never drift apart.
         //
-        // Leave requires approval: `outcome == null` replaces the old `status == LeaveStatus.APPROVED`
-        // here -- an EQUIVALENT condition (status was APPROVED exactly when outcome was null), not a
-        // behaviour change, since #approve/#reject never touch the split computed here. Payroll is
+        // `outcome == null` means the rule chain passed. #approve/#reject never touch the split
+        // computed here. Payroll is
         // therefore unaffected: findUnpaidLeaveDaysByEmployeeForMonth still only reads APPROVED rows,
         // so a SUBMITTED request's already-correct unpaid_days simply sits inert until #approve flips
         // the status -- no recomputation, nothing to drift.
-        // §5.3.5 pool choice (V161): the requester's own declaration, resolved to its concrete
+        // §5.3.5 pool choice: the requester's own declaration, resolved to its concrete
         // default here (once, outside computeQuotaSplit's per-year loop, since the choice is a
         // whole-request property, not a per-year one) -- see LeaveQuotaPoolPreference#orDefault.
         LeaveQuotaPoolPreference quotaPoolPreference = LeaveQuotaPoolPreference.orDefault(request.quotaPoolPreference());
-        // V164 (owner-approved change, 2026-09-09): autoReject.unpaidByRuleDays() -- ALWAYS
+        // autoReject.unpaidByRuleDays() -- ALWAYS
         // BigDecimal.ZERO when `outcome != null` (AutoRejectResult.reject builds it that way; see
-        // that record's Javadoc) -- is excluded from the quota-eligible pool BEFORE quota math runs,
-        // per owner ruling #1: unpaid-by-rule days consume NO quota. See #computeQuotaSplit's Javadoc.
+        // that record's Javadoc) -- is excluded from the quota-eligible pool BEFORE quota math runs:
+        // unpaid-by-rule days consume NO quota. See #computeQuotaSplit's Javadoc.
         QuotaSplitResult quotaSplit = computeQuotaSplit(
             employeeId, leaveType, request.startDate(), request.endDate(), totalDays, isWorkingDay,
             quotaYear, outcome == null, quotaPoolPreference, autoReject.unpaidByRuleDays(), spanFractions);
@@ -601,11 +588,11 @@ public class LeaveService {
         if (outcome != null) {
             leaveRepository.recordAutoRejectReason(id, outcome.code(), outcome.params());
         }
-        // §5 WARN_UNPAID_* gates (V164, owner-approved change, 2026-09-09): same small-follow-up-
+        // §5 WARN_UNPAID_* gates: same small-follow-up-
         // UPDATE-by-id shape as markEmergencyFiling/recordAutoRejectReason above, for the identical
         // reason. Only called when at least one WARN gate fired -- rule_warnings stays NULL and
         // unpaid_by_rule_days stays its SQL DEFAULT of 0 otherwise (see LeaveRepository
-        // #recordRuleWarnings' Javadoc). Owner ruling #2: this is what makes the warning reach the
+        // #recordRuleWarnings' Javadoc). This is what makes the warning reach the
         // approver via LeaveRequestDto -- see #requireRequest/LeaveRepository#mapRequest below.
         if (!autoReject.warnings().isEmpty()) {
             leaveRepository.recordRuleWarnings(id, autoReject.warnings(), autoReject.unpaidByRuleDays());
@@ -640,13 +627,12 @@ public class LeaveService {
     }
 
     /**
-     * POST /api/leave/preview (Phase A0b dry-run): runs the IDENTICAL gate chain {@link #submit}
+     * POST /api/leave/preview (dry-run): runs the IDENTICAL gate chain {@link #submit}
      * runs -- {@link #eligibilityRuleOutcome} (always) and, when dates are supplied, {@link
      * #autoRejectNote} (the SAME method #submit calls, with the SAME arguments) -- against an
      * UNCOMMITTED request, and writes nothing: no {@link LeaveRepository#create}, no attachment
-     * storage, no audit record, no notification. Exists because every rule {@link #autoRejectNote}
-     * computes was previously reachable only by actually submitting and receiving an AUTO_REJECTED
-     * row -- there was no way for the frontend to show a verdict before the employee commits.
+     * storage, no audit record, no notification. Exists so the frontend can show a verdict before
+     * the employee commits, rather than only after submitting and receiving an AUTO_REJECTED row.
      *
      * <p><b>{@code depth} (QUICK vs FULL):</b> QUICK skips {@link #departmentCoverageRuleOutcome} --
      * it fans out over every active department colleague's schedule and leave spans (see that
@@ -654,7 +640,7 @@ public class LeaveService {
      * debounce as the user types dates, which cannot afford that fan-out on every keystroke. This is
      * NEVER silent: {@link LeavePreviewDto#coverageEvaluated} is {@code false} whenever the check did
      * not run (QUICK depth, or a gate above it in {@link #autoRejectNote} already blocked first, or
-     * the pre-existing emergency-filing early return skipped it -- see {@link AutoRejectResult}'s
+     * the emergency-filing early return skipped it -- see {@link AutoRejectResult}'s
      * Javadoc), so a caller can never mistake "not evaluated" for "evaluated, and clear". FULL runs
      * everything, exactly as {@link #submit} does -- {@code depth == null} defaults to FULL, the safer
      * reading for a caller that does not specify (a caller who wants the cheap QUICK read must ask
@@ -669,7 +655,7 @@ public class LeaveService {
      * NOT evaluated in this case -- {@link LeavePreviewDto#datesEvaluated} is {@code false} and
      * {@code totalDays}/{@code paidDays}/{@code unpaidDays}/{@code quotaYearSplits} are all {@code
      * null}/empty, so the response can never be misread as "approved" when most of the gate chain
-     * never ran. This is the explicit representation the brief for this phase asks for.
+     * never ran.
      *
      * <p>{@code hasAttachment}/{@code requestedAsEmergency}/{@code purposeCode} are the caller's OWN
      * declarations, exactly as {@link #submit} treats them -- this endpoint cannot verify a file was
@@ -681,7 +667,7 @@ public class LeaveService {
      * CURRENT calendar month (see {@link #previewCounters}), not to the request's own dates, so
      * neither needs them.
      *
-     * <p><b>{@code ruleWarnings}/{@code unpaidByRuleDays} (V164 follow-up, 2026-09-09):</b> the SAME
+     * <p><b>{@code ruleWarnings}/{@code unpaidByRuleDays}:</b> the SAME
      * §5 WARN_UNPAID_* signal {@link #submit} persists to {@code rule_warnings}/{@code
      * unpaid_by_rule_days}, surfaced here so the pre-submit live check can show it too -- see {@link
      * LeavePreviewDto}'s own Javadoc for the full field contract. Populated from the IDENTICAL {@link
@@ -905,12 +891,11 @@ public class LeaveService {
     }
 
     /**
-     * Notification coverage gap B: cancelling a request used to notify nobody, so a withdrawn item
-     * sat in a reviewer's queue forever. Notifies the requester unconditionally, plus the direct
+     * Cancelling a request notifies the requester unconditionally, plus the direct
      * manager IF the request was still pending review ({@code before.status() == SUBMITTED}) and a
      * direct manager is on file. {@code before.status() == APPROVED} has no PENDING reviewer, but
      * cancelling it reverses payroll-relevant state ({@link #recordPayrollCorrectionIfNeeded} writes
-     * a correction) -- D1 (owner ruling): whoever actually approved it, read from {@code
+     * a correction) -- so whoever actually approved it, read from {@code
      * before.reviewedById()} (the same column {@link #approve} itself writes the actor into -- HR or
      * the direct manager, whichever reviewed it), is told.
      *
@@ -919,33 +904,29 @@ public class LeaveService {
      * reviewer -- HR in general, via {@code REVIEW_ALL_ROLES} -- is a role bucket, not a stored
      * account: role is derived per-employee by {@code DivisionAccessPolicy#roleFor}. A resolver for
      * "every employee whose derived role is hr" exists ({@link EmployeeRepository#findHrEmployeeIds},
-     * added by this same leave-requires-approval change (2026-08-05) as the no-manager-of-record
-     * fallback in {@link #notifyPendingApproval}, which is its only caller -- {@code
-     * ProfileRequestService} has no notification code of its own to have been added alongside), so
-     * it is not infeasible here -- it is simply not
+     * the no-manager-of-record
+     * fallback in {@link #notifyPendingApproval}, which is its only caller), so
+     * it is feasible here -- it is simply not
      * NEEDED here, since every leave cancellation already has a specific person to notify (the direct
-     * manager, or -- for D1 -- the specific reviewer who approved it), and broadcasting to the whole
-     * HR division on every leave cancellation was not asked for and would be noisy for a case that
+     * manager, or the specific reviewer who approved it), and broadcasting to the whole
+     * HR division on every leave cancellation would be noisy for a case that
      * already reaches the person who can act.
      *
-     * <p>Review finding (BLOCKING 1): the approver-facing message used to hardcode {@code
-     * before.employeeName()} as if the employee themselves always did the cancelling, and never
-     * excluded the actor from the notified set -- a direct manager cancelling their own report's
-     * SUBMITTED request (reachable via {@code isDirectManager}, not just HR) was emailed about the
-     * cancellation they themselves had just performed. Fixed by threading {@code actorEmployeeId}/
-     * {@code actorName} (the caller of {@link #cancel}) through: the approver-facing message is
-     * worded from the actual actor, and the manager/reviewer notification is skipped when they ARE
-     * the actor.
+     * <p>The approver-facing message is worded from the actual actor ({@code actorEmployeeId}/
+     * {@code actorName}, the caller of {@link #cancel}), never assuming the employee did the
+     * cancelling, and the manager/reviewer notification is skipped when they ARE the actor -- a
+     * direct manager cancelling their own report's SUBMITTED request (reachable via {@code
+     * isDirectManager}, not just HR) must not be notified about the cancellation they themselves
+     * just performed.
      *
-     * <p>Review finding (S5): the employee-facing wording used to key off {@code after.reviewedById()
-     * != null}, which is {@code true} whenever a reviewer-shaped actor cancelled -- including an HR
-     * employee cancelling their OWN request (reachable: {@code canReviewAll} grants any "hr"-role
-     * account blanket reviewer status, independent of whose request it is, and role is derived live
-     * from the employee's CURRENT division, so a request submitted before that employee moved into
-     * HR can still be sitting SUBMITTED afterwards). That produced "ถูกยกเลิกโดย <own name>" for a
-     * genuine self-cancel. Keyed off {@code actorEmployeeId == after.employeeId()} instead, which is
-     * exactly "did the person taking this action own the request", regardless of what role let them
-     * take it.
+     * <p>The employee-facing wording keys off {@code actorEmployeeId == after.employeeId()}, not
+     * {@code after.reviewedById() != null}: the latter is {@code true} whenever a reviewer-shaped
+     * actor cancelled -- including an HR employee cancelling their OWN request (reachable: {@code
+     * canReviewAll} grants any "hr"-role account blanket reviewer status, independent of whose
+     * request it is, and role is derived live from the employee's CURRENT division, so a request
+     * submitted before that employee moved into HR can still be sitting SUBMITTED afterwards) and
+     * would produce "ถูกยกเลิกโดย <own name>" for a genuine self-cancel. The actor check is exactly
+     * "did the person taking this action own the request", regardless of what role let them take it.
      */
     private void notifyCancelled(LeaveRequestDto before, LeaveRequestDto after, long actorEmployeeId, String actorName) {
         String actorLabel = actorName == null || actorName.isBlank() ? "หัวหน้างานหรือ HR" : actorName;
@@ -990,8 +971,7 @@ public class LeaveService {
     }
 
     /**
-     * Cancel-after-close reversal (2026-07-23; AUTO-REFUND added 2026-07-23 same day, owner
-     * decision -- the original record-and-surface-only v1 was not enough). Cancelling a leave
+     * Cancel-after-close reversal with auto-refund. Cancelling a leave
      * request is allowed unconditionally regardless of whether it overlaps an already-PROCESSED
      * payroll month (nothing above this method blocks that). Once a leave's month has been
      * processed, though, its unpaid-day deduction already landed in the employee's net pay for a
@@ -1018,17 +998,16 @@ public class LeaveService {
         if (unpaidDays == null || unpaidDays.signum() <= 0) {
             return;
         }
-        // V118 cross-year quota fix: reads the request's per-year attribution and composes the
+        // Reads the request's per-year attribution and composes the
         // per-month unpaid breakdown via LeaveDayMath#unpaidWorkingDaysByMonthAcrossYears, NOT the
         // parent's aggregate paidDays/totalDays -- see that method's Javadoc for why the aggregate
-        // figures can no longer be fed into a single whole-request chronological-rank threshold once
+        // figures cannot be fed into a single whole-request chronological-rank threshold, since
         // paid-day consumption resets per calendar year (a request can be "paid, then unpaid" in an
-        // earlier year and "paid" again from the start of a later one; the old aggregate-only call
-        // would have misattributed which calendar days -- and so which months -- are unpaid in that
-        // case). For every pre-V118 (single-year) request this produces the identical result as
-        // before.
+        // earlier year and "paid" again from the start of a later one; an aggregate-only call
+        // would misattribute which calendar days -- and so which months -- are unpaid in that
+        // case).
         //
-        // §5.4 MATERNITY calendar-day counting (V119): the basis used to REVERSE a cancellation must
+        // §5.4 MATERNITY calendar-day counting: the basis used to REVERSE a cancellation must
         // be the SAME basis used to GRANT it, or the recomputed unpaid-by-month figures would not
         // match what was actually deducted -- see LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth's
         // Javadoc for the identical decision on the forward (deduction) path. Falls back to
@@ -1038,7 +1017,7 @@ public class LeaveService {
             .map(LeaveTypeDto::dayCountBasis)
             .orElse(LeaveDayCountBasis.WORKING_DAYS);
         List<LeaveQuotaYearSplit> quotaYearSplits = leaveRepository.findQuotaYearSplits(cancelled.id());
-        // Schedule/holiday-aware working-day counting (2026-08-03): same reasoning as #submit --
+        // Schedule/holiday-aware working-day counting: same reasoning as #submit --
         // the reversal must use the SAME per-employee working-day predicate that granted the
         // request, or the recomputed unpaid-by-month figures would not match what was actually
         // deducted (mirrors the basis decision in the comment above, one paragraph up).
@@ -1143,8 +1122,7 @@ public class LeaveService {
     }
 
     /**
-     * V118 cross-year quota fix (2026-08-02), extracted verbatim in Phase A0b from {@link #submit}
-     * (previously inline there -- see git blame for the original comment this Javadoc preserves): a
+     * Cross-year quota split, shared by {@link #submit} and {@link #preview}: a
      * request's days are attributed per calendar year (almost always just one -- two only for a
      * request spanning 31 Dec/1 Jan, e.g. a long MATERNITY request -- see {@link LeaveQuotaYearSplit}).
      * Each year's paidDays/unpaidDays/remaining figures are computed INDEPENDENTLY against that
@@ -1153,9 +1131,9 @@ public class LeaveService {
      * a same-year one would).
      *
      * <p>{@code approved} means "the rule chain did not block this request" ({@code outcome == null}
-     * in both {@link #submit} and {@link #preview} -- see #submit's own call site comment, added when
-     * leave stopped auto-approving (2026-08-05), for why this is deliberately NOT {@code status ==
-     * LeaveStatus.APPROVED}: {@link #submit} now persists a rule-passing request as SUBMITTED, not
+     * in both {@link #submit} and {@link #preview} -- see #submit's own call site comment
+     * for why this is deliberately NOT {@code status ==
+     * LeaveStatus.APPROVED}: {@link #submit} persists a rule-passing request as SUBMITTED, not
      * APPROVED, and #approve/#reject never recompute or touch this split -- the entitlement computed
      * here with {@code approved = true} is the one that survives, unchanged, all the way through a
      * later human approval. An AUTO_REJECTED request (the only case {@code approved = false} is ever
@@ -1168,7 +1146,7 @@ public class LeaveService {
      * and the figure {@link #submit} would actually persist can never drift apart through two separate
      * copies of this arithmetic.
      *
-     * <p><b>§5.3.5 pool split (V161, 2026-09-03):</b> within each year's {@code approved} branch, the
+     * <p><b>§5.3.5 pool split:</b> within each year's {@code approved} branch, the
      * quota-consuming amount -- {@code quotaBoundedPaidDaysYear}, NOT {@code daysInYear}/{@code
      * totalDays} (unpaid days consume no quota) and NOT {@code paidDaysYear} (narrowed a second time
      * by {@link #boundByPaidCap}, independently of quota) -- is split across the carry-in and
@@ -1181,12 +1159,11 @@ public class LeaveService {
      * pool-specific "used" sums this method reads can never exceed the aggregate "used" {@link
      * #remainingDays} itself reads -- see {@link LeaveRepository#sumCarriedInDaysUsed}/{@link
      * LeaveRepository#sumOwnQuotaDaysUsed}'s Javadoc and {@code chk_lrqy_pool_matches_consumed},
-     * V161, which is what keeps that inequality true for every row, including the V161-migration
-     * backfilled ones). A rule chain that would reject a request for not fitting in ONE pool was
+     * which is what keeps that inequality true for every row, including backfilled ones). A rule chain that would reject a request for not fitting in ONE pool was
      * explicitly NOT approved -- spillover is the intended behaviour, not a fallback for an error.
      *
-     * <p><b>V164 unpaid-by-rule exclusion (owner-approved change, 2026-09-09, owner ruling #1 --
-     * "the single most important correctness property of this change"):</b> {@code unpaidByRuleDays}
+     * <p><b>Unpaid-by-rule exclusion (the single most important correctness property here):</b>
+     * {@code unpaidByRuleDays}
      * (from {@link AutoRejectResult#unpaidByRuleDays()} -- ALWAYS {@link BigDecimal#ZERO} for a
      * rejected or warning-free request) is allocated across years by {@link
      * #allocateUnpaidByRuleAcrossYears} -- consumed from the LATEST year backward, since a
@@ -1200,7 +1177,7 @@ public class LeaveService {
      * simply never entered the SQL those methods read. {@code unpaidDaysYear} (= {@code daysInYear -
      * paidDaysYear}) still naturally INCLUDES the unpaid-by-rule slice alongside any ordinary
      * quota-exceeded unpaid days -- {@code hr.leave_request.unpaid_by_rule_days} is a recorded SUBSET
-     * of {@code unpaid_days}, never a third bucket (chk_leave_paid_unpaid_sum, V85/V87, is
+     * of {@code unpaid_days}, never a third bucket (chk_leave_paid_unpaid_sum is
      * unaffected).
      */
     private QuotaSplitResult computeQuotaSplit(
@@ -1235,7 +1212,7 @@ public class LeaveService {
             // pre-existing min-service-months and PERSONAL-probation gates already evaluate tenure
             // as of the request's start date, not "today".
             BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year, startDate);
-            // V164: this year's slice of unpaidByRuleDays, computed regardless of `approved` -- see
+            // This year's slice of unpaidByRuleDays, computed regardless of `approved` -- see
             // this method's Javadoc. ZERO for a not-approved (rejected) request, since `unpaidByRuleByYear`
             // is built from `unpaidByRuleDays`, which {@link AutoRejectResult#reject} always sets to
             // ZERO, so `unpaidByRuleByYear` is empty in that case and this getOrDefault falls through.
@@ -1246,7 +1223,7 @@ public class LeaveService {
             BigDecimal carriedInDaysYear;
             BigDecimal ownQuotaDaysYear;
             if (approved) {
-                // V164: this year's slice of unpaidByRuleDays is removed from the quota-eligible pool
+                // This year's slice of unpaidByRuleDays is removed from the quota-eligible pool
                 // BEFORE the quota-bounding min() below -- see this method's Javadoc.
                 BigDecimal quotaEligibleDaysInYear = daysInYear.subtract(unpaidByRuleDaysYear);
                 // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological
@@ -1254,7 +1231,7 @@ public class LeaveService {
                 // represent, matching the natural reading of "day N of this year onward went unpaid".
                 // See LeaveDayMath.
                 BigDecimal quotaBoundedPaidDaysYear = remainingBeforeYear.min(quotaEligibleDaysInYear).max(BigDecimal.ZERO);
-                // §5.4 MATERNITY-shaped rule (V116): paid_days_cap bounds how many of THOSE days are
+                // §5.4 MATERNITY-shaped rule: paid_days_cap bounds how many of THOSE days are
                 // paid, independently of the quota -- e.g. a 44-day slice of a MATERNITY request
                 // still gets bounded by that same year's 45-day paid_days_cap.
                 paidDaysYear = boundByPaidCap(employeeId, leaveType, year, quotaBoundedPaidDaysYear);
@@ -1307,7 +1284,7 @@ public class LeaveService {
     }
 
     /**
-     * V164 unpaid-by-rule exclusion (owner-approved change, 2026-09-09): distributes {@code
+     * Unpaid-by-rule exclusion: distributes {@code
      * unpaidByRuleDays} (a whole-request amount -- see {@link AutoRejectResult#unpaidByRuleDays()})
      * across the years {@code requestedDaysByYear} touched, consumed from the LATEST year BACKWARD,
      * each year bounded by its own {@code daysInYear} -- see {@link #computeQuotaSplit}'s Javadoc for
@@ -1317,8 +1294,8 @@ public class LeaveService {
      * its keys into a list once, then walks it back-to-front, rather than assuming any ordering of
      * its own. Returns only the years that actually received a non-zero slice (never a zero entry) --
      * callers use {@link Map#getOrDefault} against {@link BigDecimal#ZERO} for every other year, the
-     * same null-safe-by-absence convention {@code requestedDaysByYear} itself was not needed to keep
-     * (every year IN that map always has real requested days).
+     * same null-safe-by-absence convention (every year IN {@code requestedDaysByYear} always has
+     * real requested days, so it needs no such default).
      */
     private static Map<Integer, BigDecimal> allocateUnpaidByRuleAcrossYears(
             Map<Integer, BigDecimal> requestedDaysByYear, BigDecimal unpaidByRuleDays) {
@@ -1420,7 +1397,7 @@ public class LeaveService {
     }
 
     /**
-     * §5.3.5 VACATION carry-forward (V127): returns (computing and memoizing on first need) the
+     * §5.3.5 VACATION carry-forward: returns (computing and memoizing on first need) the
      * grant {@code earnedYear} produces for {@code earnedYear + 1} -- i.e. {@code earnedYear}'s own
      * unused quota, capped so it can never itself have been inflated by a still-live carry-in from
      * {@code earnedYear - 1} (see the non-accumulation note below).
@@ -1447,7 +1424,7 @@ public class LeaveService {
      * "use-it-or-lose-it" reading -- the pool that is about to expire unconditionally is drawn down
      * first, preserving as much of the renewable annual quota as possible for the NEXT
      * carry-forward. Consequence, worked (requester used the CARRIED_IN_FIRST default throughout --
-     * see the V161 paragraph below for what changes when they do not): employee has a 6.00 own quota
+     * see the pool-choice paragraph below for what changes when they do not): employee has a 6.00 own quota
      * for {@code earnedYear} plus a 2.00 carry-in from {@code earnedYear - 1} (8.00 total available)
      * and takes exactly 6.00 days during {@code earnedYear}.
      * <pre>
@@ -1458,38 +1435,31 @@ public class LeaveService {
      *                           grants 0.00 into earnedYear+1.
      * </pre>
      *
-     * <p><b>§5.3.5 pool choice (V161, 2026-09-03): carryOut is now RECORDED, not INFERRED.</b> Before
-     * this change, carry-in-first was the ONLY possible consumption order, so the two worked cases
-     * above could be told apart purely by ARITHMETIC, with no need to know which specific request
-     * drew from which pool: {@code carryOut = min(ownQuota, max(0, ownQuota + carriedIn - used))}
-     * (where {@code used} is the aggregate {@link LeaveRepository#sumUsedDays}) happened to give the
-     * right answer for BOTH cases above, because under a carry-in-first-ONLY world "how much was
-     * used in total" and "how much of OWN quota was used" always implied each other via that formula.
-     * {@link LeaveQuotaPoolPreference#OWN_FIRST} (this same change) breaks that implication: now that
-     * an employee can genuinely choose to spend OWN quota first and leave carry-in sitting unused,
-     * the old formula silently ASSUMES carry-in-first happened regardless of what the requester
-     * actually chose. Worked counter-example, same 6.00-own/2.00-carried-in/6.00-taken numbers as
-     * above but under {@code OWN_FIRST}: the employee's OWN 6.00 quota is exhausted by the 6.00 taken
-     * (the 2.00 carry-in sits completely untouched, and is simply lost at year-end -- §5.3.5's own
-     * non-accumulation clause). The OLD formula still computes {@code min(6, max(0, 6+2-6)) = 2.00}
-     * -- WRONG, since nothing is left of the OWN quota to grant; the correct {@code carryOut} is
-     * {@code 0.00}. The fix: read what {@link LeaveService#computeQuotaSplit} ACTUALLY recorded for
-     * this year's own pool ({@code hr.leave_request_quota_year.own_quota_days}, summed via {@link
-     * LeaveRepository#sumOwnQuotaDaysUsed}) instead of inferring it from the aggregate:
+     * <p><b>§5.3.5 pool choice: carryOut is RECORDED, not INFERRED.</b> Because
+     * {@link LeaveQuotaPoolPreference#OWN_FIRST} lets an employee spend OWN quota first and leave
+     * carry-in sitting unused, the aggregate-arithmetic formula {@code carryOut = min(ownQuota,
+     * max(0, ownQuota + carriedIn - used))} (where {@code used} is the aggregate {@link
+     * LeaveRepository#sumUsedDays}) would silently ASSUME carry-in-first happened regardless of what
+     * the requester actually chose. Worked counter-example, same 6.00-own/2.00-carried-in/6.00-taken
+     * numbers as above but under {@code OWN_FIRST}: the employee's OWN 6.00 quota is exhausted by the
+     * 6.00 taken (the 2.00 carry-in sits completely untouched, and is simply lost at year-end --
+     * §5.3.5's own non-accumulation clause). That formula computes {@code min(6, max(0, 6+2-6)) =
+     * 2.00} -- WRONG, since nothing is left of the OWN quota to grant; the correct {@code carryOut}
+     * is {@code 0.00}. So this method reads what {@link LeaveService#computeQuotaSplit} ACTUALLY
+     * recorded for this year's own pool ({@code hr.leave_request_quota_year.own_quota_days}, summed
+     * via {@link LeaveRepository#sumOwnQuotaDaysUsed}) instead of inferring it from the aggregate:
      * <pre>carryOut = min(ownQuota, max(0, ownQuota - ownUsed))</pre>
-     * Re-run against BOTH worked cases: carry-in-first default (ownUsed = 4.00, since 2.00 of the
-     * 6.00 taken was recorded against the carry-in pool) gives {@code min(6, max(0, 6-4)) = 2.00} --
-     * the SAME answer as before for the common (default-preference) case. OWN_FIRST (ownUsed = 6.00,
-     * the full 6.00 taken was recorded against the own pool) gives {@code min(6, max(0, 6-6)) = 0.00}
-     * -- now correct. {@code carriedIn} is still computed and still persisted into {@code
+     * Against BOTH worked cases: carry-in-first default (ownUsed = 4.00, since 2.00 of the
+     * 6.00 taken was recorded against the carry-in pool) gives {@code min(6, max(0, 6-4)) = 2.00};
+     * OWN_FIRST (ownUsed = 6.00, the full 6.00 taken was recorded against the own pool) gives {@code
+     * min(6, max(0, 6-6)) = 0.00}. {@code carriedIn} is still computed and still persisted into {@code
      * hr.leave_carryover.carried_in_days}/{@code used_days} below (audit-trail inputs, unread by any
-     * query -- see that column's V127 comment), and the recursive call still walks the chain backward
-     * so every earlier year's grant is memoized before this one needs it; only the {@code carryOut}
-     * FORMULA itself changed, not what triggers or persists a grant.
+     * query), and the recursive call still walks the chain backward
+     * so every earlier year's grant is memoized before this one needs it.
      *
-     * <p><b>Pro-rated first year (V120) DOES carry forward.</b> §5.3.5 says "ปีใด" ("whatever
-     * year"), with no carve-out for a first, pro-rated year, and V120's own parenthetical extends
-     * pro-ration from the identical announcement sentence -- reading one half as carrying an
+     * <p><b>Pro-rated first year DOES carry forward.</b> §5.3.5 says "ปีใด" ("whatever
+     * year"), with no carve-out for a first, pro-rated year, and the pro-ration rule (see
+     * {@link #employeeAnnualQuota}) extends from the identical announcement sentence -- reading one half as carrying an
      * unstated exception the other half does not state is not supported by the text. What it
      * carries is the unused portion of THAT year's own (pro-rated, not flat-6) entitlement:
      * {@code ownQuota} below is {@link #employeeAnnualQuota} evaluated at the EARNED year's own
@@ -1497,13 +1467,13 @@ public class LeaveService {
      * capturing the full pro-rated figure even though {@link #employeeAnnualQuota} would have
      * returned a SMALLER number earlier in that same year (see that method's "quota GROWS as the
      * year progresses" note). This is an INTERPRETATION, like V120's own, not restated company
-     * policy -- flag it as such when reporting this change.
+     * policy.
      *
      * <p><b>Non-accumulation (§5.3.5 "...ได้ในปีต่อไปเท่านั้น"):</b> {@code carryOut} is bounded
      * above by {@code ownQuota} (this method's own year), never by {@code ownQuota + carriedIn} --
      * a carry-in that goes unused this year is simply gone, not re-carried. Enforced twice: here in
      * Java (the {@code .min(ownQuota)}) AND structurally in the DB
-     * ({@code chk_lc_carried_days_bounded_by_own_quota}, V127).
+     * ({@code chk_lc_carried_days_bounded_by_own_quota}).
      */
     private BigDecimal ensureCarryoverGrant(long employeeId, LeaveTypeDto leaveType, int earnedYear) {
         if (earnedYear < CARRY_FORWARD_BASELINE_YEAR) {
@@ -1534,30 +1504,29 @@ public class LeaveService {
     }
 
     /**
-     * §5.2/§5.3 pro-ration for an employee's first year of service (V120, fix for defect 1). V116
-     * seeded VACATION.min_service_months=12 as an outright eligibility floor -- refusing ALL vacation
-     * leave to anyone under a year of service -- when the announcement's actual text grants a
+     * §5.2/§5.3 pro-ration for an employee's first year of service. VACATION has no
+     * outright min-service eligibility floor refusing ALL vacation
+     * leave to anyone under a year of service, because the announcement's actual text grants a
      * pro-rated entitlement instead: "...(กรณีอายุงานไม่ถึงหนึ่งปีให้ลาได้เป็นสัดส่วนตามอายุงาน)"
      * ("in case service duration is under one year, leave is granted in proportion to service
      * duration"), stated identically for PERSONAL in §5.2. Applies only when {@link
-     * LeaveTypeDto#proratedFirstYear()} is TRUE (VACATION, PERSONAL -- see V120's migration comment);
+     * LeaveTypeDto#proratedFirstYear()} is TRUE (VACATION, PERSONAL);
      * every other type returns its flat {@link LeaveTypeDto#annualQuotaDays()} unchanged.
      *
-     * <p><b>INTERPRETATION, not stated company policy (pending owner confirmation -- flag this when
-     * reporting the change, do not describe it as settled).</b> The announcement gives no formula,
+     * <p><b>INTERPRETATION, not stated company policy (pending owner confirmation).</b> The announcement gives no formula,
      * only "เป็นสัดส่วนตามอายุงาน" ("in proportion to service duration"). This method reads that as:
      *
      * <pre>quota × (completed months of service, capped at 12, ÷ 12)</pre>
      *
      * rounded to the NEAREST 0.5 DAY (HALF_UP) -- 0.5 is the natural increment since sub-day leave
-     * (V90) already makes the schema and UI support a half day; there is no reason to round to a
-     * whole day and reintroduce the exact "denies more than it should / grants more than it should"
-     * tension this fix exists to remove.
+     * already makes the schema and UI support a half day; rounding to a whole day would reintroduce
+     * the "denies more than it should / grants more than it should" tension pro-ration exists to
+     * remove.
      *
      * <p><b>"Completed months of service" is measured as {@code hire_date} to {@code asOf}, capped at
-     * {@value #FULL_SERVICE_MONTHS}, DELIBERATELY NOT bounded to the calendar quota year.</b> An
-     * earlier draft of this method bounded the month-count to the calendar year being quoted (i.e.
-     * {@code max(hireDate, 1 Jan of quotaYear)} through {@code min(asOf, 31 Dec of quotaYear)}), which
+     * {@value #FULL_SERVICE_MONTHS}, DELIBERATELY NOT bounded to the calendar quota year.</b>
+     * Bounding the month-count to the calendar year being quoted (i.e.
+     * {@code max(hireDate, 1 Jan of quotaYear)} through {@code min(asOf, 31 Dec of quotaYear)})
      * is wrong in both directions: it wrongly PRO-RATES a 10-year veteran's mid-year request (their
      * service "within the year" only reaches 12 months at the 31 Dec mark, understating a request
      * filed in July), and it wrongly grants a January-hired employee the FULL quota on day one (by 31
@@ -1572,9 +1541,8 @@ public class LeaveService {
      * call sites), a first-year employee's quota GROWS as the calendar year progresses -- two
      * VACATION requests filed months apart by the same not-yet-1-year employee can see a different
      * quota figure, larger for the later one. This is the natural reading of an accruing, tenure-based
-     * entitlement (the employee has genuinely earned more by the later date), not a bug; flagged here
-     * so it is not "corrected" into a single fixed-at-submission-year number without knowing this was
-     * intentional.
+     * entitlement (the employee has genuinely earned more by the later date), not a bug; do not
+     * "correct" it into a single fixed-at-submission-year number.
      *
      * <p>A missing {@code hire_date} returns {@link BigDecimal#ZERO} rather than throwing -- the
      * submission path never reaches this method with a missing hire date (see the dedicated
@@ -1622,7 +1590,7 @@ public class LeaveService {
     }
 
     /**
-     * §5.2 PERSONAL "passed probation" gate (review fix, V116). Extracted to its own method so the
+     * §5.2 PERSONAL "passed probation" gate. Its own method so the
      * decision is unit-testable in isolation from the rest of {@link #autoRejectNote}'s branches --
      * see {@code LeaveServiceTest} for the Mockito-level reject/allow/NULL-hire_date/
      * NULL-probation_days/probation_days=0 coverage, and {@code LeaveTypeRuleIntegrationTest} for
@@ -1631,7 +1599,7 @@ public class LeaveService {
      *
      * <p>Resolves "passed probation" through the SAME shared function
      * {@code SpecialMoneyPolicyEvaluator#hasPassedProbation} uses for special-money aid eligibility
-     * (owner ruling, 2026-08-03): {@code hr.employee.confirm_date}, when present, is authoritative
+     * (owner ruling): {@code hr.employee.confirm_date}, when present, is authoritative
      * and the employee is eligible the day AFTER it; otherwise falls back to {@code hire_date +
      * probation_days}, where {@code probation_days} falls back to {@link
      * SpecialMoneyPolicyEvaluator#DEFAULT_PROBATION_DAYS} when NULL on the employee row. Calling the
@@ -1646,8 +1614,7 @@ public class LeaveService {
      *
      * @return a rejection outcome ({@link LeaveRuleCode#PROBATION_HIRE_DATE_MISSING} or
      *     {@link LeaveRuleCode#PROBATION_NOT_PASSED}), or {@code null} if the employee has passed
-     *     probation. (Phase A0a: was a plain English rejection message; the DECISION this method
-     *     makes is unchanged, only its return shape is now structured -- see {@link LeaveRuleOutcome}.)
+     *     probation. The outcome is structured -- see {@link LeaveRuleOutcome}.
      */
     private LeaveRuleOutcome personalProbationRuleOutcome(
             LeaveTypeDto leaveType, long employeeId, LocalDate startDate, BigDecimal totalDays) {
@@ -1683,15 +1650,14 @@ public class LeaveService {
         return LeaveRuleOutcome.of(LeaveRuleCode.PROBATION_NOT_PASSED, Map.of(
             "leaveTypeNameTh", leaveType.nameTh(),
             // Thai-reader date, e.g. "12 กันยายน 2569" -- NEVER LocalDate.toString()'s ISO CE form.
-            // See LeaveRuleMessages's class Javadoc (final copy rules, V164, 2026-09-09).
+            // See LeaveRuleMessages's class Javadoc (copy rules).
             "probationEndsOn", ThaiText.date(probationEndsOn),
             "days", formatDays(daysForMessage)));
     }
 
     /**
-     * §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). Replaces the old
-     * "SICK requires an attachment, full stop" rule with the combined reading of the announcement's
-     * single sentence:
+     * §5.1 SICK certificate + filing-window + no-certificate tolerance: the combined reading of
+     * the announcement's single sentence (not "SICK requires an attachment, full stop"):
      *
      * <pre>
      * (ต้องมีใบรับรองแพทย์ และยื่นใบลาภายใน 3 วันทำการ) ได้ไม่เกิน 30 วันต่อปี โดยได้รับค่าจ้างตามปกติ
@@ -1710,7 +1676,7 @@ public class LeaveService {
      * | no       | n/a                  | >= tolerance (4th+)        | REJECT -- needs a certificate |
      * </pre>
      *
-     * <p><b>The interaction the task exists to get right:</b> the filing-window clause is
+     * <p><b>The interaction to get right:</b> the filing-window clause is
      * grammatically part of the CERTIFICATE sentence, not the tolerance sentence -- so a
      * certificate-less request is judged ONLY against the monthly occasion count, NEVER against the
      * 3-working-day window. A certificate-less request filed long after its own start date is still
@@ -1730,14 +1696,14 @@ public class LeaveService {
      * <p><b>Filing-window reference date:</b> the announcement names no explicit reference event.
      * This reads "ยื่นใบลาภายใน 3 วันทำการ" (file the leave form within 3 working days) as 3 working
      * days from the leave's own {@code startDate} -- {@code hr.leave_request} has no separate "date
-     * of illness" field (see V124's migration comment), so start_date is the only available proxy.
+     * of illness" field, so start_date is the only available proxy.
      * "Now" is {@link #clock}'s {@code LocalDate.now(clock)} AT SUBMISSION, the same reference point
      * the advance-notice check two branches below already uses -- not {@code hr.leave_request
      * .requested_at}, which is not yet known until after {@link #submit}'s {@code INSERT}.
      *
      * <p><b>Working-day counting caveat:</b> {@link LeaveDayMath#addWorkingDays} counts Mon-Fri only,
-     * with no holiday calendar -- a known, PRE-EXISTING, separately-owned defect (see CLAUDE.md and
-     * {@link LeaveDayMath}'s class Javadoc). NOT fixed here. Unlike {@code advanceNoticeDays}
+     * with no holiday calendar -- a known, separately-owned limitation (see CLAUDE.md and
+     * {@link LeaveDayMath}'s class Javadoc). Unlike {@code advanceNoticeDays}
      * elsewhere in this file (deliberately CALENDAR-day, to sidestep this exact dependency), the
      * filing window is genuinely working-day per the announcement's own "วันทำการ" wording and
      * cannot avoid it.
@@ -1748,7 +1714,7 @@ public class LeaveService {
      * precedent {@code quotaYear} already uses (see {@link #submit}). Only certificate-less ({@code
      * attachment_id IS NULL}) SICK requests in {@link #ACTIVE_QUOTA_STATUSES} count -- a CANCELLED
      * occasion releases its slot (the employee never actually took uncertified leave that month),
-     * matching the once-per-employment guard's identical cancel-releases-the-claim precedent (V116).
+     * matching the once-per-employment guard's identical cancel-releases-the-claim precedent.
      * The count is computed fresh from {@code hr.leave_request} on every call (see {@link
      * LeaveRepository#countNoCertificateRequestsInMonth}) -- a rolling allowance, never a stored
      * counter that could drift.
@@ -1757,8 +1723,7 @@ public class LeaveService {
      *     {@link LeaveRuleCode#SICK_CERTIFICATE_REQUIRED}, or
      *     {@link LeaveRuleCode#SICK_NO_CERT_TOLERANCE_EXHAUSTED}), or {@code null} if the
      *     SICK-specific rule is satisfied (other gates in {@link #autoRejectNote} may still apply).
-     *     (Phase A0a: was a plain English rejection message; the DECISION TABLE above is unchanged,
-     *     only its return shape is now structured -- see {@link LeaveRuleOutcome}.)
+     *     The outcome is structured -- see {@link LeaveRuleOutcome}.
      */
     private LeaveRuleOutcome sickCertificateRuleOutcome(
             LeaveTypeDto leaveType, long employeeId, LocalDate startDate, boolean hasAttachment, BigDecimal totalDays) {
@@ -1778,7 +1743,7 @@ public class LeaveService {
                 return LeaveRuleOutcome.of(LeaveRuleCode.SICK_CERTIFICATE_WINDOW, Map.of(
                     "certificateWindowDays", String.valueOf(filingWindowDays),
                     // Thai-reader date -- NEVER LocalDate.toString()'s ISO CE form. See
-                    // LeaveRuleMessages's class Javadoc (final copy rules, V164, 2026-09-09).
+                    // LeaveRuleMessages's class Javadoc (copy rules).
                     "certificateDeadline", ThaiText.date(deadline),
                     "days", days));
             }
@@ -1801,32 +1766,29 @@ public class LeaveService {
     }
 
     /**
-     * §5.2 emergency-filing exception (V125): the outcome of {@link #autoRejectNote} in the one case
+     * §5.2 emergency-filing exception: the outcome of {@link #autoRejectNote} in the one case
      * that needs to communicate more than a rejection outcome -- whether THIS request was approved
      * specifically because it used the emergency tolerance (so {@link #submit} knows to record
      * {@code emergency_filing = TRUE} via {@link LeaveRepository#markEmergencyFiling}). {@code
      * blocking == null} means approved; {@code emergencyFilingApplied} is only ever {@code true}
      * on an approved outcome (never paired with a non-null {@code blocking}).
      *
-     * <p>Phase A0a: {@code blocking} was a plain English rejection {@code String} ({@code
-     * rejectionNote}); it is now a structured {@link LeaveRuleOutcome} (code + params + rendered
-     * Thai sentence) -- see that record's Javadoc. This is a pure representation change: every call
-     * site below still returns for the exact same reason, under the exact same condition, in the
-     * exact same order as before.
+     * <p>{@code blocking} is a structured {@link LeaveRuleOutcome} (code + params + rendered
+     * Thai sentence) -- see that record's Javadoc.
      *
-     * <p>Phase A0b: {@code coverageEvaluated} records whether {@link #departmentCoverageRuleOutcome}
+     * <p>{@code coverageEvaluated} records whether {@link #departmentCoverageRuleOutcome}
      * actually RAN for this call -- {@code false} for every return that happens before reaching it
-     * (every gate above it in {@link #autoRejectNote}, including the pre-existing emergency-filing
-     * early-return at line ~1451, which already skipped department coverage entirely before this
-     * field existed -- see that call site's own comment) or when the caller passed {@code
+     * (every gate above it in {@link #autoRejectNote}, including the emergency-filing
+     * early-return, which skips department coverage entirely -- see that call site's own comment)
+     * or when the caller passed {@code
      * evaluateDepartmentCoverage = false} (QUICK-depth {@link #preview}); {@code true} only when the
      * method reached and executed {@link #departmentCoverageRuleOutcome}. {@link #submit} always
      * passes {@code evaluateDepartmentCoverage = true}, so this flag is {@code true} for every
-     * submission that reaches that point today -- unchanged observable behaviour for submit.
+     * submission that reaches that point.
      *
-     * <p><b>V164 (owner-approved change, 2026-09-09):</b> {@code warnings} and {@code
-     * unpaidByRuleDays} are the WARN_UNPAID_ALL/WARN_UNPAID_EXCESS counterpart to {@code blocking} --
-     * see {@link LeaveRuleEnforcement} and {@link #autoRejectNote}'s rewritten Javadoc for the
+     * <p>{@code warnings} and
+     * {@code unpaidByRuleDays} are the WARN_UNPAID_ALL/WARN_UNPAID_EXCESS counterpart to {@code blocking} --
+     * see {@link LeaveRuleEnforcement} and {@link #autoRejectNote}'s Javadoc for the
      * BLOCK-short-circuits/WARN-accumulates dispatch. Both are ALWAYS empty/zero whenever {@code
      * blocking != null} ({@link #reject} builds them that way): a BLOCK wins outright, so a rejected
      * request never carries warnings that would otherwise suggest it partially went through. {@code
@@ -1845,9 +1807,9 @@ public class LeaveService {
     }
 
     /**
-     * V164 central BLOCK/WARN dispatch (owner-approved change, 2026-09-09), used throughout {@link
+     * Central BLOCK/WARN dispatch, used throughout {@link
      * #autoRejectNote} and its {@link #eligibilityRuleOutcome} extraction: every individual §5 gate
-     * still just returns its own {@link LeaveRuleOutcome} exactly as before -- this is the ONE place
+     * just returns its own {@link LeaveRuleOutcome} -- this is the ONE place
      * that decides, from {@link LeaveRuleCode#enforcement()}, whether a non-null outcome means "stop
      * evaluating and reject" (BLOCK) or "record it and keep going" (WARN_UNPAID_ALL/
      * WARN_UNPAID_EXCESS -- appended to {@code warnings} in place). Returns {@code true} only when
@@ -1867,7 +1829,7 @@ public class LeaveService {
     }
 
     /**
-     * V164 dominance rule (owner ruling, NOT additive -- see {@link AutoRejectResult}'s Javadoc): if
+     * Dominance rule (owner ruling, NOT additive -- see {@link AutoRejectResult}'s Javadoc): if
      * ANY {@link LeaveRuleEnforcement#WARN_UNPAID_ALL} code is among {@code warnings}, the entire
      * {@code totalDays} is unpaid by rule, full stop -- a WARN_UNPAID_EXCESS firing alongside it
      * contributes nothing extra. Only when no WARN_UNPAID_ALL fired does this become the MAX (never
@@ -2007,7 +1969,7 @@ public class LeaveService {
     /**
      * True if at least one date in [{@code from}, {@code to}] (inclusive) is a day the employee would
      * actually have worked, per {@link LeaveRepository#workingDayPredicate} (schedule/holiday-aware,
-     * see V115/V117/V121 and #470's LeaveDayMath rework). An empty/invalid range ({@code from} after
+     * see LeaveDayMath). An empty/invalid range ({@code from} after
      * {@code to}, i.e. the two spans are adjacent with no days between them at all) returns {@code
      * false} -- no possible working day, so still contiguous.
      */
@@ -2031,8 +1993,8 @@ public class LeaveService {
      *
      * <p><b>OWNER RELAXATION -- implemented here, NOT the literal text above:</b> the "&gt;1 year
      * tenure" qualifier is DROPPED. The rule actually enforced is simply: at least one employee of the
-     * department must be at work. Do not reintroduce a tenure check into this method; it was
-     * deliberately removed, not missed.
+     * department must be at work. Do not reintroduce a tenure check into this method; it is
+     * deliberately absent.
      *
      * <p>Binds at DEPARTMENT level. A PENDING (SUBMITTED) request counts as absent, the same as an
      * APPROVED one -- first-come-first-served, so two colleagues are never both told "yes" for the
@@ -2048,9 +2010,9 @@ public class LeaveService {
      * type qualifier here (contrast §5.3.3/§5.3.4, which both explicitly name their types), and this
      * reading is an owner-confirmed ruling: SICK included, the department-size floor above the only
      * carve-out. This means even SICK leave -- typically unplanned/urgent -- can be blocked if
-     * approving it would leave a &ge;3-person department empty; flagged in the PR body as a known risk.
+     * approving it would leave a &ge;3-person department empty; a known risk.
      *
-     * <p><b>Schedule-awareness (V115/V117/V121, via #470's {@link LeaveRepository#workingDayPredicate}):
+     * <p><b>Schedule-awareness (via {@link LeaveRepository#workingDayPredicate}):
      * </b> "at work" is evaluated per employee's own resolved schedule, not a hardcoded Mon-Fri
      * assumption -- a warehouse (OPS_6D) colleague genuinely at work on a Saturday counts as coverage
      * even though the requester's own office (OFFICE_5D) schedule has Saturday off. Only days that are
@@ -2063,9 +2025,7 @@ public class LeaveService {
      *
      * @return a rejection outcome ({@link LeaveRuleCode#DEPARTMENT_COVERAGE}) naming the first
      *         uncovered date, or {@code null} if the department is exempt or stays covered on every
-     *         day of the request. (Phase A0a: was a plain English rejection message naming the date;
-     *         the DECISION is unchanged, only its return shape is now structured -- see
-     *         {@link LeaveRuleOutcome}.)
+     *         day of the request. The outcome is structured -- see {@link LeaveRuleOutcome}.
      */
     private LeaveRuleOutcome departmentCoverageRuleOutcome(long employeeId, LocalDate startDate, LocalDate endDate) {
         List<Long> colleagueIds = leaveRepository.findActiveDepartmentColleagues(employeeId);
@@ -2108,29 +2068,26 @@ public class LeaveService {
     }
 
     /**
-     * Phase A0b dry-run extraction: the subset of {@link #autoRejectNote}'s checks that depend only
+     * The subset of {@link #autoRejectNote}'s checks that depend only
      * on the employee and leave type -- plus, for two of them, a single {@code referenceDate} -- not
-     * on a request's actual date RANGE. Bundles, in the SAME order they always ran inline in {@link
-     * #autoRejectNote}: once-per-employment, §5.3.4 resignation, hire-date-missing-on-a-prorated-type,
-     * minimum service months, and PERSONAL probation. Every line of logic below is moved verbatim
-     * from {@link #autoRejectNote} (Phase A0b extraction, not a rewrite) -- {@link #autoRejectNote}
-     * calls this SAME method, with {@code referenceDate == startDate}, exactly where these five checks
-     * used to sit inline, so a submission's decisions, thresholds and evaluation order are byte-for-
-     * byte unchanged by this extraction.
+     * on a request's actual date RANGE. Bundles, in this order: once-per-employment, §5.3.4
+     * resignation, hire-date-missing-on-a-prorated-type, minimum service months, and PERSONAL
+     * probation. {@link #autoRejectNote} calls this SAME method, with {@code referenceDate ==
+     * startDate}, so a submission's decisions, thresholds and evaluation order are the ones defined
+     * here.
      *
      * <p>Exists so {@link #preview} can evaluate these five when the caller has not chosen dates yet
      * (see {@code LeavePreviewRequest}'s nullable startDate/endDate) without a second, drift-prone
-     * copy of the same decisions -- the brief this phase implements is explicit that the rules must
-     * not be reimplemented, only extracted. For that dateless case, {@link #preview} passes {@code
+     * copy of the same decisions. For that dateless case, {@link #preview} passes {@code
      * LocalDate.now(clock)} as {@code referenceDate} -- the SAME "as-of-today" stand-in {@link
      * #balanceFor} already uses when a query has no request date of its own (see that method's
-     * Javadoc on {@code annualQuota}), not a new convention invented for this method.
+     * Javadoc on {@code annualQuota}).
      *
-     * <p><b>V164 (owner-approved change, 2026-09-09):</b> two of these five gates (MIN_SERVICE_MONTHS,
-     * PROBATION_NOT_PASSED) are now WARN_UNPAID_ALL, not BLOCK -- see {@link LeaveRuleCode
-     * #enforcement()}. This method therefore no longer stops at the first NON-NULL outcome: it stops
-     * (short-circuits) only at the first BLOCK, via {@link #isBlocking}, exactly preserving this
-     * method's pre-V164 evaluation ORDER for every gate -- a WARN outcome is appended to the returned
+     * <p>Two of these five gates (MIN_SERVICE_MONTHS,
+     * PROBATION_NOT_PASSED) are WARN_UNPAID_ALL, not BLOCK -- see {@link LeaveRuleCode
+     * #enforcement()}. This method therefore does not stop at the first NON-NULL outcome: it stops
+     * (short-circuits) only at the first BLOCK, via {@link #isBlocking},
+     * in gate ORDER -- a WARN outcome is appended to the returned
      * {@link EligibilityResult#warnings()} and evaluation continues to the next gate in the list.
      *
      * @return an {@link EligibilityResult}: {@code blocking()} is the first BLOCK outcome among these
@@ -2152,9 +2109,9 @@ public class LeaveService {
             return new EligibilityResult(outcome, List.of());
         }
 
-        // §5.3.4 post-resignation gate (relational rules, 2026-08). See #resignationRuleOutcome's
+        // §5.3.4 post-resignation gate. See #resignationRuleOutcome's
         // Javadoc for what hr.resignation actually contains and the handover-escape-hatch decision.
-        // BLOCK (V164).
+        // BLOCK.
         LeaveRuleOutcome resignationOutcome = resignationRuleOutcome(leaveType, employeeId);
         if (isBlocking(resignationOutcome, warnings)) {
             return new EligibilityResult(resignationOutcome, List.of());
@@ -2230,7 +2187,7 @@ public class LeaveService {
     }
 
     /**
-     * §5 leave-rules-as-data (V116, extended V120/V124/V125, relational rules 2026-08). Checks run in
+     * §5 leave-rules-as-data. Checks run in
      * this order -- categorical eligibility first (once-per-employment, §5.3.4 post-resignation,
      * missing hire_date on a pro-rated type, minimum service, PERSONAL probation, the first-year
      * total-days cap), then request-shape (wedding-leave cap, max consecutive days, §5.3.3 contiguous
@@ -2241,15 +2198,15 @@ public class LeaveService {
      * found is returned; see the individual checks below for what each one means and the decisions
      * behind it.
      *
-     * <p>ORDERING NOTE (V125): the wedding-leave cap and the SICK-certificate/notice checks are both
+     * <p>ORDERING NOTE: the wedding-leave cap and the SICK-certificate/notice checks are both
      * PER-TYPE-CODE gates (PERSONAL and SICK respectively) that can never both apply to the same
      * request -- a request is submitted under exactly one leave_type_code, so their relative order
-     * has no observable effect on any real submission. They stay in their pre-existing buckets
+     * has no observable effect on any real submission. They sit in their buckets
      * (wedding cap alongside max-consecutive-days as a request-SHAPE limit; SICK-certificate and
      * notice/emergency as document/timing checks, in that order) purely so each gate sits next to the
      * other gates it is conceptually closest to, not because the order between them matters.
      *
-     * <p>ORDERING NOTE (relational rules, 2026-08): §5.3.4 (resignation) is CATEGORICAL -- like
+     * <p>ORDERING NOTE (relational rules): §5.3.4 (resignation) is CATEGORICAL -- like
      * once-per-employment, it is a "not eligible for this type at all" gate, so it runs immediately
      * after once-per-employment, ahead of every hire-date/tenure check (those still make sense to
      * report even for a resigned employee, but resignation is the more fundamental reason). §5.3.3
@@ -2257,23 +2214,20 @@ public class LeaveService {
      * request relative to nearby ones, so it sits directly after max-consecutive-days; it is
      * type-scoped (VACATION/PERSONAL only, via {@code CONTIGUOUS_LEAVE_PAIR}) and mutually exclusive
      * with the wedding cap and SICK-certificate gates by leave_type_code, so its exact position
-     * relative to those two has no observable effect, same reasoning as V125's own ordering note
+     * relative to those two has no observable effect, same reasoning as the ordering note
      * above. §5.3.2 (department coverage) is neither categorical, request-shape, nor document/timing
      * -- it is the ONE gate here that depends on OTHER employees' data rather than the requester's
      * own, and it is type-AGNOSTIC (applies to every leave type, SICK included -- owner ruling), so it
-     * runs LAST, after every type-specific/requester-specific gate above (including all of V124/V125's)
+     * runs LAST, after every type-specific/requester-specific gate above
      * has had a chance to give a more specific reason first.
      *
-     * <p><b>V164 (owner-approved change, 2026-09-09) -- BLOCK still short-circuits, WARN now
-     * ACCUMULATES.</b> Before V164, EVERY gate below returned the instant it fired -- "only the first
-     * violation found is returned" (above) was true without qualification. That is no longer true for
-     * the 10 codes {@link LeaveRuleCode#enforcement()} marks WARN_UNPAID_ALL/WARN_UNPAID_EXCESS: via
-     * {@link #isBlocking}, a BLOCK code still returns immediately (byte-for-byte the SAME order, SAME
-     * condition, SAME result as pre-V164 -- nothing about BLOCK evaluation changed), but a WARN code
+     * <p><b>BLOCK short-circuits, WARN ACCUMULATES.</b> "Only the first
+     * violation found is returned" (above) holds for BLOCK codes only; the 10 codes
+     * {@link LeaveRuleCode#enforcement()} marks WARN_UNPAID_ALL/WARN_UNPAID_EXCESS behave differently:
+     * via {@link #isBlocking}, a BLOCK code returns immediately, but a WARN code
      * is appended to a local {@code warnings} accumulator and evaluation CONTINUES to the next gate,
      * so a single request can carry several warnings at once (e.g. both an advance-notice miss and a
-     * wedding-cap excess). The gate ORDER above is completely unchanged -- V164 only changes what
-     * happens when a gate that used to be BLOCK-only fires. See {@link AutoRejectResult}'s Javadoc for
+     * wedding-cap excess). The gate ORDER above applies either way. See {@link AutoRejectResult}'s Javadoc for
      * the {@code warnings}/{@code unpaidByRuleDays} this method now returns alongside {@code
      * blocking}, and {@link #dominantUnpaidByRuleDays} for the dominance rule that turns accumulated
      * warnings into a single unpaid-day count.
@@ -2302,14 +2256,13 @@ public class LeaveService {
         }
         warnings.addAll(eligibilityResult.warnings());
 
-        // §5.2 first-year total-days cap (V120, defect 3). SEPARATE rule from pro-ration and from
+        // §5.2 first-year total-days cap. SEPARATE rule from pro-ration and from
         // the probation gate above -- do not collapse the three. The 2567 text moved the "not more
         // than 3 days" limit INSIDE the under-one-year parenthesis and dropped "ติดต่อกัน"
         // ("consecutive"): "(กรณีอายุงานไม่ถึงหนึ่งปี ให้ลาเป็นสัดส่วนตามอายุงาน และไม่อนุญาตให้ลากิจ
         // เกิน 3 วัน)" -- a TOTAL annual ceiling for under-1-year employees, not a per-request
-        // consecutive-day rule for everyone (the old 2561-era max_consecutive_days=3 blanket rule
-        // this replaces; see V120's migration comment for why max_consecutive_days is now NULL on
-        // PERSONAL instead). Owner-ruled reading (2026-08-02), not this branch's own interpretation.
+        // consecutive-day rule for everyone (which is why max_consecutive_days is NULL on
+        // PERSONAL). This is the owner-ruled reading.
         //
         // Expressed as data (leaveType.firstYearMaxDays(), NULL = no such cap) rather than hardcoded
         // to PERSONAL's code, matching every other §5 rule on this table -- even though PERSONAL is
@@ -2324,9 +2277,7 @@ public class LeaveService {
         // with an unlimited cap") -- an employee past one year is governed by the ordinary
         // quota/paid-cap machinery alone, the same as VACATION.
         //
-        // V164 (owner-approved change, 2026-09-09): was an outright REJECTION -- "ไม่อนุญาต" ("not
-        // permitted") read as categorically stronger than a pay-eligibility limit, the same reading
-        // V116 gave the now-removed consecutive-day cap. Now WARN_UNPAID_EXCESS: the request still
+        // WARN_UNPAID_EXCESS, not an outright rejection: the request still
         // submits, and only the days that push usedThisYear + totalDays past effectiveCap are unpaid
         // -- everything up to the cap still goes through the ordinary quota/paid-cap machinery below.
         // Compares against usedThisYear + totalDays (cumulative across every request this quota year,
@@ -2363,7 +2314,7 @@ public class LeaveService {
             }
         }
 
-        // §5.2 wedding leave cap (V125): "ลาเข้าพิธีสมรส จัดงานสมรสของบุตรลาได้ไม่เกิน 3 วัน" -- own
+        // §5.2 wedding leave cap: "ลาเข้าพิธีสมรส จัดงานสมรสของบุตรลาได้ไม่เกิน 3 วัน" -- own
         // marriage or a child's wedding, no more than 3 days. The ONLY per-PURPOSE limit §5.2 states
         // -- do not extend this pattern to the other named purposes, none of which carry a stated
         // cap.
@@ -2375,7 +2326,7 @@ public class LeaveService {
         // exceed 3 days".
         //
         // DESIGN NOTE -- deliberately NOT a hr.leave_type column, unlike every OTHER §5 numeric rule
-        // in this method: those vary meaningfully BY TYPE (V116/V120/V124). This rule is scoped to a
+        // in this method: those vary meaningfully BY TYPE. This rule is scoped to a
         // (type, purpose) PAIR -- PERSONAL + WEDDING specifically -- and no other purpose/type
         // combination carries a stated cap; a leave_type column would either apply to every purpose
         // of PERSONAL (wrong -- it would also cap FAMILY_NECESSITY/FAMILY_FUNERAL/etc.) or need a new
@@ -2383,7 +2334,7 @@ public class LeaveService {
         // precedent as the SICK-certificate check and the PERSONAL-probation gate above, both of
         // which are likewise keyed off leaveType.code() in Java rather than a column, for the
         // identical "does not generalize across every type" reason.
-        // V164 (owner-approved change, 2026-09-09): WARN_UNPAID_EXCESS -- only the days beyond
+        // WARN_UNPAID_EXCESS -- only the days beyond
         // WEDDING_LEAVE_MAX_DAYS are unpaid, not the whole request.
         if ("PERSONAL".equals(leaveType.code()) && WEDDING_PURPOSE_CODE.equals(purposeCode)) {
             long weddingSpanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
@@ -2405,27 +2356,24 @@ public class LeaveService {
             }
         }
 
-        // §5.2 "not more than 3 consecutive days" (PERSONAL, pre-2567/pre-V120 wording -- superseded,
-        // see the first-year total-days cap above) and any other type given a
-        // max_consecutive_days cap. DECISION: "consecutive" is counted in CALENDAR days (end - start +
+        // Generic max_consecutive_days cap for any type that carries one (PERSONAL's old "not more
+        // than 3 consecutive days" wording is superseded by the first-year total-days cap above). DECISION: "consecutive" is counted in CALENDAR days (end - start +
         // 1 inclusive), not working days -- a calendar-day span is the natural reading of "3 days in
         // a row" for a short request that, by definition, rarely crosses a weekend anyway. A sub-day
         // request is always single-day (start_date = end_date, enforced by validateSubDayTimes), so
         // this never conflicts with the sub-day feature.
         //
-        // RECONFIRMED, not merely carried over (2026-08-03): LeaveDayMath is now schedule/holiday-
-        // aware (see its javadoc), so switching this to true working days is technically possible in
-        // this branch -- but was deliberately NOT done here. This check is a request-SHAPE limit ("do
+        // LeaveDayMath is schedule/holiday-aware (see its javadoc), so switching this to true
+        // working days is technically possible -- but deliberately NOT done. This check is a request-SHAPE limit ("do
         // not take more than N days in one go"), not a pay-eligibility count, and it is a MAXIMUM:
         // switching to a working-day count would, if anything, LOOSEN it (a calendar span that
         // crosses a weekend/holiday would newly fit under the same numeric cap, since those days
         // would stop counting toward the limit) -- the opposite direction of the advance-notice
-        // decision below, but still an unrequested behaviour change with no business ask driving it.
-        // Left on calendar days; flagged as a separate, explicit follow-up decision if the business
-        // actually wants it.
-        // V164 (owner-approved change, 2026-09-09): WARN_UNPAID_EXCESS -- see LeaveRuleCode's class
+        // decision below, but would be a behaviour change with no business ask driving it.
+        // Left on calendar days; a separate, explicit decision if the business actually wants it.
+        // WARN_UNPAID_EXCESS -- see LeaveRuleCode's class
         // Javadoc for why this branch is DORMANT (no seeded type carries a non-NULL
-        // maxConsecutiveDays since V120); implemented for completeness only.
+        // maxConsecutiveDays); implemented for completeness only.
         if (leaveType.maxConsecutiveDays() != null) {
             long spanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
             BigDecimal spanDaysValue = BigDecimal.valueOf(spanDays);
@@ -2444,13 +2392,12 @@ public class LeaveService {
             }
         }
 
-        // §5.3.3 contiguous VACATION/PERSONAL gate (relational rules, 2026-08) runs before the SICK
+        // §5.3.3 contiguous VACATION/PERSONAL gate runs before the SICK
         // certificate gate just below. ORDERING NOTE: the two are mutually exclusive by leave type
         // (CONTIGUOUS_LEAVE_PAIR only keys VACATION/PERSONAL; sickCertificateRuleOutcome only fires
         // for SICK), so for any single request at most one of them can ever return non-null -- this
         // placement is a documentation choice (keeps it grouped with the request-shape checks above,
-        // consistent with where it lived before V124), not a decision with an observable effect on
-        // which message a user sees. See #contiguousLeaveRuleOutcome's Javadoc for the "ติดต่อกัน
+        // not a decision with an observable effect on which message a user sees. See #contiguousLeaveRuleOutcome's Javadoc for the "ติดต่อกัน
         // across a non-working day" decision.
         LeaveRuleOutcome contiguousOutcome = contiguousLeaveRuleOutcome(leaveType, employeeId, startDate, endDate);
         if (contiguousOutcome != null) {
@@ -2466,33 +2413,32 @@ public class LeaveService {
             isBlocking(sickOutcome, warnings);
         }
 
-        // §5 advance notice, now per-type (hr.leave_type.advance_notice_days) instead of the removed
-        // global app.leave.advance-notice-days property. Counted in the employee's OWN WORKING days
+        // §5 advance notice, per-type (hr.leave_type.advance_notice_days). Counted in the employee's OWN WORKING days
         // (schedule + hr.holiday aware): the days after today up to the leave's first working day that
         // the employee would work must number at least noticeDays; today is day 0 and not counted
-        // (owner ruling 2026-10-29). A type with advanceNoticeDays == 0 (SICK, MATERNITY, MILITARY,
+        // (owner ruling). A type with advanceNoticeDays == 0 (SICK, MATERNITY, MILITARY,
         // LEAVE_WITHOUT_PAY as seeded) skips this check entirely.
         //
-        // §5.2 emergency-filing exception (V125), COMBINED notice x emergency decision table:
+        // §5.2 emergency-filing exception, COMBINED notice x emergency decision table:
         //
         //   notice met?  | requestedAsEmergency? | monthly tolerance left? | outcome
         //   -------------|------------------------|--------------------------|--------------------------------
         //   yes           | (irrelevant)           | (irrelevant)             | proceeds normally (unaffected)
-        //   no            | no                     | n/a                      | AUTO_REJECTED (unchanged, pre-V125 behaviour)
+        //   no            | no                     | n/a                      | AUTO_REJECTED
         //   no            | yes                    | yes (used < allowance)   | APPROVED via the exception; emergencyFilingApplied=true
         //   no            | yes                    | no (used >= allowance)   | AUTO_REJECTED (tolerance-exhausted message, not the generic notice one)
         //
         // "โดยไม่หักเงิน" ("without deduction") is read here as: an emergency-approved request is not
         // WORSE OFF than an on-time one -- it falls through to the SAME quota/paid-cap machinery every
         // other approved request already goes through (#submit), not as an unconditional override of
-        // ordinary quota-exceeded unpaid splitting, which is an orthogonal, pre-existing rule. Only
+        // ordinary quota-exceeded unpaid splitting, which is an orthogonal rule. Only
         // types carrying a non-null emergencyMonthlyAllowance (PERSONAL today) get this exception at
         // all -- it composes with advanceNoticeDays generically (data-driven, not hardcoded to
         // PERSONAL's code), unlike the wedding cap above.
         //
-        // ISOLATION FROM V124's SICK no-certificate tolerance: this counter
+        // ISOLATION FROM the SICK no-certificate tolerance: this counter
         // (LeaveRepository#countEmergencyFilings) reads hr.leave_request.emergency_filing, a column
-        // set ONLY by #markEmergencyFiling for THIS gate; V124's sickCertificateRuleOutcome/
+        // set ONLY by #markEmergencyFiling for THIS gate; sickCertificateRuleOutcome/
         // countNoCertificateRequestsInMonth instead reads attachment_id IS NULL and is called only
         // for SICK. The two counters share no column and are never invoked for the same
         // leave_type_code in practice (emergencyMonthlyAllowance is non-null only for PERSONAL,
@@ -2507,14 +2453,13 @@ public class LeaveService {
         // in hr.leave_request. This gate enforces only what it CAN verify (the requester's own
         // declaration and the <=N/month count); the other two conditions are left to the reviewing
         // manager/HR's judgement, same as every other manually-reviewed condition in this class (e.g.
-        // MILITARY's voluntary-vs-call-up distinction, V116's migration comment). An emergency-
+        // MILITARY's voluntary-vs-call-up distinction). An emergency-
         // approved request is NOT proof the supervisor was actually notified in time -- do not read it
         // that way.
-        // V164 (owner-approved change, 2026-09-09): both EMERGENCY_TOLERANCE_EXHAUSTED and
-        // ADVANCE_NOTICE are now WARN_UNPAID_ALL -- neither BLOCKs any more, so isBlocking always
+        // Both EMERGENCY_TOLERANCE_EXHAUSTED and
+        // ADVANCE_NOTICE are WARN_UNPAID_ALL -- neither BLOCKs, so isBlocking always
         // appends and this method keeps evaluating (department coverage below still runs). The
-        // notice-met/emergency-approved branch is UNCHANGED (an emergency approval was never a
-        // rejection to begin with).
+        // notice-met/emergency-approved branch is not a rejection at all.
         int noticeDays = Math.max(0, leaveType.advanceNoticeDays());
         if (noticeDays > 0) {
             LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
@@ -2555,10 +2500,10 @@ public class LeaveService {
             }
         }
 
-        // §5.3.2 department-coverage gate (relational rules, 2026-08). Runs LAST of all -- after
-        // V125's wedding-cap/SICK-certificate/notice-and-emergency gates too, not just the pre-V125
-        // set: it is the most data-heavy check (reads every other active department member's
-        // schedule/leave) and, unlike every gate above (including V125's, which are all still about
+        // §5.3.2 department-coverage gate. Runs LAST of all -- after
+        // the wedding-cap/SICK-certificate/notice-and-emergency gates too:
+        // it is the most data-heavy check (reads every other active department member's
+        // schedule/leave) and, unlike every gate above (all still about
         // THIS employee's own eligibility/timing), it is not about the requester at all -- it is the
         // least "fundamental" reason in the ordering this Javadoc describes, and it applies to every
         // leave type (type-agnostic), so it must not sit ahead of a type-specific rejection that would
@@ -2566,12 +2511,10 @@ public class LeaveService {
         // relaxation of the announcement's text, the department-size floor, and the schedule-awareness
         // this depends on.
         //
-        // Phase A0b: gated on `evaluateDepartmentCoverage` -- #submit always passes `true` (identical
-        // behaviour to before this parameter existed), so this branch is unconditionally reached for
-        // every real submission, unchanged. QUICK-depth LeaveService#preview passes `false` instead,
+        // Gated on `evaluateDepartmentCoverage` -- #submit always passes `true`, so this branch is
+        // reached for every real submission. QUICK-depth LeaveService#preview passes `false` instead,
         // to skip this check's fan-out over every active department colleague's schedule/leave spans
-        // -- see #preview's Javadoc for why (debounced-as-the-user-types calls cannot afford it). The
-        // check's own condition is untouched; only whether it runs at all is now caller-controlled.
+        // -- see #preview's Javadoc for why (debounced-as-the-user-types calls cannot afford it).
         LeaveRuleOutcome departmentCoverageOutcome = evaluateDepartmentCoverage
             ? departmentCoverageRuleOutcome(employeeId, startDate, endDate)
             : null;
@@ -2586,20 +2529,14 @@ public class LeaveService {
     }
 
     /**
-     * Leave requires approval (2026-08-05): {@code actorEmployeeId} (the caller of {@link #submit})
-     * threaded through so {@link #notifyPendingApproval} can exclude the actor from the approver
+     * {@code actorEmployeeId} (the caller of {@link #submit}) is threaded through so {@link
+     * #notifyPendingApproval} can exclude the actor from the approver
      * notification -- the same "nobody is ever notified about their own action" convention {@link
-     * #notifyCancelled} already established in this file.
+     * #notifyCancelled} follows.
      *
-     * <p>Nit fix (Opus review): this used to also branch on {@code status == LeaveStatus.APPROVED}
-     * (a LEAVE_AUTO_APPROVED path), kept around as dead code after this same 2026-08-05 change made
-     * it unreachable -- {@link #submit} now only ever passes {@link LeaveStatus#SUBMITTED} or {@link
+     * <p>{@link #submit} only ever passes {@link LeaveStatus#SUBMITTED} or {@link
      * LeaveStatus#AUTO_REJECTED} (see that method's own {@code status = systemNote == null ? ...}
-     * line). Removed outright rather than kept "for the shape's own sake": {@code
-     * LEAVE_AUTO_APPROVED} has no other reader (grep the repo), and a branch no test chain can ever
-     * take is a worse trap than a two-way {@code if}/{@code else} would be a comment explaining it.
-     * If auto-approval is ever reintroduced, restore it from git history ({@code git log -p} on this
-     * file) rather than un-deleting a branch that had already drifted from #submit's actual call sites.
+     * line), so there is no auto-approved branch here.
      */
     private void notifyAfterSubmit(LeaveRequestDto request, LeaveStatus status, long actorEmployeeId) {
         if (status == LeaveStatus.SUBMITTED) {
@@ -2618,8 +2555,7 @@ public class LeaveService {
     }
 
     /**
-     * Leave requires approval (2026-08-05): leave never had a pending-approver notification before
-     * this change, because SUBMITTED was unreachable -- this is the new case.
+     * Pending-approver notification for a SUBMITTED leave request.
      *
      * <p>Notifies the requester unconditionally ("submitted, awaiting approval"), then the
      * approver(s) -- resolved from {@link LeaveRequestDto#managerEmployeeId}, which is {@code
@@ -2635,8 +2571,8 @@ public class LeaveService {
      * source or it would tell the wrong person a request is waiting for them.
      *
      * <p><b>No manager of record</b> ({@code managerEmployeeId == null}): falls back to every active
-     * HR-role employee ({@link EmployeeRepository#findHrEmployeeIds}, added by this same change for
-     * exactly this fallback -- this method is its only caller) -- HR can always review any
+     * HR-role employee ({@link EmployeeRepository#findHrEmployeeIds}, which exists for exactly
+     * this fallback -- this method is its only caller) -- HR can always review any
      * employee's leave via {@link #canReviewAll} regardless of whose manager they are, so HR is the
      * correct fallback reviewer when there is no specific manager to tell. This mirrors {@code
      * OvertimeService#notifySubmitted}'s manager-or-broadcast-fallback SHAPE (notify the specific
@@ -2645,7 +2581,7 @@ public class LeaveService {
      * method's own routing-source requirement above. Deliberately NOT a routine cc to HR on every
      * submission that already has a manager -- HR is the FALLBACK reviewer (no manager on file), not
      * a second recipient alongside an existing manager; broadcasting to the whole HR division on
-     * every ordinary leave submission that already reaches its manager was not asked for and would be
+     * every ordinary leave submission that already reaches its manager would be
      * noisy for a case that already reaches someone who can act.
      *
      * <p>{@code actorEmployeeId} (the caller of {@link #submit} -- the employee themselves, or an
