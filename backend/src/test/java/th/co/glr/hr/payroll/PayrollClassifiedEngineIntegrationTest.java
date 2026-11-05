@@ -30,7 +30,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
- * Task 2 (2026-07-29): real-Postgres coverage of {@link PayrollCalculator#calculateClassified},
+ * Real-Postgres coverage of {@link PayrollCalculator#calculateClassified},
  * driven exclusively through the real {@link PayrollService#preview}/{@code #process} and {@link
  * PayrollRepository}, per CLAUDE.md's requirement for authz/business-logic changes ("a mocked
  * repository happily 'passes' while the SQL does something else"). See
@@ -122,7 +122,7 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         // 100,000; SSO allowance = min(10,500, 0 + 875x12) = 10,500; taxAllowanceTotal = 60,000 +
         // 10,500 = 70,500; taxableAnnualIncome = 600,000 - 100,000 - 70,500 = 429,500; annualTax =
         // 150,000@5% + 129,500@10% = 7,500 + 12,950 = 20,450; withholdingTax = 20,450 / 12 = 1,704.1666
-        // -> HALF_UP 1,704.17 -> whole baht 1,704.00 (2026-08-28).
+        // -> HALF_UP 1,704.17 -> whole baht 1,704.00.
         assertThat(line.projectedAnnualIncome()).isEqualByComparingTo("600000.00");
         assertThat(line.taxAllowanceTotal()).isEqualByComparingTo("70500.00");
         assertThat(line.taxableAnnualIncome()).isEqualByComparingTo("429500.00");
@@ -327,12 +327,12 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
     void overtimeGarnishmentCapsAtThirtyPercentOfOvertimeAndDiligencePaidThisPeriod() {
         long employeeId = seedEmployee("GARN-OT-001", "อายัดโอที", "ทดสอบ", new BigDecimal("20000.00"));
         // OVERTIME_PAY only reaches payroll via approved hr.overtime_request rows -- not HR-typed on
-        // the request -- so this test uses SPECIAL_PAY_5 (พิเศษ 5, เบี้ยขยันประจำ under the 2026-07-29
-        // workbook realignment -- see PayrollComponent's javadoc / PayrollService#specialPayDtos, one
-        // of the two components the handoff names for this garnishment type) instead, classified
-        // REGULAR. SPECIAL_PAY_4 (พิเศษ 4, now ค่าตำแหน่ง -- a position allowance, NOT เบี้ยขยัน) is
+        // the request -- so this test uses SPECIAL_PAY_5 (พิเศษ 5, เบี้ยขยันประจำ -- see
+        // PayrollComponent's javadoc / PayrollService#specialPayDtos, one
+        // of the two components named for this garnishment type) instead, classified
+        // REGULAR. SPECIAL_PAY_4 (พิเศษ 4, ค่าตำแหน่ง -- a position allowance, NOT เบี้ยขยัน) is
         // ALSO given a large non-zero amount here and must be excluded from the cap base: this is the
-        // regression pin for the off-by-one defect (Opus review, 2026-07-29) where the calculator
+        // regression pin for the off-by-one defect where the calculator
         // read SPECIAL_PAY_4 instead of SPECIAL_PAY_5, letting a position allowance inflate the
         // ป.วิ.พ. ม.302 เบี้ยขยัน/ค่าล่วงเวลา garnishment cap.
         payrollRepository.upsertComponentTaxTreatment(TAX_YEAR, List.of(
@@ -440,7 +440,7 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * REVIEW ADDITION (2026-07-29). {@link #twelveMonthSimulationTotalsToTheCorrectAnnualLiability}
+     * {@link #twelveMonthSimulationTotalsToTheCorrectAnnualLiability}
      * asserts {@code sumOfMonthlyWithholding == decemberLine.annualTax()} -- the engine compared
      * against its OWN final-month figure. That is a telescoping/consistency property, not a
      * correctness property: an engine that mis-stacked every limb identically all year would still
@@ -474,7 +474,7 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
      *
      * <p>The second assertion pins the known limb's deliberate semantic: December's {@code annualTax}
      * reports ฿72,900 (the ongoing regular liability), NOT the ฿112,900 actually withheld, because a
-     * settled ข้อ 1(5) payment is not carried into any later projection (see {@code V96} section 3).
+     * settled ข้อ 1(5) payment is not carried into any later projection.
      * That gap is by design; asserting it here means a future change that folds the known limb into
      * the year-end figure has to confront the double-counting question deliberately rather than
      * silently shifting real money.
@@ -521,7 +521,7 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * REVIEWER ADDITION (Opus review, 2026-07-30). The two whole-year simulations above each exercise
+     * Both extra limbs in one year. The two whole-year simulations above each exercise
      * exactly ONE extra limb: {@link #twelveMonthSimulationTotalsToTheCorrectAnnualLiability} runs
      * REGULAR + {@code EXTRA_CUMULATIVE_ACTUAL} with no bonus, and {@link
      * #twelveMonthSimulationWithAMidYearBonusMatchesAHandComputedAnnualLiability} runs REGULAR +
@@ -549,16 +549,12 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
      *                                          total = 157,375
      * </pre>
      *
-     * <p><b>F1 correction (Opus review, 2026-07-30, P3):</b> this docstring originally described the
-     * defect this test caught in the present tense — "{@code calculateClassified} stacks the KNOWN
-     * limb and the CUMULATIVE limb on the regular limb INDEPENDENTLY ... but {@code knownThisPeriod}
-     * is only ever THIS period's amount and no {@code knownLimb*} field exists on {@link
-     * PayrollYearToDate} to carry a settled bonus forward." F1 (see the handoff's "task 4" progress
-     * section) made that false: {@link PayrollYearToDate#knownLimbTaxableIncome()} now carries every
+     * <p>This test pins that the KNOWN limb and the CUMULATIVE limb are not stacked on the regular
+     * limb independently: {@link PayrollYearToDate#knownLimbTaxableIncome()} carries every
      * settled known-limb baht forward, and stage 3's own YTD-inclusive base
-     * ({@code netWithCumulativeYtd}) is built from it, so the two limbs no longer consume the same tax
-     * brackets twice. This test now PASSES and pins that fix — see F1's fuller writeup in the handoff
-     * for the mechanism and the mutation-check that proves this specific test catches a regression.
+     * ({@code netWithCumulativeYtd}) is built from it, so the two limbs do not consume the same tax
+     * brackets twice. Without that carry-forward ({@code knownThisPeriod} is only ever THIS
+     * period's amount), this test fails.
      */
     @Test
     void twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability() {
@@ -594,7 +590,7 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * Whole-baht payslip (owner decision, 2026-08-29), through the real service + Postgres seam.
+     * Whole-baht payslip, through the real service + Postgres seam.
      *
      * <p>Three rules, each chosen for a reason and each proven here by a value that would otherwise
      * carry satang:
@@ -607,8 +603,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
      *   <li><b>Everything composes</b>: gross, deductions and net all land whole.</li>
      * </ul>
      *
-     * <p>Non-vacuous: ฿1,500.50 and the ฿0.1667/day remainder are both satang the pre-2026-08-29
-     * engine stored verbatim. Revert either rounding and the matching assertion fails on the satang.
+     * <p>Non-vacuous: ฿1,500.50 and the ฿0.1667/day remainder are both satang that would
+     * otherwise be stored verbatim. Revert either rounding and the matching assertion fails on the satang.
      */
     @Test
     void everyPayslipFigureIsWholeBahtWithTypedEarningsRoundedAndComputedLeaveDeductionFloored() {
