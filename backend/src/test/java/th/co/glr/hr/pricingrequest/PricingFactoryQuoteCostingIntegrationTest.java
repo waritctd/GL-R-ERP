@@ -85,9 +85,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     private FactoryQuoteRepository factoryQuoteRepository;
     private FactoryQuoteService factoryQuoteService;
     private PricingCostingService costingService;
-    // V141 ("CEO owns costing"): the CEO path — Import's costing create/recalculate/submit is
-    // gone, so every test that used to build a costing via costingService now drives it through
-    // PricingDecisionService#startReview/recalculateCost instead.
+    // The CEO owns costing: every test that needs a costing drives it through
+    // PricingDecisionService#startReview/recalculateCost (Import has no costing create/submit).
     private PricingDecisionService pricingDecisionService;
     private LandedCostCalculator landedCostCalculator;
     private NotificationRepository notificationRepository;
@@ -367,7 +366,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     @Test
     void firstFactoryResponseOnMultiFactoryRequestMovesToAwaitingFactoryResponse_andMarkingItReadyAloneDoesNotAdvanceEither() {
-        // Regression for the review finding, extended for V141 ("CEO owns costing"): a single
+        // A single
         // factory answering (and even being marked READY_FOR_COSTING) on a multi-factory pricing
         // request must not advance the whole request while other factories (Factory B here) are
         // still pending. The auto-advance in FactoryQuoteService.markReadyForCosting only fires
@@ -772,7 +771,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     @Test
     void factoryQuoteReceiveRejectsClientRequestIdReusedAgainstADifferentFactoryQuote() {
-        // Regression for the review finding: the receipt lookup must be scoped to the QUOTE
+        // The receipt lookup must be scoped to the QUOTE
         // CHAIN, not the pricing request. A pricing request has one quote per factory, so
         // reusing a clientRequestId against a different factory's quote in the same pricing
         // request must 409 — silently returning Factory A's receipt would discard Factory B's
@@ -832,12 +831,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ── Factory quote attachment deletion hardening (V69, review remediation COMMIT 4) ──
+    // ── Factory quote attachment deletion hardening ──
     //
-    // The audit defect this hardens: deletion used to be permitted whenever the parent pricing
-    // request was in a broad "mutable" set that included READY_FOR_CEO_REVIEW, and physically
-    // removed the row and file. Each test below isolates exactly ONE of the three independent
-    // guards deleteAttachment now applies, by constructing state where the OTHER two guards do
+    // Deletion must not be permitted merely because the parent pricing request is in a broad
+    // "mutable" set that includes READY_FOR_CEO_REVIEW (and it must not physically remove the row
+    // and file). Each test below isolates exactly ONE of the three independent
+    // guards deleteAttachment applies, by constructing state where the OTHER two guards do
     // not (and could not) fire — see each test's own comment for how.
 
     @Test
@@ -959,11 +958,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
      * returns the request to Import (permitted — AWAITING_FACTORY_RESPONSE is back within
      * FactoryQuoteService.receive's RESPONSE_STATUSES): the old, costed revision becomes
      * SUPERSEDED (not READY_FOR_COSTING), so only guard 3 can be why its attachment stays
-     * undeletable. Isolated from guard 1 the same way, for free: V141 ("CEO owns costing") means
-     * {@code PricingDecisionService.returnToImport} — the real, now-only reopen path (Import's
-     * old {@code createDraft} that this test used to reach via a raw-SQL shortcut is gone) —
-     * lands exactly on AWAITING_FACTORY_RESPONSE, which is already inside
-     * ATTACHMENT_DELETE_STATUSES. No SQL shortcut needed any more.
+     * undeletable. Isolated from guard 1 the same way, for free: the CEO owns costing, so
+     * {@code PricingDecisionService.returnToImport} — the only reopen path — lands exactly on
+     * AWAITING_FACTORY_RESPONSE, which is already inside ATTACHMENT_DELETE_STATUSES. No SQL
+     * shortcut is needed.
      */
     @Test
     void factoryQuoteAttachmentDeletion_isRefusedOnceReferencedByASubmittedCosting() {
@@ -1105,9 +1103,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     // correctly — a mocked repository would pass happily even if that SQL joined on the wrong
     // column.
     //
-    // The "Finding A" completeness gate that used to live here was REMOVED on 2026-08-11 (owner
-    // request): a คำขอราคา may legitimately name a product that is not in the catalogue yet. What
-    // these tests now pin is that the removal was a NARROWING, not a hole — a free-text line
+    // There is no catalogue-completeness gate: a คำขอราคา may legitimately name a product that
+    // is not in the catalogue yet. What these tests pin is that this is a NARROWING, not a hole — a free-text line
     // submits, while a DANGLING catalog reference (a product_id whose price list is not ACTIVE)
     // is still rejected by findUnresolvableCatalogItemIds. That pair is the whole point: if
     // someone later deletes the surviving gate too, the second test goes red on its own.
@@ -1222,13 +1219,13 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Import fills in a blank factory (PricingRequestService#setItemFactory).
     //
-    // The hole these close: since 2026-08-11 a line may be SUBMITTED with no factory (see
-    // submitCatalogGate_acceptsFreeTextItem... above), and the factory check was deferred to
-    // FactoryQuoteService#groupByFactory. But nothing could then SUPPLY the value — updateDraft is
-    // DRAFT-only and sales-owner-only, the request is past DRAFT by then, and V140 deleted the
-    // MORE_INFO_REQUIRED send-back — so สร้างร่างอีเมล 422'd forever and the only escape was
-    // cancelling the request. setItemFactory is that missing step, and it is an AUTHORIZATION
-    // change (a new write, Import-only), so per CLAUDE.md it is pinned here: through the real
+    // The hole these close: a line may be SUBMITTED with no factory (see
+    // submitCatalogGate_acceptsFreeTextItem... above), and the factory check is deferred to
+    // FactoryQuoteService#groupByFactory. Nothing else could then SUPPLY the value — updateDraft is
+    // DRAFT-only and sales-owner-only, the request is past DRAFT by then, and there is no
+    // MORE_INFO_REQUIRED send-back — so สร้างร่างอีเมล would 422 forever and the only escape would be
+    // cancelling the request. setItemFactory is that step, and it is an AUTHORIZATION
+    // write (Import-only), so per CLAUDE.md it is pinned here: through the real
     // service AND the real repository, against real Postgres, with the refusals asserted
     // wrong-way-round and every assertion made against the PERSISTED ROW, never the thrown
     // exception alone.
@@ -1239,7 +1236,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
         long pricingRequestId = pricingRequestWithOneBlankFactoryLine();
         long blankItemId = blankFactoryItemId(pricingRequestId);
 
-        // Before: partial draft generation (owner decision, manual-RFQ redesign) — line 1
+        // Before: partial draft generation — line 1
         // (Factory A) resolves and gets its draft; the still-blank row 2 is skipped rather than
         // blocking the whole batch, so this no longer throws at all.
         List<FactoryQuoteDto> beforeDrafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
@@ -1250,12 +1247,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             new PricingRequestRequests.SetItemFactoryRequest(factoryBId), importActor);
 
         // The persisted row — the canonical master name, resolved server-side from factoryBId, not
-        // anything the caller typed (B6: the caller sends only an id now).
+        // anything the caller typed (the caller sends only an id).
         assertThat(jdbc.queryForObject(
             "SELECT factory FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), String.class)).isEqualTo("Factory B");
-        // B6 (GLA-135): resolved_factory_id is now written — the column the downstream factory-email
-        // + CEO costing lookups actually key on. This is the root fix.
+        // resolved_factory_id is written — the column the downstream factory-email
+        // + CEO costing lookups actually key on.
         assertThat(jdbc.queryForObject(
             "SELECT resolved_factory_id FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
             Map.of("id", blankItemId), Long.class)).isEqualTo(factoryBId);
@@ -1319,7 +1316,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     /**
-     * B6 (GLA-135): the picker only ever offers real {@code price_catalog.factories} rows, but the
+     * The picker only ever offers real {@code price_catalog.factories} rows, but the
      * service must not trust an arbitrary id blindly — a factoryId that resolves to nothing is a
      * 404, and the line must be left completely untouched (both {@code factory} and
      * {@code resolved_factory_id} still null), not partially written.
@@ -1382,14 +1379,14 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     /**
-     * BLOCKER 1b (review remediation): the companion guard to {@code
-     * FactoryQuoteService#generateDrafts}'s own BLOCKER 1a fix. Once Factory A's RFQ has actually
+     * The companion guard to {@code FactoryQuoteService#generateDrafts}'s re-draft behaviour.
+     * Once Factory A's RFQ has actually
      * been sent, its quote's item set is exactly what went out and must not silently change under
-     * Import — so filling the still-blank line onto Factory A must now be refused HERE, at the
+     * Import — so filling the still-blank line onto Factory A must be refused HERE, at the
      * moment of the decision, instead of silently succeeding and permanently stranding the line
-     * (the pre-fix sequence: generateDrafts would skip Factory A forever because it "already has a
+     * (generateDrafts would skip Factory A forever because it "already has a
      * quote", setItemFactory would 409 on any attempt to move the line elsewhere because it
-     * "already has a factory", and receive's item-set check meant the sent quote could never grow
+     * "already has a factory", and receive's item-set check means the sent quote could never grow
      * to cover it either).
      */
     @Test
@@ -1419,9 +1416,9 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     /**
-     * Partial draft generation (owner decision, manual-RFQ redesign): a request with SOME lines
-     * unresolved no longer blocks the WHOLE batch on a 422 — {@link
-     * FactoryQuoteService#groupByFactory} now simply skips a blank line, and {@link
+     * Partial draft generation: a request with SOME lines
+     * unresolved does not block the WHOLE batch on a 422 — {@link
+     * FactoryQuoteService#groupByFactory} simply skips a blank line, and {@link
      * FactoryQuoteService#generateDrafts} throws only when NOTHING resolves at all (see the
      * sibling test below). Here line 1 (Factory A) resolves; lines 2 and 3 do not — exactly one
      * draft is created, for Factory A alone, and it contains only the resolved item.
@@ -1452,7 +1449,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     /**
      * The one case that must still 422: NOTHING resolves, so generating zero drafts while
      * returning 200 would be a silent no-op — worse than refusing outright. Keeps the informative
-     * message the batch-blocking behaviour used to always produce: EVERY offending line in ONE
+     * message: EVERY offending line in ONE
      * message, each by the row position the detail page renders and the product name that page
      * shows — not the first line only, and not a primary key that appears nowhere on screen.
      */
@@ -1482,12 +1479,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     /**
-     * BLOCKER 1a (review remediation). Sequence pulled straight from the defect report: line 1
+     * Line 1
      * resolves to Factory A immediately; line 2 starts blank, so the first {@code generateDrafts}
      * skips it and drafts only Factory A. Import then fills line 2's factory in via {@code
      * setItemFactory} — onto the SAME factory that already has a DRAFT quote, which is allowed
-     * because nothing has been sent yet. Re-running {@code generateDrafts} used to skip Factory A
-     * outright (it "already has a quote") and silently strand line 2 forever. Now it must ADD line
+     * because nothing has been sent yet. Re-running {@code generateDrafts} must not skip Factory A
+     * (it "already has a quote") and silently strand line 2 forever; it must ADD line
      * 2 to the SAME existing draft — no second quote for Factory A, no lost line — and the result
      * must be genuinely usable: receiving a response covering BOTH items must succeed, proving the
      * previously-stranded line is actually reachable through the ordinary factory-quote lifecycle,
@@ -1649,8 +1646,8 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     /**
-     * CR-1 (R7): "ติดต่อโรงงานแล้ว" has NO undo and NO edit. This used to be send()'s idempotent
-     * no-op (a re-send returned the quote unchanged); it is now a 409, and the first call's date,
+     * "ติดต่อโรงงานแล้ว" has NO undo and NO edit. A re-send is a 409 (not an idempotent no-op
+     * returning the quote unchanged), and the first call's date,
      * note and actor -- and the single audit event -- must survive untouched.
      */
     @Test
@@ -1707,7 +1704,7 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             """, Map.of("id", pricingRequestId), Long.class);
     }
 
-    /** B6 (GLA-135): {@code SetItemFactoryRequest} now carries a factoryId, resolved against the
+    /** {@code SetItemFactoryRequest} carries a factoryId, resolved against the
      * real {@code price_catalog.factories} master row — "Factory A"/"B"/"C" are seeded by
      * {@code insertCatalogProduct} in {@code wireServicesAndCreateDeal} above. */
     private long factoryIdByName(String name) {
@@ -1721,15 +1718,14 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
      * factory on EITHER side — no catalog product to snapshot one from, and no free text. That is
      * the shape the whole section above is about, and nothing else in this file produced it.
      */
-    // V185: model is now unconditionally required (owner ruling), independent of whether the item
+    // Model is unconditionally required, independent of whether the item
     // has a catalog link — "free text" here means no catalog PRODUCT, not no model. Both helpers
-    // pass `description` itself as the model so they (a) keep reaching resolveItems' happy path
-    // and (b) keep printing the SAME text callers already assert on via
+    // pass `description` itself as the model so they (a) reach resolveItems' happy path
+    // and (b) print the SAME text callers assert on via
     // PricingRequestItemDto#displayName() (brand/model, falling back to productDescription only
-    // when both are blank) — model is no longer blank here, so it becomes the source of that text
-    // instead of the fallback, and the two are deliberately kept equal so no caller's assertion
-    // needs to change. productId stays null on both — the "no catalog product to snapshot" shape
-    // both are actually testing is untouched.
+    // when both are blank) — model is not blank here, so it is the source of that text, and
+    // the two are deliberately kept equal. productId stays null on both — the "no catalog
+    // product to snapshot" shape both are testing.
     private PricingRequestRequests.PricingRequestItemRequest factorylessPricingItem(String description) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, null, null, null, description,
             description, "White", "Matte", "60x60", null, null, null, null, null,
@@ -1885,12 +1881,11 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
      * Builds a fresh single-item pricing request against "Factory C" / TestLand's all-zero
      * price_calc_config (see the {@code catalogProductIdFactoryC} field javadoc), drives it
      * through submit -> pickup -> generate draft -> factory response -> mark ready -> CEO
-     * startReview, and returns the resulting single costing line. V141 ("CEO owns costing"):
+     * startReview, and returns the resulting single costing line. The CEO owns costing:
      * markReadyForCosting auto-advances this single-factory request straight to
-     * READY_FOR_CEO_REVIEW, and the CEO's startReview computes the cost via the SAME
-     * LandedCostCalculator.calculate() Import's deleted createDraft/recalculate used to trigger
-     * — every arithmetic assertion in the tests driving this helper is unaffected by WHO
-     * triggers the calculation, only the calculation itself matters.
+     * READY_FOR_CEO_REVIEW, and the CEO's startReview computes the cost via
+     * LandedCostCalculator.calculate() — every arithmetic assertion in the tests driving this
+     * helper is unaffected by WHO triggers the calculation, only the calculation itself matters.
      */
     private PricingCostingItemDto singleItemCosting(
         BigDecimal requestedQty, String requestedUnitBasis,
@@ -1928,13 +1923,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Regression: FactoryQuoteRepository.insertDraftItems used to seed a freshly drafted item's
-    // unit_basis by text-matching the free-text requested_unit ('sqm'/'sq.m'/'m2'/'m²'/'ตร.ม.'
-    // -> PER_SQM, everything else -> PER_PIECE) — a CASE with no branch for PER_BOX or
-    // PER_LINEAR_M, so a request item asked for in boxes or linear metres seeded its draft as
-    // PER_PIECE from the moment the draft was created. The fix copies
-    // pricing_request_item.requested_unit_basis (V68's own canonical, NOT NULL + CHECK-
-    // constrained column) straight across instead of re-deriving it. Both cases below assert
+    // FactoryQuoteRepository.insertDraftItems must copy
+    // pricing_request_item.requested_unit_basis (the canonical, NOT NULL + CHECK-
+    // constrained column) straight across, not re-derive unit_basis by text-matching the
+    // free-text requested_unit ('sqm'/'sq.m'/'m2'/'m²'/'ตร.ม.' -> PER_SQM, everything else ->
+    // PER_PIECE), which has no branch for PER_BOX or PER_LINEAR_M and would seed a draft for
+    // boxes or linear metres as PER_PIECE. Both cases below assert
     // the draft state right after generateDrafts() and BEFORE any receive/response call —
     // replaceResponseItems deletes and re-inserts every item from Import's own form, so
     // asserting after a receive would prove nothing about the seed.
@@ -2008,10 +2002,10 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
             .isEqualTo(PricingRequestStatus.SUPERSEDED);
     }
 
-    // Review remediation (COMMIT 5, P2 finding 2): createCustomerChangeRevision computed the next
-    // revision_no via a bare SELECT MAX(...)+1 with no lock, so two concurrent callers racing the
+    // createCustomerChangeRevision must lock when computing the next revision_no (SELECT
+    // MAX(...)+1): two concurrent callers racing the
     // SAME parent (different clientRequestIds -- two genuinely distinct customer-change requests,
-    // not a retry of the same one) could both read the same MAX before either INSERT committed.
+    // not a retry of the same one) could otherwise both read the same MAX before either INSERT committed.
     @Test
     void createCustomerChangeRevisionSerializesConcurrentCallersOnTheSameChainAndAvoidsDuplicateRevisionNumbers()
             throws Exception {
