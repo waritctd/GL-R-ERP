@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import { api, setPricingRequestStatusForTests } from './mockApi.js';
 
 // GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): mock coverage
 // for DealQuotationService#approveAndIssuePricingRequestOrigin/#requireCeoApprovalIfChanged — ONE
@@ -14,6 +14,28 @@ import { api } from './mockApi.js';
 function nextClientRequestId() {
   return crypto.randomUUID();
 }
+
+/** The fixture request's one line, shared with its customer-change revision below. */
+const REQUEST_ITEM = {
+  productId: 1,
+  brand: 'SCG',
+  model: 'Tile S2 Approval Mock',
+  factory: 'Panaria SpA',
+  color: 'ขาว',
+  texture: 'ด้าน',
+  size: '60x60',
+  thicknessMm: 10,
+  sqmPerPiece: 0.36,
+  quantityMode: 'PIECES',
+  piecesInput: 10,
+  wastageMode: 'NONE',
+  piecesPerBox: 4,
+  roundToFullBox: false,
+  originCountry: 'ไทย-สต็อก',
+  leadTimeMinDays: 3,
+  leadTimeMaxDays: 7,
+  quantityType: 'ESTIMATE',
+};
 
 /** Drives a fresh PCR to an APPROVED NET decision, then createFromPricingRequest — the shared
  * starting point (a DRAFT quotation, unchanged from the CEO's decision) every test below builds
@@ -48,27 +70,7 @@ async function draftPricingRequestQuotation() {
     recipientType: 'DESIGNER',
     recipientLabel: 'ผู้ออกแบบทดสอบ S2',
     clientRequestId: nextClientRequestId(),
-    items: [{
-      sourceTicketItemId: sourceItemId,
-      productId: 1,
-      brand: 'SCG',
-      model: 'Tile S2 Approval Mock',
-      factory: 'Panaria SpA',
-      color: 'ขาว',
-      texture: 'ด้าน',
-      size: '60x60',
-      thicknessMm: 10,
-      sqmPerPiece: 0.36,
-      quantityMode: 'PIECES',
-      piecesInput: 10,
-      wastageMode: 'NONE',
-      piecesPerBox: 4,
-      roundToFullBox: false,
-      originCountry: 'ไทย-สต็อก',
-      leadTimeMinDays: 3,
-      leadTimeMaxDays: 7,
-      quantityType: 'ESTIMATE',
-    }],
+    items: [{ sourceTicketItemId: sourceItemId, ...REQUEST_ITEM }],
   });
   const prId = draftPr.summary.id;
   await api.pricingRequests.submit(prId);
@@ -207,5 +209,69 @@ describe('mockApi dealQuotations approval (GLA-123 slice S2, reworked)', () => {
       await api.auth.login({ role });
       await expect(api.dealQuotations.approve(quotationId, {})).rejects.toMatchObject({ status: 403 });
     }
+  });
+});
+
+/** A customer-change revision of the fixture's request: the same recipient and the same line. */
+function customerChangeRevision() {
+  return {
+    recipientType: 'DESIGNER',
+    recipientLabel: 'ผู้ออกแบบทดสอบ S2',
+    revisionReason: 'ลูกค้าขอเปลี่ยนแปลงรายละเอียด',
+    clientRequestId: nextClientRequestId(),
+    items: [{ ...REQUEST_ITEM }],
+  };
+}
+
+// Mirrors the quotation supersede of PricingRequestService#cancel (PricingRequestRepository
+// #supersedeOpenPricingDecisionAndQuotation) and of #createCustomerChangeRevision
+// (#supersedeUnissuedPricingRequestOriginQuotations), and the cancelled/superseded-request guard in
+// DealQuotationService#approveAndIssuePricingRequestOrigin. Mock plumbing only; the real-DB pins are
+// the cancel/revision/approve tests in DealQuotationPricingRequestApprovalIntegrationTest.
+describe('mockApi: a cancelled or revised request takes its open quotation with it', () => {
+  it('cancel supersedes a PENDING_APPROVAL quotation, which can then no longer be approved', async () => {
+    const { prId, quotationId } = await pendingApprovalPricingRequestQuotation();
+    await api.pricingRequests.cancel(prId, { reason: 'ลูกค้ายกเลิกโครงการ' });
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('SUPERSEDED');
+    await api.auth.login({ role: 'sales_manager' });
+    await expect(api.dealQuotations.approve(quotationId, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('cancel supersedes a DRAFT quotation too', async () => {
+    const { prId, quotationId } = await draftPricingRequestQuotation();
+    await api.pricingRequests.cancel(prId, { reason: 'ลูกค้ายกเลิกโครงการ' });
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('SUPERSEDED');
+  });
+
+  it('a customer-change revision supersedes the old request\'s PENDING_APPROVAL quotation, which can then no longer be approved', async () => {
+    const { prId, quotationId } = await pendingApprovalPricingRequestQuotation();
+    await api.pricingRequests.createCustomerChangeRevision(prId, customerChangeRevision());
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('SUPERSEDED');
+    await api.auth.login({ role: 'sales_manager' });
+    await expect(api.dealQuotations.approve(quotationId, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('a customer-change revision supersedes the old request\'s DRAFT quotation too', async () => {
+    const { prId, quotationId } = await draftPricingRequestQuotation();
+    await api.pricingRequests.createCustomerChangeRevision(prId, customerChangeRevision());
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('SUPERSEDED');
+  });
+
+  it.each([
+    ['CANCELLED', 'คำขอราคาของใบเสนอราคานี้ถูกยกเลิกแล้ว จึงอนุมัติไม่ได้'],
+    ['SUPERSEDED', 'คำขอราคาของใบเสนอราคานี้ถูกแทนที่ด้วยคำขอราคาฉบับแก้ไขแล้ว จึงอนุมัติไม่ได้'],
+  ])('approve refuses a PENDING_APPROVAL quotation left on a %s request, for either approver', async (status, message) => {
+    const { prId, quotationId } = await pendingApprovalPricingRequestQuotation();
+    setPricingRequestStatusForTests(prId, status);
+    for (const role of ['sales_manager', 'ceo']) {
+      await api.auth.login({ role });
+      await expect(api.dealQuotations.approve(quotationId, {})).rejects.toMatchObject({ status: 409, message });
+    }
+    const { quotation } = await api.dealQuotations.get(quotationId);
+    expect(quotation.docStatus).toBe('PENDING_APPROVAL');
   });
 });
