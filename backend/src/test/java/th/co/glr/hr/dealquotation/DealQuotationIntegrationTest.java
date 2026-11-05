@@ -3170,10 +3170,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quotationService.search(null, false, accountActor)).isEmpty();
     }
 
-    /** Owner ruling 2026-09-24 — the KEY new guard: a {@code canCreateQuotation} grant-holder
-     * (qc, ภิญญดา's own capability, V166) may still READ any deal's quotation individually via
-     * {@link DealQuotationService#get} (the grant still widens detail access, unchanged) — but on
-     * the GLOBAL LIST, the grant no longer widens scope: it sees only quotations on deals IT
+    /** A {@code canCreateQuotation} grant-holder (qc) may still READ any deal's quotation
+     * individually via {@link DealQuotationService#get} (the grant widens detail access) — but on
+     * the GLOBAL LIST the grant does not widen scope: it sees only quotations on deals IT
      * created, not {@code salesActor}'s. */
     @Test
     void grantHolder_search_seesOnlyOwnDeals_butCanStillGetAnotherRepsQuotationIndividually() {
@@ -3189,12 +3188,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(results).extracting(DealQuotationDto::id).contains(ownQuotation.id());
         assertThat(results).extracting(DealQuotationDto::id).doesNotContain(salesActorsQuotation.id());
 
-        // Detail access via requireViewAccess is UNCHANGED -- the grant still lets qcActor read
-        // salesActor's quotation individually, even though it is now absent from qcActor's list.
+        // Detail access via requireViewAccess: the grant still lets qcActor read salesActor's
+        // quotation individually, even though it is absent from qcActor's list.
         assertThat(quotationService.get(salesActorsQuotation.id(), qcActor).id())
             .isEqualTo(salesActorsQuotation.id());
 
-        // counts().all() must always equal the size of the list that tab would show (F5) -- same
+        // counts().all() must always equal the size of the list that tab would show -- same
         // scope decision, so this must equal 1 (ownQuotation only), never 2.
         assertThat(quotationService.counts(qcActor).all()).isEqualTo(results.size());
     }
@@ -3220,25 +3219,25 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> quotationService.search(null, false, qcActor));
     }
 
-    /** Owner ruling 2026-09-24: import/account may still read an INDIVIDUAL deal's quotation(s)
-     * via {@link DealQuotationService#get}/{@link DealQuotationService#listForTicket} — that is
-     * unchanged, per-deal viewing on the deal page. But the GLOBAL LIST ({@link
-     * DealQuotationService#search}) is now scoped to deals THEY created, and neither import nor
+    /** Import/account may read an INDIVIDUAL deal's quotation(s) via
+     * {@link DealQuotationService#get}/{@link DealQuotationService#listForTicket} (per-deal
+     * viewing on the deal page). But the GLOBAL LIST ({@link
+     * DealQuotationService#search}) is scoped to deals THEY created, and neither import nor
      * account created this deal, so it is empty for them there. */
     @Test
     void importAndAccount_readIndividualDeals_butGlobalListScopedToOwn() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        // H1 lockdown: account now reads a deal's quotations only inside its list scope (live, S10+).
+        // Account reads a deal's quotations only inside its list scope (live, S10+).
         setSalesStage(ticketId, "PROCUREMENT");
-        // ...and only once the quotation went to the customer (2026-09-30 ruling): APPROVED here.
+        // ...and only once the quotation went to the customer: APPROVED here.
         setDocStatus(created.id(), "APPROVED");
         for (UserPrincipal reader : List.of(importActor, accountActor)) {
             assertThat(quotationService.get(created.id(), reader).id()).isEqualTo(created.id());
             assertThat(quotationService.listForTicket(ticketId, reader))
                 .extracting(DealQuotationDto::id).contains(created.id());
-            // NEW guard (2026-09-24): the global list no longer includes a deal this reader did
-            // not create, even though get()/listForTicket() above still can.
+            // The global list excludes a deal this reader did not create, even though
+            // get()/listForTicket() above can read it.
             assertThat(quotationService.search(null, false, reader))
                 .extracting(DealQuotationDto::id).doesNotContain(created.id());
             // Still read-only: neither role may create/edit/approve.
@@ -3248,7 +3247,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /** H1 lockdown: the SAME reads are refused to account on a deal outside its list scope (below S10),
+    /** The SAME reads are refused to account on a deal outside its list scope (below S10),
      * on every read path (get / list-for-ticket / PDF); import is unaffected. */
     @Test
     void account_isRefusedADealQuotationBelowS10_onEveryReadPath_importIsNot() {
@@ -3320,7 +3319,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * 2026-09-30 owner ruling: for account, a deal quotation is visible only once it has gone to the customer --
+     * For account, a deal quotation is visible only once it has gone to the customer --
      * APPROVED (DEAL_DIRECT's post-approval status), ISSUED (PRICING_REQUEST's), SENT, ACCEPTED. Everything else
      * (DRAFT, PENDING_APPROVAL, REJECTED, CANCELLED, ...) is 403 on get / PDF / XLS / picture and absent from
      * listForTicket and search. Other roles are unchanged.
@@ -3397,7 +3396,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertNetFieldsKept(jsonOf(rows.stream().filter(r -> r.id() == created.id()).findFirst().orElseThrow()));
     }
 
-    /** A2 fix: the finance view's item unit must come out of a quotation built through the REAL
+    /** The finance view's item unit must come out of a quotation built through the REAL
      * DEAL_DIRECT insert path, which writes {@code raw_unit} only (never unit_basis /
      * requested_unit_basis) -- a hand-built fixture that fills those columns hid this. */
     @Test
@@ -3457,7 +3456,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             salesActor);
         DealQuotationDto approvedByManager = quotationService.approve(submitted1.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(approvedByManager.docStatus()).isEqualTo(QuotationStatus.APPROVED);
-        // P2 B8: the manager approved -> the CEO (other approver) is told, not the manager.
+        // The manager approved -> the CEO (other approver) is told, not the manager.
         salesMailer.assertNoticeFor(ceoId, "DEAL_QUOTATION_DECIDED", DECIDED_TITLE,
             decidedMessage(salesManagerActor, "ผู้จัดการฝ่ายขาย", "อนุมัติใบเสนอราคา " + approvedByManager.number() + " แล้ว"),
             "/quotations/" + approvedByManager.id());
@@ -3477,14 +3476,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void salesManager_canCreateEditSubmitOnAnyDeal_notJustOwn() {
-        // salesManagerActor is not the ticket owner (salesRepId is) -- "any deal" per the plan.
+        // salesManagerActor is not the ticket owner (salesRepId is) -- a manager may act on any deal.
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesManagerActor);
         assertThat(created.docStatus()).isEqualTo(QuotationStatus.DRAFT);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Authz — the canCreateQuotation grant (owner ruling, Ploy 2026-09-09)
+    // Authz — the canCreateQuotation grant
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** {@code qc} WITHOUT the grant is covered by {@link #importAccountQcEmployee_cannotCreate}
@@ -3607,8 +3606,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // V178 — remark 7's second กำหนดยืนยันราคา variant (an exact validity_until date, gated on
-    // the document having special pricing — owner ruling 2026-09-14).
+    // Remark 7's second กำหนดยืนยันราคา variant (an exact validity_until date, gated on
+    // the document having special pricing).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -3770,11 +3769,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ") + Item 4 (V181, "ไม่รับมัดจำ")
-    // owner ruling 2026-09-16 — real-DB coverage through the real service.
+    // "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ" and "ไม่รับมัดจำ" — real-DB coverage through the real
+    // service.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Item 4 wither — sets depositPercent/remainderMode/creditDays/fullPaymentTerm together,
+    /** Wither — sets depositPercent/remainderMode/creditDays/fullPaymentTerm together,
      * since {@code DealQuotationService} resolves the four as one unit (see
      * #resolveFullPaymentTerm's own Javadoc). */
     private UpsertDealQuotationRequest withDepositAndTerm(UpsertDealQuotationRequest base,
@@ -3931,11 +3930,10 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Contact-update DRAFT snapshot refresh (2026-09-16 fix, owner re-report "แก้หรือเพิ่ม Email
-    // ผู้สั่งซื้อภายหลังไม่ได้") — CustomerService#updateContact /
-    // DealQuotationRepository#refreshDraftContactSnapshot. Written wrong-way-round per CLAUDE.md
-    // ("Permission changes must ship evidence" — same discipline applied to this scope guard):
-    // negative cases (a row that must NOT move) come first. Every call goes through
+    // Contact-update DRAFT snapshot refresh ("แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้") —
+    // CustomerService#updateContact / DealQuotationRepository#refreshDraftContactSnapshot.
+    // Written wrong-way-round per CLAUDE.md ("Permission changes must ship evidence" — same
+    // discipline applied to this scope guard): negative cases (a row that must NOT move) come first. Every call goes through
     // #transactional(customerService) rather than the bare field, so #updateContact's own
     // @Transactional is exercised through a real AOP proxy instead of being inert — see that
     // helper's own Javadoc and the double-afterCommit-defer test above for why a bare `new`-wired
@@ -4026,16 +4024,15 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * D5 (Opus review 2026-09-16): {@code refreshDraftContactSnapshot}'s own {@code UPDATE} carries
+     * {@code refreshDraftContactSnapshot}'s own {@code UPDATE} carries
      * no actor/ownership predicate at all -- it moves EVERY DRAFT pointing at this contact id,
      * regardless of whose ticket it belongs to, even though a DRAFT is otherwise visible only to
      * its owning rep plus CEO/sales_manager (DealEntryAccess is role-only). Pinned here as the
      * INTENDED behaviour, not an authz gap: the snapshot is derived data rep B's own next save on
      * their DRAFT would reproduce verbatim anyway (same contact row, same {@code resolveContact}
      * read), so this carries no information about rep B's ticket that rep A could not already see
-     * by looking at the (shared) contact record itself. See this test's own PR-body paragraph
-     * (in the branch's PR description) for the full reasoning a reviewer needs to tell this apart
-     * from a genuine cross-rep leak.
+     * by looking at the (shared) contact record itself. That is what separates this from a
+     * genuine cross-rep leak.
      */
     @Test
     void updateContact_anotherRepsDraftOnTheSameContact_isAlsoRefreshed() {
@@ -4055,7 +4052,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * D6 (Opus review 2026-09-16): {@code ContactRepository#update}'s own
+     * {@code ContactRepository#update}'s own
      * {@code COALESCE(:email, email)} treats an explicit {@code ""} (as opposed to a literal
      * {@code null} parameter, which means "leave unchanged") as "clear this field", so
      * {@code customers.contact.email} genuinely holds {@code ''} after this call --
@@ -4110,7 +4107,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /** {@code contactId} null = no contact picked: a blank snapshot (the deal's contact is never
-     * inherited, ruling 2026-10-18). Pass {@code contact.id()} when a test needs one on the row. */
+     * inherited). Pass {@code contact.id()} when a test needs one on the row. */
     private UpsertDealQuotationRequest upsertRequest(Long contactId, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(contactId, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             "หมายเหตุทดสอบ", items).withRecipientType("OWNER");
@@ -4120,20 +4117,16 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return sampleItem(null, unitPrice, pieces);
     }
 
-    /** H1: a location heading is what actually exercises {@code QuotationRenderer}'s
+    /** A location heading is what actually exercises {@code QuotationRenderer}'s
      * underline-style cache — see {@link #renderPdfAndXlsx_nonEmptyBytes}'s own comment. */
     private ItemInput sampleItem(String locationLabel, String unitPrice, int pieces) {
         // Item completeness rule (inline-deal-spec.md): thicknessMm and
-        // piecesPerBox are now REQUIRED on create/update -- this fixture predates that rule and
-        // used to leave both null (sqmPerPiece was already covered, derived from "60x60").
-        // ⚠️ 2026-09-12: that derivation is GONE (owner ruling "2) ไม่มีค่อยคำนวนเอง" --
-        // DealQuotationService#resolveSqmPerPiece no longer parses sizeText at all, see its own
-        // Javadoc), so this fixture now supplies sqmPerPiece EXPLICITLY (60x60cm = 0.36 sqm/piece)
-        // rather than relying on the deleted size-string heuristic.
+        // piecesPerBox are REQUIRED on create/update.
+        // DealQuotationService#resolveSqmPerPiece does not parse sizeText at all (see its own
+        // Javadoc), so this fixture supplies sqmPerPiece EXPLICITLY (60x60cm = 0.36 sqm/piece).
         // piecesPerBox=1 (not e.g. 4) deliberately -- box rounding is a no-op at box size 1
         // (ceil(n/1)*1 == n for every n), so every dollar-amount assertion across this large
-        // file that was written against the OLD (no-box-rounding) piecesFinal keeps passing
-        // unchanged; a caller that specifically wants to exercise box rounding builds its own
+        // file is unaffected by box rounding; a caller that specifically wants to exercise box rounding builds its own
         // ItemInput (see e.g. #incompleteItem_missingPiecesPerBox_isBadRequestNamingTheRowAndField's
         // ItemInputBuilder).
         return new ItemInput(locationLabel, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
@@ -4142,9 +4135,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal(unitPrice), BigDecimal.ZERO, "ไทย-สต็อก", 30, 45, null);
     }
 
-    /** A REAL, decodable PNG — {@code EmployeeSignatureService#upload} now runs {@code
+    /** A REAL, decodable PNG — {@code EmployeeSignatureService#upload} runs {@code
      * ImageDecodability.decode} and re-encodes to canonical 8-bit ARGB, so magic bytes alone
-     * (this helper's old behaviour) are no longer enough; see {@link #undecodablePngBytesFile()}
+     * are not enough; see {@link #undecodablePngBytesFile()}
      * for the deliberately-broken counterpart that still proves that rejection. Alpha is
      * meaningful here (not incidental) -- a signature sits over a rule, and alpha preservation
      * through the re-encode is deliberate. Same construction as {@code
@@ -4234,7 +4227,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
-    // Quotation v3 (owner feedback pass 3, 2026-09-11) — price modes, PLAIN and ADJUSTMENT rows.
+    // Quotation v3 — price modes, PLAIN and ADJUSTMENT rows.
     //
     // Every negative case below is written WRONG-WAY-ROUND per CLAUDE.md: it asserts what the
     // service must REFUSE, not what it accepts. These run through the REAL DealQuotationService
@@ -4242,7 +4235,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // into the stored row, not merely that a branch was taken.
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
-    /** S1, end to end: the owner's QN6900704-2 item 1 — ราคาพิเศษ 1,350 บาท/ตร.ม. incl. VAT on a
+    /** End to end, matching a real printed quotation (QN6900704-2 item 1) — ราคาพิเศษ 1,350 บาท/ตร.ม. incl. VAT on a
      * 60x60 tile (0.36 ตร.ม./แผ่น) prints คงเหลือ 453.84. Asserted off the row READ BACK from
      * Postgres, so the column round-trip is covered too, not just the in-memory computation. */
     @Test
@@ -4266,7 +4259,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.subtotalAmount()).isEqualByComparingTo("4538.40");
     }
 
-    /** S1: DIRECT_NET keeps the list price in ราคา and stores the rep's typed net in คงเหลือ. */
+    /** DIRECT_NET keeps the list price in ราคา and stores the rep's typed net in คงเหลือ. */
     @Test
     void directNetMode_keepsTheListPrice_andStoresTheTypedNet() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4281,8 +4274,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.subtotalAmount()).isEqualByComparingTo("7775.00");
     }
 
-    /** NET mode is untouched by v3 — the default when no mode is sent, and the arithmetic is the
-     * pre-v3 one. Guards against the new switch silently changing today's documents. */
+    /** NET mode is the default when no mode is sent, with the original arithmetic. Guards against
+     * the price-mode switch silently changing ordinary documents. */
     @Test
     void netMode_isTheDefault_andItsArithmeticIsUnchanged() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4294,7 +4287,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0).lineType()).isEqualTo(WastageCalculator.LINE_TYPE_TILE);
     }
 
-    /** S2: a PLAIN row carries description/quantity/unit/price and NONE of the tile machinery. */
+    /** A PLAIN row carries description/quantity/unit/price and NONE of the tile machinery. */
     @Test
     void plainRow_hasNoTileMachinery_andAmountIsQuantityTimesNetPrice() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4328,12 +4321,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * D1 (owner decision, 2026-09-16, review of V182): a PLAIN row (สินค้า/บริการอื่น — sanitaryware
-     * sold on ชุด) may now carry an OPTIONAL import lead time, exactly like a TILE row's. This is
-     * the production PATH the review flagged as missing evidence for — {@code ItemInput} built the
-     * way the wired editor now sends it (never a hand-constructed {@code DealQuotationItemDto}),
+     * A PLAIN row (สินค้า/บริการอื่น — sanitaryware sold on ชุด) may carry an OPTIONAL import
+     * lead time, exactly like a TILE row's. This covers the production PATH —
+     * {@code ItemInput} built the way the editor sends it (never a hand-constructed
+     * {@code DealQuotationItemDto}),
      * through the REAL {@code DealQuotationService#create} → {@code #buildPlainItem}, proving the
-     * fields the UI now sends actually reach the saved item and, from there, the printed document —
+     * fields the UI sends actually reach the saved item and, from there, the printed document —
      * not merely that a fixture built directly at the render layer can express the state.
      */
     @Test
@@ -4349,14 +4342,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(item.leadTimeMaxDays()).isEqualTo(90);
 
         // The saved document has no TILE line at all, so it takes the non-tile remark set — and
-        // now that this PLAIN row carries a lead time, remark 3 prints it rather than dropping.
+        // because this PLAIN row carries a lead time, remark 3 prints it rather than dropping it.
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(created, null, null);
         assertThat(model.remarkLines().get(2)).isEqualTo(
             "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า รายการที่ 1 ประมาณ 75-90 วัน "
                 + "หลังจากได้รับมัดจำ 30% เรียบร้อยแล้ว");
     }
 
-    /** Wording-scan fix 2 (2026-09-17): at 100% deposit the non-tile remark 3's own
+    /** At 100% deposit the non-tile remark 3's own
      * "หลังจากได้รับมัดจำ N% เรียบร้อยแล้ว" clause is replaced with "หลังจากได้รับชำระเงินเรียบร้อยแล้ว"
      * -- naming a "deposit" percentage at 100% is naming money that was never separate from the
      * full price. Exercised through the REAL create() -> render path, not a hand-built DTO. */
@@ -4376,8 +4369,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(model.remarkLines()).noneMatch(l -> l.contains("มัดจำ 100%") || l.contains("เครดิต 45"));
     }
 
-    /** D1 twin: a PLAIN row saved with NO lead time (today's ordinary case) still saves exactly as
-     * before — the field is optional, never required, for a non-TILE row. */
+    /** A PLAIN row saved with NO lead time (the ordinary case) saves without one — the field is optional, never required, for a non-TILE row. */
     @Test
     void plainRow_withNoLeadTime_stillSavesAndPrintsUnchanged() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4391,7 +4383,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(model.remarkLines()).noneMatch(l -> l.contains("ระยะเวลานำเข้า"));
     }
 
-    /** S2: a fractional PLAIN quantity must survive — the reason `quantity` is a BigDecimal and
+    /** A fractional PLAIN quantity must survive — the reason `quantity` is a BigDecimal and
      * not an int. An int would have thrown ArithmeticException on the read path instead. */
     @Test
     void plainRow_acceptsAFractionalQuantity() {
@@ -4405,7 +4397,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * S3, pinned against the owner's QN6900704-2: 3% of the four preceding line amounts
+     * Pinned against a real printed quotation (QN6900704-2): 3% of the four preceding line amounts
      * (149,767.20 + 96,012.60 + 528,269.76 + 499,224.00 = 1,273,273.56) is 38,198.21, and the row
      * prints จำนวน −1, no unit, a POSITIVE ราคา/คงเหลือ and a NEGATIVE เป็นเงิน.
      */
@@ -4441,7 +4433,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.grandTotal()).isEqualByComparingTo("1321530.62");
     }
 
-    /** S3: a flat baht adjustment, the alternative to a percentage. */
+    /** A flat baht adjustment, the alternative to a percentage. */
     @Test
     void adjustmentRow_acceptsAFlatBahtAmount() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4481,9 +4473,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /**
      * Two adjustments do NOT compound: each is a percentage of the same NON-adjustment subtotal.
-     * ⚠️ This is the one behaviour in this pass the owner has not ruled on — flagged in the PR
-     * body. Pinned here so that if she chooses compounding, this test names the decision rather
-     * than the change slipping in unnoticed.
+     * ⚠️ This behaviour has not been confirmed by the business. Pinned here so that if compounding
+     * is chosen, this test names the decision rather than the change slipping in unnoticed.
      */
     @Test
     void twoAdjustments_doNotCompound() {
@@ -4538,8 +4529,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /** ...and on the LENIENT preview path too. calculate-line used to 400 on a zero price via the
-     * bean annotation; moving the rule must not have quietly loosened that. */
+    /** ...and on the LENIENT preview path too. calculate-line must 400 on a zero price, as the
+     * bean annotation once did; moving the rule must not loosen that. */
     @Test
     void tileRow_withNonPositivePrice_isRejectedOnTheCalculateLinePreviewToo() {
         assertThatThrownBy(() -> quotationService.calculateLine(
@@ -4571,8 +4562,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /**
      * An ADJUSTMENT's amount is DERIVED, and a client-supplied {@code unitPrice} on such a row is
-     * IGNORED — not refused (review fix F2). It used to 400, which made the round-trip below
-     * impossible; the caller still cannot dictate the discount, because
+     * IGNORED — not refused (refusing would make the round-trip below impossible); the caller
+     * still cannot dictate the discount, because
      * {@code #buildAdjustmentItem} never reads {@code unitPrice} at all.
      *
      * <p>Written wrong-way-round in the sense that matters here: the assertion is that the absurd
@@ -4713,37 +4704,31 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════
-    // Review fixes F1 / F2 / F3 — the UPDATE path.
+    // The UPDATE path.
     //
-    // ⚠️ The v3 update() path had NO coverage at all until these landed: replacing
-    // `resolvePriceMode(request.priceMode())` at DealQuotationService#update with a hardcoded
-    // PRICE_MODE_NET left the whole suite green while silently repricing every SPECIAL_SQM and
-    // DIRECT_NET document a rep edits. Every test in this block runs through the REAL service
-    // against a REAL Postgres, and the first three are the ones that red under that mutation.
+    // ⚠️ Replacing `resolvePriceMode(request.priceMode())` at DealQuotationService#update with a
+    // hardcoded PRICE_MODE_NET must turn these red: otherwise the suite stays green while
+    // silently repricing every SPECIAL_SQM and DIRECT_NET document a rep edits. Every test in
+    // this block runs through the REAL service against a REAL Postgres.
     //
-    // MUTATION-CHECK RECORD (actually run against a real Postgres, not simulated; each reverted
-    // with an editor, never `git checkout --`, because these worktrees are shared). Baseline for
-    // all four: 216 green across th.co.glr.hr.dealquotation.*Test + QuotationRendererTest.
-    //
-    //   MC1  update()'s price mode hardcoded to PRICE_MODE_NET  -> exactly 4 red, ALL NEW:
-    //        update_withNoPriceMode_keepsTheStoredSpecialSqmMode_andRepricesNothing,
-    //        ...keepsTheStoredDirectNetMode..., update_withAnExplicitPriceMode_switchesTheDocumentBothWays,
-    //        getThenPutVerbatim_roundTripsASpecialSqmDocument. Nothing else moved.
-    //   MC2  the ADJUSTMENT "cannot supply a price" throw put back -> exactly 3 red:
-    //        adjustmentRow_withARepSuppliedPrice_ignoresIt_andStillDerivesTheAmount and both
-    //        getThenPutVerbatim_* round-trips.
-    //   MC3  the negative-subtotal guard disabled (signum() < -1) -> exactly 3 red:
-    //        twoAdjustments_drivingTheSubtotalNegative_areRejected,
-    //        aFlatAdjustmentLargerThanTheDocument_isRejected, update_drivingTheSubtotalNegative_isRejected.
-    //   MC4  each of the three @Digits removed in turn (DealQuotationRequests) -> exactly ONE red
-    //        each, the matching case in DealQuotationRequestsValidationTest.
+    // Mutations that must each go red:
+    //   - update()'s price mode hardcoded to PRICE_MODE_NET: the keepsTheStored*Mode update tests,
+    //     update_withAnExplicitPriceMode_switchesTheDocumentBothWays and
+    //     getThenPutVerbatim_roundTripsASpecialSqmDocument.
+    //   - the ADJUSTMENT "cannot supply a price" throw restored:
+    //     adjustmentRow_withARepSuppliedPrice_ignoresIt_andStillDerivesTheAmount and both
+    //     getThenPutVerbatim_* round-trips.
+    //   - the negative-subtotal guard disabled: twoAdjustments_drivingTheSubtotalNegative_areRejected,
+    //     aFlatAdjustmentLargerThanTheDocument_isRejected, update_drivingTheSubtotalNegative_isRejected.
+    //   - each of the three @Digits removed in turn (DealQuotationRequests): exactly the matching
+    //     case in DealQuotationRequestsValidationTest.
     // ══════════════════════════════════════════════════════════════════════════════════════
 
     /**
-     * F1: a rep creates a SPECIAL_SQM quotation, reopens the draft, edits ONE header field and
+     * A rep creates a SPECIAL_SQM quotation, reopens the draft, edits ONE header field and
      * saves without re-sending {@code priceMode}. Nothing about the money may move.
      *
-     * <p>Before the fix the document repriced: 453.84 → 2,000.00 per แผ่น, {@code
+     * <p>The failure to guard against is a reprice: 453.84 → 2,000.00 per แผ่น, {@code
      * special_price_sqm} to NULL, the ราคาพิเศษ sub-line gone, ส่วนลด พิเศษ→Net, subtotal 4.4×.
      */
     @Test
@@ -4774,7 +4759,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * F1, DIRECT_NET — the worse half. The rep-typed net is deliberately NOT stored in a column of
+     * DIRECT_NET — the worse half. The rep-typed net is deliberately NOT stored in a column of
      * its own (it IS final_unit_price), so once an update overwrites it with the list price there
      * is nothing left to recover it from.
      */
@@ -4796,7 +4781,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saved.subtotalAmount()).isEqualByComparingTo("7775.00");
     }
 
-    /** F1: an EXPLICIT mode still wins — that is what lets a rep switch a draft's mode at all.
+    /** An EXPLICIT mode still wins — that is what lets a rep switch a draft's mode at all.
      * Both directions, because keeping the stored mode must not become "ignore what was sent". */
     @Test
     void update_withAnExplicitPriceMode_switchesTheDocumentBothWays() {
@@ -4820,9 +4805,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(backToNet.items().get(0).specialPriceSqm()).isNull();
     }
 
-    /** F1: the pre-v3 case — a NET document updated with no mode stays NET. Deliberately does NOT
+    /** A NET document updated with no mode stays NET. Deliberately does NOT
      * red under the hardcode mutation (NET is NET either way); it is here to pin that "keep the
-     * stored mode" did not change today's behaviour for the 99% of documents that are NET. */
+     * stored mode" leaves the ordinary NET documents unchanged. */
     @Test
     void update_withNoPriceMode_onANetDocument_staysNet() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4834,16 +4819,16 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * F2: GET a document containing BOTH kinds of adjustment, hand every item back VERBATIM, and
+     * GET a document containing BOTH kinds of adjustment, hand every item back VERBATIM, and
      * the save must succeed with nothing moved.
      *
-     * <p>Two separate traps sit on this path and both had to be fixed for it to pass:
+     * <p>Two separate traps sit on this path:
      * <ol>
      *   <li>{@code mapItem} returns {@code unitPrice} = the derived amount on an ADJUSTMENT row
-     *       (the ราคา column has to print it) and the service used to REFUSE a supplied price on
+     *       (the ราคา column has to print it), so the service must not REFUSE a supplied price on
      *       exactly that row — a contract that 400s the caller for echoing a field we sent.</li>
-     *   <li>A FLAT adjustment's amount had no field on the DTO at all, so there was nothing to
-     *       echo and the PUT failed the "exactly one of percent / flat" rule instead. Hence
+     *   <li>A FLAT adjustment's amount needs a field on the DTO to echo, or the PUT fails the
+     *       "exactly one of percent / flat" rule instead. Hence
      *       {@code DealQuotationItemDto.adjustmentAmount}.</li>
      * </ol>
      */
@@ -4880,7 +4865,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saved.subtotalAmount()).isEqualByComparingTo(created.subtotalAmount());
     }
 
-    /** F2: the same round-trip on a SPECIAL_SQM document, which additionally exercises F1's
+    /** The same round-trip on a SPECIAL_SQM document, which additionally exercises
      * keep-the-stored-mode (the echoed payload carries no {@code priceMode}). */
     @Test
     void getThenPutVerbatim_roundTripsASpecialSqmDocument() {
@@ -4903,8 +4888,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * F3 — ⚠️ a NEW rule the owner has not ruled on, flagged in the PR body next to the
-     * "two adjustments do not compound" question it falls out of.
+     * ⚠️ A rule the business has not confirmed; it falls out of the "two adjustments do not
+     * compound" question above.
      *
      * <p>Because adjustments do not compound, each one takes the FULL non-adjustment base — so two
      * 60% rows take 120% and the document ends up owing the customer money. Refused.
@@ -4922,7 +4907,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("ติดลบ");
     }
 
-    /** F3: a FLAT adjustment is bounded only by {@code @DecimalMax("99999999")} and bears no
+    /** A FLAT adjustment is bounded only by {@code @DecimalMax("99999999")} and bears no
      * relation to the document's own size, so it is the easier of the two paths to hit. */
     @Test
     void aFlatAdjustmentLargerThanTheDocument_isRejected() {
@@ -4934,7 +4919,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("ติดลบ");
     }
 
-    /** F3, the boundary: EXACTLY zero is allowed. A 100% discount is at least an intelligible
+    /** The boundary: EXACTLY zero is allowed. A 100% discount is at least an intelligible
      * document to issue; only a NEGATIVE grand total is refused. */
     @Test
     void anAdjustmentTakingTheSubtotalToExactlyZero_isAccepted() {
@@ -4944,7 +4929,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.subtotalAmount()).isEqualByComparingTo("0.00");
     }
 
-    /** F3 applies on UPDATE too, not only on create — the same {@code buildItems} is the single
+    /** The negative-total guard applies on UPDATE too, not only on create — the same {@code buildItems} is the single
      * gate, and a draft edited into the negative would otherwise slip past. */
     @Test
     void update_drivingTheSubtotalNegative_isRejected() {
@@ -4963,12 +4948,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("1000.00");
     }
 
-    // ── Quotation arithmetic reconciliation (2026-09-15) — service-level reproductions of five
-    // ── of the owner's real printed documents, through create()+get() against real Postgres.
-    // ── D6 (English per-sqm boxes) is already pinned in DealQuotationEnglishIntegrationTest;
-    // ── not duplicated here. D2/D4/D9 have no service-level equivalent (D2/D4 are plain-row
-    // ── totals identical in shape to D1/D8 below; D9 is pieces-only, already pinned at the
-    // ── WastageCalculator layer by WastageCalculatorTest/QuotationGoldenDocumentsTest). ────────
+    // ── Quotation arithmetic reconciliation — service-level reproductions of five real printed
+    // ── documents, through create()+get() against real Postgres.
+    // ── English per-sqm boxes are pinned in DealQuotationEnglishIntegrationTest; not duplicated
+    // ── here. Plain-row totals identical in shape to the cases below, and pieces-only documents,
+    // ── have no service-level equivalent (pieces-only is pinned at the WastageCalculator layer by
+    // ── WastageCalculatorTest/QuotationGoldenDocumentsTest). ────────
 
     @Test
     void goldenDocument_D1_QN6900971_4_plainRowsWithDiscount20pct() {
@@ -5009,8 +4994,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void goldenDocument_D3_QN6900981_1_areaModeSpecialSqmNoWastage() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(
-                // Row 1: 2,793 × 1.39 = 3,882.27. The document printed 3,882 (HALF_UP); since the
-                // owner's 2026-10-12 round-up ruling this prints 3,883 → 3,884 (two per box).
+                // Row 1: 2,793 × 1.39 = 3,882.27. The original document printed 3,882 (HALF_UP);
+                // pieces round UP, so this prints 3,883 → 3,884 (two per box).
                 areaSpecialSqmItem("2793", "0.72", 2, "790"),
                 areaSpecialSqmItem("274", "0.72", 2, "790"))),
             salesActor);
@@ -5061,8 +5046,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 areaSpecialSqmItem("945", "0.72", 2, "1800"),
                 areaSpecialSqmItem("339", "0.72", 2, "1800"),
                 areaSpecialSqmItem("159", "0.72", 2, "860"),
-                // 511 × 1.39 = 710.29. The document printed 710 (HALF_UP); since the owner's
-                // 2026-10-12 round-up ruling this prints 711 → 712 (two per box).
+                // 511 × 1.39 = 710.29. The original document printed 710 (HALF_UP); pieces
+                // round UP, so this prints 711 → 712 (two per box).
                 areaSpecialSqmItem("511", "0.72", 2, "1800"),
                 areaSpecialSqmItem("1200", "0.72", 2, "1800"))),
             salesActor);
@@ -5100,7 +5085,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saved.grandTotal()).isEqualByComparingTo("64649.40");
     }
 
-    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+    // ── "Sell loose pieces" ─────────────────────────────────
 
     /** The flag persists, round-trips on GET, and defaults true for a request that never mentions
      * it — same "null reads as true" contract as every other layer. */
@@ -5222,7 +5207,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, roundToFullBox);
     }
 
-    /** D1/D8 — a PLAIN row with an explicit discount ({@link #plainItem} has none). */
+    /** A PLAIN row with an explicit discount ({@link #plainItem} has none). */
     private ItemInput plainItemWithDiscount(String description, String quantity, String unit,
                                             String unitPrice, String discountPct) {
         return new ItemInput(null, null, null, null, null, null, null, null,
@@ -5232,9 +5217,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, null, null, null);
     }
 
-    /** D1 (owner decision, 2026-09-16) — a PLAIN row carrying the OPTIONAL import lead time
-     * QuotationPlainItemRow's new control now sends ({@link #plainItem} has none, same as every
-     * PLAIN row before this fix). */
+    /** A PLAIN row carrying the OPTIONAL import lead time
+     * QuotationPlainItemRow's control sends ({@link #plainItem} has none). */
     private ItemInput plainItemWithLeadTime(String description, String quantity, String unit,
                                             String unitPrice, int leadTimeMinDays, int leadTimeMaxDays) {
         return new ItemInput(null, null, null, null, null, null, null, null,
@@ -5244,7 +5228,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, null, null, null);
     }
 
-    /** D3/D7 — an AREA-mode TILE row priced SPECIAL_SQM, no wastage. {@code unitPrice} is a
+    /** An AREA-mode TILE row priced SPECIAL_SQM, no wastage. {@code unitPrice} is a
      * dummy positive value: SPECIAL_SQM pricing never reads it for the net/amount computation
      * (only validates it is positive; the printed ราคา column instead shows the special price). */
     private ItemInput areaSpecialSqmItem(String area, String sqmPerPiece, int piecesPerBox, String specialPerSqm) {
@@ -5257,7 +5241,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal(specialPerSqm), null, null, null, null);
     }
 
-    /** D5 — a PIECES-mode TILE row priced SPECIAL_SQM, no wastage, box rounding only. */
+    /** A PIECES-mode TILE row priced SPECIAL_SQM, no wastage, box rounding only. */
     private ItemInput piecesTileSpecialSqmItem(int piecesInput, int piecesPerBox, String listPrice,
                                                String specialPerSqm, String sqmPerPiece) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
@@ -5309,7 +5293,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items).withRecipientType("OWNER");
     }
 
-    /** Owner-directed reversal of F2 (2026-09-26) — the full canonical constructor, for the one
+    /** The full canonical constructor, for the one
      * field (orderedByName) none of this class's other helpers thread through. The fixture's
      * contact is picked; every other field left at its "use the default" value. */
     private UpsertDealQuotationRequest upsertRequestWithOrderedByName(String orderedByName, List<ItemInput> items) {
@@ -5340,7 +5324,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new BigDecimal(directNet), null, null, null);
     }
 
-    /** S2 — description/quantity/unit/price and nothing else. */
+    /** Description/quantity/unit/price and nothing else. */
     private ItemInput plainItem(String description, String quantity, String unit, String unitPrice) {
         return new ItemInput(null, null, null, null, null, null, null, null,
             null, null, null, null, null, null, null, null,
