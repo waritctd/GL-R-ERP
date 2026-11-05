@@ -28,6 +28,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn(),
       },
+      // เจ้าของงาน picker: the people who may OWN a deal (sales / sales_manager / quotation grant).
+      // Same eligible-people list the quotation editor's print-name selectors already read.
+      dealQuotations: {
+        displayNameOptions: vi.fn(),
+      },
       // FX rates back the "≈ x บาท" companion beside a catalog price. Fetched via react-query inside
       // the modal, so every render() needs a QueryClientProvider (see renderModal() below).
       // `api.dealEstimateMarkup` is deliberately NOT mocked: if the modal calls it again these tests
@@ -38,6 +43,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     },
   };
 });
+
+// The signed-in rep is id 6; id 9 is a colleague the admin keys the deal for.
+const currentUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+const OWNER_OPTIONS = [
+  { id: 6, name: 'คุณสมหมาย ขายดี' },
+  { id: 9, name: 'คุณวิมล ขายเก่ง' },
+];
 
 const mockCustomer = { id: 1, name: 'บริษัท ทดสอบ จำกัด', taxId: null };
 const mockProject = { id: 10, name: 'โครงการ A' };
@@ -158,6 +170,7 @@ beforeEach(() => {
   api.customers.search.mockResolvedValue({ customers: [mockCustomer] });
   api.customers.projects.mockResolvedValue({ projects: [mockProject] });
   api.tickets.list.mockResolvedValue({ tickets: [] });
+  api.dealQuotations.displayNameOptions.mockResolvedValue({ items: OWNER_OPTIONS });
   // FX rates covering the catalogItem() fixture's EUR price. Individual tests override this to
   // exercise the "no rate for this currency" path.
   api.fxRates.list.mockResolvedValue({
@@ -534,6 +547,89 @@ describe('TicketCreateModal validation', () => {
 
     openSection('entryChannel');
     expect(screen.getByRole('radio', { name: /เจ้าของตรง/ }).getAttribute('aria-checked')).toBe('true');
+  });
+});
+
+// Deal OWNER vs KEYER (Ploy 2026-11-05): admin staff key deals for other reps, so the create form
+// carries a เจ้าของงาน picker. It defaults to the signed-in user (today's behaviour) and its choice
+// travels as `ownerEmployeeId`. Assumes a native <select> labelled เจ้าของงาน, fed by
+// api.dealQuotations.displayNameOptions, with the signed-in user passed as the `user` prop.
+describe('TicketCreateModal เจ้าของงาน (deal owner) picker', () => {
+  async function ownerSelect() {
+    openSection('details');
+    return screen.findByLabelText(/เจ้าของงาน/);
+  }
+
+  it('shows a เจ้าของงาน picker listing the eligible people, defaulting to the current user', async () => {
+    renderModal({ user: currentUser, onSubmit: vi.fn() });
+
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').map((o) => o.value))
+      .toEqual(expect.arrayContaining(['6', '9'])));
+    expect(select.value).toBe('6');
+  });
+
+  it("sends the chosen colleague's id as ownerEmployeeId", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').length).toBeGreaterThan(1));
+    fireEvent.change(select, { target: { value: '9' } });
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId).toBe(9);
+  });
+
+  it('left untouched, the deal is still the current user\'s own (ownerEmployeeId omitted or = current user)', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    await ownerSelect();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId ?? currentUser.id).toBe(currentUser.id);
+  });
+
+  // Review finding (11-06): a resumed draft must not fall back to the keyer as owner, or the
+  // deal lands under the admin again.
+  it('autosaves the chosen owner into the draft', async () => {
+    renderModal({ user: currentUser, onSubmit: vi.fn() });
+    const select = await ownerSelect();
+    await waitFor(() => expect(within(select).getAllByRole('option').length).toBeGreaterThan(1));
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText(/ชื่อดีล/), { target: { value: 'ดีลคีย์แทน' } });
+      fireEvent.change(select, { target: { value: '9' } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+    } finally {
+      vi.useRealTimers();
+    }
+    const [draft] = listDrafts();
+    expect(loadDraft(draft.id).ownerEmployeeId).toBe('9');
+  });
+
+  it('a restored draft brings its owner back and submits it as ownerEmployeeId', async () => {
+    saveDraft(null, { dealTitle: 'ดีลคีย์แทน', ownerEmployeeId: '9' });
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderModal({ user: currentUser, onSubmit });
+    fireEvent.click(await screen.findByRole('button', { name: 'เปิดต่อ' }));
+
+    const select = await ownerSelect();
+    await waitFor(() => expect(select.value).toBe('9'));
+    await selectCustomerAndProject();
+    chooseEntryChannel();
+    submitForm();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].ownerEmployeeId).toBe(9);
   });
 });
 

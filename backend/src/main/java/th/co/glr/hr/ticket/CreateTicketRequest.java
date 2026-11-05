@@ -39,8 +39,23 @@ public record CreateTicketRequest(
      * project" create at {@code /quotations/new} is the ONLY caller that sends it. Provenance
      * only: the deal is an ordinary pipeline deal either way (listed, counted, movable).
      */
-    Boolean quotationOnly
+    Boolean quotationOnly,
+    /**
+     * Optional เจ้าของงาน (deal owner, 2026-11-05): admin staff key deals for other reps. Null = the
+     * actor owns it. Otherwise {@code sales.ticket.created_by} becomes this employee (sells it, earns
+     * the commission, is notified) and the actor is recorded in {@code keyed_by} and keeps full access.
+     * Must be an active employee who can enter deals ({@code TicketService#create} validates).
+     */
+    Long ownerEmployeeId
 ) {
+    /** The pre-owner eleven-argument shape: the actor owns the deal. */
+    public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
+                               Long projectId, Long contactId, String note, String entryChannel,
+                               List<TicketItemRequest> items, LocalDate nextFollowUpAt, Boolean quotationOnly) {
+        this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
+            items, nextFollowUpAt, quotationOnly, null);
+    }
+
     /**
      * The ten-argument shape, kept so every existing call site that passes
      * {@code nextFollowUpAt} keeps compiling unchanged — a deal created through it is an ordinary
@@ -51,7 +66,7 @@ public record CreateTicketRequest(
                                Long projectId, Long contactId, String note, String entryChannel,
                                List<TicketItemRequest> items, LocalDate nextFollowUpAt) {
         this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
-            items, nextFollowUpAt, null);
+            items, nextFollowUpAt, null, null);
     }
 
     /**
@@ -65,6 +80,6 @@ public record CreateTicketRequest(
                                Long projectId, Long contactId, String note, String entryChannel,
                                List<TicketItemRequest> items) {
         this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
-            items, null, null);
+            items, null, null, null);
     }
 }

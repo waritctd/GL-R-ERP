@@ -49,7 +49,7 @@ public class TicketRepository {
                t.cancel_reason, t.cancelled_at,
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
-               t.quotation_only
+               t.quotation_only, t.keyed_by
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -139,7 +139,7 @@ public class TicketRepository {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
-               AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
+               AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy OR t.keyed_by = :createdBy)
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
@@ -176,7 +176,7 @@ public class TicketRepository {
             SELECT COUNT(*) FROM sales.ticket t
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
-               AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)
+               AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy OR t.keyed_by = :createdBy)
             """);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
@@ -324,14 +324,20 @@ public class TicketRepository {
      * referenced by a whole customer's worth of billing notes, instead of one {@link #findById}
      * (a heavy join-everything load) per referenced ticket per note. Missing ids are simply
      * absent from the returned map, never an error. */
-    public Map<Long, Long> findCreatedByIds(java.util.Collection<Long> ticketIds) {
+    public Map<Long, java.util.Set<Long>> findOwnerAndKeyerIds(java.util.Collection<Long> ticketIds) {
         if (ticketIds.isEmpty()) {
             return Map.of();
         }
-        Map<Long, Long> byId = new java.util.HashMap<>();
-        jdbc.query("SELECT ticket_id, created_by FROM sales.ticket WHERE ticket_id IN (:ids)",
+        Map<Long, java.util.Set<Long>> byId = new java.util.HashMap<>();
+        jdbc.query("SELECT ticket_id, created_by, keyed_by FROM sales.ticket WHERE ticket_id IN (:ids)",
             Map.of("ids", ticketIds),
-            rs -> { byId.put(rs.getLong("ticket_id"), rs.getLong("created_by")); });
+            rs -> {
+                java.util.Set<Long> people = new java.util.HashSet<>();
+                people.add(rs.getLong("created_by"));
+                long keyed = rs.getLong("keyed_by");
+                if (!rs.wasNull()) people.add(keyed);
+                byId.put(rs.getLong("ticket_id"), people);
+            });
         return byId;
     }
 
@@ -362,8 +368,19 @@ public class TicketRepository {
         return "QT-" + Year.now() + "-" + String.format("%04d", seq);
     }
 
-    @Transactional
+    /** May {@code employeeId} own a deal? Same predicate as the print-name / owner picker's option list. */
+    public boolean isEligibleDealOwner(long employeeId) {
+        return th.co.glr.hr.commission.QuotationDisplayNameEligibility.isEligible(
+            jdbc, employeeId, th.co.glr.hr.auth.DivisionAccessPolicy.SALES_DIVISION_CODE);
+    }
+
+    /** The actor owns (and keyed) the deal -- the shape every pre-owner caller uses. */
     public long create(CreateTicketRequest request, String code, long actorId, String actorName) {
+        return create(request, code, actorId, actorId, actorName);
+    }
+
+    @Transactional
+    public long create(CreateTicketRequest request, String code, long ownerId, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
             ? request.priority() : Priority.DEFAULT;
         // Every deal begins as a DRAFT at the lead stage, regardless of whether
@@ -376,10 +393,10 @@ public class TicketRepository {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO sales.ticket
-                (code, title, status, priority, created_by, customer_name, customer_id, project_id, contact_id, note, entry_channel,
+                (code, title, status, priority, created_by, keyed_by, customer_name, customer_id, project_id, contact_id, note, entry_channel,
                  next_follow_up_at, quotation_only)
             VALUES
-                (:code, :title, :status, :priority, :createdBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel,
+                (:code, :title, :status, :priority, :createdBy, :keyedBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel,
                  :nextFollowUpAt, :quotationOnly)
             """,
             new MapSqlParameterSource()
@@ -387,7 +404,8 @@ public class TicketRepository {
                 .addValue("title", request.title())
                 .addValue("status", status)
                 .addValue("priority", priority)
-                .addValue("createdBy", actorId)
+                .addValue("createdBy", ownerId)
+                .addValue("keyedBy", actorId)
                 .addValue("customerName", request.customerName())
                 .addValue("customerId", request.customerId())
                 .addValue("projectId", request.projectId())
@@ -1229,7 +1247,7 @@ public class TicketRepository {
             rs.getTimestamp("reopened_at") != null ? rs.getTimestamp("reopened_at").toInstant() : null,
             rs.getInt("reopen_count"),
             rs.getBoolean("quotation_only")
-        );
+        ).withKeyedById(rs.getObject("keyed_by", Long.class));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1315,7 +1333,8 @@ public class TicketRepository {
             due == null ? null : due.date(), due == null ? null : due.basis(),
             due == null ? null : due.creditDays(),
             facts.liveDirectQuotation(), facts.quotedRecipients(),
-            "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null);
+            "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
+            s.keyedById());
     }
 
     /**

@@ -1,6 +1,7 @@
 package th.co.glr.hr.customerquotation;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -854,7 +855,7 @@ public class CustomerQuotationService {
     }
 
     private void requireOwner(PricingRequestSummaryDto summary, UserPrincipal actor) {
-        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

@@ -1676,7 +1676,7 @@ public class DealQuotationRepository {
             where.append(" AND ").append(NEEDS_REWORK_PREDICATE);
         }
         if (ownerTicketCreatedById != null) {
-            where.append(" AND t.created_by = :ownerId");
+            where.append(" AND (t.created_by = :ownerId OR t.keyed_by = :ownerId)");
             params.addValue("ownerId", ownerTicketCreatedById);
         }
         List<long[]> idsAndKind = jdbc.query("""
@@ -1720,7 +1720,7 @@ public class DealQuotationRepository {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String ownerClause = "";
         if (ownerTicketCreatedById != null) {
-            ownerClause = " AND t.created_by = :ownerId";
+            ownerClause = " AND (t.created_by = :ownerId OR t.keyed_by = :ownerId)";
             params.addValue("ownerId", ownerTicketCreatedById);
         }
         String originClause = originPredicate(originFilter, includePricedOrigins);
