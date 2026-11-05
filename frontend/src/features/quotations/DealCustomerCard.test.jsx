@@ -16,9 +16,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      // The ผู้รับ field reads the deal's route (owner ruling 2026-09-30 #1) from the served stage
-      // catalog — the SAME canned payload mockApi serves (data/dealStageCatalog.js, pinned against
-      // DealStage.java / DealRoute.java by stageCatalog.test.js), never a fixture of its own.
+      // The ผู้รับ field reads the deal's route from the served stage catalog: the SAME canned payload
+      // mockApi serves (data/dealStageCatalog.js, pinned against DealStage.java / DealRoute.java by
+      // stageCatalog.test.js), never a fixture of its own.
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
       locations: { provinces: vi.fn(), districts: vi.fn(), subdistricts: vi.fn() },
       customers: {
@@ -30,7 +30,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createContact: vi.fn(),
         update: vi.fn(),
       },
-      // Slice 2: the "เลือกดีลที่มีอยู่" branch mounts DealPicker, which reads the deal list.
+      // The "เลือกดีลที่มีอยู่" branch mounts DealPicker, which reads the deal list.
       tickets: { list: vi.fn() },
       dealQuotations: { createRevision: vi.fn() },
     },
@@ -71,16 +71,13 @@ describe('DealCustomerCard', () => {
     fireEvent.change(screen.getByLabelText(/^ลูกค้า/), { target: { value: 'ก้าวหน้า' } });
     await waitFor(() => expect(api.customers.search).toHaveBeenCalledWith('ก้าวหน้า'));
 
-    // role="option", not "button": the typeahead popup is a real listbox since V4
-    // (2026-09-10) — it used to announce as a plain bulleted list of buttons.
+    // role="option", not "button": the typeahead popup is a real listbox.
     const option = await screen.findByRole('option', { name: new RegExp(testCustomer.name) });
     fireEvent.mouseDown(option);
 
     expect(screen.getByText(testCustomer.name)).not.toBeNull();
     expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull(); // the search input is gone, replaced by the chip
-    // Loads โครงการ for the newly-picked customer. Owner-directed reversal of F2/V167
-    // (2026-09-26): this card no longer fetches ผู้ติดต่อ at all -- the ผู้สั่งซื้อ contact-picker
-    // it used to render (and load contacts for) is gone.
+    // Loads โครงการ for the newly-picked customer. This card does not fetch ผู้ติดต่อ at all.
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(testCustomer.id));
     expect(api.customers.contacts).not.toHaveBeenCalled();
   });
@@ -122,8 +119,7 @@ describe('DealCustomerCard', () => {
     await waitFor(() => expect(api.customers.search).toHaveBeenCalledWith('บริษัท ใหม่ จำกัด'));
     fireEvent.mouseDown(await screen.findByRole('button', { name: 'เพิ่มลูกค้าใหม่' }));
 
-    // Was emptyNewCustomer()'s '' before the fix -- the rep had to retype the name they had
-    // already typed into the search box to get here.
+    // The rep must not have to retype the name already typed into the search box to get here.
     expect(screen.getByPlaceholderText('บริษัท … จำกัด').value).toBe('บริษัท ใหม่ จำกัด');
   });
 
@@ -153,7 +149,7 @@ describe('DealCustomerCard', () => {
     await waitFor(() => expect(screen.getByText('โครงการใหม่ทดสอบ')).not.toBeNull());
   });
 
-  // ── โครงการ type-ahead (owner testing feedback, 2026-09-11) ──────────────────────────────────
+  // ── โครงการ type-ahead ──
   describe('โครงการ type-ahead filter', () => {
     const projectA = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
     const projectB = { id: 2, customerId: 1, name: 'โครงการ Siam Paragon ชั้น 3' };
@@ -255,7 +251,7 @@ describe('DealCustomerCard', () => {
     expect(document.getElementById('deal-entry-channel')).not.toBeNull();
   });
 
-  // ── F7 (owner, 2026-09-10): เลขที่ผู้เสียภาษี / โทร. on the SELECTED customer ────────────────
+  // ── เลขที่ผู้เสียภาษี / โทร. on the SELECTED customer ──
   describe('F7: editing the selected customer\'s เลขที่ผู้เสียภาษี / โทร.', () => {
     const withPhone = { ...testCustomer, phone: '02-111-2222' };
 
@@ -327,7 +323,7 @@ describe('DealCustomerCard', () => {
     });
   });
 
-  // ── Foreign-customer address (bug fix, prod QT-2026-0039-1) ─────────────────────────────────
+  // ── Foreign-customer address ──
   describe('เพิ่มลูกค้าใหม่ — ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย', () => {
     async function openNewCustomerModal() {
       api.customers.search.mockResolvedValue({ customers: [] });
@@ -380,9 +376,9 @@ describe('DealCustomerCard', () => {
         address: '123 Nguyen Hue St, District 1, Ho Chi Minh City, Vietnam',
         phone: null,
       });
-      // The mechanism the fix relies on: CustomerController#structured / mockApi's
-      // structuredCustomerAddress both flag "structured" on ANY of these keys being non-null --
-      // an empty string counts. The payload must not carry them at all, not even as ''.
+      // CustomerController#structured / mockApi's structuredCustomerAddress both flag "structured" on
+      // ANY of these keys being non-null, an empty string included. The payload must not carry them
+      // at all, not even as ''.
       for (const key of ['addressLine', 'provinceCode', 'districtCode', 'subdistrictCode', 'postalCode']) {
         expect(payload[key]).toBeUndefined();
       }
@@ -415,7 +411,7 @@ describe('DealCustomerCard', () => {
   });
 });
 
-// ── Owner, 2026-09-11: "a way for the sales to fill in the customer address" ────────────────────
+// ── A way for sales to fill in the customer address ──
 describe('DealCustomerCard — ที่อยู่ on the selected customer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -467,11 +463,10 @@ describe('DealCustomerCard — ที่อยู่ on the selected customer', 
   });
 });
 
-// ── Slice 2 — flow A (SLICE-2-FLOW-A.md §A) ────────────────────────────────────────────────────
-// The card becomes step 1 "ดีล": a segmented choice (เลือกดีลที่มีอยู่ | สร้างดีลใหม่) over the
-// DealPicker / today's customer+project card, then ผู้รับใบเสนอราคา* (three pill radios, required,
-// in S-order). The spec's live "ดีลจะอยู่ที่ขั้น …" helper line was dropped by owner ruling
-// 2026-09-30 (the recipient no longer moves the deal's stage in slice 2).
+// ── Flow A ──
+// The card is step 1 "ดีล": a segmented choice (เลือกดีลที่มีอยู่ | สร้างดีลใหม่) over the DealPicker /
+// customer+project card, then ผู้รับใบเสนอราคา* (three pill radios, required, in S-order). There is no
+// "ดีลจะอยู่ที่ขั้น …" helper line: the recipient does not move the deal's stage.
 describe('DealCustomerCard — ดีล step (slice 2)', () => {
   const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
 
@@ -539,8 +534,8 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
     expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
     expect(screen.getAllByRole('radio').map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
-    // Owner ruling 2026-09-30 (slice-2 scope reduction): no "ดีลจะอยู่ที่ขั้น …" line — the recipient
-    // no longer moves the deal's stage, so the field must not say it will. And no S-codes (§18).
+    // No "ดีลจะอยู่ที่ขั้น …" line: the recipient does not move the deal's stage, so the field must
+    // not say it will. And no S-codes.
     expect(screen.queryByText(/ดีลจะอยู่ที่ขั้น|ดีลอยู่ที่ขั้น/)).toBeNull();
     expect(document.body.textContent).not.toMatch(/\bS\d+\b|QUOTE_/);
   });
@@ -550,7 +545,7 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
     const channel = screen.getByRole('group', { name: 'ช่องทางรับงาน' });
     const recipient = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
     expect(channel.compareDocumentPosition(recipient) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // #1085: UNSPECIFIED is not a pickable channel.
+    // UNSPECIFIED is not a pickable channel.
     expect(within(channel).getAllByRole('button')).toHaveLength(3);
   });
 
@@ -569,10 +564,10 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
     expect(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' }).getAttribute('aria-invalid')).toBe('true');
   });
 
-  // Owner ruling 2026-09-30 #1 — off-route recipient: ALLOW + inline note. All three pills stay
-  // selectable on every deal; when the chosen recipient's quote stage is not on the deal's route
-  // (read from the served catalog via routeForChannel), a quiet info line says so. No block, no modal.
-  // On the new-deal card the deal's channel is the one being chosen on that card.
+  // Off-route recipient: ALLOW + inline note. All three pills stay selectable on every deal; when
+  // the chosen recipient's quote stage is not on the deal's route (read from the served catalog via
+  // routeForChannel), a quiet info line says so. No block, no modal. On the new-deal card the deal's
+  // channel is the one being chosen on that card.
   describe('off-route recipient note (owner ruling #1)', () => {
     const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
 

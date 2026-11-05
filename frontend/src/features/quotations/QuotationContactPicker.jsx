@@ -22,8 +22,7 @@ function emptyNewContact() {
 
 /**
  * ผู้ติดต่อ picker — one of the customer's contact records (`customers.contact`), picked per
- * document; the picked name prints as ผู้สั่งซื้อ on the quotation (owner rulings 2026-10-18,
- * .design/quotation-contact/DESIGN.md). Optional everywhere — no required marker, no gate, phone
+ * document; the picked name prints as ผู้สั่งซื้อ on the quotation (.design/quotation-contact/DESIGN.md). Optional everywhere — no required marker, no gate, phone
  * and email optional too — and the one `hint` is the only explanatory text on the field.
  *
  * Closed, it is a select-style button; a picked contact shows as a card (name, เบอร์/อีเมล editable
@@ -39,10 +38,10 @@ function emptyNewContact() {
  */
 export const QuotationContactPicker = forwardRef(function QuotationContactPicker({
   customerId, customerName, value, onChange, error, showToast, disabled = false, idPrefix = 'deal-contact', onResolve,
-  // Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — optional so a
-  // caller with nothing to bind it to simply omits both and gets no extra UI. Both current callers
-  // pass their own value through: QuotationEditorPage (its `terms.omitContactHonorific`, on the
-  // inline-create and ?ticket= paths alike) and PricingRequestCreateModal.
+  // Optional so a caller with nothing to bind it to omits both and gets no extra UI (the "ไม่เติม
+  // “คุณ”" option). Both current callers pass their own value through: QuotationEditorPage (its
+  // `terms.omitContactHonorific`, on the inline-create and ?ticket= paths alike) and
+  // PricingRequestCreateModal.
   omitContactHonorific = false, onChangeOmitContactHonorific,
   label = 'ผู้ติดต่อ', hint = 'ชื่อจะพิมพ์เป็นผู้สั่งซื้อบนใบเสนอราคา',
 }, ref) {
@@ -66,8 +65,8 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     restoreFocusRef.current = false;
     triggerRef.current?.focus();
   });
-  // "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11: "when the customer and the
-  // purchaser are the same person, let the rep reuse the customer name instead of retyping it").
+  // "ใช้ชื่อเดียวกับลูกค้า": when the customer and the purchaser are the same person, the rep can
+  // reuse the customer name instead of retyping it.
   //
   // Decided behaviour, documented here because there is no spec doc for it:
   //  - Checking the box copies `customerName` into ชื่อ and blanks นามสกุล (the customer record
@@ -123,21 +122,20 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     if (match) onResolve(match);
   }, [options, selectedId, value, onResolve]);
 
-  // ── edit-in-place: โทร./อีเมล of the SELECTED contact (gap fix, prod QT-2026-0041-1) ──────
-  // A contact created without an e-mail used to be stuck that way — there was no update
-  // endpoint. Mirrors CustomerDetailsFields' own save-on-blur pattern: local field state, seeded
+  // ── edit-in-place: โทร./อีเมล of the SELECTED contact ──────
+  // Lets a contact created without an e-mail be completed later. Mirrors CustomerDetailsFields' own
+  // save-on-blur pattern: local field state, seeded
   // from the selected contact and re-seeded only for a field this component itself last put
   // there (never clobbering text the rep is mid-typing), saved on blur with PATCH semantics
   // (only the changed field is sent), optimistic + rollback + toast on refusal.
   const [contactEdits, setContactEdits] = useState(() => contactEditsFrom(selected));
   const [savingContactField, setSavingContactField] = useState(null);
   const lastSeededContactRef = useRef({ id: selected?.id ?? null, ...contactEditsFrom(selected) });
-  // Bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): the ONE
-  // in-flight `saveContactField` call, if any -- exposed via `flushPendingContactSave` below so the
-  // editor's ส่งขออนุมัติ pre-save can AWAIT it before reading `contact`/building its own PUT. Without
-  // this, a rep who blurs อีเมล then immediately confirms submit could have the quotation's own
-  // pre-save PUT (which re-reads the LIVE contact row server-side) land before this field's PUT
-  // commits, freezing the OLD email into an approved document.
+  // The ONE in-flight `saveContactField` call, if any, exposed via `flushPendingContactSave` below
+  // so the editor's ส่งขออนุมัติ pre-save can AWAIT it before reading `contact`/building its own
+  // PUT. Without this, a rep who blurs อีเมล then immediately confirms submit could have the
+  // quotation's own pre-save PUT (which re-reads the LIVE contact row server-side) land before this
+  // field's PUT commits, freezing the OLD email into an approved document.
   const pendingContactSaveRef = useRef(null);
   useImperativeHandle(ref, () => ({
     flushPendingContactSave: () => pendingContactSaveRef.current ?? Promise.resolve(),
@@ -170,14 +168,11 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
    * every save; see CustomerController#updateContact's own Javadoc). */
   function saveContactField(field) {
     if (!selected?.id) return;
-    // Bug fix (owner re-report 2026-09-16): this used to return here just as silently as the
-    // `!selected?.id` case above -- no request, no toast, the typed value simply reverting to
-    // whatever it was on the next re-render with nothing telling the rep why. Happens for a
-    // quotation-grant holder who cannot load the ticket (`contactCustomerId` stays null even
-    // though the quotation's own frozen snapshot already seeded a `selected` contact with
-    // phone/email). Toast instead, and — unlike the catch block below — do NOT revert
-    // `contactEdits`: there is nothing to roll back to (no request was ever sent), so reverting
-    // here would silently discard what the rep just typed for no reason they could see.
+    // Without a customer to save against (a quotation-grant holder who cannot load the ticket:
+    // `contactCustomerId` stays null though the frozen snapshot already seeded a `selected` contact
+    // with phone/email), toast rather than failing silently with the typed value reverting. Unlike
+    // the catch block below, do NOT revert `contactEdits`: no request was sent, so there is nothing
+    // to roll back to and reverting would discard what the rep just typed.
     if (!customerId) {
       showToast?.('error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้');
       return;
@@ -428,7 +423,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
           ) : null}
         </div>
       </FormField>
-      {/* Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ", owner ruling 2026-09-16) — directly under
+      {/* The ไม่เติม “คุณ” option, directly under
           the picker, per the owner's own placement. No sub-line: the field's hint is the only
           explanatory text (owner ruling 2026-10-18). Whole row is the tappable label
           (not just the checkbox square) and grows to the mobile touch-target floor, same

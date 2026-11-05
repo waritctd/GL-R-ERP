@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The 15-stage deal pipeline (V50, widened by V143), grouped into 5 phases. One
+ * The 15-stage deal pipeline, grouped into 5 phases. One
  * ticket = one deal; sales_stage tracks what it takes to close that deal.
  *
  * Auto-advanced stages (from the deal's own operational transitions):
@@ -14,7 +14,7 @@ import java.util.Set;
  * mid-fulfillment states (IR_SENT / SHIPPING / GOODS_RECEIVED) all live inside
  * PROCUREMENT via fulfillment_status — no separate stages.
  *
- * Business cross-reference (boss's S1–S20 sheet): LEAD_APPROACH=S1,
+ * Business cross-reference (the business's S1–S20 sheet): LEAD_APPROACH=S1,
  * PRESENTATION=S2, SPEC_APPROVED=S3, QUOTE_DESIGN_SIDE=S4, QUOTE_OWNER=S5,
  * OWNER_SIGNOFF=S6, AWAITING_BUYER=S7, QUOTE_BUYER=S8, NEGOTIATION=S9,
  * ORDER_RECEIVED=S10, DEPOSIT_RECEIVED=S11, PROCUREMENT=S12–S17,
@@ -29,24 +29,22 @@ public final class DealStage {
     /**
      * S4 — the quotation sent to the <strong>designer</strong>, and only the designer.
      *
-     * <p>This constant used to mean "S4+S5" (designer AND owner quoted), because
-     * {@code TicketService}'s recipient routing mapped both {@code DESIGNER} and {@code OWNER}
-     * onto it. The CEO tracks them as two separate milestones with genuinely different document
-     * content — the product list is the same, but quantity, price and terms differ by recipient
-     * (S4 is model + price only, with a nominal quantity and terms usually omitted; S5 carries a
-     * negotiated price, the owner's real quantity, and the import lead time) — so the merge made
-     * {@code sales_stage} unable to answer "has the owner been quoted yet?", which is exactly the
-     * milestone before {@link #OWNER_SIGNOFF}. {@link #QUOTE_OWNER} now carries S5.
+     * <p>S4 and S5 are separate milestones with different document content: the product list is
+     * the same, but quantity, price and terms differ by recipient (S4 is model + price only, with
+     * a nominal quantity and terms usually omitted; S5 carries a negotiated price, the owner's
+     * real quantity, and the import lead time). Keeping them apart lets {@code sales_stage}
+     * answer "has the owner been quoted yet?", which is the milestone before
+     * {@link #OWNER_SIGNOFF}. {@link #QUOTE_OWNER} carries S5.
      *
      * <p><strong>The string value is deliberately unchanged.</strong> Historical
      * {@code sales.ticket.sales_stage} rows, the uat seeds and the frontend stage metadata all
      * carry it, and a historical row is genuinely ambiguous about which recipient it meant — so
-     * nothing is backfilled and nothing is renamed; only the forward meaning narrows.
+     * nothing is backfilled and nothing is renamed; only the forward meaning is narrow.
      */
     public static final String QUOTE_DESIGN_SIDE = "QUOTE_DESIGN_SIDE";
     /**
-     * S5 — the quotation sent to the <strong>project owner</strong> (V143). Split out of
-     * {@link #QUOTE_DESIGN_SIDE}; see that constant's Javadoc for the full reasoning.
+     * S5 — the quotation sent to the <strong>project owner</strong>. Kept separate from
+     * {@link #QUOTE_DESIGN_SIDE}; see that constant's Javadoc for the reasoning.
      */
     public static final String QUOTE_OWNER       = "QUOTE_OWNER";
     public static final String OWNER_SIGNOFF     = "OWNER_SIGNOFF";
@@ -75,7 +73,7 @@ public final class DealStage {
     /**
      * Stages whose absence from a deal's history is an <strong>anomaly</strong>, not a route.
      *
-     * <p>The owner's four real sales routes are mostly not a straight line through {@link #ORDER}:
+     * <p>The four real sales routes are mostly not a straight line through {@link #ORDER}:
      *
      * <ul>
      *   <li><strong>Case A</strong> (designer → owner → contractor, the full route):
@@ -105,18 +103,16 @@ public final class DealStage {
 
     // ── Write gates ─────────────────────────────────────────────────────────────────────────
     //
-    // These three sets moved here from TicketService (where they were private static fields) so
-    // that ONE definition serves both enforcement and description. TicketService.
-    // requireStageWriteAccess still keys off exactly these sets — membership here is what makes
-    // the difference between a 403 and a write — and {@link #gateOf} now reads the same sets to
-    // tell a client which department owns a stage. Before this move the client's copy of the
-    // gate lived in the frontend's stageMeta.js as a hand-maintained literal, which is precisely
-    // the drift this class is being consolidated to end. Do not re-declare a gate anywhere else.
+    // ONE definition serves both enforcement and description. TicketService.
+    // requireStageWriteAccess keys off exactly these sets — membership here is what makes
+    // the difference between a 403 and a write — and {@link #gateOf} reads the same sets to
+    // tell a client which department owns a stage. A hand-maintained copy of the gate on the
+    // client would drift. Do not re-declare a gate anywhere else.
 
     /**
      * Stages whose manual fallback belongs to the deal owner / sales_manager / ceo.
      *
-     * <p>{@link #QUOTE_OWNER} is in the set (V143) for the same reason {@link #QUOTE_DESIGN_SIDE}
+     * <p>{@link #QUOTE_OWNER} is in the set for the same reason {@link #QUOTE_DESIGN_SIDE}
      * is: quoting the owner is a sales action, so when the automatic advance at quotation-issue
      * time did not happen (a quotation raised outside the PCR chain, or a stage corrected after
      * the fact) the fallback must belong to the same three principals — not to account or import,
@@ -160,13 +156,12 @@ public final class DealStage {
      *       ORDER_RECEIVED, {@code reconcilePaymentStatus} → DEPOSIT_RECEIVED,
      *       {@code issueImportRequest} → PROCUREMENT, {@code maybeAdvanceClosedPaid} →
      *       CLOSED_PAID. These are this class's own "Auto-advanced stages" header.
-     *   <li><b>Document-driven</b> (owner ruling 2026-10-16) — from a quotation being addressed to
+     *   <li><b>Document-driven</b> — from a quotation being addressed to
      *       a party: {@code advanceStageForCustomerQuotationIssue} → QUOTE_DESIGN_SIDE /
      *       QUOTE_OWNER / QUOTE_BUYER, by recipient.
      * </ul>
      *
-     * <p><b>No longer purely descriptive.</b> This set used to change no gate. Now
-     * {@code TicketService.requireStageFactsHold} refuses a manual move into the three quote stages
+     * <p><b>Not purely descriptive.</b> {@code TicketService.requireStageFactsHold} refuses a manual move into the three quote stages
      * and ORDER_RECEIVED / DEPOSIT_RECEIVED / CLOSED_PAID until the stage's fact holds, so
      * membership here and that refusal are two halves of one rule and must change together.
      * PROCUREMENT is listed as auto-advanced only; it is not fact-gated. DELIVERED is fact-gated
@@ -206,14 +201,14 @@ public final class DealStage {
     }
 
     /**
-     * The owner's S1–S20 sheet number for each stage — the business's own identifier, distinct
+     * The S1–S20 sheet number for each stage — the business's own identifier, distinct
      * from {@link #displayNoOf}.
      *
      * <p><strong>The two genuinely differ and always will</strong>, which is why both are served
      * rather than one being derived from the other. {@code PROCUREMENT} is a single pipeline
      * stage covering six sheet steps (S12–S17), so the sheet runs to S20 while the pipeline has
-     * 15 entries; and V143 inserting {@link #QUOTE_OWNER} moved every later display number by one
-     * while changing no sheet number at all. A client that shows "4." next to a stage is showing
+     * 15 entries; and {@link #QUOTE_OWNER} shifts every later display number by one without
+     * changing any sheet number. A client that shows "4." next to a stage is showing
      * the display sequence; a client discussing "S12" with the CEO is using this.
      */
     private static final Map<String, String> BUSINESS_CODE = Map.ofEntries(
@@ -259,12 +254,12 @@ public final class DealStage {
      * seeds, the frontend stage metadata and every historical sales_stage value,
      * so renumbering carries far more risk than this ergonomic fix is worth.
      *
-     * <p>V143 did NOT widen this when {@link #QUOTE_OWNER} was inserted. S5 comes after S3 in the
-     * real route (S2→S4→S3→S5), so quoting the owner is reached going <em>forward</em> from
-     * SPEC_APPROVED — there is no new everyday backward step to allowlist. Any
+     * <p>{@link #QUOTE_OWNER} is not allowlisted. S5 comes after S3 in the real route
+     * (S2→S4→S3→S5), so quoting the owner is reached going <em>forward</em> from
+     * SPEC_APPROVED — there is no everyday backward step to allowlist. Any
      * {@code QUOTE_OWNER -> …} backward move stays a genuine regression that must be explained.
      *
-     * <p>Private since V143: {@link #requiresJustification} is the one entry point callers use,
+     * <p>Private: {@link #requiresJustification} is the one entry point callers use,
      * so this stays a special case inside the single decision rather than a second parallel
      * mechanism a call site could forget to consult.
      */
@@ -275,18 +270,17 @@ public final class DealStage {
     /**
      * Does moving {@code fromStage -> toStage} require the rep to write down why?
      *
-     * <p>The single decision behind {@code TicketService.updateStage}'s note requirement,
-     * replacing the raw index arithmetic ({@code indexOf(to) - indexOf(from) > 1}) that used to
-     * decide it. That arithmetic treated <em>every</em> multi-stage forward move as an anomaly,
-     * which demanded a justification for three of the business's four normal routes — see
-     * {@link #MANDATORY} for the routes and the grouping.
+     * <p>The single decision behind {@code TicketService.updateStage}'s note requirement. Treating
+     * <em>every</em> multi-stage forward move as an anomaly would demand a justification for three
+     * of the business's four normal routes — see {@link #MANDATORY} for the routes and the
+     * grouping.
      *
      * <ul>
      *   <li><strong>Forward:</strong> true only when a {@link #MANDATORY} stage lies strictly
      *       between the two. The target itself is never "skipped" — jumping straight to S8
      *       (Case C) crosses only route-dependent stages and needs no note; jumping from
      *       ORDER_RECEIVED past DELIVERY_SCHEDULING to DELIVERED does need one.
-     *   <li><strong>Backward:</strong> unchanged from before — always true except for the one
+     *   <li><strong>Backward:</strong> always true except for the one
      *       {@link #isRoutineBackwardMove} pair.
      *   <li><strong>Same stage / unknown code:</strong> false. {@code updateStage} rejects both
      *       before it ever asks (409 and 400 respectively), so this predicate does not
@@ -296,10 +290,9 @@ public final class DealStage {
     public static boolean requiresJustification(String fromStage, String toStage) {
         // Null-checked here rather than in indexOf: ORDER is a List.of(), whose indexOf throws NPE
         // on a null probe instead of returning -1. Neither argument can be null through
-        // updateStage (the target is isValid-checked first, and sales_stage is NOT NULL since
-        // V50), but this method's contract says "unknown code -> false", and a null IS an unknown
-        // code. Leaving indexOf itself alone: it is a pre-existing public helper with other
-        // callers, and widening its contract is not this task.
+        // updateStage (the target is isValid-checked first, and sales_stage is NOT NULL),
+        // but this method's contract says "unknown code -> false", and a null IS an unknown
+        // code. indexOf itself is left alone: it is a public helper with other callers.
         if (fromStage == null || toStage == null) {
             return false;
         }

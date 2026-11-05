@@ -25,8 +25,7 @@ public final class TicketEventKind {
     public static final String GOODS_RECEIVED        = "GOODS_RECEIVED";
     public static final String AWAITING_FINAL_PAYMENT = "AWAITING_FINAL_PAYMENT";
     public static final String FULLY_PAID            = "FULLY_PAID";
-    // CEO manual price override on a ticket item (2026-07-16 pricing-integrity audit) —
-    // sales.ticket_event.chk_event_kind was extended for this in V48.
+    // CEO manual price override on a ticket item (chk_event_kind extended in V48).
     public static final String PRICE_OVERRIDDEN      = "PRICE_OVERRIDDEN";
     // Deal pipeline events (V50) — from_status/to_status carry DealStage codes.
     // chk_event_kind was re-declared for these in V50.
@@ -52,7 +51,7 @@ public final class TicketEventKind {
     // Three-party close (V56). CLOSED is now written only by the CEO's verification.
     public static final String CLOSE_CONFIRMED        = "CLOSE_CONFIRMED";
     public static final String CLOSE_CONFIRM_REVOKED  = "CLOSE_CONFIRM_REVOKED";
-    // Step 6 (V76): the ONE place outside the legacy state machine that writes
+    // Order confirmation (V76): the ONE place outside the legacy state machine that writes
     // sales.ticket.status directly — see OrderConfirmationService's class Javadoc. Written once,
     // by TicketRepository.markQuotationIssuedForOrderConfirmation, immediately before
     // TicketService.confirmCustomer (unmodified) takes over the rest of the existing dual-track
@@ -70,14 +69,14 @@ public final class TicketEventKind {
     public static final String DEAL_QUOTATION_SUBMITTED = "DEAL_QUOTATION_SUBMITTED";
     public static final String DEAL_QUOTATION_APPROVED  = "DEAL_QUOTATION_APPROVED";
     public static final String DEAL_QUOTATION_REJECTED  = "DEAL_QUOTATION_REJECTED";
-    // Owner request (2026-09-16): a submit whose row is a revision (parentQuotationId != null --
+    // A submit whose row is a revision (parentQuotationId != null --
     // covers BOTH #createRevision's own submit and the resubmit-after-ตีกลับ path) must read as a
     // REVISION to sales_manager/ceo, not the identical "รออนุมัติ" text DEAL_QUOTATION_SUBMITTED
     // sends for a first-time submit. Distinct kind so the mail subject itself says ฉบับแก้ไข --
     // see NotificationRepository.TICKET_EVENT_TITLES and DealQuotationService#notifySubmitted.
     public static final String DEAL_QUOTATION_REVISION_SUBMITTED = "DEAL_QUOTATION_REVISION_SUBMITTED";
 
-    // P1 hand-off notifications: NOTIFICATION `type` values only (hr.notification.type), NOT
+    // Hand-off notifications: NOTIFICATION `type` values only (hr.notification.type), NOT
     // ticket_event kinds -- never pass these into TicketRepository#addEvent* (chk_event_kind). Thai
     // titles live in NotificationRepository.TICKET_EVENT_TITLES. DELIVERY_COMPLETED above is reused.
     public static final String IMPORT_REQUEST_ISSUED = "IMPORT_REQUEST_ISSUED";
@@ -89,11 +88,10 @@ public final class TicketEventKind {
     public static final String CLOSE_READY_FOR_CEO = "CLOSE_READY_FOR_CEO";
     public static final String ORDER_CONFIRMED_NO_DEPOSIT = "ORDER_CONFIRMED_NO_DEPOSIT";
 
-    // P2 notifications: NOTIFICATION `type` values only, like the P1 block above -- never ticket_event
-    // kinds. Titles in NotificationRepository.TICKET_EVENT_TITLES. FACTORY_NOT_AVAILABLE,
-    // CUSTOMER_QUOTATION_EXPIRED, PRICING_REQUEST_CANCELLED and PRICING_REQUEST_REVISED (PricingRequestEventKind)
-    // are reused as types too: PRICING_REQUEST_CANCELLED gained a title, PRICING_REQUEST_REVISED's was reworded,
-    // the other two keep theirs.
+    // Payment/deal-lifecycle notifications: NOTIFICATION `type` values only, like the hand-off block
+    // above -- never ticket_event kinds. Titles in NotificationRepository.TICKET_EVENT_TITLES.
+    // FACTORY_NOT_AVAILABLE, CUSTOMER_QUOTATION_EXPIRED, PRICING_REQUEST_CANCELLED and
+    // PRICING_REQUEST_REVISED (PricingRequestEventKind) are reused as types too.
     public static final String PAYMENT_RECEIVED = "PAYMENT_RECEIVED";
     public static final String PAYMENT_FULLY_PAID = "PAYMENT_FULLY_PAID";
     public static final String DEAL_CLOSED = "DEAL_CLOSED";
@@ -107,23 +105,22 @@ public final class TicketEventKind {
     public static final String DEAL_QUOTATION_CANCELLED = "DEAL_QUOTATION_CANCELLED";
     public static final String DEAL_QUOTATION_DECIDED = "DEAL_QUOTATION_DECIDED";
 
-    // Per-factory ใบขอซื้อ progress (V184, GLA-100): one event kind for every step advance, with
+    // Per-factory ใบขอซื้อ progress (V184): one event kind for every step advance, with
     // the actual step (th.co.glr.hr.importrequest.ImportRequestStep) named in the free-text
     // message/note rather than as a distinct kind per step -- see that class's own Javadoc for why
     // step names are never event kinds. related_document_type=IMPORT_REQUEST,
     // related_document_id=the sales.import_request row. chk_event_kind re-declared for this in V184.
     public static final String IMPORT_STEP_ADVANCED = "IMPORT_STEP_ADVANCED";
 
-    // Per-factory ใบขอซื้อ order-email draft (V184, owner decision 09-18 #3 §B): written once when
+    // Per-factory ใบขอซื้อ order-email draft (V184): written once when
     // the draft is marked sent (ImportRequestService#markEmailSent). The email itself is never sent
     // by this system -- a human copies the draft and sends it by hand -- so this event records only
     // that a human DID, not that the system did. chk_event_kind re-declared for this in V184, the
-    // SAME re-declaration that adds IMPORT_STEP_ADVANCED just above. Coordinated with the pricing
-    // session's V186 (import-request-per-factory-PLAN.md's "chk_event_kind COORDINATION" section) --
-    // use exactly this name; do not invent another.
+    // SAME re-declaration that adds IMPORT_STEP_ADVANCED just above (the name is pinned by the
+    // CHECK constraint).
     public static final String IMPORT_REQUEST_EMAIL_SENT = "IMPORT_REQUEST_EMAIL_SENT";
 
-    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186): a REAL sales.ticket_event.kind value
+    // "สร้างจากใบเดิม" / สั่งเหมือนเดิม (V186): a REAL sales.ticket_event.kind value
     // (unlike the three DEAL_QUOTATION_* notification-only kinds above) -- chk_event_kind was
     // widened for it in V186. Written once, by DealQuotationService#createReorder, when an
     // APPROVED direct-deal quotation is cloned into a new independent DRAFT. Deliberately NOT a
@@ -131,22 +128,20 @@ public final class TicketEventKind {
     // sharing that kind would misdescribe it in DealHistoryPanel.jsx's EVENT_KIND_LABEL ("ขอแก้ไข").
     public static final String DEAL_QUOTATION_REORDERED = "DEAL_QUOTATION_REORDERED";
 
-    // Owner ruling (2026-09-19): a deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
+    // A deal may hold only ONE APPROVED DEAL_DIRECT quotation at a
     // time -- approving a new one (a first issue, a revision, or a reorder clone) supersedes
     // every OTHER currently-APPROVED DEAL_DIRECT quotation on the same ticket. A REAL
-    // sales.ticket_event.kind value (chk_event_kind widened for it in V186, still unmerged as of
-    // this writing so edited in place rather than a new migration). Written once per superseded
-    // sibling, by DealQuotationService#approve, message "ใบ {old} ถูกแทนที่ด้วย {new}" -- the
-    // pre-existing ancestor-chain supersede walk (a DIFFERENT, older rule: climbing a
-    // REJECTED/DRAFT parentQuotationId lineage) stays silent, as it always has; this kind is only
-    // for the NEW same-ticket sweep.
+    // sales.ticket_event.kind value (chk_event_kind widened for it in V186). Written once per
+    // superseded sibling, by DealQuotationService#approve, message "ใบ {old} ถูกแทนที่ด้วย {new}" --
+    // the ancestor-chain supersede walk (a DIFFERENT rule: climbing a REJECTED/DRAFT
+    // parentQuotationId lineage) stays silent; this kind is only for the same-ticket sweep.
     public static final String DEAL_QUOTATION_SUPERSEDED = "DEAL_QUOTATION_SUPERSEDED";
 
-    // GLA-136 (owner ruling 2026-09-30): a REAL sales.ticket_event.kind value (chk_event_kind
-    // widened for it in V193). Written once, by DealQuotationService#confirmOrderFromDirectQuotation
-    // (named promoteToDeal until quotation <-> deal linking slice 1 — this kind keeps the old name
-    // because the DB CHECK pins it), when the order is confirmed from an APPROVED direct
-    // (DEAL_DIRECT) quotation (draft -> quotation_issued, related document = that QUOTATION). Deliberately NOT a reuse of
+    // A REAL sales.ticket_event.kind value (chk_event_kind widened for it in V193). Written once,
+    // by DealQuotationService#confirmOrderFromDirectQuotation (formerly named promoteToDeal — this
+    // kind keeps the old name because the DB CHECK pins it), when the order is confirmed from an
+    // APPROVED direct (DEAL_DIRECT) quotation (draft -> quotation_issued, related document = that
+    // QUOTATION). Deliberately NOT a reuse of
     // ORDER_CONFIRMED_FROM_QUOTATION, which means a customer-accepted PRICING_REQUEST quotation's
     // order confirmation (OrderConfirmationService) — a different business event.
     public static final String DEAL_PROMOTED_FROM_QUOTATION = "DEAL_PROMOTED_FROM_QUOTATION";

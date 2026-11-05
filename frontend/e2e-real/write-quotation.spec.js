@@ -31,7 +31,7 @@ const ITEM = {
   color: 'Punta Molara',
   texture: 'R11',
   sizeText: '60x120',
-  // Mandatory by owner ruling (2026-09-09): "thickness is mandatory — sales must fill it in".
+  // Thickness is mandatory: sales must fill it in.
   thicknessMm: 2,
   sqmPerPiece: 0.72,
   quantityMode: 'AREA',
@@ -46,10 +46,10 @@ const ITEM = {
   leadTimeMaxDays: 90,
 };
 
-// Quotation ↔ deal linking slice 2: a direct create must name its ผู้รับใบเสนอราคา (S2-B1, 400
-// otherwise), and a deal may hold only ONE live direct quotation (N6, 409 otherwise) — so every test
-// below that CREATES a quotation does so on a deal of its own (`newDeal`), and the body always says
-// who the quotation is for. On an update the same OWNER is a no-op (it is what was stored).
+// A direct create must name its ผู้รับใบเสนอราคา (400 otherwise), and a deal may hold only ONE live
+// direct quotation (409 otherwise) — so every test below that CREATES a quotation does so on a deal
+// of its own (`newDeal`), and the body always says who the quotation is for. On an update the same
+// OWNER is a no-op (it is what was stored).
 function draftBody(contactId, overrides = {}) {
   return {
     contactId,
@@ -112,10 +112,9 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     };
     ticketId = await newDeal();
 
-    // Owner-directed reversal of V167/F2 (2026-09-26): ผู้สั่งซื้อ is no longer mandatory — a
-    // contact is still created here because "sales creates a draft, and the ผู้สั่งซื้อ snapshot
-    // is frozen onto it" below wants a real one to freeze, not because create/submit would refuse
-    // without one.
+    // ผู้สั่งซื้อ is not mandatory; a contact is still created here because "sales creates a draft,
+    // and the ผู้สั่งซื้อ snapshot is frozen onto it" below wants a real one to freeze, not because
+    // create/submit would refuse without one.
     const created = await apiWrite(sessions.sales, 'post', `/api/customers/${customerId}/contacts`, {
       firstName: 'ธนพล', lastName: `ศรีวัฒนกุล ${tag}`, phone: '081-234-5678', email: `e2e.${tag}@demo.invalid`,
     });
@@ -144,10 +143,9 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(Number(quotation.grandTotal)).toBeGreaterThan(0);
   });
 
-  // `contactId: null` used to be refused by DealQuotationService ("กรุณาระบุผู้สั่งซื้อ", 400) until
-  // the owner-directed reversal of V167/F2 (2026-09-26). Ruling 2026-10-18: the ผู้ติดต่อ is picked
-  // per quotation and optional, the server derives ordered_by_name from it, and the deal's own
-  // contact is never inherited — so the create succeeds (201) with a blank contact snapshot.
+  // The ผู้ติดต่อ is picked per quotation and optional, the server derives ordered_by_name from it,
+  // and the deal's own contact is never inherited — so the create succeeds (201) with a blank
+  // contact snapshot.
   // Mirrors DealQuotationIntegrationTest#create_withNoContactId_doesNotInheritTheDealsContact.
   test('a quotation can be created with no ผู้สั่งซื้อ at all, and freezes a blank contact snapshot', async () => {
     const response = await apiWrite(
@@ -180,9 +178,9 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(submitted.status(), 'POST submit').toBe(200);
     expect((await submitted.json()).quotation.docStatus).toBe('PENDING_APPROVAL');
 
-    // The rep who raised it is not an approver. Owner ruling 2026-09-09: ผึ้ง (sales_manager) OR
-    // ราม (ceo) approve — and NOBODY else, whatever the amount. There is deliberately no
-    // amount-based routing in the code; the <1M / >1M split is an out-of-system agreement.
+    // The rep who raised it is not an approver. The sales_manager OR the ceo approves — and
+    // NOBODY else, whatever the amount. There is deliberately no amount-based routing in the
+    // code; the <1M / >1M split is an out-of-system agreement.
     const self = await apiWrite(sessions.sales, 'post', `/api/deal-quotations/${id}/approve`, { note: 'mine' });
     expect(self.status(), 'the raising rep must not approve their own quotation').toBe(403);
 
@@ -220,12 +218,12 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   });
 });
 
-// ── Quotation v3 / v3b, and the owner's 2026-09-11 requests, against the real service ─────────────
+// ── Quotation v3 / v3b, customer details, against the real service ─────────────
 //
-// v3 (owner feedback pass 3): per-quotation price modes (NET / SPECIAL_SQM / DIRECT_NET), PLAIN
-// rows, and the ส่วนลดพิเศษ ADJUSTMENT row. v3b: the English (USD) document. 2026-09-11: the
-// customer's ที่อยู่ is fillable from the quotation editor, a repeat customer's details come back on
-// the next quotation, and the editor lists what is still empty.
+// v3: per-quotation price modes (NET / SPECIAL_SQM / DIRECT_NET), PLAIN rows, and the ส่วนลดพิเศษ
+// ADJUSTMENT row. v3b: the English (USD) document. Also: the customer's ที่อยู่ is fillable from
+// the quotation editor, a repeat customer's details come back on the next quotation, and the
+// editor lists what is still empty.
 //
 // Every money figure asserted here is the SERVICE's. The frontend deliberately does not compute the
 // ราคาพิเศษ net (its rounding order is the point — see WastageCalculator#netPerPieceFromSpecialSqm)
@@ -272,7 +270,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     customerId = (await customer.json()).customer.id;
     const project = await apiWrite(sessions.sales, 'post', `/api/customers/${customerId}/projects`, { name: `V3 Project ${tag}` });
     const projectId = (await project.json()).project.id;
-    // One deal per created quotation (slice 2's N6) — all for the SAME customer, which is what the
+    // One deal per created quotation — all for the SAME customer, which is what the
     // repeat-customer test at the end is about.
     newDeal = async () => {
       const ticket = await apiWrite(sessions.sales, 'post', '/api/tickets', {
@@ -305,7 +303,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   test('a ราคาพิเศษ tile + a PLAIN row + a ส่วนลดพิเศษ sent FIRST: the adjustment prints LAST, as her form does', async () => {
     const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/deal-quotations`, draftBody(contactId, {
       priceMode: 'SPECIAL_SQM', documentLanguage: 'TH', currency: 'THB',
-      // unitPrice on an ADJUSTMENT is IGNORED (review fix F2), not refused.
+      // unitPrice on an ADJUSTMENT is IGNORED, not refused.
       items: [adjustment({ unitPrice: 1 }), tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350 }), plain],
     }));
     expect(response.status(), 'POST create answers 201').toBe(201);
@@ -335,13 +333,12 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
   });
 
   test('refusals: every one the editor avoids offering is a real 400 from the service', async () => {
-    // A deal with NO live direct quotation: on ticketId (which holds thaiId) N6's 409 would answer
+    // A deal with NO live direct quotation: on ticketId (which holds thaiId) the one-live-quotation 409 would answer
     // before any item is validated. Every refusal below writes nothing, so one fresh deal serves all.
     const refusalDeal = await newDeal();
     const create = (overrides) => apiWrite(sessions.sales, 'post', `/api/tickets/${refusalDeal}/deal-quotations`, draftBody(contactId, overrides));
     const refusals = [
-      // Option B (owner decision 2026-09-16) superseded 2026-09-13's "never without box data": a
-      // bare English per-sqm row (no box area at all) is now ACCEPTED, its sqm quantity derived
+      // A bare English per-sqm row (no box area at all) is ACCEPTED, its sqm quantity derived
       // from pieces instead. The ONE combination still refused is a PARTIALLY filled box pair —
       // ตร.ม./กล่อง present, piecesPerBox blank — requireItemComplete (not requireBoxDataForPerSqm,
       // which never actually runs first on create/update) catches this and names the field
@@ -408,8 +405,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
     // ⚠️ Asserted on the EXACT strings DealQuotationRenderAdapter composes, never on a bare label.
     // A bare-label byte search is not evidence of anything here: "E :" occurs inside the bank
     // block's "SWIFT CODE :", "Tel. " inside the company header, and the workbook's shared-string
-    // table can hold template strings no cell uses any more. (Cell-level evidence — B5/B6 read back
-    // through Apache POI — is recorded in the PR.)
+    // table can hold template strings no cell uses any more.
     const contactAndCustomer = `สมศรี ${tag}   /   บริษัท เปล่า ${tag} จำกัด`;
 
     // Bare customer, contact with no phone/email.
@@ -447,8 +443,8 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
 
     const filledTh = await render(thaiId);
     expect(xlsHasText(filledTh, `คุณ${contactAndCustomer}   เลขที่ผู้เสียภาษี : ${TAX_ID}`), 'TH B5 carries the tax id').toBe(true);
-    // Owner 2026-10-13: the customer master's phone is snapshotted but NOT printed. Only the Phone
-    // typed under ผู้ติดต่อ prints, and nothing has been typed yet.
+    // The customer master's phone is snapshotted but NOT printed. Only the Phone typed under
+    // ผู้ติดต่อ prints, and nothing has been typed yet.
     expect(xlsHasText(filledTh, `Phone ${PHONE}`), 'TH does not print the customer-master phone').toBe(false);
     const filledEn = await render(englishId);
     expect(xlsHasText(filledEn, `Address : ${ADDRESS}`), 'EN B6 carries the address').toBe(true);
@@ -464,7 +460,7 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
       priceMode: 'DIRECT_NET', documentLanguage: 'EN', orderedByPhone: TYPED,
       items: [tile({ unitPrice: 15, directNetPrice: 12.5, discountPct: null })],
     }));
-    // Owner 2026-10-12 (sales feedback item 3): the Thai document labels the line "Phone", not "โทร.".
+    // The Thai document labels the line "Phone", not "โทร.".
     expect(xlsHasText(await render(thaiId), `Phone ${TYPED}`), 'TH B6 carries the typed phone').toBe(true);
     // ONE exact string: the address, then the phone, joined by the adapter's single separator — so
     // this also proves no "E :" is printed for the missing email, and no doubled separator.
@@ -517,10 +513,9 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await expect(checklist.getByTestId('checklist-warnings')).toContainText('ยังไม่ได้กรอกที่อยู่ลูกค้า');
     await expect(checklist.getByTestId('checklist-blocking')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeEnabled();
-    // Ruling 2026-10-18 (.design/quotation-contact): ผู้ติดต่อ is a picker over the customer's
-    // contacts again, and this quotation was created via the API with วิไล's contactId — so the
-    // editor opens on her card (เปลี่ยน / ล้าง). Still no field answers to ผู้สั่งซื้อ (the label
-    // since 2026-10-06; the PDF keeps that heading), and no contact checklist warning came back.
+    // ผู้ติดต่อ is a picker over the customer's contacts, and this quotation was created via the
+    // API with a contactId — so the editor opens on that contact's card (เปลี่ยน / ล้าง). No field
+    // answers to ผู้สั่งซื้อ (the PDF keeps that heading), and no contact checklist warning shows.
     await expect(page.getByText(`วิไล ${tag}`, { exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'เปลี่ยนผู้ติดต่อ' })).toBeVisible();
     await expect(page.getByLabel(/^ผู้สั่งซื้อ/)).toHaveCount(0);
@@ -544,9 +539,9 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await page.locator('#special-0').fill('1800');
     await expect(page.getByTestId('special-net-0')).toHaveText('= สุทธิ ฿1,210.25/แผ่น (ก่อน VAT)');
 
-    // English (owner decisions 2026-09-13): the per-sqm mode is KEPT — on English it is the USD/ตร.ม.
-    // price, so the Thai-labelled button is gone and its English label is the pressed one — and
-    // "Clear all prices on switch": the baht figure is never carried into USD as the same number.
+    // English: the per-sqm mode is KEPT — on English it is the USD/ตร.ม. price, so the
+    // Thai-labelled button is gone and its English label is the pressed one — and all prices are
+    // cleared on switch: the baht figure is never carried into USD as the same number.
     await page.getByRole('group', { name: 'ภาษาเอกสาร' }).getByRole('button', { name: /English/ }).click();
     await expect(modes.getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' })).toHaveCount(0);
     await expect(modes.getByRole('button', { name: 'ราคา USD/ตร.ม.' })).toHaveAttribute('aria-pressed', 'true');
@@ -555,11 +550,11 @@ test.describe('quotation editor UI — v3 controls, ที่อยู่, and t
     await expect.poll(() => page.$$eval('input', (els) => els.map((el) => el.value))).not.toContain('1800');
     await expect(page.locator('body')).not.toContainText('1,210.25');
     // Nothing is previewed or saveable until the USD/ตร.ม. is stated — ตร.ม./กล่อง is OPTIONAL for
-    // English per-sqm since Option B (owner decision 2026-09-16, quotationMeta#validateQuotationItem).
+    // English per-sqm (quotationMeta#validateQuotationItem).
     await expect(page.getByTestId('checklist-blocking')).toContainText('รายการที่ 1: ขาด ราคาต่อ ตร.ม.');
     await expect(page.getByRole('button', { name: 'ส่งขออนุมัติ' })).toBeDisabled();
 
-    // Re-entering the price ALONE already clears the block — Option B, pinned end to end against
+    // Re-entering the price ALONE already clears the block, pinned end to end against
     // the REAL service's English per-sqm preview. Then filling ตร.ม./กล่อง too, to prove the
     // box-area path still works exactly as before.
     await page.locator('#special-0').fill('64');

@@ -81,7 +81,7 @@ vi.mock('../../api/index.js', () => ({
     depositNotices: {
       listByTicket: vi.fn(),
     },
-    // CR-1 (GLA-167): lead-time change requests (R2 / R10).
+    // Lead-time change requests.
     leadTimeChanges: {
       listForPricingRequest: vi.fn(),
       create: vi.fn(),
@@ -90,7 +90,7 @@ vi.mock('../../api/index.js', () => ({
       approve: vi.fn(),
       reject: vi.fn(),
     },
-    // CR-1 (R9): the factory card lists the deal's stored IR for that factory, read-only.
+    // The factory card lists the deal's stored IR for that factory, read-only.
     storedImportRequests: {
       listForTicket: vi.fn(),
       download: vi.fn(),
@@ -98,8 +98,8 @@ vi.mock('../../api/index.js', () => ({
     catalog: {
       prices: vi.fn(),
     },
-    // B6 (GLA-135): the import factory picker's master list + country roster + in-flow
-    // add-factory form (ImportFactoryPicker, reusing catalog PriceImportPage's FactoryFormModal).
+    // The import factory picker's master list + country roster + in-flow add-factory form
+    // (ImportFactoryPicker, reusing catalog PriceImportPage's FactoryFormModal).
     priceImport: {
       factories: vi.fn(),
       countries: vi.fn(),
@@ -108,18 +108,16 @@ vi.mock('../../api/index.js', () => ({
     meta: {
       unitBases: vi.fn(),
     },
-    // GLA-125: PricingRequestCreateModal's header-terms section (opened here in mode="revision")
-    // fetches the same eligible-display-name list the direct-deal quotation editor uses.
+    // PricingRequestCreateModal's header-terms section (opened here in mode="revision") fetches the
+    // same eligible-display-name list the direct-deal quotation editor uses.
     dealQuotations: {
       displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
-      // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20) — reset to "none yet" in the shared
-      // beforeEach below (mirrors getPricingDecisionSalesView's own per-test reset there), so
-      // every existing test in this file keeps seeing the SAME legacy-only panel state as before
-      // this fix, rather than a leaked override from an earlier test or a thrown TypeError.
+      // Reset to "none yet" in the shared beforeEach below (like getPricingDecisionSalesView), so
+      // tests see the legacy-only panel state and no override leaks from an earlier test.
       findForPricingRequest: vi.fn(),
       listForTicket: vi.fn(),
       createFromPricingRequest: vi.fn(),
-      // GLA-123 slice S3 — the new engine's own outcome-recording endpoint, mirrors
+      // The new engine's own outcome-recording endpoint, like
       // pricingRequests.recordCustomerQuotationOutcome above.
       recordOutcome: vi.fn(),
     },
@@ -163,15 +161,15 @@ function buildRequest(overrides = {}) {
         color: 'ขาว',
         texture: 'ด้าน',
         size: '60x60',
-        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-        // required on every item PricingRequestCreateModal can save — see that component's own
-        // validateItemFields (mirrors PricingRequestService#requireItemFieldsComplete).
+        // color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are required on every
+        // item PricingRequestCreateModal can save (see its validateItemFields, which mirrors
+        // PricingRequestService#requireItemFieldsComplete).
         thicknessMm: 10,
         sqmPerPiece: 0.36,
         quantityMode: 'PIECES',
         piecesInput: 20,
         piecesPerBox: 4,
-        // GLA-125: required on this form too.
+        // Required on this form too.
         originCountry: 'ไทย-สต็อก',
         leadTimeMinDays: 3,
         leadTimeMaxDays: 7,
@@ -247,13 +245,12 @@ function buildCosting(overrides = {}) {
   };
 }
 
-// V141 ("CEO owns costing", PR #702) fixture. Mirrors PricingCostingItemDto's override/provenance
-// fields — see PricingCostingDtos.java. Deliberately a DIFFERENT id (5001, not buildCosting's
-// default 211) and a DIFFERENT landedCostPerUnitThb (55, not buildDecisionItem's
-// frozenLandedCostPerRequestedUnitThb of 60) — a test pairing this with
+// Fixture mirroring PricingCostingItemDto's override/provenance fields (see PricingCostingDtos.java).
+// Deliberately a DIFFERENT id (5001, not buildCosting's default 211) and a DIFFERENT
+// landedCostPerUnitThb (55, not buildDecisionItem's 60): a test pairing this with
 // buildDecisionItem({ pricingCostingItemId: 5001 }) exercises the REAL join
 // (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) rather than an
-// accidental id/number collision with buildCosting's own default fixture.
+// accidental id/number collision with buildCosting's default fixture.
 function buildCostingItemWithOverride(overrides = {}) {
   return {
     id: 5001,
@@ -297,10 +294,9 @@ function setApiDefaults() {
   api.pricingRequests.receiveFactoryQuote.mockResolvedValue({});
   api.pricingRequests.startFactoryNegotiation.mockResolvedValue({});
   api.pricingRequests.markFactoryQuoteReady.mockResolvedValue({});
-  // Nothing on the page calls these any more — submitToCeo stopped chaining them in PR #760, and
-  // #747 deleted the last four controls that drove them. They stay mocked ONLY so the
-  // "must not come back" assertions below have something that would record a call if one happened;
-  // an unmocked vi.fn() would throw instead of recording, which is a worse failure to read.
+  // Nothing on the page calls these any more (submitToCeo no longer chains them; the controls that
+  // drove them are deleted). They stay mocked ONLY so the "must not come back" assertions below have
+  // something that records a call; an unmocked vi.fn() would throw, a worse failure to read.
   api.pricingRequests.createCosting.mockResolvedValue({ costing: { id: 21 } });
   api.pricingRequests.recalculateCosting.mockResolvedValue({});
   api.pricingRequests.submitCosting.mockResolvedValue({});
@@ -311,9 +307,8 @@ function setApiDefaults() {
   api.pricingRequests.createCustomerChangeRevision.mockResolvedValue({ pricingRequest: { summary: { id: 999 } } });
   api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [] });
   api.pricingRequests.getPricingDecisionSalesView.mockRejectedValue(new Error('No approved pricing decision yet'));
-  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): reset every test back to "no new-engine
-  // quotation yet" — mockResolvedValue (not Once) leaks into later tests otherwise, exactly like
-  // getPricingDecisionSalesView above would without this same per-test reset.
+  // Reset every test to "no new-engine quotation yet": mockResolvedValue (not Once) would leak into
+  // later tests otherwise, like getPricingDecisionSalesView above.
   api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: null });
   api.pricingRequests.startPricingDecision.mockResolvedValue({});
   api.pricingRequests.updatePricingDecision.mockResolvedValue({});
@@ -336,8 +331,8 @@ function setApiDefaults() {
   api.pricingRequests.createDepositNoticeFromQuotation.mockResolvedValue({ depositNotice: { id: 9901, status: 'DRAFT' } });
   api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
   api.catalog.prices.mockResolvedValue({ items: [] });
-  // B6 (GLA-135): a small real-looking factory roster — enough for the picker + duplicate-name
-  // tests below without pulling in the full catalog fixture this file doesn't otherwise need.
+  // A small real-looking factory roster: enough for the picker + duplicate-name tests without the
+  // full catalog fixture.
   api.priceImport.factories.mockResolvedValue([
     { factoryId: 601, name: 'SCG Ceramics', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
     { factoryId: 602, name: 'Cotto Industry', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
@@ -462,10 +457,9 @@ function buildDecisionItem(overrides = {}) {
     decisionNote: null,
     // Phase 1 UI simplification ("ปรับราคาเอง") — no override by default.
     manualSellingPricePerRequestedUnit: null,
-    // Phase 2 (owner rulings 2026-09-18/19, V187) — sqmPerPiece is null by default, which makes
-    // this fixture LEGACY-shaped under isNewFormEligibleDecision despite requestedUnitBasis
-    // already being PER_PIECE above (matching the real backend's own eligibility rule: PER_PIECE
-    // AND sqmPerPiece both required). Tests exercising the new mode picker pass sqmPerPiece.
+    // sqmPerPiece is null by default, which makes this fixture LEGACY-shaped under
+    // isNewFormEligibleDecision despite requestedUnitBasis already being PER_PIECE (the real
+    // backend rule needs PER_PIECE AND sqmPerPiece). Tests exercising the new mode picker pass sqmPerPiece.
     sqmPerPiece: null,
     listUnitPrice: null,
     discountPct: null,
@@ -536,9 +530,9 @@ function renderDetailPage({
   // (listFactoryQuotes/listCostings/listAttachments) so a test that doesn't care about this
   // feature never has to know it exists — only tests exercising it pass discountApprovals.
   discountApprovals = [],
-  // CR-1: lead-time change requests (LeadTimeChangeDto[]).
+  // Lead-time change requests (LeadTimeChangeDto[]).
   leadTimeChanges = [],
-  // CR-1 (R9): the deal's stored ใบขอซื้อ rows (ImportRequestDto[]).
+  // The deal's stored ใบขอซื้อ rows (ImportRequestDto[]).
   importRequests = [],
   showToast = vi.fn(),
   routeId = request?.summary?.id ?? 501,
@@ -577,14 +571,14 @@ async function waitForLoaded(request = buildRequest()) {
   return screen.findByRole('heading', { level: 1, name: request.summary.requestCode });
 }
 
-// ── CEO pricing workspace redesign: shared helpers (new-form decision, CEO view) ────────────────
+// ── CEO pricing workspace: shared helpers (new-form decision, CEO view) ───────────────────────────
 // jsdom has no media queries, so the page renders BOTH the desktop table and the mobile cards and
 // hides one with Tailwind classes. The card inputs/figures reuse the table's data-testids, so
-// EVERY query on the redesigned workspace is SCOPED: within the table / a row (ceoTable, ceoRow)
-// or within a card (ceoCard). An unscoped getByTestId('pcr-ceo-margin-input-8001') is ambiguous by
-// design. The unique, unscoped ids are the summary bar's (pcr-ceo-save-all / -approve / -return)
-// and the mobile bar's (pcr-ceo-mobile-*).
-// Import PCR redesign: the 3-step indicator of a factory card (ติดต่อโรงงาน -> กรอกราคา -> ยืนยันราคาเสนอ)
+// EVERY query on the workspace is SCOPED: within the table / a row (ceoTable, ceoRow) or within a
+// card (ceoCard). An unscoped getByTestId('pcr-ceo-margin-input-8001') is ambiguous by design. The
+// unique, unscoped ids are the summary bar's (pcr-ceo-save-all / -approve / -return) and the
+// mobile bar's (pcr-ceo-mobile-*).
+// The 3-step indicator of a factory card (ติดต่อโรงงาน -> กรอกราคา -> ยืนยันราคาเสนอ)
 // -> ['done' | 'now' | 'todo', ...] read off each step's data-state.
 const stepStates = (quoteId) => within(screen.getByTestId(`pcr-factory-steps-${quoteId}`))
   .getAllByTestId('pcr-factory-step').map((el) => el.getAttribute('data-state'));
@@ -733,19 +727,18 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     });
     await waitForLoaded();
 
-    // 2026-10-01 (owner Ploy): the CEO's pricing workspace is the single
-    // "รายการสินค้าและราคาตั้งต้น" panel. The factory-quote panel "รายการสินค้า (N รายการ)" is now
-    // Import-only (it was import+ceo) and "ต้นทุนนำเข้า" is gone for the CEO too, so neither the
-    // panels nor the raw costing code may render for this role. Intent kept: nothing mutating is
-    // reachable for the CEO on the quote/costing side (asserted below, unchanged).
+    // The CEO's pricing workspace is the single "รายการสินค้าและราคาตั้งต้น" panel. The
+    // factory-quote panel "รายการสินค้า (N รายการ)" is Import-only and "ต้นทุนนำเข้า" is gone for the
+    // CEO, so neither the panels nor the raw costing code may render for this role. Intent:
+    // nothing mutating is reachable for the CEO on the quote/costing side (asserted below).
     expect(await screen.findByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' })).not.toBeNull();
     expect(screen.queryByRole('heading', { name: /^รายการสินค้า \(/ })).toBeNull();
     expect(screen.queryByText('ต้นทุนนำเข้า')).toBeNull();
     expect(screen.queryByText('COST-2026-0001')).toBeNull();
 
-    // But every mutating control on the factory-quote panel is Import-only (isImport(user)) and
-    // must be absent for CEO. The three costing ones (สร้างร่างต้นทุน / คำนวณใหม่ / ส่งให้ CEO ตรวจ)
-    // are absent for a stronger reason since #747: they no longer exist for any role.
+    // Every mutating control on the factory-quote panel is Import-only (isImport(user)) and must be
+    // absent for CEO. The three costing ones (สร้างร่างต้นทุน / คำนวณใหม่ / ส่งให้ CEO ตรวจ) no longer
+    // exist for any role.
     expect(screen.queryByRole('button', { name: 'สร้างร่างอีเมล' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างร่างต้นทุน' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ส่ง' })).toBeNull();
@@ -758,10 +751,9 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     expect(screen.queryByRole('button', { name: 'ร่างอีเมล' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'ยกเลิก' })).toBeNull();
-    // No editable email-draft or response-entry form fields either. Queried by
-    // accessible name, not placeholder: these fields carry real labels now, so
-    // a placeholder query would report "absent" for a field that is present and
-    // simply has no placeholder — an assertion that passes for the wrong reason.
+    // No editable email-draft or response-entry form fields either. Queried by accessible name, not
+    // placeholder: the fields carry real labels, so a placeholder query would report "absent" for a
+    // present field that has no placeholder (an assertion passing for the wrong reason).
     expect(screen.queryByLabelText(/อีเมลโรงงาน/)).toBeNull();
     expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();
     // The per-factory currency/unit controls are read-only text for CEO, not a live select.
@@ -777,8 +769,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    // CR-1: the composer lives in a modal behind each factory card's สร้างเมล button (the old
-    // ร่างอีเมล / ดูอีเมล labels are gone — see IA naming table).
+    // The composer lives in a modal behind each factory card's สร้างเมล button (the ร่างอีเมล /
+    // ดูอีเมล labels are gone, see IA naming table).
     fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
     const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
 
@@ -802,8 +794,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     ));
   });
 
-  // Owner UX ask 2026-09-24 (kept) + CR-1 R3/B-R2: the price grid must not invite a quoted price
-  // before the factory has been marked ติดต่อโรงงานแล้ว (a DRAFT quote = not contacted yet).
+  // The price grid must not invite a quoted price before the factory has been marked
+  // ติดต่อโรงงานแล้ว (a DRAFT quote = not contacted yet).
   it('locks the price grid with a hint while the factory is not yet contacted (DRAFT)', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote()] }); // default status DRAFT
     await waitForLoaded();
@@ -825,11 +817,10 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' })).not.toBeNull();
   });
 
-  // Opus review of #1062 (2026-09-28) used to pin that a DRAFT quote outside send()'s window
-  // UNLOCKED the grid because receive() accepted a DRAFT quote there. CR-1 B-R2 reverses that:
-  // FactoryQuoteService#receive now 409s on EVERY DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"),
-  // so the grid stays locked past the window too, and — since markContacted is itself guarded by
-  // DRAFT_STATUSES — the ติดต่อโรงงานแล้ว button is withheld there rather than offered to 409.
+  // A DRAFT quote outside send()'s window does NOT unlock the grid: FactoryQuoteService#receive
+  // 409s on EVERY DRAFT quote ("ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา"), so the grid stays locked past
+  // the window too, and since markContacted is itself guarded by DRAFT_STATUSES, the
+  // ติดต่อโรงงานแล้ว button is withheld there rather than offered to 409.
   it('keeps a DRAFT quote locked once the request is past the contact window (READY_FOR_CEO_REVIEW), with no contact button', async () => {
     renderDetailPage({
       user: importUser,
@@ -844,9 +835,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByRole('button', { name: 'ติดต่อโรงงานแล้ว' })).toBeNull();
   });
 
-  // #2 (owner ask 2026-09-24): before any mail is generated the price section used to be a
-  // bare "ยังไม่มีราคาโรงงาน" — now it previews what needs pricing, grouped by the routed factory,
-  // read-only (no editable price input yet).
+  // Before any mail is generated the price section previews what needs pricing, grouped by the
+  // routed factory, read-only (no editable price input yet).
   it('previews what needs pricing (grouped by factory) before any mail is generated', async () => {
     renderDetailPage({ user: importUser }); // no factoryQuotes → nothing generated yet
     await waitForLoaded();
@@ -857,15 +847,12 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByLabelText(/^ราคาที่เสนอ/)).toBeNull();          // no editable price yet
   });
 
-  // Opus review of #1062 (2026-09-28): the preview used to be gated on `factoryGroups.length ===
-  // 0`, so it vanished entirely the instant ANY factory quote existed anywhere on the request. An
-  // item whose factory was blank until Import gap-filled it (canSetItemFactory, still within
-  // FACTORY_ROUTING_STATUSES — never a re-route of an already-set line, per setItemFactory's own
-  // Javadoc) AFTER drafts were already generated for other items has no factory-quote row of its
-  // own, so it appeared in neither the (suppressed) preview nor the quote grid — invisible. The
-  // preview must now cover exactly the items no CURRENT factory quote already lists, independent of
-  // whether other items already have one — and its banner copy must not claim "no draft generated
-  // at all" in this mixed case, and the panel's item count must include these previewed items too.
+  // The preview covers exactly the items no CURRENT factory quote already lists, independent of
+  // whether other items have one. An item whose factory was blank until Import gap-filled it
+  // (canSetItemFactory, within FACTORY_ROUTING_STATUSES; never a re-route, per setItemFactory's
+  // Javadoc) AFTER drafts were generated for other items has no factory-quote row, so it would
+  // appear in neither the preview nor the quote grid. The banner copy must not claim "no draft
+  // generated at all" in this mixed case, and the item count must include these previewed items.
   it('previews an item with no factory-quote row yet even once other items already have one', async () => {
     const base = buildRequest().items[0];
     const items = [
@@ -886,20 +873,19 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     const preview = await screen.findByTestId('pcr-price-preview');
     expect(within(preview).getByText('Cotto')).not.toBeNull();          // C's factory shows
     expect(within(preview).queryByText('SCG Ceramics')).toBeNull();     // A/B's factory does not
-    // (Import PCR redesign: the amber pre-draft banner and its two copies are retired — the lock reason
-    // now sits in each factory card's terms row — so the banner-copy assertions were deleted.)
+    // (The lock reason sits in each factory card's terms row; there is no amber pre-draft banner.)
 
     // A and B still render as their own quote-grid rows (locked, since request stays
     // IMPORT_REVIEWING and the quote stays DRAFT) rather than being hidden by C's preview.
     expect(screen.getAllByLabelText(/^ราคาที่เสนอ/).length).toBe(2);
 
-    // The progress strip's สินค้า figure counts all three items (2 quoted + 1 previewed), not just the
-    // quoted ones (it replaces the old "รายการสินค้า (3 รายการ)" panel title).
+    // The progress strip's สินค้า figure counts all three items (2 quoted + 1 previewed), not just
+    // the quoted ones.
     expect(within(screen.getByRole('region', { name: 'ความคืบหน้าการขอราคา' })).getByTestId('pcr-import-fig-items').textContent.trim()).toBe('3');
   });
 
-  // #1 (owner ask 2026-09-24): a SUBMITTED request opened here (e.g. from a link) had no รับเรื่อง
-  // affordance on the page itself — only in the คิวขอราคา queue.
+  // A SUBMITTED request opened here (e.g. from a link) needs a รับเรื่อง affordance on the page
+  // itself, not only in the คิวขอราคา queue.
   it('lets an import user รับเรื่อง a SUBMITTED request from the request-page header', async () => {
     api.pricingRequests.pickup.mockResolvedValue({ pricingRequest: buildRequest({ summary: { status: 'IMPORT_REVIEWING' } }) });
     renderDetailPage({ user: importUser, request: buildRequest({ summary: { status: 'SUBMITTED' } }) });
@@ -915,8 +901,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByTestId('pcr-detail-pickup')).toBeNull();
   });
 
-  // owner ask 2026-09-24 (kept): once contacted, Import can still reopen the mail — read-only
-  // (view + copy). Import PCR redesign: once contacted the button reads ดูเมลที่ส่ง (same testid, same modal).
+  // Once contacted, Import can still reopen the mail, read-only (view + copy); the button reads
+  // ดูเมลที่ส่ง (same testid, same modal).
   it('reopens the mail of a CONTACTED factory read-only (copy kept, no บันทึกร่าง)', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
     await waitForLoaded();
@@ -933,8 +919,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(within(dialog).getByLabelText('ถึง').disabled).toBe(true);
   });
 
-  // Opus review of #1062 second pass (kept in spirit): outside the contact window the modal is
-  // read-only too — updateDraft is guarded by the identical DRAFT_STATUSES (409).
+  // Outside the contact window the modal is read-only too: updateDraft is guarded by the identical
+  // DRAFT_STATUSES (409).
   it('reopens the mail modal read-only for a DRAFT quote once the request is past the contact window', async () => {
     renderDetailPage({
       user: importUser,
@@ -958,8 +944,7 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     await screen.findByText('SCG Ceramics');
 
     // Import types ONE thing: the price. เลขอ้างอิงใบเสนอราคา / เงื่อนไขการชำระเงิน /
-    // ระยะเวลาผลิต-ส่งมอบ were removed from this form (owner ruling 2026-08-11) — all three are
-    // optional in ReceiveFactoryQuoteRequest, so the payload simply carries null for them.
+    // ระยะเวลาผลิต-ส่งมอบ are optional in ReceiveFactoryQuoteRequest, so the payload carries null.
     const priceInput = screen.getByLabelText(/^ราคาที่เสนอ/);
     fireEvent.change(priceInput, { target: { value: '55.5' } });
 
@@ -999,12 +984,10 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.getByText('60x60 · ขาว · ด้าน')).toBeTruthy();
   });
 
-  // THE SEED BUG. FactoryQuoteRepository.insertDraftItems seeds a fresh quote item's quotedUnit
-  // from the REQUEST's own requested_unit (real text, e.g. ตร.ม.) and unitBasis from a basis guess
-  // — the two are already different on a brand-new draft. The old defaultResponseItems used ONE
-  // variable to seed both fields, so the real unit was thrown away in favour of the basis code
-  // before Import ever saw the form. This is the mutation-checked test: reverting the fix (sharing
-  // one variable again) must turn it red.
+  // Seed bug guard. FactoryQuoteRepository.insertDraftItems seeds a fresh quote item's quotedUnit
+  // from the REQUEST's requested_unit (real text, e.g. ตร.ม.) and unitBasis from a basis guess, so
+  // the two already differ on a brand-new draft. Seeding both from ONE variable threw the real unit
+  // away in favour of the basis code. Mutation-checked: sharing one variable again must turn it red.
   it('seeds quotedUnit from the real unit Sales requested, not the basis code, when Import has not touched it', async () => {
     const quote = buildFactoryQuote({
       status: 'REQUESTED',
@@ -1058,9 +1041,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     ));
   });
 
-  // The ตร.ม./หน่วย input this task's brief listed as already shipped, but which was not present
-  // on origin/main — FactoryQuoteService requires sqmPerUnit for any PER_SQM line
-  // (validateAndNormalizeResponseItems:727) and there was no way for Import to supply it.
+  // The ตร.ม./หน่วย input: FactoryQuoteService requires sqmPerUnit for any PER_SQM line
+  // (validateAndNormalizeResponseItems) and Import needs a way to supply it.
   const perSqmItem = (overrides = {}) => ({
     id: 911,
     pricingRequestItemId: 1,
@@ -1175,27 +1157,23 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
 });
 
 describe('PricingRequestDetailPage Import costing workflow', () => {
-  // Owner ruling 2026-08-11: Import keys in the price and submits — it never touches the costing
-  // aggregate. The old per-step buttons (คำนวณใหม่ / ส่งให้ CEO ตรวจ, and the สร้างร่างต้นทุน that
-  // preceded them) are gone; ONE button does the hand-off.
+  // Import keys in the price and submits; it never touches the costing aggregate. ONE button does
+  // the hand-off.
   //
-  // This test used to assert a four-call chain in invocation ORDER
-  // (markReady -> createCosting -> recalculate -> submit). V141/PR #702 severed the last three —
-  // PricingCostingService's createDraft/recalculate/submit are @Deprecated shells that throw
-  // 409 COSTING_MOVED_TO_CEO — but this suite mocks `api`, so every severed call resolved happily
-  // and the test stayed green over a button that always errored in production (issue #729). The
-  // assertions are now wrong-way-round on purpose: the severed calls must NOT be made.
+  // The severed costing calls (createDraft/recalculate/submit) are @Deprecated shells that throw
+  // 409 COSTING_MOVED_TO_CEO. This suite mocks `api`, so a test asserting the old call chain stayed
+  // green over a button that always errored in production. The assertions are wrong-way-round on
+  // purpose: the severed calls must NOT be made.
   it('sends the factory quote to the CEO with markFactoryQuoteReady alone, and touches no severed costing endpoint', async () => {
     const quote = buildFactoryQuote({ status: 'RESPONSE_RECEIVED' });
     renderDetailPage({ user: importUser, factoryQuotes: [quote] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces ส่งให้ CEO อนุมัติราคา. A response is
-    // already on file (RESPONSE_RECEIVED) and nothing was edited this session, so confirmFactoryQuote
-    // must skip receiveFactoryQuote entirely — see its own doc comment for why an unconditional
-    // receive() call here would be wrong, not merely redundant (it would spuriously bump the
-    // revision and notify the CEO of a "revision" that never happened).
+    // ยืนยันราคาเสนอ replaces ส่งให้ CEO อนุมัติราคา. A response is already on file
+    // (RESPONSE_RECEIVED) and nothing was edited this session, so confirmFactoryQuote must skip
+    // receiveFactoryQuote (see its doc comment): an unconditional receive() would bump the
+    // revision and notify the CEO of a "revision" that never happened.
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
@@ -1205,11 +1183,10 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     expect(api.pricingRequests.submitCosting).not.toHaveBeenCalled();
   });
 
-  // The regression the bug report called out as "clicking again is worse": on the old code a quote
-  // already at READY_FOR_COSTING re-rendered the button, skipped step 1, and fired a pure 409.
-  // markFactoryQuoteReady is not idempotent — markReady's UPDATE matches zero rows on an
-  // already-ready quote and the service 409s — so the action must not be offered there at all
-  // while nothing has been edited (an edit re-opens it — see the next test).
+  // Clicking again must not fire a pure 409: a quote already at READY_FOR_COSTING must not offer
+  // the action while nothing has been edited. markFactoryQuoteReady is not idempotent (its UPDATE
+  // matches zero rows on an already-ready quote and the service 409s); an edit re-opens it (see
+  // the next test).
   it('does not offer ยืนยันราคาเสนอ on an untouched quote that is already READY_FOR_COSTING', async () => {
     renderDetailPage({ user: importUser, factoryQuotes: [buildFactoryQuote({ status: 'READY_FOR_COSTING' })] });
     await waitForLoaded();
@@ -1246,12 +1223,11 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
       expect.objectContaining({ items: [expect.objectContaining({ rawUnitPrice: 48 })] }),
     ));
     // markReady is called on the NEW revision id receiveFactoryQuote resolved to, not the
-    // now-superseded original — the exact bug the old two-button flow could not hit (it never
-    // chained these two calls together at all).
+    // superseded original.
     await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(92));
   });
 
-  // Wrong-way-round: the point is that these surfaces are ABSENT for Import, not merely different.
+  // Wrong-way-round: these surfaces must be ABSENT for Import, not merely different.
   it('shows Import no costing, CEO-decision, customer-quotation or ask-Sales surface', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
@@ -1262,7 +1238,7 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     expect(screen.queryByText('ต้นทุนนำเข้า')).toBeNull();
     expect(screen.queryByText('การพิจารณาราคาขายของ CEO')).toBeNull();
     expect(screen.queryByText('ใบเสนอราคาลูกค้า')).toBeNull();
-    // The ขอข้อมูลเพิ่มเติม feature was removed from the product entirely.
+    // The ขอข้อมูลเพิ่มเติม feature no longer exists.
     expect(screen.queryByText('ขอข้อมูลจาก Sales')).toBeNull();
     expect(screen.queryByText('ตอบข้อมูลเพิ่มเติม')).toBeNull();
     // COST-2026-0001 is the costing code — absent because the whole panel is.
@@ -1275,16 +1251,12 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // ONE <ConfirmDialog> serves every confirmable action on this page, and its title, message and
-// confirmLabel are each a separate `confirmAction?.type === ...` ternary CHAIN. Removing one
-// action means deleting a branch from the middle of three chains at once, and the failure mode
-// is silent: mis-nest the `message` chain and อนุมัติราคาขาย starts showing ตีกลับ's copy while
-// every existing assertion — which only ever checked that the right mutation fired — stays green.
-//
-// #747 deleted the submitCosting branch (the four Import costing controls were unreachable for
-// their whole existence: the panel is `canSeeRaw && !isImport`, every control inside required
-// `isImport`). These cases pin the copy of the FOUR that remain, so that edit and any future one
-// is falsifiable. Mutation-checked on 2026-08-14: swapping any single branch of any of the three
-// chains turns exactly the matching case below red.
+// confirmLabel are each a separate `confirmAction?.type === ...` ternary CHAIN. Removing an action
+// means deleting a branch from the middle of three chains, and the failure is silent: mis-nesting
+// the `message` chain would show ตีกลับ's copy on อนุมัติราคาขาย while every assertion that only
+// checked the right mutation fired stays green. These cases pin the copy of the four remaining
+// actions. Mutation-checked: swapping any single branch of any chain turns exactly the matching
+// case red.
 describe('PricingRequestDetailPage shared ConfirmDialog copy (the three surviving actions)', () => {
   it('approveDecision — อนุมัติราคาขาย / เมื่ออนุมัติแล้ว… / อนุมัติ', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -1296,8 +1268,8 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the three survivin
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'อนุมัติราคาขาย' });
-    // P2 fix (2026-09): now also states the approved price is ex-VAT — see the "selling price is
-    // stated as ก่อน VAT" describe block below for the dedicated coverage of that copy change.
+    // Also states the approved price is ex-VAT (see the "selling price is stated as ก่อน VAT"
+    // describe block below).
     expect(within(dialog).getByText(
       'เมื่ออนุมัติแล้ว ราคาขายจะถูกส่งให้ฝ่ายขายและไม่สามารถแก้ไขราคานี้ได้อีก (ราคานี้เป็นราคาก่อน VAT — ยังไม่รวมภาษีมูลค่าเพิ่ม 7%)',
     )).not.toBeNull();
@@ -1342,7 +1314,7 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the three survivin
   it('offers no submitCosting confirmation to the CEO, who is the only role the costing panel renders for', async () => {
     renderDetailPage({ user: ceoUser, costings: [buildCosting()] });
     await waitForLoaded();
-    // (Waited on the costing-panel text before; that panel is gone for the CEO, 2026-10-01.)
+    // (Waits on the pricing workspace, not a costing panel, which the CEO no longer has.)
     await screen.findByRole('heading', { level: 2, name: 'รายการสินค้าและราคาตั้งต้น' });
 
     expect(screen.queryByRole('button', { name: 'ส่งให้ CEO ตรวจ' })).toBeNull();
@@ -1353,8 +1325,8 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the three survivin
 
 describe('PricingRequestDetailPage customer-change revision editing', () => {
   it('lets the owning sales rep open the revision modal (seeded from the current request) and create a revision via createCustomerChangeRevision', async () => {
-    // CR-1: the line carries the currency/unit sales fixed (a legacy line without them must be
-    // completed before a revision can be saved — covered in PricingRequestCreateModal.test.jsx).
+    // The line carries the currency/unit sales fixed (a legacy line without them must be completed
+    // before a revision can be saved; covered in PricingRequestCreateModal.test.jsx).
     const request = buildRequest({
       summary: { status: 'READY_FOR_CEO_REVIEW' },
       items: [{ ...buildRequest().items[0], requestedCurrency: 'THB', requestedPriceUnitBasis: 'PER_PIECE' }],
@@ -1396,7 +1368,7 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
   });
 });
 
-// QA-11 (Ploy 2026-10-29): a DRAFT (e.g. a customer-change revision) can be sent from its own page.
+// A DRAFT (e.g. a customer-change revision) can be sent from its own page.
 describe('PricingRequestDetailPage DRAFT — ส่งให้ฝ่ายนำเข้า', () => {
   it('the owning rep sends their DRAFT to import from its own page', async () => {
     const request = buildRequest({ summary: { status: 'DRAFT' } });
@@ -1486,21 +1458,17 @@ describe('PricingRequestDetailPage pricing-request attachments (COMMIT 4)', () =
 });
 
 describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level only — see file header)', () => {
-  // Phase 1 UI simplification (owner ruling 2026-08-16): the cost breakdown, the formula
-  // derivation, ปรับต้นทุนเอง, and ปรับราคาเอง all live inside a per-item "วิธีคำนวณราคานี้"
-  // CollapsibleSection, collapsed by default (CollapsibleSection unmounts its body rather than
-  // CSS-hiding it — see that component's own doc comment) — every test below that needs to reach
-  // one of those controls must open it first.
+  // The cost breakdown, the formula derivation, ปรับต้นทุนเอง, and ปรับราคาเอง all live inside a
+  // per-item "วิธีคำนวณราคานี้" CollapsibleSection, collapsed by default (it unmounts its body
+  // rather than CSS-hiding it), so every test that needs one of those controls must open it first.
   function expandDerivation() {
     fireEvent.click(screen.getByRole('button', { name: 'วิธีคำนวณราคานี้' }));
   }
 
-  // "ต้นทุนรวมนำเข้า (รวมค่าขนส่งและภาษี): <code>฿60.00</code>" splits its label and value across an element
-  // boundary (the <code> wraps the figure, matching every other computed-money display in this
-  // panel) — the default getByText text matcher does not read across that boundary (it is a
-  // known testing-library limitation, not a markup defect: the "ราคาขาย" line right next to it
-  // has no such boundary and matches a plain regex fine). A function matcher reading the whole
-  // element's combined textContent, restricted to the leaf that owns it, is the documented fix.
+  // "ต้นทุนรวมนำเข้า (รวมค่าขนส่งและภาษี): <code>฿60.00</code>" splits its label and value across an
+  // element boundary (the <code> wraps the figure), which the default getByText matcher does not
+  // read across (a testing-library limitation, not a markup defect). A function matcher reading the
+  // combined textContent of the leaf that owns it is the documented fix.
   function byCombinedText(regex) {
     return (_content, element) => {
       if (!regex.test(element.textContent)) return false;
@@ -1547,11 +1515,11 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
     expect(screen.getByText(byCombinedText(/ต้นทุนรวมนำเข้า.*฿60\.00/))).not.toBeNull();
     expect(screen.getByText(/ราคาขาย.*฿72\.00/)).not.toBeNull();
-    // QA-29: the requested quantity reads "20 แผ่น", never the raw basis enum "20 (PER_PIECE)".
-    // The request-items list already renders one "20 แผ่น"; the decision line is the second.
+    // The requested quantity reads "20 แผ่น", never the raw basis enum "20 (PER_PIECE)". The
+    // request-items list already renders one "20 แผ่น"; the decision line is the second.
     expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
     expect(screen.queryByText(/PER_PIECE/)).toBeNull();
-    // The old per-item margin/minimum/ceiling grid is gone entirely.
+    // The per-item margin/minimum/ceiling grid is gone.
     expect(screen.queryByPlaceholderText('อัตรากำไร เช่น 0.20 = 20%')).toBeNull();
     expect(screen.queryByPlaceholderText('ราคาขั้นต่ำ')).toBeNull();
     expect(screen.queryByPlaceholderText('ส่วนลดสูงสุด เช่น 0.10 = 10%')).toBeNull();
@@ -1562,8 +1530,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
   });
 
-  // QA-29 leftover: the decision's FX line printed the raw source enum and an ISO date
-  // ("อัตราแลกเปลี่ยน 1 (MANUAL, 2026-10-30)"); it reads a Thai source and a Thai date.
+  // The decision's FX line reads a Thai source and a Thai date, not the raw source enum and ISO
+  // date ("อัตราแลกเปลี่ยน 1 (MANUAL, 2026-10-30)").
   it.each(['MANUAL', 'BOT'])('the CEO decision FX line shows a Thai source label and a Thai date, never %s or the ISO date', async (fxSource) => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -1583,7 +1551,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // V141 ("CEO owns costing", PR #702, commit 1).
+  // CEO owns costing: the CEO's per-line cost override and recalculate controls.
   it('lets the CEO recalculate the decision cost, calling recalculatePricingDecisionCost with the decision id and nothing else', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
@@ -1598,7 +1566,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
   });
 
   // Wrong-way-round: the whole CEO decision panel is import-excluded (canSeeRawPricingDecision(user)
-  // && !isImport(user)), so this is not a narrower gate than the panel itself — it must be absent
+  // && !isImport(user)), so this is not a narrower gate than the panel itself; it must be absent
   // for the same reason every other control in this panel is absent for Import.
   it('does not offer "คำนวณต้นทุนใหม่" to Import — the whole CEO decision panel is import-excluded', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -1609,7 +1577,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
   });
 
-  // Wrong-way-round: editable = isDraft && canActOnPricingDecision(...) — an APPROVED decision is
+  // Wrong-way-round: editable = isDraft && canActOnPricingDecision(...), so an APPROVED decision is
   // read-only even for the CEO who approved it.
   it('does not offer "คำนวณต้นทุนใหม่" to the CEO on an APPROVED decision (not DRAFT)', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
@@ -1623,7 +1591,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(screen.queryByTestId('pcr-ceo-recalculate-cost')).toBeNull();
   });
 
-  // V141 ("CEO owns costing", PR #702, commit 2) — per-line cost override.
+  // Per-line cost override.
   describe('CEO per-line cost override', () => {
     function renderWithCostingItem(costingItemOverrides = {}, { user = ceoUser } = {}) {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -1736,8 +1704,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' }).disabled).toBe(true);
     });
 
-    // Wrong-way-round: the whole CEO decision panel is import-excluded, same as commit 1's own
-    // recalculate button — this is not a narrower gate than the panel itself.
+    // Wrong-way-round: the whole CEO decision panel is import-excluded, like the recalculate
+    // button; this is not a narrower gate than the panel itself.
     it('shows Import no cost-override button anywhere', async () => {
       renderWithCostingItem({}, { user: importUser });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
@@ -1746,12 +1714,11 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // Phase 1 UI simplification ("ปรับราคาเอง", owner ruling 2026-08-16) — a REAL behaviour change:
-  // overrides the SELLING PRICE directly (not the cost), and the formula stops driving that line
-  // entirely. Reuses PUT /pricing-decisions/{id} (updatePricingDecision) rather than a new
-  // endpoint — see PricingDecisionRequests.UpdatePricingDecisionItemRequest's own doc comment for
-  // why sellingPriceOverride/clearSellingPriceOverride need a tri-state that plain COALESCE can't
-  // express, and PriceOverrideModal / the overrideSellingPrice mutation in the page itself.
+  // "ปรับราคาเอง": a REAL behaviour change. It overrides the SELLING PRICE directly (not the cost),
+  // and the formula stops driving that line. Reuses PUT /pricing-decisions/{id}
+  // (updatePricingDecision); see PricingDecisionRequests.UpdatePricingDecisionItemRequest for why
+  // sellingPriceOverride/clearSellingPriceOverride need a tri-state plain COALESCE can't express,
+  // and PriceOverrideModal / the overrideSellingPrice mutation in the page.
   describe('CEO per-line selling-price override ("ปรับราคาเอง")', () => {
     it('shows the automatically computed price by default, opens the derivation, and offers ปรับราคาเอง', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -1861,8 +1828,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    // Uncollapsed, same as the stale-override badge — a CEO must see AT A GLANCE that a price was
-    // fixed manually, without expanding anything.
+    // Uncollapsed, like the stale-override badge: a CEO must see AT A GLANCE that a price was fixed
+    // manually, without expanding anything.
     it('shows a "ราคาปรับเอง" indicator in the main (collapsed) view and the overridden price, once active', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -1904,9 +1871,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // ราคาขั้นต่ำ is no longer a CEO input (auto-populated server-side at approve() — see
-  // PricingDecisionService#approve), so only a missing MARGIN can block approval now, and only on
-  // a line with no active "ปรับราคาเอง" override.
+  // ราคาขั้นต่ำ is auto-populated server-side at approve() (PricingDecisionService#approve), so only
+  // a missing MARGIN can block approval, and only on a line with no active "ปรับราคาเอง" override.
   it('disables approval until every item has a margin (mirrors the server 422 gate)', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -1954,8 +1920,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     ));
   });
 
-  // Was: "shows Import the raw decision read-only". Import's job now ends at ส่งให้ CEO อนุมัติราคา,
-  // so it is shown NO decision surface at all — a strictly narrower view than before, never wider.
+  // Import's job ends at ส่งให้ CEO อนุมัติราคา, so it is shown NO decision surface at all.
   it('shows Import no CEO decision surface at all', async () => {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
@@ -1981,13 +1946,13 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     // this page renders structurally has no cost/margin field at all (design correction 2).
     expect(screen.queryByText(/ต้นทุน/)).toBeNull();
     expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
-    // QA-29: "20 แผ่น", not the raw basis enum (the request-items list renders one already;
-    // the sales-view line is the second).
+    // "20 แผ่น", not the raw basis enum (the request-items list renders one already; the
+    // sales-view line is the second).
     expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
     expect(screen.queryByText(/PER_PIECE/)).toBeNull();
   });
 
-  // W6-04: no approved decision to show yet (or any more), so no 404 on every load.
+  // No approved decision to show yet (or any more), so no 404 on every load.
   it.each(['READY_FOR_CEO_REVIEW', 'SUPERSEDED'])('does not fetch the sales-view projection on a %s request', async (status) => {
     const request = buildRequest({ summary: { status } });
     renderDetailPage({ user: salesOwner, request });
@@ -2006,12 +1971,12 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(api.pricingRequests.getPricingDecisionSalesView).not.toHaveBeenCalled();
   });
 
-  // Per-line margin (owner request 2026-10-21): the CEO sets อัตรากำไร% PER product line, not one
-  // combined default — each line's price = cost × (1 + its own margin). Reuses PUT
-  // /pricing-decisions/{id} (updatePricingDecision) with a single-item marginPct payload, the same
-  // endpoint applyItemUpdates handles for the selling-price override above. The single
-  // "อัตรากำไรเริ่มต้น" stays the creation-time seed; this is a per-line OVERRIDE of it, on the
-  // legacy formula path only (the NEW-FORM/V187 path prices through the mode picker, not margin).
+  // Per-line margin: the CEO sets อัตรากำไร% PER product line, not one combined default; each
+  // line's price = cost × (1 + its own margin). Reuses PUT /pricing-decisions/{id}
+  // (updatePricingDecision) with a single-item marginPct payload, the same endpoint
+  // applyItemUpdates handles for the selling-price override above. "อัตรากำไรเริ่มต้น" stays the
+  // creation-time seed; this is a per-line OVERRIDE of it, on the legacy formula path only (the
+  // new-form path prices through the mode picker, not margin).
   describe('CEO per-line margin ("อัตรากำไรรายรายการ")', () => {
     it('seeds the per-line margin input from the line proposedMarginPct and saves a single-item marginPct payload', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -2138,8 +2103,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(saveAllButton().disabled).toBe(false);
     });
 
-    // Owner request 2026-10-21: "ทุกโหมดอยากให้เห็นชัด ๆ ว่ากำไรกี่บาทกี่ %". Now the กำไร column:
-    // ฿ for the whole line + % of cost.
+    // The กำไร column: ฿ for the whole line + % of cost.
     it('shows the realized profit (฿ for the line + % of cost) in the กำไร column of a NEW-FORM NET row', async () => {
       // cost 60 THB, net 72 THB (fx 1), qty 20 → profit 12/unit, 20% of cost, ฿240 for the line.
       await renderCeoNewForm({ priceMode: 'NET', items: [nfItem({ netUnitPrice: 72, listUnitPrice: 72 })] });
@@ -2170,13 +2134,11 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // P0/P1a fix (2026-09): LandedCostCalculator now aggregates every problem across every item
-  // into ONE 422 whose message is a heading line + one bullet per problem (see
-  // LandedCostCalculator#aggregateProblems), and FxResolver's own staleness/missing-rate messages
-  // are similarly meant to be read in full, not truncated. Both startCeoReview and
-  // recalculateDecisionCost render that error inline in this panel instead of the toast — see
-  // ceoCostingError's own comment in the page for why the toast is wrong for this (collapses '\n'
-  // to a space in Toast.jsx, auto-dismisses after 3200ms in useToast.js).
+  // LandedCostCalculator aggregates every problem across every item into ONE 422 whose message is
+  // a heading line + one bullet per problem (LandedCostCalculator#aggregateProblems), and
+  // FxResolver's staleness/missing-rate messages are meant to be read in full. Both startCeoReview
+  // and recalculateDecisionCost render that error inline instead of the toast (see ceoCostingError
+  // in the page: Toast.jsx collapses '\n' to a space and useToast.js auto-dismisses after 3200ms).
   describe('CEO costing error surfaced inline, not the toast (P0/P1a fix)', () => {
     const multiLineError = [
       'ไม่สามารถคำนวณต้นทุนได้ เนื่องจากพบปัญหาดังนี้:',
@@ -2209,8 +2171,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       // to a space.
       const messageEl = alert.querySelector('p');
       expect(messageEl.className).toContain('whitespace-pre-line');
-      // The toast-regression guard: every OTHER useActionMutation call site still reports its
-      // error via showToast('error', ...) — these two must not, or this flips true.
+      // Toast-regression guard: every OTHER useActionMutation call site still reports its error via
+      // showToast('error', ...); these two must not, or this flips true.
       expect(showToast).not.toHaveBeenCalledWith('error', expect.anything());
     });
 
@@ -2269,9 +2231,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // P1b fix (2026-09): the backend batching means costing is faster than before, but it is still
-  // a multi-second round trip — these two controls must SHOW that, not just go `disabled` with no
-  // other signal (issue: "รีเฟรชใช้เวลานานนิดนึง" read as broken, not slow).
+  // Costing is a multi-second round trip: these two controls must SHOW that, not just go
+  // `disabled` with no other signal (otherwise "รีเฟรชใช้เวลานานนิดนึง" reads as broken, not slow).
   describe('costing pending state (P1b fix)', () => {
     it('busies the recalculate icon button and reflects it in the accessible name while in flight', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -2318,11 +2279,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // P2 fix (2026-09): PricingDecisionService.computeSellingPrice is cost x (1 + margin) x
-  // sellingBuffer, rounded HALF_UP to 2dp (owner ruling 2026-09-19, Phase 2 CEO pricing —
-  // formerly rounded UP to the nearest ฿10) with NO VAT term — VAT 7% is only ever added later,
-  // on the customer quotation. Every place a CEO or sales rep reads a selling price on this page
-  // must say so.
+  // PricingDecisionService.computeSellingPrice is cost x (1 + margin) x sellingBuffer, rounded
+  // HALF_UP to 2dp, with NO VAT term: VAT 7% is only added later, on the customer quotation. Every
+  // place a CEO or sales rep reads a selling price on this page must say so.
   describe('selling price is stated as ก่อน VAT (P2 fix)', () => {
     it('shows a persistent ก่อน VAT note in the CEO panel without expanding anything, and labels the per-item line', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
@@ -2352,7 +2311,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
   });
 
-  // ── Phase 2, CEO pricing method (owner rulings 2026-09-18/19, V187) ────────────────────────
+  // ── CEO pricing method ────────────────────────────────────────────────────────────────────
   describe('CEO price mode (Phase 2)', () => {
     function newFormItem(overrides = {}) {
       return buildDecisionItem({ sqmPerPiece: 0.36, ...overrides });
@@ -2366,7 +2325,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       await screen.findByText('PCD-2026-0001');
 
       expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
-      // Legacy UI (ปรับราคาเอง, formula derivation) still renders exactly as before.
+      // Legacy UI (ปรับราคาเอง, formula derivation) still renders as before.
       expandDerivation();
       expect(screen.getByTestId('pcr-ceo-price-override-8001')).not.toBeNull();
     });
@@ -2379,8 +2338,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         expect(group.getByRole('button', { name }).getAttribute('aria-pressed')).toBe('false');
       }
       expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
-      // Opus review finding #1 / minors #6, #8 (2026-09-19) + 2026-10-01: ปรับราคาตั้งเอง is gone; with
-      // no mode chosen there is no price input at all.
+      // ปรับราคาตั้งเอง is gone; with no mode chosen there is no price input at all.
       expect(screen.queryByTestId('pcr-ceo-price-override-8001')).toBeNull();
       for (const id of ['pcr-ceo-margin-input-8001', 'pcr-ceo-list-price-8001', 'pcr-ceo-discount-8001',
         'pcr-ceo-special-sqm-8001', 'pcr-ceo-direct-net-8001']) {
@@ -2414,7 +2372,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       fireEvent.click(toggle);
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(ceoTable().getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
-      // GLA-152: the duty product-type select is gone — see the dedicated test in the 2026-10-01 describe.
+      // The duty product-type select is gone (see the dedicated test in the CEO-workspace describe).
       expect(ceoTable().queryByTestId('pcr-ceo-product-type-override-8001')).toBeNull();
     });
 
@@ -2431,9 +2389,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(ceoTable().getByText('ไม่พบอัตราค่าขนส่ง')).not.toBeNull();
     });
 
-    // Reproduced against a genuine new-form decision, per the coordinator's screenshots of the
-    // mock demo (2026-09-19): a seeded item forced to PER_PIECE with sqmPerPiece 0.72 and
-    // listUnitPrice = proposed (83), NET mode with 10% typed but NOT yet saved.
+    // Reproduced against a genuine new-form decision: a seeded item forced to PER_PIECE with
+    // sqmPerPiece 0.72 and listUnitPrice = proposed (83), NET mode with 10% typed but NOT yet saved.
     it('shows the auto formula price per แผ่น and per ตร.ม. in the ราคาตั้ง cell without opening anything (review minor #6)', async () => {
       await renderCeoNewForm({
         priceMode: 'NET',
@@ -2464,16 +2421,16 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
       fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
 
-      // round2(83 x (1 - 10/100)) = 74.70 -- NOT the stale saved 83.00 any more.
+      // round2(83 x (1 - 10/100)) = 74.70, NOT the stale saved 83.00.
       expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('74.70');
       expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
       // รวม follows the live preview too: round2(1000 x 74.70) = 74,700.00.
       expect(ceoRow(8001).getByTestId('pcr-ceo-total-8001').textContent).toContain('74,700.00');
     });
 
-    // Rewritten 2026-10-01 then again for the table: ราคาตั้ง is a typed input on a STOCK line only
-    // (an import line's is the formula/override price, margin % is its input); ปรับต้นทุนเอง lives
-    // in the collapsed รายละเอียด; there is no ปรับราคาตั้งเอง button.
+    // ราคาตั้ง is a typed input on a STOCK line only (an import line's is the formula/override
+    // price, margin % is its input); ปรับต้นทุนเอง lives in the collapsed รายละเอียด; there is no
+    // ปรับราคาตั้งเอง button.
     it('NET: a stock line types its ราคาตั้ง, an import line shows the formula price + margin %, ปรับต้นทุนเอง is one click away, no ปรับราคาตั้งเอง', async () => {
       const costingItem = buildCostingItemWithOverride({ id: 1 });
       await renderCeoNewForm({
@@ -2496,9 +2453,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(ceoTable().getByTestId('pcr-ceo-cost-override-8001')).not.toBeNull();
     });
 
-    // Opus review minor #1 (2026-09-19): "ปรับราคาเอง" only ever affects the price under NET
-    // (or before a mode is chosen) -- DIRECT_NET/SPECIAL_SQM never consult it, so offering it
-    // there let the CEO believe an override priced a line it never touched.
+    // "ปรับราคาเอง" only affects the price under NET (or before a mode is chosen); DIRECT_NET/
+    // SPECIAL_SQM never consult it, so offering it there let the CEO believe an override priced a
+    // line it never touched.
     it('hides ปรับราคาตั้งเอง under DIRECT_NET (review minor #1), ปรับต้นทุนเอง stays reachable in รายละเอียด', async () => {
       await renderCeoNewForm({
         priceMode: 'DIRECT_NET',
@@ -2595,16 +2552,15 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    // Rewritten 2026-10-01 (ราคาตั้ง typed) and again for the table: the discount edit previews in the
-    // row and saves through the ONE บันทึกราคา.
+    // The discount edit previews in the row and saves through the ONE บันทึกราคา.
     it('NET mode: typing a discount previews against the list price in the row and, with ราคาตั้ง untouched, saves only the discount (no override/list keys)', async () => {
       await renderCeoNewForm({ priceMode: 'NET', items: [newFormItem({ listUnitPrice: 1000 })] });
 
       expect(ceoRow(8001).getByTestId('pcr-ceo-list-price-8001').value).toBe('1000');
       fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-discount-8001'), { target: { value: '10' } });
 
-      // Client PREVIEW only (round2(1000 * (1 - 10/100)) = 900.00) — never sent to the server as a
-      // stored value; the server recomputes and returns its own netUnitPrice on save.
+      // Client PREVIEW only (round2(1000 * (1 - 10/100)) = 900.00), never sent as a stored value;
+      // the server recomputes and returns its own netUnitPrice on save.
       expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('900.00');
       expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
 
@@ -2632,9 +2588,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
       fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '1350' } });
 
-      // Never a client-side number for this mode — WastageCalculator#netPerPieceFromSpecialSqm's
+      // Never a client-side number for this mode: WastageCalculator#netPerPieceFromSpecialSqm's
       // rounding order is the algorithm; only the real service may compute it (see
-      // previewCeoNetUnitPrice's own header comment).
+      // previewCeoNetUnitPrice's header comment).
       expect(ceoRow(8001).getByText('คำนวณเมื่อบันทึก')).not.toBeNull();
 
       fireEvent.click(saveAllButton());
@@ -2691,9 +2647,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       renderDetailPage({ user: importUser, request });
       await waitForLoaded(request);
 
-      // Import never even reaches the CEO panel (canSeeRawPricingDecision(user) && !isImport(user)
-      // gates it out entirely) — mirrors the existing "Import sees no CEO decision UI" coverage
-      // for the legacy panel.
+      // Import never reaches the CEO panel (canSeeRawPricingDecision(user) && !isImport(user)),
+      // like the "Import sees no CEO decision UI" coverage for the legacy panel.
       expect(screen.queryByText('การพิจารณาราคาขายของ CEO')).toBeNull();
       expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
     });
@@ -2701,12 +2656,10 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 });
 
 describe('PricingRequestDetailPage mobile layout', () => {
-  // This page has no JS-driven responsive branching (no useIsMobile() call) — every
-  // breakpoint is a Tailwind utility class (e.g. `md:grid-cols-2`, `md:grid-cols-4`)
-  // evaluated purely by CSS media queries, which jsdom does not apply. So there is no
-  // separate "mobile DOM" to assert against; what a mobile-viewport test CAN meaningfully
-  // prove is that the page still renders its full content tree (nothing crashes, nothing
-  // is conditionally dropped) when the viewport reports as mobile.
+  // This page has no JS-driven responsive branching (no useIsMobile() call): every breakpoint is a
+  // Tailwind utility class evaluated by CSS media queries, which jsdom does not apply. So there is
+  // no separate "mobile DOM"; what a mobile-viewport test CAN prove is that the page still renders
+  // its full content tree (nothing crashes, nothing conditionally dropped).
   const realMatchMedia = window.matchMedia;
 
   afterEach(() => {
@@ -2744,11 +2697,10 @@ describe('PricingRequestDetailPage mobile layout', () => {
   });
 });
 
-// Sales feedback Admin 1d / owner 2026-10-06: "remove ฝ่าย field completely". The request's
-// read-only header terms used to repeat it ("ฝ่าย: —") beside the designer code and the validity.
-// It is asserted absent on a request that DOES carry one, so the line cannot survive by being
-// conditional on a value; the other header terms are asserted present, so the test cannot pass
-// by the whole block having disappeared.
+// The read-only header terms must not repeat the removed ฝ่าย field ("ฝ่าย: —") beside the
+// designer code and the validity. It is asserted absent on a request that DOES carry one, so the
+// line cannot survive by being conditional on a value; the other header terms are asserted
+// present, so the test cannot pass by the whole block having disappeared.
 describe('PricingRequestDetailPage header terms — ฝ่าย is not shown (owner, 2026-10-06)', () => {
   it('shows the designer code and the validity, and no ฝ่าย, even when the request stores one', async () => {
     const request = buildRequest({ summary: { deptCode: 'P003', unitCode: 'D002', validityDays: 30 } });
@@ -2774,13 +2726,11 @@ describe('PricingRequestDetailPage header terms — ฝ่าย is not shown (o
   });
 });
 
-// V185 (direct-deal-form parity) + owner ruling 2026-09-18 (label reversed back to โรงงาน, not
-// ยี่ห้อ — see PricingRequestDetailPage.jsx's own comment on brandDisplay): the "รายการสินค้าและ
-// ราคาตั้งต้น" item card shows every sales-entered tile field read-only, and hides เผื่อ
-// (wastage)/the pre-wastage quantity from Import specifically — everyone else (sales, CEO) still
-// sees the full breakdown. UI scoping only, no backend authz change (buildRequest's base fixture
-// already carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox — see that
-// fixture's own V185 comment).
+// The "รายการสินค้าและราคาตั้งต้น" item card shows every sales-entered tile field read-only (label
+// โรงงาน, see PricingRequestDetailPage.jsx's comment on brandDisplay), and hides เผื่อ
+// (wastage)/the pre-wastage quantity from Import specifically; sales and CEO still see the full
+// breakdown. UI scoping only, no backend authz change (buildRequest's base fixture already
+// carries color/thicknessMm/sqmPerPiece/quantityMode/piecesInput/piecesPerBox).
 describe('PricingRequestDetailPage import price in baht', () => {
   const fxRates = [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }];
   // 5 แผ่น of a 1.44 ตร.ม. slab = 7.2 ตร.ม.
@@ -2806,9 +2756,9 @@ describe('PricingRequestDetailPage import price in baht', () => {
   };
   afterEach(() => { delete api.fxRates; });
 
-  // Import PCR redesign: the read-only item card (and its "ราคาจากฝ่ายนำเข้า" line) is gone for import;
-  // the baht conversion now sits under the price input in the factory table. The CEO still reads it on
-  // the item card (second test), unchanged.
+  // The read-only item card (and its "ราคาจากฝ่ายนำเข้า" line) is gone for import; the baht
+  // conversion sits under the price input in the factory table. The CEO still reads it on the item
+  // card (second test).
   it('import: the price cell shows ≈ baht per ตร.ม. and the line total under the input, reusing quotedPriceInThb — no item card', async () => {
     await renderWithFx(importUser, [quoteWith()]);
     const thb = await screen.findByTestId('pcr-quote-thb-91-1');
@@ -2884,10 +2834,10 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(screen.getByText(/^จำนวนที่กรอก:/)).not.toBeNull();
   });
 
-  // Import PCR redesign: the item card is not rendered for import; its fields live in the factory
-  // table's spec row (opened by the "สเปกจากฝ่ายขาย" toggle) and the จำนวน cell. The wastage ruling
-  // (2026-09-18) is unchanged: neither appears there. The positive control (the spec row opened and
-  // holding a sales-entered field) keeps the absence assertions from passing on an empty page.
+  // The item card is not rendered for import; its fields live in the factory table's spec row
+  // (opened by the "สเปกจากฝ่ายขาย" toggle) and the จำนวน cell. Wastage stays hidden from import
+  // there. The positive control (spec row opened, holding a sales-entered field) keeps the absence
+  // assertions from passing on an empty page.
   it('hides เผื่อ (wastage) and the pre-wastage quantity from Import — in the opened spec row too; final order quantity stays in the จำนวน cell', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();
@@ -2930,13 +2880,13 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(screen.getByText('ผิว: —')).not.toBeNull();
     expect(screen.getByText('ความหนา: —')).not.toBeNull();
     // The legacy row's OWN requestedQty/requestedUnit (client-typed under the old form) still
-    // renders in the final-order-quantity line — this never depended on the new columns.
+    // renders in the final-order-quantity line; it never depended on the new columns.
     expect(screen.getByText('จำนวนสั่งซื้อ: 20 แผ่น')).not.toBeNull();
   });
 
-  // Owner ruling 2026-09-18: the label is โรงงาน, not ยี่ห้อ — but the VALUE shown is still the
-  // sales-entered brand, captioned to distinguish it from Import's own factory-assignment control
-  // just below (which also says โรงงาน — see PricingRequestDetailPage.jsx's own comment).
+  // The label is โรงงาน, but the VALUE shown is the sales-entered brand, captioned to distinguish
+  // it from Import's own factory-assignment control just below (which also says โรงงาน; see
+  // PricingRequestDetailPage.jsx).
   it('import: the spec row captions the sales-entered value "โรงงาน (ที่ฝ่ายขายกรอก)", never the old bare "Factory:" label', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();
@@ -2948,10 +2898,9 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(spec.queryByText(/^ยี่ห้อ/)).toBeNull();
   });
 
-  // Opus review finding #6 (2026-09-18): before this fix, a card whose sales rep left the
-  // โรงงาน-labelled brand field blank fell back to showing Import's ROUTING resolution
-  // (resolvedFactoryName/factory) under the "(ที่ฝ่ายขายกรอก)" caption — misattributing an
-  // Import/catalog value to Sales. The two must render as separate lines instead.
+  // A card whose sales rep left the โรงงาน-labelled brand blank must not fall back to Import's
+  // ROUTING resolution (resolvedFactoryName/factory) under the "(ที่ฝ่ายขายกรอก)" caption, which
+  // would misattribute an Import/catalog value to Sales. The two render as separate lines.
   it('import: the spec row shows the sales value; Import\'s resolved factory is the CARD heading — two separate places, never one falling back to the other', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();
@@ -2986,7 +2935,7 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
     expect(specValue(within(screen.getByTestId('pcr-spec-1')), 'โรงงาน (ที่ฝ่ายขายกรอก)')).toBe('—');
   });
 
-  // The old amber "ยังไม่ได้ระบุ" routing line (Sales/CEO item card) is unchanged.
+  // The amber "ยังไม่ได้ระบุ" routing line (Sales/CEO item card) is unchanged.
   it('sales: the item card still shows the sales value as em-dash and an amber "ยังไม่ได้ระบุ" routing line when nothing resolved a factory', async () => {
     const request = buildRequest({
       items: [{ ...buildRequest().items[0], brand: null, resolvedFactoryName: null, factory: null }],
@@ -3043,17 +2992,14 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     ));
   });
 
-  // GLA-123 slice S1 M2 fix (Opus review, 2026-09-20): mutual exclusivity means offering BOTH
-  // create buttons on a new-form (CEO price-mode) request just invites a wasted click on the
-  // now-redundant OLD path — server-side, starting it would either 409 (if the NEW quotation
-  // already exists) or itself block the NEW path from ever being started. A legacy decision
-  // (newFormPricing false) has no such redundancy, so it keeps offering both, exactly as before.
+  // Mutual exclusivity means offering BOTH create buttons on a new-form (CEO price-mode) request
+  // invites a wasted click on the redundant OLD path: server-side it would either 409 (NEW
+  // quotation exists) or block the NEW path from ever starting. A legacy decision
+  // (newFormPricing false) has no such redundancy and keeps offering both.
   //
-  // MINOR-1 fix (owner ruling, confirmed 2026-09-20, second re-review): the fixture below used to
-  // pass `priceMode` — the field PricingDecisionSalesViewDto has SINCE replaced with the plain
-  // `newFormPricing` boolean (never leaks which pricing method the CEO chose, since this endpoint
-  // is also legitimately callable by import). Updated so this test still exercises the REAL
-  // signal the component reads, not a stale field name it would now silently ignore.
+  // The fixture passes `newFormPricing` (the plain boolean PricingDecisionSalesViewDto exposes, so
+  // the endpoint, also callable by import, never leaks which pricing method the CEO chose), the
+  // REAL signal the component reads.
   it('hides the old "สร้างร่างใบเสนอราคาลูกค้า" button once the decision is new-form, but keeps the new-engine button', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
     api.pricingRequests.getPricingDecisionSalesView.mockResolvedValue({
@@ -3078,10 +3024,9 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' })).not.toBeNull();
   });
 
-  // Coordinator repro (2026-09-20): clicking "เขียนใบเสนอราคาจากคำขอราคา" on a request whose
-  // ticket/PR carries no ผู้สั่งซื้อ (recipientContactId) 409s server-side with a clear Thai
-  // message, but nothing on screen showed it — no toast, no inline error, no navigation. This
-  // pins that the click surfaces the server's message via showToast('error', ...).
+  // Clicking "เขียนใบเสนอราคาจากคำขอราคา" on a request whose ticket/PR carries no ผู้สั่งซื้อ
+  // (recipientContactId) 409s server-side with a clear Thai message; the click must surface it via
+  // showToast('error', ...) instead of showing no toast, no inline error, no navigation.
   it('shows the server\'s error as a toast when create-from-PCR fails (e.g. missing ผู้สั่งซื้อ), instead of failing silently', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
     const error = new Error('กรุณาระบุผู้สั่งซื้อ');
@@ -3096,9 +3041,8 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุผู้สั่งซื้อ'));
   });
 
-  // GLA-123 slice S1 M1 fix (Opus review, 2026-09-20): the NEW engine's quotation is displayed
-  // in this SAME "ใบเสนอราคาลูกค้า" panel (number/status/link), and — since one already exists —
-  // neither create button is offered (there is nothing left to create).
+  // The NEW engine's quotation is displayed in this SAME "ใบเสนอราคาลูกค้า" panel (number/status/
+  // link), and since one already exists neither create button is offered.
   it('shows the new-engine quotation (number, status, link) once one exists, and hides both create buttons', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
@@ -3117,14 +3061,12 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาจากคำขอราคา' })).toBeNull();
   });
 
-  // MAJOR-3 fix (owner ruling via coordinator, 2026-09-20 — "the expiry escape hatch"): once the
-  // linked quotation EXPIRES, the owning sales rep gets a plain note + a button to write a fresh
-  // one from the same approved decision — DealQuotationService#createFromPricingRequest now
-  // tolerates this specific case (PR status QUOTATION_ISSUED, no live quotation) server-side.
+  // Once the linked quotation EXPIRES, the owning sales rep gets a plain note + a button to write a
+  // fresh one from the same approved decision (DealQuotationService#createFromPricingRequest
+  // tolerates this: PR status QUOTATION_ISSUED, no live quotation).
   it('offers "เขียนใบเสนอราคาใหม่" once the linked quotation has EXPIRED, calling the same createFromPricingRequest endpoint', async () => {
-    // The PR itself sits at QUOTATION_ISSUED once its quotation issued — canManageCustomerQuotation
-    // (not canCreateCustomerQuotation) is the gate this button uses precisely because
-    // APPROVED_FOR_QUOTATION no longer holds at this point in the lifecycle.
+    // The PR sits at QUOTATION_ISSUED once its quotation issued; canManageCustomerQuotation (not
+    // canCreateCustomerQuotation) gates this button because APPROVED_FOR_QUOTATION no longer holds.
     const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
       quotation: { id: 9002, number: 'QT-2026-0099-1', docStatus: 'EXPIRED' },
@@ -3153,8 +3095,8 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     expect(screen.queryByText(/APPROVED_FOR_QUOTATION/)).toBeNull();
   });
 
-  // QA-29b: a viewer who cannot create the quotation (the CEO) used to read
-  // "wait for APPROVED_FOR_QUOTATION" forever — stale after approval, and a raw enum.
+  // A viewer who cannot create the quotation (the CEO) must not read "wait for
+  // APPROVED_FOR_QUOTATION" forever (stale after approval, and a raw enum).
   it.each([
     ['CEO_REVIEWING', 'ยังไม่มีใบเสนอราคาลูกค้า — ต้องรออนุมัติราคาขายก่อนจึงจะสร้างได้'],
     ['APPROVED_FOR_QUOTATION', 'อนุมัติราคาขายแล้ว — รอฝ่ายขายสร้างใบเสนอราคาลูกค้า'],
@@ -3178,8 +3120,8 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     await waitForLoaded(request);
     await screen.findByText(quotation.number);
 
-    // QA-29: the quotation line reads "20 แผ่น", not the raw basis enum (the request-items list
-    // renders one already; the quotation line is the second).
+    // The quotation line reads "20 แผ่น", not the raw basis enum (the request-items list renders
+    // one already; the quotation line is the second).
     expect(screen.getAllByText('20 แผ่น')).toHaveLength(2);
     expect(screen.queryByText(/PER_PIECE/)).toBeNull();
 
@@ -3204,7 +3146,7 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
     ));
   });
 
-  // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155).
+  // CEO discount-approval workflow.
   describe('CEO discount-approval workflow', () => {
     it('shows Sales the pending status badge, with no approve/reject buttons', async () => {
       const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
@@ -3326,32 +3268,21 @@ describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   });
 });
 
-// GLA-123 slice S3 BLOCKER 1 fix (Opus review against real Postgres, 2026-09-23):
-// DealQuotationService#findForPricingRequest used to call the DRAFT-only
-// findOpenDraftForPricingRequest, so dealQuotationForPr was null for every status past DRAFT and
-// this whole panel (outcome-recording, the EXPIRED escape hatch) was unreachable in production —
-// even though these mock-driven tests already exercised the UI logic correctly, since they mock
-// the API response directly and never went through the real (buggy) backend query. These tests
-// pin the SAME UI behaviour per status the legacy "Step 5" describe block above pins for the old
-// engine, now for the new one.
-//
-// CORRECTION (Opus MAJOR-A re-review, 2026-09-23): the sentence this replaced claimed these tests
-// also catch a regression in the BACKEND query — false. They stub api.dealQuotations
-// .findForPricingRequest's RESOLVED VALUE directly (see newEngineQuotation()/mockResolvedValue
-// below), so reverting DealQuotationService#findForPricingRequest to the old DRAFT-only reader
-// leaves every one of these 4 tests green — proven: 73/73 still passed under that mutation. The
-// real backend-query regression coverage is
+// These stub api.dealQuotations.findForPricingRequest's RESOLVED VALUE directly (see
+// newEngineQuotation()/mockResolvedValue below), so they do NOT catch a regression in the BACKEND
+// query: reverting DealQuotationService#findForPricingRequest to a DRAFT-only reader leaves them
+// green. That is covered by
 // DealQuotationOutcomeIntegrationTest#findForPricingRequest_returnsTheQuotationPastDraft (real
-// Postgres, added for MAJOR-A) — THAT is what a future regression on the repository method is
-// caught by, not this file.
+// Postgres). These tests pin, per status, the same UI behaviour the legacy "Step 5" describe block
+// above pins for the old engine, now for the new one.
 describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationForPr) outcome + expiry', () => {
   function newEngineQuotation(overrides = {}) {
     return { id: 9101, number: 'QT-2026-0101-1', docStatus: 'ISSUED', ...overrides };
   }
 
-  // QA-35 (supersedes the 2026-10-27 B2 "buyer = one click"): every recipient asks first. The buyer's is
-  // the last party, so the question never mentions skipping. Review V4: a revision draft cancelled
-  // after แก้ใบเสนอราคา is the server's newest row; the page still records on the quotation it revised.
+  // Every recipient asks first. The buyer's is the last party, so the question never mentions
+  // skipping. A revision draft cancelled after แก้ใบเสนอราคา is the server's newest row; the page
+  // still records on the quotation it revised.
   it('ISSUED, a buyer request: ลูกค้ายอมรับ asks first (no "ข้ามผู้รับรายถัดไป"), then records ACCEPTED via dealQuotations.recordOutcome, even behind a cancelled revision draft', async () => {
     const issued = newEngineQuotation({ docStatus: 'ISSUED', origin: 'PRICING_REQUEST', pricingRequestId: 501 });
     const cancelledRevision = newEngineQuotation({
@@ -3364,7 +3295,7 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     await waitForLoaded(request);
     await screen.findByText(issued.number);
 
-    // W3-06: ปฏิเสธ/ขอแก้ไข take their reason from a dialog; ลูกค้ายอมรับ still sends the inline note.
+    // ปฏิเสธ/ขอแก้ไข take their reason from a dialog; ลูกค้ายอมรับ still sends the inline note.
     fireEvent.change(screen.getByPlaceholderText('หมายเหตุจากลูกค้า (ถ้ามี)'), { target: { value: 'ส่งของต้นเดือน' } });
     const acceptButton = await screen.findByRole('button', { name: 'ลูกค้ายอมรับ' });
     fireEvent.click(acceptButton);
@@ -3381,9 +3312,9 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     ));
   });
 
-  // Spec B2: accepting a DESIGNER/OWNER quotation makes it the order and skips the later parties, so
-  // the click asks first (the page's shared ConfirmDialog). The confirm button keeps ConfirmDialog's
-  // own default label, ยืนยัน (the spec names the title and body only).
+  // Accepting a DESIGNER/OWNER quotation makes it the order and skips the later parties, so the
+  // click asks first (the page's shared ConfirmDialog). The confirm button keeps ConfirmDialog's
+  // default label, ยืนยัน (the spec names the title and body only).
   it('ISSUED, a designer request: ลูกค้ายอมรับ first asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" (ส่งถึงผู้ออกแบบ…); confirming records ACCEPTED', async () => {
     const issued = newEngineQuotation({ docStatus: 'ISSUED' });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: issued });
@@ -3440,7 +3371,7 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     await waitForLoaded();
     await screen.findByText(issued.number);
 
-    // W3-06: ปฏิเสธ now asks for a reason first.
+    // ปฏิเสธ asks for a reason first.
     fireEvent.click(await screen.findByRole('button', { name: 'ลูกค้าปฏิเสธ' }));
     const dialog = within(await screen.findByRole('dialog'));
     fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'ลูกค้าไม่เอาแล้ว' } });
@@ -3489,12 +3420,10 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     expect(screen.getByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).not.toBeNull();
   });
 
-  // S3 round-3 review fix (NEW-1, MAJOR, 2026-09-23): BLOCKER-B's service-layer fix let a
-  // REVISION_REQUESTED quotation be recreated (DealQuotationService#createFromPricingRequest /
-  // #hasLivePricingRequestQuotation both treat it like EXPIRED), but the frontend's own recreate
-  // gate only ever checked docStatus === 'EXPIRED' — so the owning rep hit a dead end: a
-  // read-only "ผลใบเสนอราคา" line with no way to write the replacement the backend already
-  // supports. Pins that the recreate button is now reachable for REVISION_REQUESTED too.
+  // The recreate gate must cover REVISION_REQUESTED too, not only docStatus === 'EXPIRED':
+  // DealQuotationService#createFromPricingRequest / #hasLivePricingRequestQuotation treat it like
+  // EXPIRED, and without it the owning rep hits a dead end (a read-only "ผลใบเสนอราคา" line with no
+  // way to write the replacement the backend supports).
   it('REVISION_REQUESTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
     const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
     const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
@@ -3515,9 +3444,8 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       .toHaveBeenCalledWith(request.summary.id));
   });
 
-  // Same S3 round-3 review fix (NEW-1) — REJECTED is the other status the backend already
-  // supports a recreate from (same #hasLivePricingRequestQuotation non-live set) but the old
-  // frontend gate never offered.
+  // REJECTED is the other status the backend supports a recreate from (same
+  // #hasLivePricingRequestQuotation non-live set).
   it('REJECTED: the outcome panel is gone and the recreate escape hatch renders instead', async () => {
     const rejected = newEngineQuotation({ docStatus: 'REJECTED' });
     const request = buildRequest({ summary: { status: 'QUOTATION_ISSUED' } });
@@ -3538,8 +3466,8 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       .toHaveBeenCalledWith(request.summary.id));
   });
 
-  // QA-13 + W6-02: a revision superseded this request. Its quotation may still read ISSUED (owner
-  // ruling 2026-08-13) or carry an earlier outcome, but nothing on it is actionable any more.
+  // A revision superseded this request. Its quotation may still read ISSUED or carry an earlier
+  // outcome, but nothing on it is actionable any more.
   it('SUPERSEDED request: no outcome buttons on its ISSUED quotation, no recreate on a REJECTED one', async () => {
     const request = buildRequest({ summary: { status: 'SUPERSEDED' } });
     const issued = newEngineQuotation({ docStatus: 'ISSUED' });
@@ -3560,20 +3488,16 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     expect(screen.queryByRole('button', { name: 'เขียนใบเสนอราคาใหม่จากคำขอราคา' })).toBeNull();
   });
 
-  // S3 round-5 review fix (NEW-A, MAJOR, 2026-09-23): invalidate() (this file's source, around
-  // line 815) invalidated seven query keys after recordDealQuotationOutcome's onSuccess but
-  // OMITTED queryKeys.dealQuotationForPricingRequest — the key backing dealQuotationForPrQuery,
-  // which both the outcome panel above AND the recreate gate just below it read. Because
+  // invalidate() must also invalidate queryKeys.dealQuotationForPricingRequest, the key backing
+  // dealQuotationForPrQuery, which both the outcome panel and the recreate gate read.
   // ['pricingRequests','detail',id] does not prefix-match
-  // ['pricingRequests','dealQuotationForPricingRequest',id], a rep recording an outcome got the
-  // success toast but the screen kept showing the stale ISSUED DTO — and with it, the OLD
-  // outcome-recording buttons instead of the new recreate affordance — until a manual reload or
-  // the query's 30s staleTime lapsed (api/queryClient.js). This test proves the refetch actually
-  // happens and the UI actually re-renders, WITHOUT a remount: it stubs
-  // findForPricingRequest to first resolve ISSUED, then REVISION_REQUESTED on any later call, and
-  // watches (a) the call count rise after the outcome is recorded, and (b) the recreate button
-  // become reachable while the old outcome buttons disappear — proving invalidate() actually
-  // reached this key and not just the six others already covered above.
+  // ['pricingRequests','dealQuotationForPricingRequest',id], so otherwise a rep recording an
+  // outcome got the success toast but the screen kept the stale ISSUED DTO (and the old outcome
+  // buttons) until a reload or the 30s staleTime (api/queryClient.js). This proves the refetch
+  // happens and the UI re-renders WITHOUT a remount: findForPricingRequest first resolves ISSUED,
+  // then REVISION_REQUESTED on any later call; it watches (a) the call count rise after the
+  // outcome is recorded, and (b) the recreate button become reachable while the old outcome
+  // buttons disappear.
   it('invalidates dealQuotationForPr after recording an outcome, so the recreate button appears without a reload', async () => {
     const issued = newEngineQuotation({ docStatus: 'ISSUED' });
     const revisionRequested = newEngineQuotation({ docStatus: 'REVISION_REQUESTED' });
@@ -3589,7 +3513,7 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
     const callsBeforeOutcome = api.dealQuotations.findForPricingRequest.mock.calls.length;
     const reviseButton = screen.getByRole('button', { name: 'ลูกค้าขอแก้ไข' });
     fireEvent.click(reviseButton);
-    // W3-06: ขอแก้ไข now asks for a reason first.
+    // ขอแก้ไข asks for a reason first.
     const dialog = within(await screen.findByRole('dialog'));
     fireEvent.change(dialog.getByRole('textbox'), { target: { value: 'ลูกค้าขอเปลี่ยนราคา' } });
     fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
@@ -3599,8 +3523,8 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
       expect.objectContaining({ outcome: 'REVISION_REQUESTED', clientRequestId: expect.any(String) }),
     ));
 
-    // The regression this pins: without invalidating dealQuotationForPricingRequest, this second
-    // call never fires and the assertions below would time out against the stale ISSUED DTO.
+    // Without invalidating dealQuotationForPricingRequest, this second call never fires and the
+    // assertions below would time out against the stale ISSUED DTO.
     await waitFor(() => expect(api.dealQuotations.findForPricingRequest.mock.calls.length)
       .toBeGreaterThan(callsBeforeOutcome));
 
@@ -3611,8 +3535,8 @@ describe('PricingRequestDetailPage GLA-123 slice S3: new-engine (dealQuotationFo
 });
 
 describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revisions', () => {
-  // Spec B2 covers both engines' controls: the old engine's ลูกค้ายอมรับ on a DESIGNER request
-  // (buildRequest's default) asks the same question before recording.
+  // The old engine's ลูกค้ายอมรับ on a DESIGNER request (buildRequest's default) asks the same
+  // question before recording.
   it('ISSUED (old engine), a designer request: ลูกค้ายอมรับ asks "ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้" first; confirming records ACCEPTED', async () => {
     const issued = buildCustomerQuotation({ docStatus: 'ISSUED' });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issued] });
@@ -3664,7 +3588,7 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
     await waitForLoaded(request);
     await screen.findByText(revisionRequested.number);
 
-    // Commercial-only: reuses createRevision, now reachable from REVISION_REQUESTED too.
+    // Commercial-only: reuses createRevision, reachable from REVISION_REQUESTED too.
     const commercialButton = await screen.findByRole('button', { name: 'สร้างรอบแก้ไขราคา/เงื่อนไข' });
     fireEvent.click(commercialButton);
     await waitFor(() => expect(api.pricingRequests.createCustomerQuotationRevision).toHaveBeenCalledWith(
@@ -3680,8 +3604,8 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
   });
 });
 
-// W6-02 sibling (old engine): a request that was cancelled or superseded takes no more revisions — the
-// server 409s them, so the legacy revision buttons are not offered (the new-engine recreate gate already agrees).
+// A request that was cancelled or superseded takes no more revisions (the server 409s them), so
+// the legacy revision buttons are not offered (the new-engine recreate gate agrees).
 describe('PricingRequestDetailPage legacy revision buttons on a dead request', () => {
   it.each(['SUPERSEDED', 'CANCELLED'])('%s request: no สร้างรอบแก้ไข* button on an ISSUED or REVISION_REQUESTED quotation', async (status) => {
     const request = buildRequest({ summary: { status } });
@@ -3703,10 +3627,10 @@ describe('PricingRequestDetailPage legacy revision buttons on a dead request', (
   });
 });
 
-// W3-06 / QA-35: ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข are irreversible (the quotation leaves ISSUED), so both engines
-// ask for a reason in the shared ConfirmDialog before recording. Each outcome also owns its own
-// clientRequestId: the backend replays a reused key as the FIRST outcome's success, so one shared key would
-// let a failed ปฏิเสธ followed by ขอแก้ไข silently record nothing/the wrong thing.
+// ลูกค้าปฏิเสธ / ลูกค้าขอแก้ไข are irreversible (the quotation leaves ISSUED), so both engines ask for
+// a reason in the shared ConfirmDialog before recording. Each outcome owns its own clientRequestId:
+// the backend replays a reused key as the FIRST outcome's success, so one shared key would let a
+// failed ปฏิเสธ followed by ขอแก้ไข silently record nothing/the wrong thing.
 describe.each([
   {
     engine: 'new engine (dealQuotations.recordOutcome)',
@@ -3886,8 +3810,8 @@ describe.each([
 });
 
 describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmation', () => {
-  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
-  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  // One deposit notice per deal. Once one is ISSUED the create action is gone (the backend 409s it)
+  // and the block says which notice exists and where to open it.
   it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
@@ -3912,7 +3836,7 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
     fireEvent.click(button);
 
-    // SK-02: the confirm is irreversible -> a dialog first; cancel sends nothing, confirm sends once.
+    // The confirm is irreversible -> a dialog first; cancel sends nothing, confirm sends once.
     const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
     expect(api.pricingRequests.confirmOrder).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
@@ -3927,8 +3851,8 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     );
   });
 
-  // VW-04 (owner ruling 2026-10-30): the dialog used to name the PCR code ("ใบเสนอราคา PCR-…"),
-  // which is not a quotation number. It names the quotation the page shows.
+  // The dialog names the quotation the page shows, not the PCR code ("ใบเสนอราคา PCR-…"), which is
+  // not a quotation number.
   it('VW-04: the confirm dialog names the new-engine quotation number, never the PCR code', async () => {
     const request = buildRequest({ summary: { status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null } });
     api.dealQuotations.findForPricingRequest.mockResolvedValue({
@@ -3941,7 +3865,7 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
     const dialog = await screen.findByRole('dialog', { name: 'ยืนยันคำสั่งซื้อ' });
     expect(dialog.textContent).toContain('ใบเสนอราคา QT-2026-0099-1');
-    expect(dialog.textContent).toContain('ไม่เก็บมัดจำ'); // W6-03: copy follows the quotation's 0%
+    expect(dialog.textContent).toContain('ไม่เก็บมัดจำ'); // copy follows the quotation's 0%
     expect(dialog.textContent).not.toContain(request.summary.requestCode);
   });
 
@@ -3982,9 +3906,9 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     ));
   });
 
-  // PR #1173 review F4: a ไม่รับมัดจำ (0%) accepted quotation has no deposit, and the server 409s
-  // the draft, so the button is not offered. Waits for the quotation itself to render first, so the
-  // absence below is not just "the query has not resolved yet".
+  // A ไม่รับมัดจำ (0%) accepted quotation has no deposit, and the server 409s the draft, so the
+  // button is not offered. Waits for the quotation itself to render first, so the absence below is
+  // not just "the query has not resolved yet".
   it('hides "สร้างใบแจ้งยอดเงินรับมัดจำ" when the accepted quotation says ไม่รับมัดจำ (0%)', async () => {
     const accepted = { id: 9102, number: 'QT-2026-0102-1', docStatus: 'ACCEPTED', depositPercent: 0 };
     api.dealQuotations.findForPricingRequest.mockResolvedValue({ quotation: accepted });
@@ -3996,8 +3920,8 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
     expect(screen.queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
   });
 
-  // Owner ruling 2026-10-23: one deposit notice per deal. Once one is ISSUED the create action is
-  // gone (the backend 409s it) and the block says which notice exists and where to open it.
+  // One deposit notice per deal. Once one is ISSUED the create action is gone (the backend 409s it)
+  // and the block says which notice exists and where to open it.
   it('replaces "สร้างใบแจ้งยอดเงินรับมัดจำ" with a pointer to the deal\'s ISSUED notice', async () => {
     api.depositNotices.listByTicket.mockResolvedValue({
       depositNotices: [{ id: 77, status: 'ISSUED', docNumber: 'GLRD69001', version: 1 }],
@@ -4034,11 +3958,10 @@ describe('PricingRequestDetailPage Step 6: Deposit, Payment, and Order Confirmat
 });
 
 // ── Import fills in a blank factory ────────────────────────────────────────────────────────────
-// The bug: a line submitted with no factory (valid since 2026-08-11) blocked สร้างร่างอีเมล with a
-// 422 that named the row's PRIMARY KEY — "รายการที่ 35" on a two-line request — and this page
-// offered no way to fix it. UI-LEVEL ONLY, per this file's header: who may actually write the
-// field is proved by PricingFactoryQuoteCostingIntegrationTest#setItemFactory_* against real
-// Postgres, not by anything here.
+// A line submitted with no factory (valid) must not block สร้างร่างอีเมล with a 422 naming the
+// row's PRIMARY KEY ("รายการที่ 35" on a two-line request) with no way to fix it. UI-LEVEL ONLY, per
+// this file's header: who may write the field is proved by
+// PricingFactoryQuoteCostingIntegrationTest#setItemFactory_* against real Postgres.
 function buildRequestWithBlankFactoryLine(overrides = {}) {
   const base = buildRequest();
   return buildRequest({
@@ -4066,8 +3989,7 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     renderDetailPage({ user: importUser, request });
     await waitForLoaded(request);
 
-    // Import PCR redesign: the warning is the callout at the TOP of the page (it used to sit in the
-    // item-card panel, which import no longer gets).
+    // The warning is the callout at the TOP of the page.
     const warning = screen.getByTestId('pcr-import-unassigned');
     expect(warning.textContent).toContain('ยังไม่ได้ระบุโรงงาน 1 รายการ');
     // Position 2, not the row id — the number the reader can count on screen.
@@ -4075,9 +3997,9 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(warning.textContent).not.toContain('รายการที่ 1');
   });
 
-  // B6 (GLA-135): the field is now a picker over the real factory master list (SearchableCombobox),
-  // not a free-text <input> — selecting an option sends the master row's factoryId, never a typed
-  // name. Opening the combobox (focus) reveals every option because the query starts empty.
+  // The field is a picker over the real factory master list (SearchableCombobox), not a free-text
+  // <input>: selecting an option sends the master row's factoryId, never a typed name. Opening the
+  // combobox (focus) reveals every option because the query starts empty.
   it('lets Import PICK the factory on the blank line from the master list and sends its id to the per-item endpoint', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: importUser, request });
@@ -4092,9 +4014,8 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     ));
   });
 
-  // QA BUG-20: pressing บันทึกโรงงาน with nothing picked used to be a silent no-op (the button was
-  // disabled — no click, no hint why). Now it stays clickable and says what to do, and still does
-  // NOT fire a NaN factoryId at the endpoint.
+  // Pressing บันทึกโรงงาน with nothing picked must not be a silent no-op: the button stays
+  // clickable and says what to do, and still does NOT fire a NaN factoryId at the endpoint.
   it('warns instead of calling the endpoint when บันทึกโรงงาน is pressed with no factory selected', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: importUser, request });
@@ -4106,10 +4027,10 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(api.pricingRequests.setItemFactory).not.toHaveBeenCalled();
   });
 
-  // QA BUG-20: the double-submit lock. Both clicks land inside ONE act(), so React cannot re-render
-  // between them — `saving` (isPending) is still false and the button still enabled for the second
-  // click, exactly the fast-double-click window. Only ImportFactoryPicker's inFlight ref can stop the
-  // repeat; separate fireEvent.click calls would each flush a render and pass without the ref.
+  // Double-submit lock. Both clicks land inside ONE act(), so React cannot re-render between them:
+  // `saving` (isPending) is still false and the button still enabled for the second click, exactly
+  // the fast-double-click window. Only ImportFactoryPicker's inFlight ref can stop the repeat;
+  // separate fireEvent.click calls would each flush a render and pass without the ref.
   it('fires setItemFactory once when บันทึกโรงงาน is clicked twice before the first save settles', async () => {
     api.pricingRequests.setItemFactory.mockReturnValue(new Promise(() => {}));
     const request = buildRequestWithBlankFactoryLine();
@@ -4129,12 +4050,11 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(api.pricingRequests.setItemFactory).toHaveBeenCalledTimes(1);
   });
 
-  // QA BUG-20: a line that already has a factory is a silent dead-end no more — it explains that
-  // changing means a new revision (the backend refuses an in-place re-route), instead of leaving
-  // Import to guess why the picker vanished.
+  // A line that already has a factory explains that changing means a new revision (the backend
+  // refuses an in-place re-route), instead of leaving Import to guess why the picker vanished.
   it('tells Import ONCE (a section subtitle, not on every card) how to change a factory once one is set, without offering a re-route', async () => {
     const base = buildRequest();
-    // two lines that already name a factory + one blank: the old per-card note would have printed twice
+    // two lines that already name a factory + one blank: a per-card note would print twice
     const request = buildRequest({ items: [
       base.items[0],
       { ...base.items[0], id: 3, model: 'A3', resolvedFactoryName: 'Cotto Industry' },
@@ -4170,10 +4090,10 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     expect(screen.queryByRole('button', { name: /เพิ่มโรงงานใหม่/ })).toBeNull();
   });
 
-  // B6 (GLA-135): Import may add a factory that genuinely doesn't exist yet, in-flow, rather than
-  // being stuck typing a name the backend can never resolve. Reuses PriceImportPage's own
-  // FactoryFormModal (name/country/currency/unit/email) — this proves the picker's own wiring:
-  // create -> refetch the master list -> auto-select the new row for this line.
+  // Import may add a factory that genuinely doesn't exist yet, in-flow, rather than being stuck
+  // typing a name the backend can never resolve. Reuses PriceImportPage's FactoryFormModal; this
+  // proves the picker's wiring: create -> refetch the master list -> auto-select the new row for
+  // this line.
   it('lets Import add a brand-new factory in-flow and auto-selects it for the blank line', async () => {
     const request = buildRequestWithBlankFactoryLine();
     renderDetailPage({ user: importUser, request });
@@ -4202,7 +4122,7 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
     await waitFor(() => expect(api.priceImport.createFactory).toHaveBeenCalledWith(
       'New Factory Co', 'TH', null, 'EUR', '', 'piece',
     ));
-    // The dialog closes and the line's picker now shows the newly-created, auto-selected factory.
+    // The dialog closes and the line's picker shows the newly-created, auto-selected factory.
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'เพิ่มโรงงานใหม่' })).toBeNull());
     expect(await screen.findByDisplayValue('New Factory Co')).toBeTruthy();
 
@@ -4247,7 +4167,7 @@ describe('PricingRequestDetailPage deal link', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-// CR-1 (GLA-167) — factory contact flow, locked terms, lead-time change (rulings R1–R10).
+// Factory contact flow, locked terms, lead-time change.
 // UI-LEVEL ONLY, per this file's header: every role assertion proves conditional rendering, not
 // server enforcement (FactoryQuoteService / LeadTimeChangeService integration tests do that).
 // ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -4346,7 +4266,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(line).toContain('สกุลเงิน');
     expect(line).toContain('EUR €');
     expect(line).toContain('ตามคำขอราคา');
-    expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull(); // the old "ต่อ ตร.ม." strip is retired: the unit is per line now
+    expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull(); // the "ต่อ ตร.ม." strip is gone: the unit is per line now
     expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
     expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
   });
@@ -4387,7 +4307,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByRole('button', { name: /ยกเลิกการติดต่อ|แก้ไขการติดต่อ/ })).toBeNull();
   });
 
-  // QA-40: the factory card's ยกเลิก only discards unsaved price edits — with none it did nothing.
+  // The factory card's ยกเลิก only discards unsaved price edits; with none it did nothing.
   it('QA-40: ยกเลิก appears only once a price has been edited', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote({ status: 'READY_FOR_COSTING' })] });
     await waitForLoaded();
@@ -4398,10 +4318,10 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();
   });
 
-  // QA-40: FactoryQuoteService#receive only takes prices while the REQUEST is IMPORT_REVIEWING /
-  // AWAITING_FACTORY_RESPONSE / READY_FOR_CEO_REVIEW, so past that the grid is read-only.
-  // Review fix: read-only means the formatted price as text (like every other read-only cell),
-  // not a greyed input under an "(แก้ไข)" caption.
+  // FactoryQuoteService#receive only takes prices while the REQUEST is IMPORT_REVIEWING /
+  // AWAITING_FACTORY_RESPONSE / READY_FOR_CEO_REVIEW, so past that the grid is read-only: the
+  // formatted price as text (like every other read-only cell), not a greyed input under an
+  // "(แก้ไข)" caption.
   it.each(['QUOTATION_ISSUED', 'CANCELLED'])('QA-40: a %s request shows the factory prices as text, with no ยกเลิก or ยืนยันราคาเสนอ', async (status) => {
     renderDetailPage({
       user: importUser,
@@ -4419,8 +4339,8 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
   });
 
-  // QA-40 review: an unsaved price typed before the request left the window must not show in the
-  // read-only grid as if it were saved (nor linger with no ยกเลิก to discard it).
+  // An unsaved price typed before the request left the window must not show in the read-only grid
+  // as if it were saved (nor linger with no ยกเลิก to discard it).
   it('QA-40: once the request leaves the response window, the read-only grid shows the saved price, not an unsaved edit', async () => {
     const quote = contactedQuote({ status: 'READY_FOR_COSTING', items: [{ ...crQuote().items[0], rawUnitPrice: 12.5 }] });
     const { queryClient } = renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
@@ -4437,7 +4357,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByText(/99,?999/)).toBeNull();
   });
 
-  // QA-40: after the deal is lost the request is CANCELLED — no mail to build or re-read.
+  // After the deal is lost the request is CANCELLED: no mail to build or re-read.
   it('QA-40: a CANCELLED request offers no สร้างเมล', async () => {
     renderDetailPage({
       user: importUser,
@@ -4486,8 +4406,8 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     ));
   });
 
-  // Owner ruling 2026-10-01: factories sell on different terms, so import may quote a per-ตร.ม.
-  // line per แผ่น and vice versa — only that pair; the currency stays Sales'.
+  // Factories sell on different terms, so import may quote a per-ตร.ม. line per แผ่น and vice
+  // versa; only that pair, and the currency stays Sales'.
   it('lets import switch a per-ตร.ม. line to per-แผ่น: placeholder follows, and unitBasis/quotedUnit are saved', async () => {
     const quote = contactedQuote();
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
@@ -4559,7 +4479,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('100 EUR/ตร.ม.');
   });
 
-  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  // Factory workspace is import-only; the backend still authorises ceo on drafts and /contacted but no CEO screen uses it.
   it('CEO does NOT see the factory card, its locked terms, price inputs, confirm or lead-time change (it loads the quotes only to show Import\'s price on the item card)', async () => {
     renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
@@ -4662,7 +4582,7 @@ describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ติดต่อโรงงานแล้วหรือไม่อยู่ในสถานะร่าง'));
   });
 
-  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  // Factory workspace is import-only; the backend still authorises ceo on drafts and /contacted but no CEO screen uses it.
   it('the CEO gets neither สร้างเมล nor ติดต่อโรงงานแล้ว, and nothing is called', async () => {
     renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [crQuote()] });
     await waitForLoaded();
@@ -4917,7 +4837,7 @@ describe('CR-1 lead-time change — import raises it (R2, R10 option C)', () => 
     expect(screen.getByTestId('pcr-lt-open-91')).not.toBeNull();
   });
 
-  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  // Factory workspace is import-only; the backend still authorises ceo on drafts and /contacted but no CEO screen uses it.
   it('the CEO does NOT see the pending lead-time request (no badge, no decide controls)', async () => {
     renderDetailPage({ user: ceoUser, request: crRequest(), factoryQuotes: [contactedQuote()], leadTimeChanges: [ltChange()] });
     await waitForLoaded();
@@ -5049,7 +4969,7 @@ describe('CR-1 factory card — the factory\'s IR row, read-only for import (R9)
   });
 });
 
-// ── Browser-verification follow-ups (coordinator, 2026-10-01) ─────────────────────────────────
+// ── Browser-verification follow-ups ──────────────────────────────────────────────────────────
 describe('CR-1 pre-draft preview card — contact / mail without the bulk สร้างเมลให้ทุกโรงงาน first (R3: สร้างเมล is optional)', () => {
   function renderPreview(user = importUser) {
     let generated = false;
@@ -5097,7 +5017,7 @@ describe('CR-1 pre-draft preview card — contact / mail without the bulk สร
     expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
   });
 
-  // Owner ruling 2026-10-01: factory workspace is import-only (#1103); the backend still authorises ceo on drafts and /contacted (CR-1) but no CEO screen uses it.
+  // Factory workspace is import-only; the backend still authorises ceo on drafts and /contacted but no CEO screen uses it.
   it('the CEO gets no pre-draft preview card and no contact / mail buttons', async () => {
     renderPreview(ceoUser);
     await waitForLoaded();
@@ -5203,11 +5123,10 @@ describe('CR-1 review copy / gating / a11y / provenance', () => {
   });
 });
 
-// Owner Ploy's request (2026-10-01): the CEO's pricing moves INSIDE "รายการสินค้าและราคาตั้งต้น"
-// (one panel, the same "วิธีกรอกราคากระเบื้อง" picker as the direct-quotation editor), and NET mode
-// gains a typed ราคาตั้ง/แผ่น input beside ส่วนลด %. UI-level only — see the file header: no
-// authorization rule changes here, and PricingDecisionService#applyItemUpdates (which these payloads
-// feed) is not exercised by this file.
+// The CEO's pricing lives INSIDE "รายการสินค้าและราคาตั้งต้น" (one panel, the same "วิธีกรอกราคากระเบื้อง"
+// picker as the direct-quotation editor), and NET mode has a typed ราคาตั้ง/แผ่น input beside
+// ส่วนลด %. UI-level only: no authorization rule changes here, and
+// PricingDecisionService#applyItemUpdates (which these payloads feed) is not exercised by this file.
 describe('CEO pricing inside รายการสินค้าและราคาตั้งต้น (2026-10-01 redesign)', () => {
   const PANEL_TITLE = 'รายการสินค้าและราคาตั้งต้น';
 
@@ -5256,7 +5175,7 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(screen.queryByRole('heading', { level: 2, name: 'ต้นทุนนำเข้า' })).toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: 'การพิจารณาราคาขายของ CEO' })).toBeNull();
     expect(screen.queryByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' })).toBeNull();
-    // the CEO header replaces the separate ภาพรวม panel, and the old pricing panel is now ตั้งราคา
+    // The CEO header replaces a separate ภาพรวม panel; the pricing panel is ตั้งราคา
     expect(screen.queryByText('ภาพรวม')).toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: PANEL_TITLE })).toBeNull();
   });
@@ -5265,7 +5184,7 @@ describe('CEO pricing inside รายการสินค้าและรา
     const request = buildRequest({ summary: { status: 'IMPORT_REVIEWING' } });
     renderDetailPage({ user: importUser, request, factoryQuotes: [buildFactoryQuote()] });
     await waitForLoaded(request);
-    // Import PCR redesign: the section is headed "ขอราคาจากโรงงาน" (was "รายการสินค้า (N รายการ)").
+    // The section is headed "ขอราคาจากโรงงาน".
     expect(await screen.findByRole('heading', { level: 2, name: 'ขอราคาจากโรงงาน' })).not.toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: /^รายการสินค้า \(\d+ รายการ\)$/ })).toBeNull();
   });
@@ -5361,14 +5280,14 @@ describe('CEO pricing inside รายการสินค้าและรา
     expect(row.getByLabelText(/ราคาพิเศษ.*รวม VAT/)).not.toBeNull();
     expect(row.queryByTestId('pcr-ceo-list-price-8001')).toBeNull();
     expect(row.queryByTestId('pcr-ceo-discount-8001')).toBeNull();
-    // QA-31: the hint is the แผ่น/ตร.ม. figure the net is divided by (round2(1 / 0.36) = 2.78),
-    // the same one the quotation editor shows — never the raw ตร.ม./แผ่น 0.36.
+    // The hint is the แผ่น/ตร.ม. figure the net is divided by (round2(1 / 0.36) = 2.78), the same
+    // one the quotation editor shows, never the raw ตร.ม./แผ่น 0.36.
     expect(row.getByText(/2\.78 แผ่น\/ตร\.ม\./)).not.toBeNull();
     expect(row.queryByText(/ตร\.ม\.\/แผ่น 0\.36/)).toBeNull();
   });
 
-  // W5-03 (Ploy 2026-10-30): under ราคาพิเศษ/ตร.ม. and ราคาสุทธิ the quotation prints the net as
-  // its ราคา, so a stock line needs no ราคาตั้ง there — no field, and approve is not blocked on it.
+  // Under ราคาพิเศษ/ตร.ม. and ราคาสุทธิ the quotation prints the net as its ราคา, so a stock line
+  // needs no ราคาตั้ง there: no field, and approve is not blocked on it.
   it.each([
     ['SPECIAL_SQM', { specialPriceSqm: 7000 }],
     ['DIRECT_NET', { directNetPrice: 399.15 }],
@@ -5389,8 +5308,8 @@ describe('CEO pricing inside รายการสินค้าและรา
     })).not.toBeNull();
   });
 
-  // Owner 2026-10-01: the CEO should not have to work these out. The formula price (CEO config:
-  // cost x (1 + margin) x buffer) pre-fills ราคาพิเศษ, and ต้นทุน reads per แผ่น AND per ตร.ม.
+  // The formula price (CEO config: cost x (1 + margin) x buffer) pre-fills ราคาพิเศษ, and ต้นทุน
+  // reads per แผ่น AND per ตร.ม., so the CEO need not work these out.
   describe('auto-calculated prices and ต้นทุน in both units', () => {
     it('pre-fills ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula price: 72/แผ่น at 0.36 ตร.ม. -> 72 x 2.78 x 1.07 = 214.17, and saves it', async () => {
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] }); // formula 72, sqmPerPiece 0.36
@@ -5795,10 +5714,10 @@ describe('CEO pricing inside รายการสินค้าและรา
   });
 });
 
-// ── BUG A: บันทึกโรงงาน must never fall through to the browser's native form submission ─────────
+// ── บันทึกโรงงาน must never fall through to the browser's native form submission ────────────────
 // SafeForm only prevented the default when it BLOCKED a submit, and neither ImportFactoryPicker's
 // handleSubmit nor the page's onSave called preventDefault, so an allowed submit was a real GET
-// navigation (full reload under BrowserRouter -> every in-memory draft lost, in-flight mutation
+// navigation (full reload under BrowserRouter: every in-memory draft lost, in-flight mutation
 // possibly cancelled). jsdom never navigates, so the observable is the submit event's
 // `defaultPrevented`, recorded by a capture-phase document listener (runs before React's handler)
 // and inspected after dispatch completes.
@@ -6115,10 +6034,10 @@ describe('PricingRequestDetailPage ยืนยันราคาเสนอ re
   });
 });
 
-// Walk 4 (owner rulings, Ploy 2026-10-29): a stock line (stockSource IN_THAILAND) is priced by the CEO and
-// then waits for delivery - it is never ordered from a factory, so import is not asked to contact one for
-// it; the request page says which lines are stock; and once the deal's order is confirmed no new pricing
-// round starts from it.
+// A stock line (stockSource IN_THAILAND) is priced by the CEO and then waits for delivery: it is
+// never ordered from a factory, so import is not asked to contact one for it; the request page
+// says which lines are stock; and once the deal's order is confirmed no new pricing round starts
+// from it.
 describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4)', () => {
   const baseItem = buildRequest().items[0];
   const stockRequestItem = (overrides = {}) => ({
@@ -6130,8 +6049,8 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
     frozenLandedCostPerRequestedUnitThb: null, sqmPerPiece: 0.36, listUnitPrice: 150, netUnitPrice: 150, ...overrides,
   });
 
-  // W4-03: a return-to-import leaves a RETURNED decision behind; when the request comes back READY, the CEO
-  // starts a fresh review. The page used to show the RETURNED decision instead and no start button.
+  // A return-to-import leaves a RETURNED decision behind; when the request comes back READY, the
+  // CEO starts a fresh review, so the page must not show the RETURNED decision and no start button.
   it('W4-03: a READY_FOR_CEO_REVIEW request whose only decision was RETURNED offers เริ่มพิจารณาราคาขาย', async () => {
     const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision({ status: 'RETURNED' })] });
@@ -6142,8 +6061,8 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
     expect(await screen.findByTestId('pcr-ceo-start-review')).not.toBeNull();
   });
 
-  // W4-06 (default pending Ploy's confirm): with no import line there is no import cost to fix, so the CEO's
-  // ตีกลับให้ฝ่ายนำเข้าแก้ไข is hidden (the backend 409 stays); with any import line it is still there.
+  // With no import line there is no import cost to fix, so the CEO's ตีกลับให้ฝ่ายนำเข้าแก้ไข is
+  // hidden (the backend 409 stays); with any import line it is still there.
   async function renderCeoReviewing(requestItems, decisionItems) {
     const request = buildRequest({ summary: { status: 'CEO_REVIEWING' }, items: requestItems });
     api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -6171,8 +6090,7 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
     expect(screen.getByTestId('pcr-ceo-mobile-return')).not.toBeNull();
   });
 
-  // W4-01: the CEO's line rows say which lines are stock (the badge exists on the deal page already; the
-  // request pages had none).
+  // The CEO's line rows say which lines are stock (the deal page already has the badge).
   it('W4-01: the CEO pricing table marks a stock line จากสต็อก and an import line not', async () => {
     await renderCeoReviewing([baseItem, stockRequestItem()],
       [buildDecisionItem({ sqmPerPiece: 0.36, listUnitPrice: 100, netUnitPrice: 100 }), stockDecisionItem()]);
@@ -6186,8 +6104,8 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
     const importLine = { ...baseItem, resolvedFactoryName: 'Factory A', factory: null };
 
     it('W4-01: import sees a จากสต็อก badge on a stock line, and no factory mail/contact group for a stock-only factory', async () => {
-      // The stock line resolves to Factory B through its catalog product - the exact case that used to
-      // put a "Factory B - สร้างเมล / ติดต่อโรงงานแล้ว" group on screen for goods nobody orders from B.
+      // The stock line resolves to Factory B through its catalog product: it must not put a
+      // "Factory B - สร้างเมล / ติดต่อโรงงานแล้ว" group on screen for goods nobody orders from B.
       const request = importRequest([importLine, stockRequestItem({ resolvedFactoryName: 'Factory B' })]);
       renderDetailPage({ user: importUser, request });
       await waitForLoaded(request);
@@ -6209,7 +6127,7 @@ describe('PricingRequestDetailPage - stock lines and the confirmed order (Walk 4
     });
   });
 
-  // W4-04: the PCR summary carries the deal's payment status (null until the order is confirmed); the
+  // The PCR summary carries the deal's payment status (null until the order is confirmed); the
   // backend refuses a new round once it is set, so the page does not offer สร้างรอบแก้ไข.
   describe('สร้างรอบแก้ไข once the deal order is confirmed', () => {
     it('is offered to the owner before the order is confirmed', async () => {
@@ -6283,7 +6201,7 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
       },
     );
 
-    // Guard (green before and after by design): the LEGACY path keeps its old markup for the CEO.
+    // Guard (green before and after by design): the LEGACY path keeps its markup for the CEO.
     it('a LEGACY decision (no sqmPerPiece) still renders the old markup: no summary bar/table/mobile bar, ภาพรวม kept, per-row margin save and the old ตีกลับ label', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [buildDecision()] });
@@ -6731,7 +6649,7 @@ describe('CEO pricing workspace redesign — review fixes', () => {
       renderDetailPage({ user: ceoUser, request });
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
-      // the redesigned workspace is on screen (not the old panel) ...
+      // the redesigned workspace is on screen ...
       expect(screen.getByTestId('pcr-ceo-table')).not.toBeNull();
       // ... and the start control is inside the pricing panel
       const start = within(ceoPricingPanel()).getByTestId('pcr-ceo-start-review');
@@ -6963,7 +6881,7 @@ describe('CEO margin % input: a fraction typed by habit is warned about, never b
   });
 });
 
-// ── CEO pricing workspace: second review round (10 findings) ─────────────────────────────────────
+// ── CEO pricing workspace: second review round ───────────────────────────────────────────────────
 describe('CEO pricing workspace redesign — review round 2', () => {
   const heldUpdate = () => {
     let release;
@@ -7596,7 +7514,7 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       const confirm = card(91).getByRole('button', { name: 'ยืนยันราคาเสนอ' });
       expect(confirm.disabled).toBe(false);
       expect(screen.getByTestId('pcr-factory-helper-91').textContent).toContain('ยืนยันแล้วราคานี้ใช้คำนวณต้นทุน');
-      // a NON-blocking count of what is still empty (owner ruling): it disables nothing
+      // a NON-blocking count of what is still empty: it disables nothing
       expect(screen.getByTestId('pcr-factory-helper-91').textContent).toContain('ยังไม่กรอกราคา 1 รายการ');
       expect(screen.queryByText(/กรอกราคาให้ครบ/)).toBeNull();
 

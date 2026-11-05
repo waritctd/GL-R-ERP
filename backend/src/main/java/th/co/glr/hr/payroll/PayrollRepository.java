@@ -104,7 +104,7 @@ public class PayrollRepository {
                 // Drives the ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (V93). Nullable: a missing
                 // date of birth means the exemption is not granted on an assumption.
                 rs.getObject("date_of_birth", LocalDate.class),
-                // Daily-rate support (2026-07-30): raw CHAR(1) code ('M'/'D'/null). Read raw --
+                // Daily-rate support: raw CHAR(1) code ('M'/'D'/null). Read raw --
                 // NULL means "never set" (172 legacy rows + any created before V1's default), which
                 // PayrollEmployeeSnapshot#dailyRatePay() and PayrollService treat as monthly, same as
                 // EmployeeRepository#payTypeLabel already does for display.
@@ -183,7 +183,7 @@ public class PayrollRepository {
     }
 
     /**
-     * Year-to-date figures used to project annual income (C2). Combines actual processed
+     * Year-to-date figures used to project annual income. Combines actual processed
      * {@code payroll_line} rows for months already run this year with
      * {@code hr.payroll_year_to_date_seed} -- the pre-system history back-loaded at go-live. An
      * employee may have rows in either table, both, or neither; the UNION ALL + GROUP BY sums whatever
@@ -279,8 +279,7 @@ public class PayrollRepository {
     }
 
     /**
-     * Special-pay carry-forward (2026-07-23, extended to all nine พิเศษ slots + meal allowance,
-     * Opus review 2026-07-29): per active employee, the carried recurring fields (special_pay_1..9,
+     * Special-pay carry-forward (all nine พิเศษ slots + meal allowance): per active employee, the carried recurring fields (special_pay_1..9,
      * meal_allowance, non_taxable_income, student_loan_deduction, legal_execution_deduction) from
      * that employee's most-recent PRIOR processed {@code payroll_line} — the latest period strictly
      * before {@code payrollMonth} with {@code status <> 'VOID'}. {@code DISTINCT ON} picks exactly one
@@ -289,24 +288,17 @@ public class PayrollRepository {
      * "nothing to pre-fill." Restricted to currently active employees so a terminated employee's old
      * figures never leak into a suggestion for a payroll run they are no longer part of.
      *
-     * <p>Defect fix (Opus review, 2026-07-29): the original version joined only {@code cf1}-{@code
-     * cf5} (special_pay_1..5) and the DTO carried only those five slots, even though V98 also seeds
-     * carry-forward flags for {@code SPECIAL_PAY_6}, {@code SPECIAL_PAY_9} and {@code
-     * MEAL_ALLOWANCE} — the very components V98's own rationale names as recurring (ค่า GPRS(เพิ่ม),
-     * เงินรางวัล). Those flags were dead: stored, never read. Extended to join and carry all nine
-     * พิเศษ slots plus meal allowance, following the exact same {@code CASE WHEN cfN.carry_forward
-     * THEN pl.special_pay_N ELSE 0 END} shape as the original five.
+     * <p>All nine พิเศษ slots plus meal allowance join the carry-forward flags in the same {@code
+     * CASE WHEN cfN.carry_forward THEN pl.special_pay_N ELSE 0 END} shape (a slot whose flag is
+     * seeded but never joined would be stored and never read).
      *
-     * <p>Second defect fix, same review: each {@code cfN} join used to match on {@code cfN.tax_year =
-     * EXTRACT(YEAR FROM pp.payroll_month)} — the SOURCE row's own year, with no fallback. V98 seeded
-     * carry-forward flags for 2026 only, so a source row from January 2027 onward would find no
-     * matching flag row at all and every slot would silently stop carrying the instant the calendar
-     * rolled over — carry-forward "surviving" through the end of 2026 and then stopping dead in
-     * February 2027, exactly the per-employee/per-year cliff {@link #findComponentTaxTreatmentsByEmployee}
-     * had for the same underlying reason. Fixed with a {@code LATERAL} join per slot that picks, for
-     * that employee and component, the closest {@code tax_year <= EXTRACT(YEAR FROM pp.payroll_month)}
-     * — the same "roll forward to the most recent year at or before" resolution, done per row because
-     * (unlike the tax-treatment/SSO-inclusion reads) the source period differs per employee here.
+     * <p>Each {@code cfN} join is a {@code LATERAL} join per slot that picks, for that employee and
+     * component, the closest {@code tax_year <= EXTRACT(YEAR FROM pp.payroll_month)}. Matching the
+     * SOURCE row's own year exactly would find no flag row once the calendar rolls past the last
+     * seeded year, and every slot would silently stop carrying — the same per-employee/per-year
+     * cliff {@link #findComponentTaxTreatmentsByEmployee} guards against. It is the same "roll
+     * forward to the most recent year at or before" resolution, done per row because (unlike the
+     * tax-treatment/SSO-inclusion reads) the source period differs per employee here.
      */
     public List<PayrollCarryForwardDtos.SuggestedInputRow> findCarryForwardSuggestions(LocalDate payrollMonth) {
         return jdbc.query("""
@@ -431,7 +423,7 @@ public class PayrollRepository {
     }
 
     /**
-     * C1 + ล.ย.01 effective dating (V93): the declaration IN FORCE for a given payroll month.
+     * ล.ย.01 effective dating: the declaration IN FORCE for a given payroll month.
      *
      * <p>คำชี้แจง ภ.ง.ด.1 ข้อ 2.2: the employer computes ค่าลดหย่อน from what the employee declared on
      * แบบ ล.ย.01, and where the employee notifies a change during the year the NEW declaration applies
@@ -492,7 +484,7 @@ public class PayrollRepository {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
-    /** C1: rows for the GET /api/payroll/tax-allowances listing, joined to employee for display. */
+    /** Rows for the GET /api/payroll/tax-allowances listing, joined to employee for display. */
     public List<EmployeeTaxAllowanceDto> findTaxAllowanceRows(int taxYear) {
         return jdbc.query("""
             SELECT e.employee_id, e.employee_code,
@@ -587,11 +579,10 @@ public class PayrollRepository {
     /**
      * Gate for {@link #upsertTaxAllowances}'s verification reset: content changed AND the row is
      * CURRENTLY {@code VERIFIED}. Deliberately gated on the row's PRIOR status, not just "content
-     * changed" -- Opus review finding F1 (2026-08-08, caught pre-merge): an earlier version of this
-     * fix reset to {@code GRANDFATHERED_UNVERIFIED} on any content change regardless of prior
-     * status. From VERIFIED that is the intended downgrade; from {@code EXPIRED_UNVERIFIED} it is a
-     * silent PROMOTION -- {@link #findTaxAllowancesByEmployee} excludes only {@code
-     * EXPIRED_UNVERIFIED}, so a lapsed, no-longer-applied declaration would have re-entered the
+     * changed": resetting to {@code GRANDFATHERED_UNVERIFIED} on any content change regardless of
+     * prior status would be the intended downgrade from VERIFIED, but from {@code
+     * EXPIRED_UNVERIFIED} a silent PROMOTION -- {@link #findTaxAllowancesByEmployee} excludes only
+     * {@code EXPIRED_UNVERIFIED}, so a lapsed, no-longer-applied declaration would re-enter the
      * withholding base on nothing more than a bare amount edit through the legacy PUT, with no
      * reviewer and no deadline, and no automated way back out (the expiry sweep only re-examines
      * declarations still {@code APPROVED} in {@code hr.tax_allowance_declaration}, and an expired
@@ -611,20 +602,20 @@ public class PayrollRepository {
         "(" + TAX_ALLOWANCE_CONTENT_CHANGED + " AND eta.verification_status = 'VERIFIED')";
 
     /**
-     * C1: bulk upsert of the standing tax-allowance declaration.
+     * Bulk upsert of the standing tax-allowance declaration.
      *
-     * <p><b>verification_status reset on overwrite (2026-08-08 fix).</b> {@code PUT
+     * <p><b>verification_status reset on overwrite.</b> {@code PUT
      * /api/payroll/tax-allowances} ({@code PayrollController}, HR-only) reaches this method
      * directly and has no verification step of its own -- unlike {@code
      * TaxAllowanceDeclarationService#apply}, the only other caller, which always calls {@link
      * #markTaxAllowanceVerified} in the very same transaction right after this method returns (see
-     * the block comment above that method). Before this fix the {@code ON CONFLICT DO UPDATE} below
-     * left {@code verification_status} untouched, so overwriting a VERIFIED row's amounts through
-     * the bare PUT silently kept it VERIFIED: brand-new, never-reviewed figures inheriting someone
-     * else's review, and {@link #findTaxAllowancesByEmployee} applies VERIFIED rows to withholding
-     * exactly like GRANDFATHERED_UNVERIFIED ones (it excludes only EXPIRED_UNVERIFIED).
+     * the block comment above that method). If the {@code ON CONFLICT DO UPDATE} below left
+     * {@code verification_status} untouched, overwriting a VERIFIED row's amounts through
+     * the bare PUT would silently keep it VERIFIED: brand-new, never-reviewed figures inheriting
+     * someone else's review, and {@link #findTaxAllowancesByEmployee} applies VERIFIED rows to
+     * withholding exactly like GRANDFATHERED_UNVERIFIED ones (it excludes only EXPIRED_UNVERIFIED).
      *
-     * <p>Fix: when {@link #TAX_ALLOWANCE_VERIFICATION_INVALIDATED} for the row being upserted --
+     * <p>So when {@link #TAX_ALLOWANCE_VERIFICATION_INVALIDATED} for the row being upserted --
      * content changed AND the row was VERIFIED, see that constant's own doc for why the gate is on
      * prior status, not just content -- the update resets verification_status to
      * GRANDFATHERED_UNVERIFIED and clears verified_by_id/verified_at/verification_deadline together:
@@ -637,7 +628,7 @@ public class PayrollRepository {
      * <p><b>Scope is per-row, not per-year.</b> This is deliberately narrower than {@link
      * #markTaxAllowanceVerified}/{@link #setTaxAllowanceVerificationDeadline}/{@link
      * #expireTaxAllowanceVerification} below, which all key on {@code (employee_id, tax_year)} with
-     * no {@code effective_month} and flip EVERY dated row for the year at once (V93: an employee can
+     * no {@code effective_month} and flip EVERY dated row for the year at once (an employee can
      * carry several dated rows per year) -- those three persist ONE holistic yearly review decision
      * the service layer already made. This reset is the opposite: an unreviewed overwrite of ONE
      * dated row's content, so only that row's own verification is invalidated. A sibling row for a
@@ -646,17 +637,17 @@ public class PayrollRepository {
      * what a single row's {@code ON CONFLICT (employee_id, tax_year, effective_month) DO UPDATE} can
      * even reach: one conflict target, one row, never a sibling.
      *
-     * <p><b>Known limitation (F3, not fixed here -- document, don't fix):</b> {@link
+     * <p><b>Known limitation (not fixed here):</b> {@link
      * #markTaxAllowanceVerified} has no {@code effective_month} filter by design (it persists ONE
      * holistic yearly review decision, see above), so a later, entirely legitimate {@code
      * TaxAllowanceDeclarationService#apply} of ANY new declaration for this employee/tax-year
      * re-VERIFIES every dated row for that year at once -- including a row THIS reset had correctly
-     * downgraded for unrelated reasons. That restores the original defect's end state (a row applying
+     * downgraded for unrelated reasons. That restores the very end state this reset prevents (a row applying
      * to payroll under a VERIFIED label nobody re-reviewed) through a legitimate action, not a bug in
      * this method. The per-row write scope here is right and unavoidable -- a single {@code ON
      * CONFLICT} can only ever reach the one row it targets -- the gap is that the REPAIR back to
-     * VERIFIED is only possible year-wide. Not addressed in this change; flagged for whoever next
-     * touches the verification state machine.
+     * VERIFIED is only possible year-wide. Whoever next touches the verification state machine
+     * should address it.
      */
     public void upsertTaxAllowances(int taxYear, List<EmployeeTaxAllowanceUpsertRequest> items, Long updatedById) {
         for (EmployeeTaxAllowanceUpsertRequest item : items) {
@@ -712,7 +703,7 @@ public class PayrollRepository {
                     verified_at = CASE WHEN %1$s THEN NULL ELSE eta.verified_at END,
                     verification_deadline = CASE WHEN %1$s THEN NULL ELSE eta.verification_deadline END
                 """
-                // F6: .formatted() only substitutes %1$s -- fine today since neither this statement
+                // .formatted() only substitutes %1$s -- fine today since neither this statement
                 // nor TAX_ALLOWANCE_VERIFICATION_INVALIDATED contains a literal '%'. If either ever
                 // grows one (a LIKE pattern, a to_char format), it must be escaped as '%%' or this
                 // throws a runtime UnknownFormatConversionException, not a compile error.
@@ -751,13 +742,13 @@ public class PayrollRepository {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Payroll input draft (2026-07-30). HR's typed-but-not-yet-processed per-run inputs -- see
+    // Payroll input draft. HR's typed-but-not-yet-processed per-run inputs -- see
     // PayrollInputDraftDtos and PayrollService#getInputDraft/#saveInputDraft. hr.payroll_input_draft
-    // (V104) is a separate table from hr.payroll_line: payroll_line is the engine's computed OUTPUT;
+    // is a separate table from hr.payroll_line: payroll_line is the engine's computed OUTPUT;
     // a draft is raw HR-typed input only, never read by PayrollCalculator, with no bearing on
     // payroll math whatsoever.
     //
-    // Optimistic concurrency (issue #422 follow-up, V113): every row carries a `version` counter,
+    // Optimistic concurrency: every row carries a `version` counter,
     // bumped on every upsert by #saveInputDrafts. #findInputDraftVersions and #lockInputDraftMonth
     // below are the two pieces PayrollService#saveInputDraft composes into a locked
     // compare-then-write -- see that method's own comment for the full sequence, and
@@ -770,7 +761,7 @@ public class PayrollRepository {
      * PayrollDraftETag#compute} depends on that ordering to produce a stable token for a stable
      * row set.
      *
-     * <p><b>Why {@code draftId} is here, not just {@code version} (Opus review finding F1, an ABA
+     * <p><b>Why {@code draftId} is here, not just {@code version} (an ABA
      * hazard):</b> {@code saveInputDrafts}' INSERT branch never sets {@code version} explicitly, so
      * a brand-new row always lands at the column DEFAULT, 0 -- and {@code process()} deletes every
      * draft row for a processed month outright, not soft-deletes them. So version is monotonic
@@ -780,7 +771,7 @@ public class PayrollRepository {
      * same {@code (employeeId, version)} pair, and therefore the exact same ETag, as a genuinely
      * earlier, already-superseded state. A stale {@code If-Match} from before the process() would
      * then incorrectly MATCH the post-process state and silently overwrite it. {@code draftId} is
-     * the {@code GENERATED ALWAYS AS IDENTITY} primary key (V104) -- a fresh sequence value every
+     * the {@code GENERATED ALWAYS AS IDENTITY} primary key -- a fresh sequence value every
      * INSERT, including a reinsert for the same employee/month after a delete -- so folding it into
      * the ETag material makes a delete-and-reinsert cycle produce a different token even when the
      * version counter alone would coincide.
@@ -819,11 +810,10 @@ public class PayrollRepository {
      * PayrollEmployeeInputRequest}) and the optimistic-concurrency identity ({@link
      * DraftRowVersion}) come from the identical result set, ordered by employee_id.
      *
-     * <p><b>Why this must be one query, not two (Opus review finding F2):</b> {@link
-     * PayrollService#getInputDraft} used to call {@link #findInputDrafts} and {@link
+     * <p><b>Why this must be one query, not two:</b> calling {@link #findInputDrafts} and {@link
      * #findInputDraftVersions} as two separate, unsynchronized round trips outside any
-     * transaction. Under READ COMMITTED, each statement takes its own fresh snapshot, so a writer
-     * committing in the gap between them produces a genuine hazard IN THE UNSAFE DIRECTION: the
+     * transaction is unsafe. Under READ COMMITTED, each statement takes its own fresh snapshot, so a
+     * writer committing in the gap between them produces a genuine hazard IN THE UNSAFE DIRECTION: the
      * first read (figures) can return the OLD state while the second read (versions) returns the
      * NEW state, handing the caller old data paired with a token that is legitimately current. A
      * caller who edits from that stale view and saves with that (accurate!) token sails straight
@@ -891,8 +881,8 @@ public class PayrollRepository {
     }
 
     /** Every saved draft row for a month, one per employee who has ever saved a draft for it.
-     * Delegates to {@link #findInputDraftRows} -- see that method's own javadoc (Opus review
-     * finding F2) for why a caller that also needs the concurrency identity for the SAME read must
+     * Delegates to {@link #findInputDraftRows} -- see that method's own javadoc
+     * for why a caller that also needs the concurrency identity for the SAME read must
      * call {@link #findInputDraftRows} directly instead of this plus {@link
      * #findInputDraftVersions} as two separate statements. */
     public List<PayrollEmployeeInputRequest> findInputDrafts(LocalDate payrollMonth) {
@@ -1003,11 +993,11 @@ public class PayrollRepository {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Declaration verification + grandfathering (V95, 2026-07-29). These three methods only persist
+    // Declaration verification + grandfathering. These three methods only persist
     // a transition already DECIDED by the caller -- they never inspect stored content themselves.
     //
     // upsertTaxAllowances above is the one exception to "separate from verification state", and
-    // deliberately so (2026-08-08 fix, see its own doc comment): it is the only one of the four
+    // deliberately so (see its own doc comment): it is the only one of the four
     // writers on this table that can silently overwrite a verified row's substance with no
     // verification decision behind it at all, so it now downgrades VERIFIED back to
     // GRANDFATHERED_UNVERIFIED itself -- but ONLY when the row's own declared content actually
@@ -1024,7 +1014,7 @@ public class PayrollRepository {
     // straight from EXPIRED via markTaxAllowanceVerified + setTaxAllowanceVerificationDeadline), so
     // this reset cannot fire in that path and there is nothing here for reverify() to race with.
     //
-    // Known gap (F3, not fixed here): markTaxAllowanceVerified has no effective_month filter, so
+    // Known gap: markTaxAllowanceVerified has no effective_month filter, so
     // apply()-ing ANY new declaration for this employee/tax-year re-VERIFIES every dated row for the
     // year at once, including one this reset had correctly downgraded for unrelated reasons -- see
     // upsertTaxAllowances' own doc comment for the full reasoning.
@@ -1032,7 +1022,7 @@ public class PayrollRepository {
 
     /**
      * Persists the verification deadline for a stored declaration -- "60 days or two payroll
-     * cut-offs after launch, whichever is later" (handoff section 3), computed by the service
+     * cut-offs after launch, whichever is later", computed by the service
      * layer. This method only stores whatever deadline the caller passes.
      */
     /**
@@ -1043,10 +1033,10 @@ public class PayrollRepository {
      *
      * <p><b>Why a delete and not just an upsert.</b> {@link #findTaxAllowancesByEmployee} resolves
      * {@code DISTINCT ON (employee_id) ... WHERE effective_month <= :month ORDER BY effective_month
-     * DESC}: the LATEST dated row on or before the payroll month wins. Since the whole-year ruling
-     * (2026-08-31) every promotion writes month 1, which LOSES that ordering to any pre-ruling row
-     * this employee still carries for the same year — so an upsert alone would leave a superseded
-     * month-7 declaration governing July through December while the register showed the new one as
+     * DESC}: the LATEST dated row on or before the payroll month wins. Every promotion writes
+     * month 1 (whole-year rule), which LOSES that ordering to any mid-year row this employee
+     * still carries for the same year from before that rule — so an upsert alone would leave a
+     * superseded month-7 declaration governing July through December while the register showed the new one as
      * applied. That divergence is invisible from the UI, which is what makes it worth a delete.
      *
      * <p>Scoped to ONE employee and ONE tax year, and only ever reached through a deliberate HR
@@ -1112,7 +1102,7 @@ public class PayrollRepository {
             Map.of("employeeId", employeeId, "taxYear", taxYear));
     }
 
-    /** C2: rows for the GET /api/payroll/ytd-seed listing, joined to employee for display. */
+    /** Rows for the GET /api/payroll/ytd-seed listing, joined to employee for display. */
     public List<YtdSeedDto> findYtdSeedRows(int taxYear) {
         return jdbc.query("""
             SELECT e.employee_id, e.employee_code,
@@ -1135,7 +1125,7 @@ public class PayrollRepository {
             ));
     }
 
-    /** C2: bulk upsert of the year-to-date backfill used at mid-year go-live. */
+    /** Bulk upsert of the year-to-date backfill used at mid-year go-live. */
     public void upsertYtdSeed(int taxYear, List<YtdSeedUpsertRequest> items, Long updatedById) {
         for (YtdSeedUpsertRequest item : items) {
             jdbc.update("""
@@ -1170,9 +1160,8 @@ public class PayrollRepository {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Payroll withholding classification + SSO inclusion matrices (V95, 2026-07-29), consulted by
-    // PayrollCalculator#calculateClassified since task 2. See
-    // docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
+    // Payroll withholding classification + SSO inclusion matrices, consulted by
+    // PayrollCalculator#calculateClassified.
     // ------------------------------------------------------------------------------------------
 
     /**
@@ -1183,34 +1172,25 @@ public class PayrollRepository {
      * the SQL level and the distinction matters for {@link #upsertComponentTaxTreatment} callers
      * that need to know whether a row exists to update.
      *
-     * <p>Defect fix (Opus review, 2026-07-29): the effective tax year used to be resolved PER
-     * EMPLOYEE (each employee rolling forward from their own most recent {@code tax_year <=
-     * taxYear}), not once for the whole table. The prior-prior implementation took a single
-     * table-wide {@code MAX(tax_year)}: the first employee hired in a new tax year (seeded at their
-     * hire year by {@code EmployeeService#create}) flipped that single MAX forward for EVERY
-     * employee, so every pre-existing employee's classification map read back completely empty on
-     * the very next payroll run.
-     *
-     * <p><b>D2 fix (fourth reachability audit, 2026-07-30): per-employee was still not narrow
-     * enough -- resolution is now PER (EMPLOYEE, COMPONENT).</b> The per-employee {@code
-     * employee_years} CTE resolved ONE effective year for an employee's ENTIRE row set: the instant
-     * a single component gained a row in a new tax year (e.g. HR editing ONE dropdown on {@code
+     * <p>The effective tax year is resolved PER (EMPLOYEE, COMPONENT), each pair rolling forward
+     * from its own most recent {@code tax_year <= taxYear}. A single table-wide {@code
+     * MAX(tax_year)} would let the first employee hired in a new tax year (seeded at their hire
+     * year by {@code EmployeeService#create}) flip that MAX forward for EVERY employee, so every
+     * pre-existing employee's classification map would read back empty on the very next payroll
+     * run. Resolving once per employee is still not narrow enough: the instant a single component
+     * gained a row in a new tax year (e.g. HR editing ONE dropdown on {@code
      * TaxTreatmentMatrixSection} in January of a new year, which saves only the edited cell --
      * {@code PayrollPage.jsx}'s {@code save()} sends {@code changes}, the diff, not the full
-     * resolved matrix), that employee's effective year flipped to the new year for EVERY component,
-     * and the {@code JOIN ... ON t.tax_year = ey.effective_tax_year} then excluded every OTHER
-     * component's still-valid prior-year row. The other 15+ components read back as "not yet
-     * classified" in the very API response the edit's own save renders, and {@link
-     * PayrollCalculator#calculateClassified}'s classification gate 409s the whole 2027 run for any
-     * of them with a non-zero amount -- a single dropdown edit stranding every other component HR
-     * never touched.
+     * resolved matrix), that employee's effective year would flip to the new year for EVERY
+     * component, excluding every OTHER component's still-valid prior-year row. The other 15+
+     * components would read back as "not yet classified" in the very API response the edit's own
+     * save renders, and {@link PayrollCalculator#calculateClassified}'s classification gate would
+     * 409 the whole new-year run for any of them with a non-zero amount -- a single dropdown edit
+     * stranding every other component HR never touched.
      *
-     * <p>Fixed by resolving the roll-forward independently per (employee, component) pair with
-     * {@code DISTINCT ON}, rather than fixing the write path to materialise a full-year snapshot or
-     * changing the frontend to submit the whole matrix every save. This is the more robust of the
-     * options: it makes ANY partial write pattern -- today's single-cell save, a future bulk import,
-     * a future screen -- safe by construction, instead of relying on every writer, present and
-     * future, to remember to write a complete per-year snapshot. A lone new hire (or a lone edited
+     * <p>Resolving per (employee, component) pair with {@code DISTINCT ON} makes ANY partial write
+     * pattern -- a single-cell save, a bulk import, a future screen -- safe by construction,
+     * instead of relying on every writer to write a complete per-year snapshot. A lone new hire (or a lone edited
      * component) in 2027 reads their own 2027 row for that one component while every other
      * component, for that same employee, keeps independently rolling forward from its own most
      * recent {@code tax_year <= taxYear} -- exactly like {@link #findCarryForwardSuggestions} must
@@ -1277,7 +1257,7 @@ public class PayrollRepository {
     }
 
     /**
-     * P0 fix (Opus review, 2026-07-30), layer 1b: seeds a SAFE DEFAULT classification for every
+     * Seeds a SAFE DEFAULT classification for every
      * classification-eligible {@link PayrollComponent} for one employee/tax year, mirroring {@link
      * #seedSsoInclusionDefaults}'s own shape exactly. {@code ON CONFLICT DO NOTHING} -- this only
      * fills components that have no row yet, so it never clobbers an HR classification made through
@@ -1292,8 +1272,8 @@ public class PayrollRepository {
      * PayrollClassificationReachabilityIntegrationTest} reproduces to prove the fix is reachable
      * through the real employee-creation path, not just a one-off SQL script.
      *
-     * <p>This is NOT the "silent default" handoff section 1 forbids: that section is about {@link
-     * PayrollCalculator#calculateClassified} never inventing a treatment for a row it cannot see. A
+     * <p>This is NOT a "silent default": the rule is that {@link
+     * PayrollCalculator#calculateClassified} never invents a treatment for a row it cannot see. A
      * stored, {@code updated_by_id = NULL}-tagged default row that HR can see and override on the
      * matrix screen before it ever affects a real run is the same mechanism {@code
      * seedSsoInclusionDefaults} already uses for SSO inclusion, applied to the sibling matrix.
@@ -1301,9 +1281,10 @@ public class PayrollRepository {
      * <p>Defaults mirror {@code V100}'s own reasoning (kept in sync there via {@link
      * #defaultTaxTreatment}, not re-derived): {@link PayrollComponent#BONUS_PAY}/{@link
      * PayrollComponent#OTHER_ONE_OFF_PAY} -&gt; {@link PayrollTaxTreatment#EXTRA_KNOWN_FREQUENCY}
-     * (handoff-explicit); {@link PayrollComponent#DIRECTOR_REMUNERATION} -&gt; {@link
-     * PayrollTaxTreatment#REGULAR_REPROJECT} (owner-confirmed: paid every คราว, ป.96/2543 ข้อ 2.1/2.4
-     * -- see {@link #defaultTaxTreatment}'s own javadoc for the correction history); every other
+     * ({@code BONUS_PAY}/{@code OTHER_ONE_OFF_PAY} are one-off by nature); {@link
+     * PayrollComponent#DIRECTOR_REMUNERATION} -&gt; {@link
+     * PayrollTaxTreatment#REGULAR_REPROJECT} (paid every คราว, ป.96/2543 ข้อ 2.1/2.4
+     * -- see {@link #defaultTaxTreatment}'s own javadoc); every other
      * classification-eligible component -&gt; {@link PayrollTaxTreatment#EXTRA_CUMULATIVE_ACTUAL}, the
      * safe choice for a component this method has zero history to evidence recurrence for (see {@code
      * V100}'s migration comment for the full worked argument on why cumulative-actual, not
@@ -1335,19 +1316,16 @@ public class PayrollRepository {
     /**
      * The safe company-wide default treatment for a component with no per-employee evidence.
      *
-     * <p>Correction (owner, 2026-07-29, caught in review before this branch merged): {@code
-     * DIRECTOR_REMUNERATION} does NOT fall to the generic unknown-recurrence default below. The owner
-     * stated directly: "director remuneration is every month but the pay may change once in a while."
+     * <p>{@code DIRECTOR_REMUNERATION} does NOT fall to the generic unknown-recurrence default
+     * below. Director remuneration is paid every month, though the pay may change once in a while.
      * Paid every คราว makes it เงินได้ที่จ่ายตามปกติ under ป.96/2543 ข้อ 2.1, not a เงินพิเศษ under
      * ข้อ 2.5 -- the amount varying occasionally is not an obstacle, because ข้อ 2.4 requires
      * recomputing the withholding every คราว from the actual year-to-date figure, which is exactly what
      * {@code REGULAR_REPROJECT} already does. This is also why {@link PayrollCalculator}'s legacy
      * {@code calculate()} engine (see that method's own comment on the two-limb split) hardcodes
      * director remuneration into its REGULAR limb, not the occasional one -- the two engines must not
-     * disagree about directors. An earlier version of this method (and {@code V100}'s migration)
-     * defaulted {@code DIRECTOR_REMUNERATION} to {@code EXTRA_CUMULATIVE_ACTUAL} on the premise that
-     * some directors are paid annually rather than monthly -- that premise is factually wrong for GL&amp;R
-     * and was corrected here before merge.
+     * disagree about directors. (Defaulting it to {@code EXTRA_CUMULATIVE_ACTUAL} would assume some
+     * directors are paid annually rather than monthly, which is wrong for GL&amp;R.)
      */
     public static PayrollTaxTreatment defaultTaxTreatment(PayrollComponent component) {
         if (component == PayrollComponent.DIRECTOR_REMUNERATION) {
@@ -1365,26 +1343,21 @@ public class PayrollRepository {
      * #seedSsoInclusionDefaults} runs for that employee -- this method only returns what is
      * actually stored, it does not synthesize the seed defaults on read.
      *
-     * <p>Defect fix (Opus review, 2026-07-29): resolved PER EMPLOYEE (a single {@code MAX(tax_year)}
-     * per employee, not one table-wide MAX) -- correct as far as it goes, but no longer the same
-     * resolution as {@link #findComponentTaxTreatmentsByEmployee}.
-     *
-     * <p><b>F4 (fifth Opus review, 2026-07-30): this javadoc used to claim it matches {@code
-     * findComponentTaxTreatmentsByEmployee} -- that is now FALSE.</b> That sibling method was later
-     * tightened (D2, fourth reachability audit) to resolve per (EMPLOYEE, COMPONENT) via {@code
-     * DISTINCT ON}, because a per-EMPLOYEE-only resolution has the exact same "one component's new
-     * row flips the year for every other component" cliff the per-employee fix was written to close
-     * one level up (see that method's own javadoc for the full mechanism). This method was never
-     * updated to match and still has that narrower cliff: HR editing ONE SSO-inclusion cell into a
+     * <p>Resolved PER EMPLOYEE (a single {@code MAX(tax_year)} per employee, not one table-wide
+     * MAX) -- NOT the same resolution as {@link #findComponentTaxTreatmentsByEmployee}, which
+     * resolves per (EMPLOYEE, COMPONENT) via {@code DISTINCT ON}, because a per-EMPLOYEE-only
+     * resolution has a "one component's new row flips the year for every other component" cliff
+     * (see that method's own javadoc for the full mechanism). This method still has that
+     * cliff: HR editing ONE SSO-inclusion cell into a
      * new tax year would flip every OTHER component's resolved year forward too, silently excluding
      * their still-valid prior-year rows from the wage base. <b>Currently LATENT, not exercised in
      * production</b> -- the only writer, {@link #seedSsoInclusionDefaults}, always writes a full-year
      * snapshot (every component, one INSERT batch), so no real caller today produces the partial,
      * split-year shape this gap requires. It would become live the moment {@code
-     * upsertComponentSsoInclusion} (F3) gets a caller that saves a single edited cell, the same way
+     * upsertComponentSsoInclusion} gets a caller that saves a single edited cell, the same way
      * {@code TaxTreatmentMatrixSection.save()} does for tax treatment -- and unlike that gate's 409,
-     * the consequence here is a silently WRONG SSO wage base (money), not a blocked run. Recorded as
-     * a known risk, not fixed here (out of this task's scope); fix in lockstep with F3.
+     * the consequence here is a silently WRONG SSO wage base (money), not a blocked run. A known
+     * risk, not fixed; fix in lockstep with {@code upsertComponentSsoInclusion}'s first caller.
      */
     public Map<Long, Map<PayrollComponent, Boolean>> findComponentSsoInclusionByEmployee(int taxYear) {
         record Row(long employeeId, PayrollComponent component, boolean included) {}
@@ -1463,10 +1436,10 @@ public class PayrollRepository {
     }
 
     /**
-     * The company-wide SSO-inclusion default (handoff section 5): every component is IN the wage base
+     * The company-wide SSO-inclusion default: every component is IN the wage base
      * except {@code DIRECTOR_REMUNERATION} (not wages under the Social Security Act) and {@code
      * NON_TAXABLE_INCOME} (out of scope for any wage base by definition). Factored out of {@link
-     * #seedSsoInclusionDefaults}'s inline boolean (P1 fix, Opus review 2026-07-30) so the SAME rule
+     * #seedSsoInclusionDefaults}'s inline boolean so the SAME rule
      * backs both the SQL-writing seed path above and the read-side fallback in
      * {@link #findComponentSsoInclusionByEmployee} below -- see that method's own comment for why a
      * second, independent copy of this rule would be exactly the kind of drift this fix exists to
@@ -1963,17 +1936,15 @@ public class PayrollRepository {
                 // chk_payroll_line_per_diem_basis_present CHECK (no basis required when both
                 // per_diem_exempt/per_diem_taxable are zero).
                 .addValue("perDiemBasis", line.perDiemBasis())
-                // D1 fix (fourth reachability audit, 2026-07-30, V101): the raw entered amount,
-                // always -- see PayrollLineDto#customerReturnRequested's own javadoc.
+                // The raw entered amount, always -- see PayrollLineDto#customerReturnRequested's own javadoc.
                 .addValue("customerReturnRequested", safe(line.customerReturnRequested()))
-                // Daily-rate support (2026-07-30): nullable -- read raw so SQL NULL stays null
+                // Daily-rate support: nullable -- read raw so SQL NULL stays null
                 // (no COALESCE), same reasoning as withholdingTaxOverride above. NULL for every
                 // monthly employee and for any daily-rate line where HR typed nothing this run.
                 .addValue("daysWorked", line.daysWorked())
-                // Finding 3 fix (Opus review, 2026-07-30): freeze the employee's pay_type AS OF THIS
-                // RUN onto the line -- see this method's SELECT-side comment in findLines and V103's
-                // pay_type column comment for the full rationale (mirrors hr.overtime_request
-                // .salary_basis).
+                // Freeze the employee's pay_type AS OF THIS RUN onto the line -- see this method's
+                // SELECT-side comment in findLines and the pay_type column comment for the full
+                // rationale (mirrors hr.overtime_request.salary_basis).
                 .addValue("payType", line.payType()));
     }
 
@@ -2061,7 +2032,7 @@ public class PayrollRepository {
             money(rs.getBigDecimal("per_diem_taxable")),
             rs.getString("per_diem_basis"),
             money(rs.getBigDecimal("customer_return_requested")),
-            // Daily-rate support (2026-07-30): nullable -- read raw (no money()) so a monthly
+            // Daily-rate support: nullable -- read raw (no money()) so a monthly
             // employee's line, which never has this figure, stays null rather than a misleading 0.00.
             rs.getBigDecimal("days_worked"),
             rs.getString("pay_type"),
@@ -2072,14 +2043,12 @@ public class PayrollRepository {
     }
 
     /**
-     * Slot labels, ALIGNED TO THE ACCOUNTANT'S WORKBOOK (2026-07-29, owner decision) -- MUST match
-     * {@link PayrollService#specialPayDtos} exactly. Defect fix (Opus review, 2026-07-29): this
-     * method still carried the OLD (pre-realignment) labels after {@code PayrollService} was moved
-     * to the new numbering, so every processed payroll line was previewed under one label and read
-     * back from the database under a different one -- silently wrong Thai labels on every payslip
-     * PDF and HR screen for slots 2 through 9. See {@code PayrollService#specialPayDtos}'s javadoc
-     * for the full renumbering rationale; {@code PayrollSlotLabelAlignmentIntegrationTest} pins the
-     * two methods against each other so they cannot drift apart again.
+     * Slot labels, ALIGNED TO THE ACCOUNTANT'S WORKBOOK -- MUST match
+     * {@link PayrollService#specialPayDtos} exactly: if they differ, a processed payroll line is
+     * previewed under one label and read back from the database under a different one, giving
+     * silently wrong Thai labels on every payslip PDF and HR screen for slots 2 through 9. See
+     * {@code PayrollService#specialPayDtos}'s javadoc for the numbering rationale; {@code
+     * PayrollSlotLabelAlignmentIntegrationTest} pins the two methods against each other.
      */
     private List<PayrollSpecialPayDto> specialPays(ResultSet rs) throws SQLException {
         return List.of(

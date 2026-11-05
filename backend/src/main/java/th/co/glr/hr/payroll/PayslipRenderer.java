@@ -74,22 +74,21 @@ public class PayslipRenderer {
             }
             addIfNonZero(earnings, "ค่าล่วงเวลา", line.overtimePay());
             addIfNonZero(earnings, "ค่าคอมมิชชั่น", line.commissionPay());
-            // Task 2 (2026-07-29): เงินโบนัส / อื่นๆ -- V94/V96 payroll_line columns (both branches
-            // added this pair). Without these two rows the printed รวมรายได้ (which reads
-            // grossEarnings directly, not a re-sum of this list) would exceed the sum of the itemized
+            // เงินโบนัส / อื่นๆ -- payroll_line columns. Without these two rows the printed
+            // รวมรายได้ (which reads grossEarnings directly, not a re-sum of this list) would
+            // exceed the sum of the itemized
             // earnings above whenever either is non-zero, breaking this class's own documented
             // invariant that every money-in component gets a row.
             addIfNonZero(earnings, "เงินโบนัส", line.bonusPay());
             addIfNonZero(earnings, "รายได้อื่นๆ", line.otherOneOffPay());
-            // Defect fix (Opus review, 2026-07-29): ค่าอาหาร / เบี้ยเลี้ยง ส่วนเกิน -- V97
-            // payroll_line columns. Both are taxable (part of grossEarnings), same reasoning as
-            // bonusPay/otherOneOffPay above: without a row here, รวมรายได้ would silently exceed the
+            // ค่าอาหาร / เบี้ยเลี้ยง ส่วนเกิน -- payroll_line columns. Both are taxable (part of
+            // grossEarnings), same reasoning as bonusPay/otherOneOffPay above: without a row here, รวมรายได้ would silently exceed the
             // sum of the itemised lines whenever either is non-zero. The exempt portion of เบี้ยเลี้ยง
             // is deliberately NOT itemised separately here -- it is already folded into
             // nonTaxableIncome (which IS itemised below as "รายได้ไม่คิดภาษี") because it shares that
             // figure's tax treatment exactly (see PayrollComponent's javadoc).
             addIfNonZero(earnings, "ค่าอาหาร", line.mealAllowance());
-            // V128. Itemised for the same reason as ค่าอาหาร above: welfare is taxable and inside
+            // Itemised for the same reason as ค่าอาหาร above: welfare is taxable and inside
             // grossEarnings, so omitting the row would make รวมรายได้ exceed the sum of the lines
             // printed beneath it -- and this is the one earning the employee can check against a
             // claim they filed themselves, so a payslip that hides it invites exactly the query it
@@ -159,33 +158,27 @@ public class PayslipRenderer {
             // because it is neither an earning nor a deduction: it is money already remitted to the RD
             // in an earlier period of this tax year that exceeds the year's assessed liability.
             //
-            // P2 fix (Opus review, 2026-07-30): F3 (task 4, same day) replaced the hardcoded-zero
-            // excessWithheldToDate with a real computation, which woke this block back up -- and this
-            // block prints the baht figure, which spec section 8 explicitly forbids: "Do not print the
-            // excess amount. Keep persisting excess_withheld_to_date for the ภ.ง.ด.1 working papers and
-            // reconciliation." F3 cited section 8 while restoring exactly what it forbids. The
-            // PERSISTENCE F3 added is correct and untouched (line.excessWithheldToDate() is still
-            // computed and stored for the ภ.ง.ด.1 working papers); only the PRINTED TEXT changes here,
-            // to the owner-approved wording from section 8 verbatim -- which never states a figure, only
-            // that the withholding shown is an estimate (normal/mid-year) or a year-end true-up
-            // (December). The existing nonZero(excessWithheldToDate()) gate is kept as-is (unchanged
-            // scope: this fix removes the number from the notice, it does not change when the notice
-            // appears -- see the branch handoff for that scoping note).
+            // The spec forbids printing the baht figure: "Do not print the excess amount. Keep
+            // persisting excess_withheld_to_date for the ภ.ง.ด.1 working papers and
+            // reconciliation." So the printed text is the owner-approved wording, which never
+            // states a figure, only that the withholding shown is an estimate (normal/mid-year) or
+            // a year-end true-up (December). line.excessWithheldToDate() is still computed and
+            // stored for the ภ.ง.ด.1 working papers; the nonZero(excessWithheldToDate()) gate only
+            // decides when the notice appears.
             if (nonZero(line.excessWithheldToDate())) {
                 float noticeWidth = pdf.right() - left;
-                // FINAL vs PROVISIONAL (2026-07-29, after review). excessWithheldToDate is measured
+                // FINAL vs PROVISIONAL. excessWithheldToDate is measured
                 // against the CURRENT period's projected annual tax, so before the last period of the
                 // year it is an estimate that later periods can still absorb by withholding less.
                 // Derived from the payroll month rather than carried on the line: PayrollService
                 // computes จำนวนคราวที่ต้องจ่าย as 13 - month, so December IS the final period, and
                 // reading it off the period keeps the renderer from needing a field it would only use
-                // here. (A leaver's final period is not detected -- ป.96 ข้อ 2.10 is a known gap, see
-                // this method's own note below and the handoff's known risks.)
+                // here. (A leaver's final period is not detected -- ป.96 ข้อ 2.10 is a known gap.)
                 boolean finalPeriodOfYear = period.payrollMonth() != null
                     && period.payrollMonth().getMonthValue() >= 12;
-                // Owner-approved wording (handoff section 8), reproduced verbatim -- neither variant
+                // Owner-approved wording, reproduced verbatim -- neither variant
                 // states a baht figure. December names both ภ.ง.ด.90 and ภ.ง.ด.91 (never 91
-                // unconditionally, per the handoff: only a 40(1)-only employee ever needs 91 alone; the
+                // unconditionally: only a 40(1)-only employee ever needs 91 alone; the
                 // renderer has no way to know an employee's other income types, so it names both).
                 String notice = finalPeriodOfYear
                     ? "ภาษีหัก ณ ที่จ่ายเดือนธันวาคมเป็นการปรับปรุงยอดปลายปีจากเงินได้ที่บริษัทจ่ายจริง "
@@ -201,10 +194,9 @@ public class PayslipRenderer {
             }
 
             // --- Optional note ------------------------------------------------------------
-            // WRAPPED (2026-07-29). This drew one unwrapped line, which fitted only because the note
-            // was short; PDFBox draws past the page edge without complaining, so nothing failed and no
-            // test caught it. The ป.96 note is longer, and a withholding-override or clamp warning can
-            // triple it -- text that runs off the right edge is not a note, it is a note that is gone.
+            // The note is wrapped: PDFBox draws past the page edge without complaining, and the
+            // ป.96 note is long (a withholding-override or clamp warning can triple it) -- text that
+            // runs off the right edge is not a note, it is a note that is gone.
             if (line.calculationNote() != null && !line.calculationNote().isBlank()) {
                 float noteWidth = pdf.right() - left;
                 for (String noteLine : wrapToWidth(pdf, regular, 9, noteWidth, "หมายเหตุ: " + line.calculationNote())) {

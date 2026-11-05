@@ -21,13 +21,13 @@ import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
 /**
- * Quotation v3b (owner, 2026-09-11 overnight) — the ENGLISH quotation, form F-SM-008 (01),
+ * The ENGLISH quotation, form F-SM-008 (01),
  * through the REAL {@link DealQuotationRenderAdapter} and the REAL {@link QuotationRenderer}.
  *
  * <p>⚠️ <b>What this file can and cannot prove.</b> There is no F-SM-008 template FILE in this
  * repository — {@code templates/} holds only the Thai {@code quotation_template.xls} — so the
  * English document is produced by driving that same workbook with English labels and an English
- * footer, modelled on the owner's PDF samples. These tests therefore pin <b>our</b> English
+ * footer, modelled on PDF samples. These tests therefore pin <b>our</b> English
  * document against <b>the differences the spec lists</b>. They are not, and cannot be, evidence of
  * fidelity to a form nobody has as a file.
  *
@@ -73,9 +73,8 @@ class DealQuotationEnglishFormTest {
         // The VALUES beside them are unchanged — same columns, same model fields.
         assertThat(str(sheet, 3, VALUE_COL)).isEqualTo("QT-2026-0001");
         assertThat(str(sheet, 4, VALUE_COL)).isEqualTo("D002");
-        // "Dept." used to head this block, with the quotation's deptCode ("P003" on this fixture)
-        // beside it. Sales feedback Admin 1d / owner 2026-10-06: "remove ฝ่าย field completely" —
-        // the same field, so it leaves the English form with the Thai one.
+        // The quotation's deptCode ("P003" on this fixture) is not printed, and no "Dept." label
+        // heads this block — the ฝ่าย field is off the English form as it is off the Thai one.
         assertThat(englishQuotation().deptCode()).as("the fixture still carries one").isEqualTo("P003");
         assertThat(blank(sheet, 2, 7)).as("H3 — no 'Dept.' label").isTrue();
         assertThat(blank(sheet, 2, VALUE_COL)).as("I3 — no department").isTrue();
@@ -99,8 +98,8 @@ class DealQuotationEnglishFormTest {
         Sheet sheet = renderEnglish();
         assertThat(str(sheet, 4, 0)).isEqualTo("Attn :");                 // A5 was เรียน
         assertThat(str(sheet, 4, 1)).isEqualTo("Ms. Aisha Rahman   /   Blue Lagoon Resort Pvt Ltd");
-        // Owner, 2026-10-13: the customer master's phone and the registry contact's e-mail are no
-        // longer printed on this line — only a ผู้ติดต่อ phone/e-mail typed on the quotation is,
+        // The customer master's phone and the registry contact's e-mail are not
+        // printed on this line — only a ผู้ติดต่อ phone/e-mail typed on the quotation is,
         // and this fixture types none (DealQuotationOrderedByContactRenderTest covers the typed
         // English labels "Tel." / "E :").
         assertThat(str(sheet, 5, 1))
@@ -161,7 +160,7 @@ class DealQuotationEnglishFormTest {
             .noneMatch(t -> t.toUpperCase(java.util.Locale.ROOT).contains("VAT"));
     }
 
-    // ── owner ruling 2026-09-13 (2): no blank bordered cells above Grand Total ────────────
+    // ── no blank bordered cells above Grand Total ────────────
 
     /**
      * The subtotal and VAT rows are emptied on an English document — and must not PRINT either. The
@@ -217,7 +216,7 @@ class DealQuotationEnglishFormTest {
         assertThat(str(sheet, SUBTOTAL_ROW, 7)).isEqualTo("รวมเป็นเงิน");
     }
 
-    // ── owner ruling 2026-09-13 (1)(4): an English item table carries no Thai ──────────────
+    // ── an English item table carries no Thai ──────────────
 
     private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
 
@@ -313,7 +312,7 @@ class DealQuotationEnglishFormTest {
         assertThat(remarks).noneMatch(line -> line.contains("บริษัทฯ"));
     }
 
-    /** Walk 4 (W4-01), English twin: an all-stock quotation prints no "Delivery" import line, even when its
+    /** English twin: an all-stock quotation prints no "Delivery" import line, even when its
      * lead-time columns carry a value; a stock line beside an import line is left out of the group. */
     @Test
     void remarks_aStockLineIsLeftOutOfTheEnglishLeadTime_andAnAllStockQuotationHasNoDeliveryLine() {
@@ -367,8 +366,8 @@ class DealQuotationEnglishFormTest {
         assertThat(names).doesNotContain("จินตนา").doesNotContain("เจนเนตร").doesNotContain("ราม");
     }
 
-    /** Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ slot no longer auto-fills from
-     * the contact snapshot at all -- it prints ONLY a rep's manually-typed
+    /** The ผู้สั่งซื้อ slot never auto-fills from
+     * the contact snapshot -- it prints ONLY a rep's manually-typed
      * {@code DealQuotationDto#orderedByName}, exactly as typed (English document, no separate
      * English name concept for a manual free-text field). */
     @Test
@@ -378,7 +377,7 @@ class DealQuotationEnglishFormTest {
         assertThat(names).contains("(Ms. Aisha Rahman)");
     }
 
-    /** F2-reversal regression guard: the CONTACT snapshot ("Ms. Aisha Rahman") is present but no
+    /** Regression guard: the CONTACT snapshot ("Ms. Aisha Rahman") is present but no
      * manual orderedByName was typed -- the slot must stay the dotted placeholder, never fall
      * back to the contact name any more. */
     @Test
@@ -393,12 +392,10 @@ class DealQuotationEnglishFormTest {
      * rather than an empty slot. Asserted wrong-way-round — the failure this guards against is a
      * BLANK signature line on a customer-facing document, not a Thai one.
      *
-     * <p>Owner-directed reversal of F2 (2026-09-26): the ผู้สั่งซื้อ slot's OWN placeholder is no
-     * longer a signal about the employee-name fallback this test covers — it always prints the
-     * placeholder now (no orderedByName was set on this fixture), so the old "doesNotContain the
-     * placeholder" assertion (which meant "the ผู้สั่งซื้อ slot fell back to the customer name")
-     * no longer holds and would be testing the wrong thing; dropped rather than reworded to avoid
-     * conflating the two independent behaviours.
+     * <p>The ผู้สั่งซื้อ slot's OWN placeholder is not a signal about the employee-name fallback
+     * this test covers — it always prints the placeholder (no orderedByName was set on this
+     * fixture), so a "doesNotContain the placeholder" assertion would test the wrong thing and
+     * conflate two independent behaviours.
      */
     @Test
     void signatureBlock_fallsBackToTheThaiNameWhenTheEmployeeHasNoEnglishOne() throws Exception {
@@ -432,7 +429,7 @@ class DealQuotationEnglishFormTest {
         assertThat(str(renderEnglish(), FORM_TAG_ROW, VALUE_COL)).isEqualTo("F-SM-008 (01)");
     }
 
-    /** Admin #6 / owner 2026-10-06: the Thai document prints ITS form number in that same cell —
+    /** The Thai document prints ITS form number in that same cell —
      * through the adapter, i.e. the model a real quotation produces, not a hand-built one. (Every
      * layout branch, and "bottom right of what prints", are QuotationFormTagTest's.) */
     @Test
@@ -485,8 +482,8 @@ class DealQuotationEnglishFormTest {
     void thaiDocument_stillPrintsItsOwnLabelsTotalsAndBuddhistEraDate() throws Exception {
         Sheet sheet = render(thaiQuotation());
         assertThat(str(sheet, 0, 7)).contains("ใบเสนอราคา");
-        // ฝ่าย headed the block top right until 2026-10-06; "remove ฝ่าย field completely" — it is
-        // off the Thai document, label and value, although this quotation still stores "P003".
+        // ฝ่าย no longer heads the block top right — it is off the Thai document, label and
+        // value, although this quotation still stores "P003".
         assertThat(thaiQuotation().deptCode()).isEqualTo("P003");
         assertThat(blank(sheet, 2, 7)).as("H3 — no ฝ่าย label").isTrue();
         assertThat(blank(sheet, 2, VALUE_COL)).as("I3 — no department").isTrue();
@@ -502,8 +499,7 @@ class DealQuotationEnglishFormTest {
         assertThat(sheet.getRow(VAT_ROW).getCell(7).getNumericCellValue()).isEqualTo(0.07);
         assertThat(str(sheet, TOTAL_ROW, 7)).isEqualTo("รวมเป็นเงินทั้งสิ้น");
         // The Thai form's own number, in the same cell the English path writes F-SM-008 (01) into
-        // (see #formTag_readsFSM008). It was BLANKED here until 2026-10-06 ("not customer-facing");
-        // sales feedback Admin #6 / owner ruling that day: "ต้องเพิ่ม" — it prints.
+        // (see #formTag_readsFSM008). It prints; it is not blanked as "not customer-facing".
         assertThat(str(sheet, FORM_TAG_ROW, VALUE_COL)).isEqualTo("F-SM-002 (03)");
         assertThat(str(sheet, LABELS_ROW, 0)).contains("ผู้พิมพ์").contains("ผู้สั่งซื้อ");
     }
@@ -556,7 +552,7 @@ class DealQuotationEnglishFormTest {
         // And the computed remarks survive the merge rather than being dropped to make room.
         assertThat(remarks.get(5)).isEqualTo("3.Delivery : item 1 approximately 30-45 days");
         // Numbering runs on 3, 4, 5 after the block — no gap at 4 for a customer to read as a
-        // missing term (review F2).
+        // missing term.
         assertThat(remarks.get(6)).startsWith("4.Price validity : 30 days").contains("ISO and TIS tolerances");
         assertThat(remarks.get(7)).startsWith("5.Colours").contains("not returnable or exchangeable");
     }
@@ -570,11 +566,11 @@ class DealQuotationEnglishFormTest {
                 List.of(BANK_BLOCK.get(0)),
                 List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1)),
                 List.of(BANK_BLOCK.get(0), "", BANK_BLOCK.get(2)),
-                // Whitespace-only is blank too. Review F4: an isBlank→isEmpty refactor stayed green.
+                // Whitespace-only is blank too; guards an isBlank→isEmpty refactor.
                 List.of(BANK_BLOCK.get(0), "   ", BANK_BLOCK.get(2)),
                 // A null line — Arrays.asList, since List.of refuses nulls.
                 Arrays.asList(BANK_BLOCK.get(0), null, BANK_BLOCK.get(2)),
-                // FOUR lines is not three. Review F5: `size() >= 3` stayed green, and the renderer
+                // FOUR lines is not three; `size() >= 3` would stay green, and the renderer
                 // silently drops a ninth remark row rather than failing.
                 List.of(BANK_BLOCK.get(0), BANK_BLOCK.get(1), BANK_BLOCK.get(2), "extra"))) {
             Sheet sheet = renderEnglishWithBank(partial);
@@ -609,14 +605,14 @@ class DealQuotationEnglishFormTest {
         }
     }
 
-    // ── V178 — remark 7's second กำหนดยืนยันราคา variant (an exact date, not a day count) ────
+    // ── remark 7's second กำหนดยืนยันราคา variant (an exact date, not a day count) ────
     //
-    // Owner ruling 2026-09-14 (superseding an earlier draft of this rule): the DATE variant is
+    // The DATE variant is
     // gated on {@link DealQuotationRenderAdapter#hasSpecialPricing} — it prints ONLY on a
     // quotation that actually has special pricing (a discount, a ราคาพิเศษ, or a ส่วนลดพิเศษ
     // adjustment row). A quotation with no discount anywhere must NOT print it, even in DATE mode.
 
-    /** DIRECT_NET with net {@code <} list price (rule b) — the exact case the owner's example
+    /** DIRECT_NET with net {@code <} list price (rule b) — the exact case the reference
      * wording describes. Bank layout: DATE mode replaces "4.Price validity : N days …". */
     @Test
     void remarks_dateModeValidity_directNetWithDiscount_printsSpecialPriceLine_bankLayout() throws Exception {
@@ -675,17 +671,16 @@ class DealQuotationEnglishFormTest {
                     block.isEmpty() ? "no" : "with", line).isLessThanOrEqualTo(130);
                 remarks.add(line);
             }
-            // Opus review (2026-09-14): the length-only loop above passes for a blank row too --
-            // pin the actual 8-real-lines guarantee here as well, the same way
-            // #everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts's DAYS-mode sibling
-            // does not need to (that one is covered by #remarks_daysModeValidity_isUnchanged, but
-            // this DATE-mode fixture had no equivalent non-blank assertion until now).
+            // The length-only loop above passes for a blank row too -- pin the actual
+            // 8-real-lines guarantee here as well. The DAYS-mode sibling of
+            // #everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts does not need this
+            // (#remarks_daysModeValidity_isUnchanged covers it).
             assertThat(remarks).as("%s block", block.isEmpty() ? "no" : "with")
                 .hasSize(8).allMatch(l -> !l.isBlank());
         }
     }
 
-    /** Thai twin — DIRECT_NET with net {@code <} list price, remark 7's DATE variant, the owner's
+    /** Thai twin — DIRECT_NET with net {@code <} list price, remark 7's DATE variant, the
      * wording verbatim. */
     @Test
     void remarks_dateModeValidity_directNetWithDiscount_printsSpecialPriceLine_thai() throws Exception {
@@ -694,7 +689,7 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.PRICE_MODE_DIRECT_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
         Sheet sheet = render(q);
         // Thai never carries a bank block, so remark 7 is always index 6 -> row 23 + 6 = 29.
-        // Owner wording, verbatim: exactly ONE ASCII space between "วันที่" and the date.
+        // Wording verbatim: exactly ONE ASCII space between "วันที่" and the date.
         assertThat(str(sheet, 29, 1))
             .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
     }
@@ -739,14 +734,14 @@ class DealQuotationEnglishFormTest {
             .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
     }
 
-    // ── owner feedback (2026-09-14) x V178: DATE-mode validity AND no lead time TOGETHER ──────
+    // ── DATE-mode validity AND no lead time TOGETHER ──────────────────────────────────────
     //
     // The DATE variant (gated on hasSpecialPricing) and the lead-time-line drop (gated on
     // hasAnyLeadTime) are independent decisions computed from different data -- an ADJUSTMENT row
     // satisfies rule (e) of hasSpecialPricing on its own, and carries no lead-time fields at all --
     // DealQuotationService#buildAdjustmentItem always nulls originCountry/leadTimeMinDays/
-    // leadTimeMaxDays regardless of what the input carries (unlike a PLAIN row's OPTIONAL lead time
-    // since D1 -- see #plainRowWithLeadTime) -- so an ADJUSTMENT-only document exercises DATE mode
+    // leadTimeMaxDays regardless of what the input carries (unlike a PLAIN row's OPTIONAL lead
+    // time -- see #plainRowWithLeadTime) -- so an ADJUSTMENT-only document exercises DATE mode
     // with hasAnyLeadTime=false. Both must compose correctly: the
     // line-drop-and-renumber must not disturb the DATE text, and the DATE text must survive being
     // renumbered down by one.
@@ -797,15 +792,14 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * V182 (owner request, 2026-09-16): an all-PLAIN China→Maldives document (QN6900902-6) has NO
-     * TILE line at all, so it now takes the NON-TILE remark set (see {@code
+     * An all-PLAIN China→Maldives document (QN6900902-6) has NO
+     * TILE line at all, so it takes the NON-TILE remark set (see {@code
      * DealQuotationRenderAdapter#englishNonTileRemarkLines}) rather than the tile-oriented 7/8-line
-     * one this test used to pin. Neither {@code plainRow} carries a lead time, so the set's own
+     * one. Neither {@code plainRow} carries a lead time, so the set's own
      * lead-time line drops too, shrinking it further — 3 lines with no bank block, 6 with it (the
      * block always costs 3 unnumbered lines, never a numbered slot).
      *
-     * <p>This test used to prove the OLD tile-remarks lead-time-drop-and-renumber path on an
-     * all-PLAIN document; it now proves the non-tile set replaces that path entirely for exactly
+     * <p>The non-tile set replaces the tile-remarks lead-time-drop-and-renumber path entirely for
      * this kind of document — see {@code remarks_anAllPlainDocument_keepsTheTileSet_whenATileLineIsPresent}
      * just below for the wrong-way-round guard (a MIXED document keeps the tile set unchanged).
      */
@@ -845,21 +839,19 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * Wrong-way-round guard for V182: a MIXED document (one genuine tile line alongside a PLAIN
-     * one) still has a tile line, so it keeps the OLD 7/8-line tile-oriented remark set —
+     * Wrong-way-round guard: a MIXED document (one genuine tile line alongside a PLAIN
+     * one) still has a tile line, so it keeps the 7/8-line tile-oriented remark set —
      * byte-for-byte, per {@code DealQuotationRenderAdapter#hasAnyTileLine}. Uses the SAME two
      * items as {@link #remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts} plus one tile,
      * so the only variable between the two tests is whether a tile line is present at all.
      *
-     * <p>D4 (review, 2026-09-15): also carries the country/stock-wording guard that used to live on
-     * {@code remarks_anAllPlainDocument_dropsTheDeliveryLineEntirely_inBothLayouts} (this test's own
-     * pre-V182 ancestor) — the 2026-09-11 owner-feedback reversal means the TILE remark set must
-     * never print "Italy"/"China"/"Thailand" wording again, and V182's rewrite of that ancestor test
-     * (into {@code remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts}, which now takes
-     * the NON-TILE path and never reaches this constant at all) dropped the assertion with nothing
-     * left asserting it anywhere. This is the ONE remaining test that still exercises the TILE
+     * <p>Also carries the country/stock-wording guard: the TILE remark set must
+     * never print "Italy"/"China"/"Thailand" wording. The all-PLAIN test
+     * ({@code remarks_anAllPlainDocument_printsTheNonTileSet_inBothLayouts}) takes
+     * the NON-TILE path and never reaches that constant, so this is the ONE
+     * test that still exercises the TILE
      * remark set's own English lead-time fallback ({@code EN_LINE3_FALLBACK}) on a document with no
-     * lead time, so the guard belongs here now.
+     * lead time, so the guard belongs here.
      */
     @Test
     void remarks_aMixedDocument_keepsTheTileRemarkSet_unchanged() throws Exception {
@@ -870,7 +862,7 @@ class DealQuotationEnglishFormTest {
         assertThat(model.remarkLines().get(2)).startsWith("3.Payment by telegraphic transfer");
         assertThat(model.remarkLines().get(5)).startsWith("6.Colours and patterns");
         assertThat(model.remarkLines().get(6)).startsWith("7.Goods sold");
-        // D4: the country/stock-wording guard restored — see this test's own Javadoc. Item 2's OWN
+        // Country/stock-wording guard — see this test's own Javadoc. Item 2's OWN
         // description ("Freight China to Male") legitimately contains "China"; that string lives in
         // model.remarkLines(), never in the item description, so it cannot false-positive here.
         assertThat(String.join("\n", model.remarkLines()))
@@ -912,16 +904,16 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * V182: a PLAIN-only document whose rows DO carry a lead time — reachable since D1 wired an
-     * OPTIONAL ระยะเวลานำเข้า input onto {@code QuotationPlainItemRow} (see
+     * A PLAIN-only document whose rows DO carry a lead time — reachable through the OPTIONAL
+     * ระยะเวลานำเข้า input on {@code QuotationPlainItemRow} (see
      * {@link #plainRowWithLeadTime}'s own comment) — prints the full FOUR-line non-tile set, not
      * the three-line dropped one. {@code DealQuotationRenderAdapter#leadTimeGroups} reads the
      * field off ANY item regardless of {@code lineType}, which is what lets this fixture exercise
      * the path directly at the render-adapter layer.
      *
-     * <p>Owner ruling (review of V182, 2026-09-16): both rows share the SAME (30, 45) range and are
+     * <p>Both rows share the SAME (30, 45) range and are
      * consecutive (seq 1, 2), so they group into ONE "รายการที่ 1-2" span — the ALWAYS-per-item form
-     * (owner feedback #7) rather than a bare "30-45 วัน", even though every item here agrees.
+     * rather than a bare "30-45 วัน", even though every item here agrees.
      */
     @Test
     void remarks_aPlainOnlyThaiDocumentWithLeadTime_printsAllFourNonTileLines() throws Exception {
@@ -945,11 +937,11 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * D2 (Opus review, 2026-09-15): every non-tile test above asserts cell TEXT only, which cannot
-     * catch a geometry regression — the reviewer mutated {@code QuotationRenderer#compactRemarksSection}'s
+     * Every non-tile test above asserts cell TEXT only, which cannot
+     * catch a geometry regression — changing {@code QuotationRenderer#compactRemarksSection}'s
      * closing call from {@code clampToPackedSlots(actualLineCount)} to
-     * {@code Math.max(clampToPackedSlots(actualLineCount), REMARK_V2_MIN_LINES)} and all 213 tests
-     * still passed, while the real render lost the box's bottom rule under line 4 and grew a
+     * {@code Math.max(clampToPackedSlots(actualLineCount), REMARK_V2_MIN_LINES)} keeps them all
+     * green, while the real render loses the box's bottom rule under line 4 and grows a
      * spurious rule under รวมเป็นเงินทั้งสิ้น. This pins the box's closing bottom rule on the ACTUAL
      * last packed row for the FOUR-line non-tile case — mirrors
      * {@code DealQuotationRenderAdapterV3Test#leadTime_noItemHasOne_rendererWritesExactlySevenRemarkRows}'s
@@ -974,7 +966,7 @@ class DealQuotationEnglishFormTest {
             .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
     }
 
-    /** D2 twin: the THREE-line case (lead time dropped, no lead time on any row). */
+    /** Twin of the above: the THREE-line case (lead time dropped, no lead time on any row). */
     @Test
     void remarks_nonTileThreeLine_boxClosesOnTheActualLastRow_notAHardcodedMinimum() throws Exception {
         DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
@@ -1037,14 +1029,12 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * Owner ruling (review of V182, 2026-09-16, answering the reviewer's own recommendation
-     * question): a non-tile document with genuinely mixed lead times must use the SAME per-item
+     * A non-tile document with genuinely mixed lead times must use the SAME per-item
      * grouping the tile set's own remark 3 uses (see {@code
      * DealQuotationRenderAdapterV3Test#leadTime_differentRangesStaySeparateGroups}) — NOT a
-     * min-of-mins/max-of-maxes envelope, which this test used to assert (and which this class's own
-     * {@code nonTileLeadTimeLine} used to compute via the now-deleted {@code nonTileLeadTimeRange}).
+     * min-of-mins/max-of-maxes envelope.
      * An envelope like "20-50 วัน" across two 20-30/40-50 rows could misstate a customer's actual
-     * wait; grouping by item — mirroring the owner's own reference text "รายการที่ 1-2 ประมาณ 75-90
+     * wait; grouping by item — mirroring the reference text "รายการที่ 1-2 ประมาณ 75-90
      * วัน  รายการที่ 3 ประมาณ 30-45 วัน" — cannot.
      *
      * <p>Three items, TWO different ranges: 1-2 share (75, 90) and are consecutive, so they group
@@ -1093,14 +1083,14 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * V182: an ADJUSTMENT-only item list counts as non-tile too — see {@code
+     * An ADJUSTMENT-only item list counts as non-tile too — see {@code
      * DealQuotationRenderAdapter#hasAnyTileLine}'s own Javadoc. An ADJUSTMENT row never carries a
      * lead time, so the set drops to three lines.
      *
-     * <p>Comment correction (review, 2026-09-16): this is NOT a real "credit-note-ish" document a
-     * rep can actually save — {@code DealQuotationService#buildItems} refuses both an empty item
+     * <p>This is NOT a real "credit-note-ish" document a rep can actually save —
+     * {@code DealQuotationService#buildItems} refuses both an empty item
      * list and an all-ADJUSTMENT one before either is ever written (see its own Javadoc). Kept
-     * anyway as a cheap guard on the render adapter's OWN logic: {@code toRenderModel} is a pure
+     * as a cheap guard on the render adapter's OWN logic: {@code toRenderModel} is a pure
      * function with no access to the service's save-time rules, so it must still answer
      * sensibly (never throw, never misclassify) if it is ever handed a list shaped like this one —
      * by a future caller, a test, or a re-render of data the current rules would no longer accept.
@@ -1115,7 +1105,7 @@ class DealQuotationEnglishFormTest {
             "3.ทางบริษัทฯ ไม่รับเปลี่ยนหรือคืนสินค้า กรุณาตรวจสอบ ความถูกต้องก่อนสั่งซื้อหรือลงชื่อรับสินค้า");
     }
 
-    /** B1 must be the owner's own spelling from her F-SM-008 form, not the older "&amp; R." one. */
+    /** B1 must use the spelling from the F-SM-008 form, not the older "&amp; R." one. */
     @Test
     void header_printsTheCompanyNameAsTheOwnersFormSpellsIt() throws Exception {
         Sheet sheet = renderEnglish();
@@ -1123,8 +1113,8 @@ class DealQuotationEnglishFormTest {
     }
 
     /**
-     * B2 runs into the badge image on the right; the old address clipped at "Bangkok 101". Measured
-     * on the rendered PDF (2026-09-11, 300 dpi), the shortened line ends ~4 mm before the badge.
+     * B2 runs into the badge image on the right; a longer address clips at "Bangkok 101". Measured
+     * on the rendered PDF (300 dpi), the shortened line ends ~4 mm before the badge.
      * The RAW cell is pinned, indent included: the leading spaces clear the logo on the left, so a
      * longer indent pushes the same text into the badge just as a longer address would. The length
      * cap is the measured line (27-space indent + 73 characters) — character count stands in for
@@ -1142,7 +1132,7 @@ class DealQuotationEnglishFormTest {
     @Test
     void thaiDocument_neverCarriesTheBankBlock_evenWhenConfigured() throws Exception {
         // The Thai หมายเหตุ block has no bank lines and must not grow them: its eight lines are the
-        // template's own, and the owner's Thai documents carry payment terms without account details.
+        // template's own, and the Thai documents carry payment terms without account details.
         Sheet sheet = renderLegacyModel(
             DealQuotationRenderAdapter.toRenderModel(thaiQuotation(), null, null, BANK_BLOCK));
         for (int r = 23; r <= 30; r++) {
@@ -1152,7 +1142,7 @@ class DealQuotationEnglishFormTest {
 
     // ── fixtures ───────────────────────────────────────────────────────────────────────────
 
-    /** The owner's own bank block, verbatim from QN6900902-6 and QN6900933 (they agree). */
+    /** The bank block, verbatim from QN6900902-6 and QN6900933 (they agree). */
     private static final List<String> BANK_BLOCK = List.of(
         "Please arrange payment to the following bank account. Bank Name : Kasikorn Bank Public Company Limited",
         "Beneficiary name : G.L.& R. Taps and Tiles Co., Ltd. Beneficiary account number : 003-92-1222-6 Saving Account",
@@ -1347,7 +1337,7 @@ class DealQuotationEnglishFormTest {
     }
 
     /** Same as {@link #withValidity}, plus an explicit {@code priceMode} — remark 7's DATE variant
-     * must print regardless of price mode (owner ruling: not gated on NET/SPECIAL_SQM/DIRECT_NET,
+     * must print regardless of price mode (not gated on NET/SPECIAL_SQM/DIRECT_NET,
      * on any item discount, or on an adjustment row existing). */
     private DealQuotationDto withPriceModeAndValidity(DealQuotationDto q, String priceMode,
                                                        String validityMode, LocalDate validityUntil) {
@@ -1366,8 +1356,8 @@ class DealQuotationEnglishFormTest {
     }
 
     /** A PLAIN row: description, 1 lot at 500.00, no lead time — the ordinary case (a rep who
-     * leaves ระยะเวลานำเข้า blank), still the common one even after D1 wired an OPTIONAL lead-time
-     * input onto QuotationPlainItemRow (see {@link #plainRowWithLeadTime} for the other case). */
+     * leaves ระยะเวลานำเข้า blank), still the common one although QuotationPlainItemRow has an
+     * OPTIONAL lead-time input (see {@link #plainRowWithLeadTime} for the other case). */
     private DealQuotationItemDto plainRow(int seq, String description) {
         return new DealQuotationItemDto((long) seq, seq,
             null, null, null, null, null, null, null, null,     // location … size text
@@ -1380,15 +1370,13 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.LINE_TYPE_PLAIN, BigDecimal.ONE, "lot", null, null, null, null, null);
     }
 
-    /** V182 fixture — a PLAIN row that DOES carry a lead time (สินค้า/บริการอื่น — sanitaryware
-     * sold on ชุด, an owner example being QN6900971-4's own "ระยะเวลานำเข้า 75-90 วัน" row).
+    /** Fixture — a PLAIN row that DOES carry a lead time (สินค้า/บริการอื่น — sanitaryware
+     * sold on ชุด, e.g. QN6900971-4's "ระยะเวลานำเข้า 75-90 วัน" row).
      *
-     * <p>D1 correction (review, 2026-09-16): this Javadoc used to say a real PLAIN row can never
-     * carry a lead time — that was true only because {@code QuotationPlainItemRow} had no input
-     * for it; the field itself always lived on {@code DealQuotationItemDto} (shared with the TILE
-     * row) and {@code DealQuotationService#buildPlainItem} always forwarded it. Now that the editor
-     * has the control, this fixture is a faithful stand-in for a real saved row rather than an
-     * unreachable one — see {@code DealQuotationIntegrationTest#plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks}
+     * <p>A real PLAIN row can carry a lead time: the field lives on {@code DealQuotationItemDto}
+     * (shared with the TILE row), {@code DealQuotationService#buildPlainItem} forwards it, and the
+     * editor has the control, so this fixture is a faithful stand-in for a real saved row — see
+     * {@code DealQuotationIntegrationTest#plainRow_optionalLeadTime_reachesTheSavedItem_andPrintsInTheNonTileRemarks}
      * for the same shape proven through the real {@code ItemInput} → service → render path. Kept as
      * a direct-DTO fixture here (rather than going through the service in every test in this file)
      * because {@code DealQuotationRenderAdapter#leadTimeGroups} reads the field off ANY item
@@ -1478,9 +1466,8 @@ class DealQuotationEnglishFormTest {
             new BigDecimal("2.78"), 10, 10, 10, 10, new BigDecimal("100.00"), new BigDecimal("1000.00"),
             "Tile Model A", "Size 60x60x2 cm.", "(10 pcs.)",
             // Trailing args are lineType, quantity, unit, specialPriceSqm, adjustmentPct,
-            // adjustmentDeadline, specialPriceLine, adjustmentAmount. The last one arrived with
-            // #925's F2 fix (a flat adjustment had no DTO field, so a GET→PUT round-trip of one
-            // was a hard 400) and is null on a TILE row.
+            // adjustmentDeadline, specialPriceLine, adjustmentAmount. adjustmentAmount carries a
+            // flat adjustment so a GET→PUT round-trip of one is not a 400; it is null on a TILE row.
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 

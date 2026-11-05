@@ -11,12 +11,9 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { FormField, fieldErrorId } from '../../components/common/FormField.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
-// Shared with HolidaysTab's identical "ดึงข้อมูลจาก ธปท." cooldown affordance -- both
-// BotFxFetchService and BotHolidayFetchService throw the same "...(ประมาณ N วินาที)" 429 shape
-// (see BotFxFetchService.MANUAL_FETCH_COOLDOWN's review-fix javadoc), so this pure helper is
-// reused across features rather than duplicated. Kept as a direct cross-feature import rather than
-// moved to a shared location -- it is dependency-free (no React, no feature-specific imports) and
-// re-exporting it would be a bigger diff than this one import line.
+// Shared with HolidaysTab's identical "ดึงข้อมูลจาก ธปท." cooldown affordance: BotFxFetchService
+// and BotHolidayFetchService throw the same "...(ประมาณ N วินาที)" 429 shape, so this
+// dependency-free helper is reused across features rather than duplicated or moved.
 import { parseCooldownSeconds } from '../attendanceCalendar/holidayFetch.js';
 
 function pctDisplay(val) {
@@ -27,7 +24,7 @@ function moneyDisplay(val) {
   return val != null ? Number(val).toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-';
 }
 
-// BRANCH 1 pricing-formula-config helpers. multiplierDisplay is for the RAW MULTIPLIER fields
+// Pricing-formula-config helpers. multiplierDisplay is for the RAW MULTIPLIER fields
 // (insuranceValueFactor/insuranceRate/the three buffers) -- these are NOT percentages, so unlike
 // pctDisplay above they must never be scaled by 100. Kept as a visually distinct helper on
 // purpose, so a future edit can't accidentally reuse pctDisplay on a multiplier field.
@@ -47,25 +44,19 @@ function thicknessBandLabel(min, max) {
   return `${min} – <${max} มม.`;
 }
 
-// UX-03 slice 3: every pricing input must be a real, non-negative number.
-// Before this, an empty field silently became Number('') === 0 on save —
-// a blank freight/margin field would zero out that input and under-price
-// every deal for the country, with no warning. Do not weaken this to allow
-// blank values; do not change the >= 0 bound without an explicit pricing
-// decision.
+// Every pricing input must be a real, non-negative number: an empty field would silently become
+// Number('') === 0 on save, zeroing that input and under-pricing every deal for the country. Do
+// not weaken this to allow blank values; do not change the >= 0 bound without an explicit
+// pricing decision.
 const numberFieldSchema = z
   .string()
   .refine((value) => value !== '' && !Number.isNaN(Number(value)) && Number(value) >= 0, 'กรุณากรอกตัวเลขที่ถูกต้อง (ตั้งแต่ 0 ขึ้นไป)');
 
-// BRANCH 1: a percent-displayed field (defaultMarginPct, dutyPct) additionally cannot exceed
+// A percent-displayed field (defaultMarginPct, dutyPct) additionally cannot exceed
 // 100% -- the backend stores these as a 0..1 fraction, so an edited display value above 100 can
 // never round-trip back into a valid fraction.
 const percentFieldSchema = numberFieldSchema.refine((value) => Number(value) <= 100, 'กรอกได้ไม่เกิน 100%');
 
-// positiveNumberFieldSchema (used only by sellingPriceRoundUpTo) is REMOVED along with that
-// field from FORMULA_SCALAR_FIELDS below (owner ruling 2026-09-19, Phase 2 CEO pricing) -- the
-// selling-price formula no longer rounds up to it at all, so there is nothing left to validate
-// as "strictly positive" here.
 
 const configFormSchema = z.object({
   freightPerSqm: numberFieldSchema,
@@ -85,10 +76,9 @@ const CONFIG_FIELDS = [
   { key: 'marginPct', label: 'อัตรากำไร (%)', suffix: '%' },
 ];
 
-// UX-08: real dialog (role="dialog", aria-modal, focus trap, Escape,
-// focus-restore) via the shared Modal, instead of the old hand-rolled
-// position:fixed overlay. Form state now lives here (react-hook-form +
-// zod), separate from CeoSettingsPage so the parent only owns the mutation.
+// Real dialog (role="dialog", aria-modal, focus trap, Escape, focus-restore) via the shared
+// Modal. Form state lives here (react-hook-form + zod), separate from CeoSettingsPage so the
+// parent only owns the mutation.
 function ConfigEditModal({ config, saving, onClose, onSubmit }) {
   const {
     register,
@@ -171,20 +161,15 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
 }
 
 // ---------------------------------------------------------------------------
-// The "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel (V153 thickness defaults) stood here until
-// 2026-09-17, removed on request. IMPORTANT: this was a FRONTEND-ONLY removal, not a data-model
-// one — the backend table (price_catalog.collection_thickness_default), ThicknessDefaultController
-// (GET/PUT /api/catalog/thickness-defaults), and the pricing engine's dependency on it via
-// price_catalog.v_priceable_product's COALESCE(p.thickness_mm, d.thickness_mm) are all still live
-// and unchanged. Existing thickness-default rows keep working exactly as before; there is simply
-// no CEO-facing UI here to add/edit more of them. See V153__catalog_priceable_basis.sql and
-// ThicknessResolutionReachesTheEngineIntegrationTest for why that engine dependency is real and
-// was deliberately left alone rather than removed alongside this UI.
+// Thickness defaults (price_catalog.collection_thickness_default, ThicknessDefaultController, and
+// the pricing engine's COALESCE(p.thickness_mm, d.thickness_mm) in
+// price_catalog.v_priceable_product) have no CEO-facing UI here, but the data and the engine
+// dependency are live: existing rows keep working. See V153__catalog_priceable_basis.sql and
+// ThicknessResolutionReachesTheEngineIntegrationTest.
 // ---------------------------------------------------------------------------
-// BRANCH 1 of the sales pricing-formula redesign: config storage + CEO editing UI only.
-// This section edits sales.pricing_formula_config + its 3 child tables (freight/duty/clearance)
-// via /api/pricing-formula-config. It does NOT calculate a selling price -- that is later
-// branches, built on top of this config. See V109__pricing_formula_config.sql for the formula.
+// Pricing formula: this section edits sales.pricing_formula_config + its 3 child tables
+// (freight/duty/clearance) via /api/pricing-formula-config. It does NOT calculate a selling
+// price. See V109__pricing_formula_config.sql for the formula.
 // ---------------------------------------------------------------------------
 
 // Scalar fields on the parent config row. `isPercent: true` is the ONLY thing that triggers the
@@ -197,12 +182,10 @@ const FORMULA_SCALAR_FIELDS = [
   { key: 'costBuffer', label: 'บัฟเฟอร์ต้นทุนรวม (B2)', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.07) — ไม่ใช่ VAT, ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'sellingBuffer', label: 'บัฟเฟอร์ราคาขาย (B3)', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.07) — ไม่ใช่ VAT, ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'defaultMarginPct', label: 'อัตรากำไรเริ่มต้น', hint: '% (เก็บในระบบเป็นเศษส่วน)', schema: percentFieldSchema, isPercent: true },
-  // sellingPriceRoundUpTo REMOVED from this list (owner ruling 2026-09-19, Phase 2 CEO pricing):
-  // the selling-price formula no longer rounds up to this multiple at all -- it rounds HALF_UP
-  // to 2dp instead (PricingFormulaEngine#sellingPrice). The column itself is untouched in the DB
-  // (no migration) and the CEO can no longer edit or see a figure that has stopped doing
-  // anything, which would only invite the question "why isn't my price a multiple of this any
-  // more". See the read-only summary table below, which drops the same field for the same reason.
+  // sellingPriceRoundUpTo is not in this list: the selling-price formula rounds HALF_UP to 2dp
+  // (PricingFormulaEngine#sellingPrice) and no longer uses it, so the CEO can no longer edit or
+  // see a figure that has stopped doing anything. The column is untouched in the DB. The
+  // read-only summary table below drops the same field.
 ];
 
 const dutyRateRowSchema = z.object({
@@ -297,13 +280,9 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
       const raw = Number(values[field.key]);
       payload[field.key] = field.isPercent ? raw / 100 : raw;
     });
-    // sellingPriceRoundUpTo (owner ruling 2026-09-19, Phase 2 CEO pricing): removed from
-    // FORMULA_SCALAR_FIELDS above, so it is no longer editable or even shown -- but
-    // UpdatePricingFormulaConfigRequest on the backend still declares it @NotNull (the column
-    // and its request field are DELIBERATELY untouched, no migration), so the save would 400 with
-    // a missing-field error if this payload dropped it. Pass the CONFIG's existing (frozen)
-    // value straight through unedited -- the CEO can no longer change it, but a save of every
-    // OTHER field must not accidentally null out a column the backend still requires non-null.
+    // sellingPriceRoundUpTo is no longer editable or shown, but UpdatePricingFormulaConfigRequest
+    // still declares it @NotNull, so the save would 400 if this payload dropped it. Pass the
+    // CONFIG's existing (frozen) value through unedited.
     payload.sellingPriceRoundUpTo = Number(config.sellingPriceRoundUpTo);
     payload.freightRates = config.freightRates.map((rate) => ({
       originCountryCode: rate.originCountryCode,
@@ -481,15 +460,14 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
   );
 }
 
-// ── Freight-row add (issue #436, PR #455) ───────────────────────────────────────────────────────
+// ── Freight-row add ───────────────────────────────────────────────────────
 // Lives on the READ-ONLY matrix panel, not FormulaConfigEditModal above — every freight add/delete
 // reissues EVERY freightRateId (a whole new config version), and that modal's own fields are named
 // `freight_${rate.freightRateId}`. Opening the amount-edit modal at the same moment a freightRateId
 // changes underneath it would silently orphan its form state.
 const addFreightRateSchema = z.object({
-  // ISO 3166-1 alpha-2, chosen from price_catalog.country rather than typed. V151 replaced the
-  // free-text column: it never matched price_catalog.factories.country, so every freight lookup
-  // returned nothing. A typo here would silently reintroduce exactly that.
+  // ISO 3166-1 alpha-2, chosen from price_catalog.country rather than typed: a free-text value
+  // never matched price_catalog.factories.country, so every freight lookup returned nothing.
   originCountryCode: z.string().trim().length(2, 'กรุณาเลือกประเทศต้นทาง'),
   thicknessMinMm: numberFieldSchema,
   thicknessMaxMm: numberFieldSchema,
@@ -637,7 +615,7 @@ function AddFreightRateModal({ prefill, availableCountries, saving, onClose, onS
 }
 
 /**
- * Issue #436: freight-row delete confirmation. Deliberately does NOT compute deletability
+ * Freight-row delete confirmation. Deliberately does NOT compute deletability
  * client-side — "only the top or bottom band of a ladder can be removed" lives in
  * validateRemovalLeavesNoInteriorGap (mirrored in mockApi.js from
  * PricingFormulaConfigController), and reimplementing it here would be a second, unguarded
@@ -669,35 +647,23 @@ function DeleteFreightRateModal({ rate, deleting, onClose, onConfirm }) {
   );
 }
 
-// P0 fix follow-up (2026-09): FxResolver no longer requires source === 'BOT', so a non-THB rate's
-// ONLY remaining refusal-by-age path is staleness. This constant mirrors
-// `FxResolver.MAX_RATE_AGE_DAYS` (backend/src/main/java/th/co/glr/hr/pricing/FxResolver.java) so
-// the CEO can see, on THIS page, which rows will 422 before ever clicking "เริ่มพิจารณาราคาขาย" /
-// "คำนวณต้นทุนใหม่" on a pricing request. Per CLAUDE.md's own note on mock-constant drift, nothing
-// automatically fails if these two numbers diverge — there is no shared source and no test spanning
-// both languages — so keep them in sync by hand if FxResolver's value ever changes.
+// FxResolver no longer requires source === 'BOT', so a non-THB rate's ONLY refusal-by-age path is
+// staleness. Mirrors `FxResolver.MAX_RATE_AGE_DAYS` (backend/.../pricing/FxResolver.java) so the
+// CEO can see, on THIS page, which rows will 422 before clicking "เริ่มพิจารณาราคาขาย" /
+// "คำนวณต้นทุนใหม่". Nothing fails if the two numbers diverge (no shared source, no
+// cross-language test), so keep them in sync by hand.
 const FX_RATE_MAX_AGE_DAYS = 7;
 
-// Mirrors FxResolver.resolve()'s own comparison exactly:
-// `rate.effectiveDate().isBefore(LocalDate.now().minusDays(MAX_RATE_AGE_DAYS))` — i.e. STRICTLY
-// more than FX_RATE_MAX_AGE_DAYS days old. A rate dated exactly on the boundary is still accepted
-// (isBefore is false when the dates are equal), so this stays a strict `>`, never `>=`. Both dates
-// are normalized to UTC midnight before differencing — NOT because a browser in a negative UTC
-// offset could otherwise misread "today" (browser-local walltime plays no part here at all:
-// `new Date().toISOString()` is always UTC, regardless of the viewer's timezone). The real reason
-// is what this mirrors: FxResolver#resolve compares against the BACKEND's `LocalDate.now()`, which
-// runs in the JVM's default time zone, and this server runs in UTC — no `TZ` is set in
-// render.yaml or backend/Dockerfile, and EmployeeService:29 states outright that "now" for the
-// server itself is UTC (Bangkok is only the business zone payroll/leave/OT explicitly convert
-// into, never the server's own default). Normalizing to UTC here is what keeps this badge's
-// "today" matching the backend's.
+// Mirrors FxResolver.resolve()'s comparison exactly: `rate.effectiveDate().isBefore(
+// LocalDate.now().minusDays(MAX_RATE_AGE_DAYS))`, i.e. STRICTLY more than FX_RATE_MAX_AGE_DAYS
+// days old (a rate exactly on the boundary is still accepted), so this stays a strict `>`, never
+// `>=`. Both dates are normalized to UTC midnight because FxResolver compares against the
+// BACKEND's `LocalDate.now()`, which runs in the JVM's default zone, and the server runs in UTC
+// (no `TZ` in render.yaml or backend/Dockerfile; EmployeeService:29 states it).
 //
-// Consequence worth knowing: if the container ever gets `TZ=Asia/Bangkok`, this badge would
-// UNDER-report staleness by one day during 00:00–07:00 ICT — Bangkok's calendar day rolls over 7
-// hours before UTC's does, so the backend's `LocalDate.now()` would already be a day ahead of what
-// this UTC-based badge computes in that window. This badge is advisory only, for the CEO's benefit
-// before they click through; FxResolver's own staleness gate on the backend is authoritative
-// regardless of what this badge shows.
+// If the container ever gets `TZ=Asia/Bangkok`, this badge would UNDER-report staleness by one
+// day during 00:00–07:00 ICT. It is advisory only; FxResolver's staleness gate on the backend is
+// authoritative.
 function isFxRateStale(effectiveDate) {
   if (!effectiveDate) return false;
   const effectiveMs = Date.parse(`${effectiveDate}T00:00:00Z`);
@@ -719,13 +685,13 @@ export function CeoSettingsPage({ showToast }) {
   // Config edit modal state
   const [editingConfig, setEditingConfig] = useState(null);  // PriceCalcConfigDto or null
 
-  // BRANCH 1: pricing-formula-config edit modal state
+  // pricing-formula-config edit modal state
   const [editingFormulaConfig, setEditingFormulaConfig] = useState(false);
 
-  // Issue #436: freight-row add. null = closed; an object (possibly {}) = open, with the object's
+  // Freight-row add. null = closed; an object (possibly {}) = open, with the object's
   // fields prefilling the form when opened from a specific blank cell.
   const [addFreightPrefill, setAddFreightPrefill] = useState(null);
-  // Issue #436: freight-row delete confirmation. null = closed; the freight row object = open.
+  // Freight-row delete confirmation. null = closed; the freight row object = open.
   const [deletingFreightRate, setDeletingFreightRate] = useState(null);
 
   const fxRatesQuery = useQuery({
@@ -740,7 +706,7 @@ export function CeoSettingsPage({ showToast }) {
   });
   const configs = configsQuery.data ?? [];
 
-  // BRANCH 1: kept as its own query, deliberately NOT folded into `loading` below -- a slow or
+  // Kept as its own query, deliberately NOT folded into `loading` below -- a slow or
   // failed /api/pricing-formula-config must not block the pre-existing FX/price-calc sections.
   const formulaConfigQuery = useQuery({
     queryKey: queryKeys.pricingFormulaConfig(),
@@ -770,13 +736,11 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  // S1 (review fix, 2026-09-28): BOT publishes DAILY_AVG_EXG_RATE late in the day, so
-  // updated === 0 is the DOMINANT case for a fetch run any time before then, and is also what an
-  // invalid/expired token looks like -- never a green "success" toast for a 0/N no-op. Mirrors
-  // HolidaysTab's identical honest-zero-row handling.
-  // B1 (review fix): BotFxFetchService.fetchNow() now enforces a 10-minute manual-fetch cooldown
-  // and throws a 429 while it's active -- handled the same way HolidaysTab handles its own BOT
-  // fetcher's identical cooldown, via the shared parseCooldownSeconds helper.
+  // BOT publishes DAILY_AVG_EXG_RATE late in the day, so updated === 0 is the DOMINANT case for a
+  // fetch run any time before then, and is also what an invalid/expired token looks like: never a
+  // green "success" toast for a 0/N no-op (mirrors HolidaysTab). BotFxFetchService.fetchNow()
+  // enforces a 10-minute manual-fetch cooldown and throws a 429 while it's active, handled like
+  // HolidaysTab via the shared parseCooldownSeconds helper.
   const DEFAULT_FX_COOLDOWN_SECONDS = 600; // matches BotFxFetchService.MANUAL_FETCH_COOLDOWN (10 min)
   const [fxCooldownUntil, setFxCooldownUntil] = useState(null);
   const [fxCooldownMessage, setFxCooldownMessage] = useState('');
@@ -846,7 +810,7 @@ export function CeoSettingsPage({ showToast }) {
   function saveFxRate(currency) {
     const val = editFx[currency];
     if (!val || isNaN(Number(val)) || Number(val) <= 0) {
-      // UX-03: surfaced inline on this row's input (aria-invalid +
+      // Surfaced inline on this row's input (aria-invalid +
       // aria-describedby -> role="alert"), not toast-only.
       setFxErrors((p) => ({ ...p, [currency]: 'กรุณากรอกอัตราแลกเปลี่ยนที่ถูกต้อง' }));
       return;
@@ -869,7 +833,7 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  // BRANCH 1: creates a new pricing_formula_config version (never mutates the current one).
+  // Creates a new pricing_formula_config version (never mutates the current one).
   const saveFormulaConfigMutation = useMutation({
     mutationFn: (payload) => api.pricingFormulaConfig.update(payload),
     onSuccess: () => {
@@ -880,7 +844,7 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  // Issue #436: adds one freight row as a new config version. setQueryData (not
+  // Adds one freight row as a new config version. setQueryData (not
   // invalidateQueries) because the response already IS the whole new config — refetching would
   // just be a race against the same data this response already carries.
   const addFreightRateMutation = useMutation({
@@ -893,7 +857,7 @@ export function CeoSettingsPage({ showToast }) {
     onError: (e) => showToast('error', e.message || 'เพิ่มค่าขนส่งไม่สำเร็จ'),
   });
 
-  // Issue #436: deletes one freight row as a new config version. Remember every freightRateId has
+  // Deletes one freight row as a new config version. Every freightRateId has
   // changed after this — setQueryData (not invalidateQueries), same reasoning as add above.
   const deleteFreightRateMutation = useMutation({
     mutationFn: (freightRateId) => api.pricingFormulaConfig.deleteFreightRate(freightRateId),
@@ -930,17 +894,14 @@ export function CeoSettingsPage({ showToast }) {
           </Button>
         )}
       >
-        {/* P0 fix follow-up (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งาน
-            การดึงอัตราอัตโนมัติ", which implied the CEO had to wait on an admin before costing
-            would work at all. That is no longer true — FxResolver no longer requires source ===
-            'BOT' (see its own class Javadoc), so a "กรอกเอง" rate below is fully usable for
-            costing right now; the daily BOT fetch is only ever a convenience on top of that. */}
+        {/* A "กรอกเอง" rate below is fully usable for costing right now (FxResolver no longer
+            requires source === 'BOT'); the daily BOT fetch is only a convenience on top. */}
         <div className="px-[18px] py-2 text-2xs text-text-muted border-b border-surface-subtle flex flex-wrap gap-x-3 gap-y-1">
           <span>ดึงอัตโนมัติจากธนาคารแห่งประเทศไทยทุกวัน 18:00 (เวลาไทย) เป็นความสะดวกเสริมเท่านั้น</span>
           <span>• อัตราที่กรอกเอง (กรอกเอง) ใช้คำนวณต้นทุนได้ตามปกติทันที ไม่ต้องรอเปิดใช้งานการดึงอัตราอัตโนมัติ</span>
         </div>
         {fxCooldownSecondsLeft > 0 ? (
-          // B1 review fix: BotFxFetchService.MANUAL_FETCH_COOLDOWN 429 -- a timed, non-error state
+          // BotFxFetchService.MANUAL_FETCH_COOLDOWN 429 -- a timed, non-error state
           // (mirrors HolidaysTab's identical cooldown banner for its own BOT fetcher), not a
           // failure toast.
           <div
@@ -1092,9 +1053,8 @@ export function CeoSettingsPage({ showToast }) {
         </div>
       </Panel>
 
-      {/* BRANCH 1: สูตรคำนวณราคาขาย (ดีล) — sales.pricing_formula_config + its 3 child tables.
-          Deliberately below the existing per-country price-calc table above; a distinct config
-          from it and does not touch it. */}
+      {/* สูตรคำนวณราคาขาย (ดีล) — sales.pricing_formula_config + its 3 child tables. Deliberately
+          below the per-country price-calc table above; a distinct config that does not touch it. */}
       <Panel
         flush
         title="สูตรคำนวณราคาขาย (ดีล)"
@@ -1148,10 +1108,8 @@ export function CeoSettingsPage({ showToast }) {
               <p className="m-0 mt-1.5 text-[10px] text-text-muted">
                 B1/B2/B3 และ 1.15/0.0045 เป็นตัวคูณดิบ (ไม่ใช่ % และไม่ใช่ VAT) — VAT 7% แยกคิดตอนออกใบเสนอราคาลูกค้าเสมอ
               </p>
-              {/* Owner ruling 2026-09-19 (Phase 2 CEO pricing): "ปัดราคาขายขึ้นเป็นทวีคูณของ" is
-                  removed from this table -- the selling-price formula rounds HALF_UP to 2dp now,
-                  never up to this multiple, so the CEO can no longer edit or read a figure that
-                  no longer affects anything. The column itself is untouched in the database. */}
+              {/* "ปัดราคาขายขึ้นเป็นทวีคูณของ" is not shown: the selling-price formula rounds HALF_UP
+                  to 2dp and no longer uses that figure. */}
               <p className="m-0 mt-1 text-[10px] text-text-muted">
                 ราคาขายปัดทศนิยม 2 ตำแหน่งแบบปกติ (ไม่ปัดขึ้นเป็นทวีคูณอีกต่อไป)
               </p>
@@ -1277,15 +1235,6 @@ export function CeoSettingsPage({ showToast }) {
         )}
       </Panel>
 
-      {/* The "ตัวคูณราคาตั้งประมาณการ (หน้าสร้างดีล)" panel stood here until 2026-08-10. It set a
-          coarse display multiplier that the deal-create modal applied on top of the raw catalog
-          price to show a "ราคาตั้ง (ประมาณการ)". That estimate was removed on the owner's
-          instruction after UAT — reps read its output as a selling price when the real one only
-          comes out of the pricing-request → CEO costing chain — so this control had nothing left
-          to configure. The deal-create modal now shows the catalog price in its own currency plus
-          a straight FX conversion, with no multiplier anywhere. "สูตรคำนวณราคา" above is
-          untouched: that section IS the margin policy and always was a separate thing. */}
-
       {/* Config Edit Modal */}
       {editingConfig && (
         <ConfigEditModal
@@ -1296,7 +1245,7 @@ export function CeoSettingsPage({ showToast }) {
         />
       )}
 
-      {/* BRANCH 1: Formula Config Edit Modal */}
+      {/* Formula Config Edit Modal */}
       {editingFormulaConfig && formulaConfig && (
         <FormulaConfigEditModal
           config={formulaConfig}
@@ -1306,7 +1255,7 @@ export function CeoSettingsPage({ showToast }) {
         />
       )}
 
-      {/* Issue #436: Add Freight Rate Modal — read-only matrix panel only, see the block comment
+      {/* Add Freight Rate Modal — read-only matrix panel only, see the block comment
           on addFreightRateSchema for why this never lives inside FormulaConfigEditModal. */}
       {addFreightPrefill && (
         <AddFreightRateModal
@@ -1318,7 +1267,7 @@ export function CeoSettingsPage({ showToast }) {
         />
       )}
 
-      {/* Issue #436: Delete Freight Rate confirmation — same read-only-matrix-only placement as
+      {/* Delete Freight Rate confirmation — same read-only-matrix-only placement as
           the add modal above. */}
       {deletingFreightRate && (
         <DeleteFreightRateModal

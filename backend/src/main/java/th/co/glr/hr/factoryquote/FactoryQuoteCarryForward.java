@@ -15,8 +15,8 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
  * Decides whether a customer-change revision may reuse its parent's factory quotes, and performs
  * the copy when it may.
  *
- * <p><strong>Why this exists</strong> (reissue-through-CEO-chain, owner ruling 2026-08-13): every
- * change to an issued quotation's prices or quantities now goes through the full chain, ending in
+ * <p><strong>Why this exists</strong> (reissue-through-CEO-chain): every
+ * change to an issued quotation's prices or quantities goes through the full chain, ending in
  * a fresh CEO decision. Most of those changes are the customer haggling over price with the
  * products and quantities untouched — and making Import re-email the factory for prices nobody
  * disputed is pure delay. When the child's item list is EQUIVALENT to the parent's, the parent's
@@ -135,11 +135,10 @@ public class FactoryQuoteCarryForward {
      * requirement, target delivery date, the free-text note) are deliberately not compared: they
      * are exactly the "commercial terms only" changes this shortcut exists to serve.
      *
-     * <p>V185 (Opus review finding #4, 2026-09-18): {@code thicknessMm}/{@code productCode}/
-     * {@code originCountry} joined the direct-deal-parity tile fields but were missing from this
-     * comparison — a revision that changed ONLY thickness (or product code, or origin country)
-     * could carry forward a factory quote priced for a different physical product. All three are
-     * compared null-safe (two legacy/pre-V185 rows both null still count as equal).
+     * <p>{@code thicknessMm}/{@code productCode}/{@code originCountry} are compared too —
+     * otherwise a revision that changed ONLY thickness (or product code, or origin country)
+     * would carry forward a factory quote priced for a different physical product. All three are
+     * compared null-safe (two legacy rows both null still count as equal).
      */
     static Map<Long, Long> equivalentItemMapping(List<PricingRequestItemDto> parentItems,
                                                  List<PricingRequestItemDto> childItems) {
@@ -171,7 +170,7 @@ public class FactoryQuoteCarryForward {
             && Objects.equals(a.factory(), b.factory())
             && Objects.equals(a.requestedUnit(), b.requestedUnit())
             && Objects.equals(a.requestedUnitBasis(), b.requestedUnitBasis())
-            // CR-1: the currency / price unit Sales asked the factory to quote in. A factory price is
+            // The currency / price unit Sales asked the factory to quote in. A factory price is
             // only meaningful in those terms, so a revision that changes just these must not carry
             // the old quotes forward as ready.
             && Objects.equals(a.requestedCurrency(), b.requestedCurrency())
@@ -179,10 +178,9 @@ public class FactoryQuoteCarryForward {
             && Objects.equals(a.quantityType(), b.quantityType())
             && Objects.equals(a.productCode(), b.productCode())
             && Objects.equals(a.originCountry(), b.originCountry())
-            // Second review pass, finding N3: originCountryOther (GLA-125's typed name under the
-            // "อื่นๆ" sentinel) is a genuinely different product-identity fact from originCountry
-            // itself — two "อื่นๆ" rows naming different countries are not the same order, and
-            // this comparison used to let that difference through silently.
+            // originCountryOther (the typed name under the "อื่นๆ" sentinel) is a genuinely
+            // different product-identity fact from originCountry itself — two "อื่นๆ" rows naming
+            // different countries are not the same order, so the difference must not pass silently.
             && Objects.equals(a.originCountryOther(), b.originCountryOther())
             && sameAmount(a.thicknessMm(), b.thicknessMm())
             // compareTo, not equals: BigDecimal.equals("10").equals("10.00") is FALSE (scale is

@@ -12,8 +12,8 @@ import th.co.glr.hr.common.ApiException;
  * ({@code TicketService.SALES_ROLES}, {@code CustomerController}'s hand-written
  * {@code requireAnyRole(..., "sales")}) to also admit {@code sales_manager} and any employee
  * holding the live {@code canCreateQuotation} grant ({@link EmployeeAuthRepository#canCreateQuotation}
- * — {@code hr.employee.can_create_quotation}, active rows only) — e.g. ภิญญดา (employee 144,
- * QC&amp;ISO / role {@code qc}), who needs to create deal quotations without being handed the
+ * — {@code hr.employee.can_create_quotation}, active rows only) — e.g. a QC&amp;ISO
+ * employee with role {@code qc}, who needs to create deal quotations without being handed the
  * {@code sales} or {@code sales_manager} role wholesale.
  *
  * <p><strong>Scope — deliberately narrow.</strong> This is a NEW, separate gate for deal-ENTRY

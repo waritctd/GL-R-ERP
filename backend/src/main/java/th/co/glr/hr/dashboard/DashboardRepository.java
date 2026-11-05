@@ -199,8 +199,8 @@ public class DashboardRepository {
     /**
      * Cash received in the Bangkok calendar month starting {@code monthStart} ([start, next month start) on
      * {@code received_at}, signed by {@link TicketRepository#SIGNED_RECEIPT_SUM}), split by the creator of the
-     * deal each receipt belongs to. The service totals the rows for the month figure. Grouped by creator id, labelled with the creator's name
-     * ({@code ไม่ระบุผู้ขาย} when blank), so two reps with the same name stay separate.
+     * deal each receipt belongs to. The service totals the rows for the month figure. Grouped by creator id,
+     * labelled with the creator's name ({@code ไม่ระบุผู้ขาย} when blank), so two reps with the same name stay separate.
      */
     public java.util.List<CashByRepDto> cashReceivedByRep(LocalDate monthStart) {
         return jdbc.query(
@@ -412,13 +412,12 @@ public class DashboardRepository {
     }
 
     /**
-     * Division scope gets one extra exclusion CEO-approval-reach follow-on (2026-09-01) added:
-     * an employee who reports straight to an active executive has no manager stage at all (see
-     * {@code ManagerApproverRepository}'s rule 3 / {@code OvertimeRepository#findRequests}, which
-     * this badge must agree with -- it links to {@code /overtime}), so a division manager cannot
-     * act on their request and it must not inflate the manager's badge either. This does NOT
-     * reopen the "countOvertime stays division-scoped on purpose" ruling (PR #846): the counter
-     * stays division-scoped, just minus rows with no manager stage in that division.
+     * Division scope gets one extra exclusion: an employee who reports straight to an active
+     * executive has no manager stage at all (see {@code ManagerApproverRepository}'s rule 3 /
+     * {@code OvertimeRepository#findRequests}, which this badge must agree with -- it links to
+     * {@code /overtime}), so a division manager cannot act on their request and it must not
+     * inflate the manager's badge either. The counter stays division-scoped on purpose, just
+     * minus rows with no manager stage in that division.
      *
      * <p>Deliberately scoped to {@code scope.isDivision()} only -- {@code whereEmployeeScope} is
      * shared by every {@code countEmployeeScoped} caller (leave, profile requests, commissions
@@ -426,15 +425,14 @@ public class DashboardRepository {
      * shared helper, or it would incorrectly narrow those unrelated counters as well. hr/ceo's
      * {@code isAll()} scope (both share {@code employeeScope} with {@link #countProfileRequests},
      * which hr genuinely does act on -- see {@link DashboardService#pendingEmployeeScope}) is left
-     * untouched on purpose, but the two roles get there for DIFFERENT reasons and it is worth
-     * knowing which: ceo genuinely can act on a manager-less request directly ({@code
-     * OvertimeService#ceoDirectApprove}), so excluding it would undercount their real queue. hr has
-     * NO overtime-approval reach at all ({@code OvertimeService} has no hr bypass -- see {@code
-     * canReviewOvertime}'s mirror in {@code mockApi.js}); hr's overtime badge has only ever been
-     * informational, matching their {@code VIEW_ALL_ROLES} read-only visibility into the full list,
-     * so this exclusion would not "correct" anything for hr either way -- left alone because
-     * scoping it division-only would be the wrong shape for a badge that was never division-scoped
-     * to begin with, not because hr has a stake in the executive-bypass rule.
+     * untouched on purpose, but the two roles get there for DIFFERENT reasons: ceo genuinely can
+     * act on a manager-less request directly ({@code OvertimeService#ceoDirectApprove}), so
+     * excluding it would undercount their real queue. hr has NO overtime-approval reach at all
+     * ({@code OvertimeService} has no hr bypass -- see {@code canReviewOvertime}'s mirror in
+     * {@code mockApi.js}); hr's overtime badge is informational, matching their
+     * {@code VIEW_ALL_ROLES} read-only visibility into the full list, so this exclusion would not
+     * "correct" anything for hr either way -- it is left alone because scoping it division-only
+     * would be the wrong shape for a badge that was never division-scoped.
      */
     private long countOvertime(DashboardQueryScope scope) {
         String sql = """
@@ -455,22 +453,19 @@ public class DashboardRepository {
      * {@code division_id} -- unlike {@link #countOvertime}, which is genuinely division-scoped
      * because overtime really does route ฝ่าย manager -> CEO. A division can hold far more members
      * than a manager's direct reports, so scoping this counter by division overcounts what
-     * {@code /leave} would actually let that manager act on (PR #846's original defect). Do not
-     * "consolidate" this back onto {@code employeeScope}/division scoping; that IS the bug this
-     * diverges from.
+     * {@code /leave} would actually let that manager act on. Do not "consolidate" this back onto
+     * {@code employeeScope}/division scoping; that would reintroduce the overcount.
      *
      * <p>The scope is intentionally NOT gated behind {@code isDivisionManager} (a position-title
      * match) either -- see {@link DashboardService#leaveScope}'s Javadoc for why that gate was
-     * removed rather than repaired (PR #846 defect D2), why the {@code is_active} guard is required
-     * (defect D3), and why this predicate deliberately includes the caller's OWN requests (defect
-     * D4) even though {@code LeaveRepository#countReviewableSubmitted} -- the reviewer-eligibility
-     * count, a different question -- deliberately excludes them. See
-     * {@link DashboardService#leaveScope} for why ceo still lands in the {@code all()} branch --
-     * that branch is {@code DashboardService}'s OWN {@code HR_APPROVAL_ROLES} constant (still
-     * {@code {"hr"}} only) needing an explicit extra ceo disjunct alongside it, a decision
-     * independent of {@code LeaveService#canReviewAll}. (That method itself is no longer hr-only
-     * either -- {@code REVIEW_ALL_ROLES} gained {@code ceo} on 2026-09-01 -- but this class does not
-     * read from it, so the two facts are unrelated.)
+     * removed rather than repaired, why the {@code is_active} guard is required, and why this
+     * predicate deliberately includes the caller's OWN requests even though
+     * {@code LeaveRepository#countReviewableSubmitted} -- the reviewer-eligibility count, a
+     * different question -- deliberately excludes them. See {@link DashboardService#leaveScope}
+     * for why ceo still lands in the {@code all()} branch -- that branch is
+     * {@code DashboardService}'s OWN {@code HR_APPROVAL_ROLES} constant (still {@code {"hr"}}
+     * only) needing an explicit extra ceo disjunct alongside it, a decision independent of
+     * {@code LeaveService#canReviewAll}, which this class does not read from.
      */
     private long countLeave(DashboardQueryScope scope) {
         return countEmployeeScoped("""

@@ -4,41 +4,28 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 // ─────────────────────────────────────────────────────────────────────────────
 // LEAVE: the quota gate, and the review gate's refusals.
 //
-// TWO THINGS BLOCKED LEAVE COVERAGE, AND ONLY ONE OF THEM WAS THE SEED.
+// Two preconditions make leave testable at all:
 //
-// 1. The seed. Every demo employee had `hire_date IS NULL`, and
-//    LeaveService#employeeAnnualQuota returns ZERO when findHireDate is empty, so VACATION
-//    (annual_quota_days 6.00) and PERSONAL (3.00) prorated to nothing and every request failed
-//    closed on quota. V139__demo_missing_role_personas_and_hire_dates.sql backfills a hire date
-//    three years back, past FULL_SERVICE_MONTHS, so the prorating branch returns the full quota.
+// 1. The seed. Every demo employee needs a hire date: LeaveService#employeeAnnualQuota returns
+//    ZERO when findHireDate is empty, so VACATION (annual_quota_days 6.00) and PERSONAL (3.00)
+//    prorate to nothing and every request fails closed on quota.
+//    V139__demo_missing_role_personas_and_hire_dates.sql backfills a hire date three years back,
+//    past FULL_SERVICE_MONTHS, so the prorating branch returns the full quota.
 //    `submitting VACATION now succeeds` below is the regression guard for that.
 //
-// 2. The service. At authoring time this was the harder blocker, and no seed fix could route
-//    around it: **LeaveService#submit never produced a SUBMITTED request at all.** It read
+// 2. The service. Leave requires approval: a rule-passing LeaveService#submit lands SUBMITTED --
+//    awaiting a human reviewer -- not auto-APPROVED (a rule failure is AUTO_REJECTED), so the
+//    review path is reachable through the API. `submitting VACATION now succeeds` below submits
+//    a fresh request, asserts SUBMITTED (not APPROVED), and cancels it itself so the run leaves
+//    no live row behind.
 //
-//        LeaveStatus status = systemNote == null ? LeaveStatus.APPROVED : LeaveStatus.AUTO_REJECTED;
-//
-//    so a submission was auto-approved or auto-rejected on the spot — there was no pending state
-//    to review, and fixing the hire date only moved VACATION from AUTO_REJECTED to APPROVED; it
-//    did not, and could not, produce anything reviewable. No amount of seed work reached the
-//    review path through the API, because that path was not reachable from #submit by construction.
-//
-//    THIS IS NO LONGER TRUE. Leave requires approval (2026-08-05) changed that line to
-//
-//        LeaveStatus status = systemNote == null ? LeaveStatus.SUBMITTED : LeaveStatus.AUTO_REJECTED;
-//
-//    A rule-passing submission now lands SUBMITTED — awaiting a human reviewer — instead of
-//    auto-APPROVED, so the review path IS reachable through the API. `submitting VACATION now
-//    succeeds` below submits a fresh request, asserts SUBMITTED (not APPROVED), and cancels it
-//    itself so the run leaves no live row behind.
-//
-// WHAT THAT LEAVES TESTABLE, AND WHY IT IS STILL WORTH HAVING.
+// WHAT THIS FILE TESTS, AND WHY IT IS STILL WORTH HAVING.
 //
 // V21 seeds one persistent SUBMITTED row for DEMO-EMP01, and it is singular and consumable:
 // approving or rejecting it would leave every later run with nothing, which is exactly the
 // shared-database trap the other write specs are built to avoid. (The create-then-cancel test
-// below also produces a SUBMITTED row of its own now that #submit can create one on demand — but
-// it retires that row itself before the test ends, so it is never a second persistent one.)
+// below also produces a SUBMITTED row of its own, but it retires that row itself before the test
+// ends, so it is never a second persistent one.)
 // So the REFUSAL and CAPABILITY tests below read V21's row rather than mint their own, and assert
 // the review gate in the two directions that mutate nothing:
 //
@@ -51,25 +38,24 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 //     isDirectManager). Asserting HR sees `canReview: true` where a peer sees `false` therefore
 //     exercises the real gate, without spending the one reviewable row in the database.
 //
-// This is the counterpart to #199: LeaveService.REVIEW_ALL_ROLES is {hr, ceo} (ceo joined
-// 2026-09-01, PR #885) — hr is a leave reviewer while OvertimeService refuses hr an overtime
-// approval outright, two adjacent HR surfaces with opposite answers for the same actor, which is
-// precisely what an approximating mock gets wrong. ceo's leave-reviewer reach is new, INTENDED
-// behaviour, not a divergence to guard against — "ceo can now approve and reject someone else's
-// leave" below pins it with a real mutation, on requests this file mints and retires itself, and
-// the denied-roles loop further down shrank to `['import', 'sales']` accordingly: asserting ceo
-// gets 403 there would now be pinning the OLD rule.
+// LeaveService.REVIEW_ALL_ROLES is {hr, ceo} -- hr is a leave reviewer while OvertimeService
+// refuses hr an overtime approval outright, two adjacent HR surfaces with opposite answers for
+// the same actor, which is precisely what an approximating mock gets wrong. ceo's leave-reviewer
+// reach is INTENDED behaviour, not a divergence to guard against -- "ceo can now approve and
+// reject someone else's leave" below pins it with a real mutation, on requests this file mints
+// and retires itself, and the denied-roles loop further down is `['import', 'sales']`: asserting
+// ceo gets 403 there would pin a rule that no longer exists.
 //
-// STILL NOT FULLY COVERED here: the successful approve → APPROVED transition now has ONE driven
-// case — "ceo can now approve and reject someone else's leave" below, added alongside ceo joining
-// REVIEW_ALL_ROLES. It submits its own request, has ceo approve it, re-reads APPROVED off the
-// server (never the write response), and cancels through HR to give the quota back — then repeats
-// the same shape for reject, on a second request of its own. REJECTED needs no such cleanup: it
-// sits outside ACTIVE_QUOTA_STATUSES, and LeaveService#cancel refuses anything that is not
-// SUBMITTED or APPROVED (409), so a REJECTED row is already inert, the same way a CANCELLED one
-// is. What is NOT built is the GENERAL case — hr approving, or any actor/path other than this
-// one — so the broader submit → approve → reconcile-quota story stays recorded in
-// e2e-real/README.md as a follow-up rather than faked here.
+// STILL NOT FULLY COVERED here: the successful approve → APPROVED transition has ONE driven
+// case -- "ceo can now approve and reject someone else's leave" below. It submits its own
+// request, has ceo approve it, re-reads APPROVED off the server (never the write response), and
+// cancels through HR to give the quota back -- then repeats the same shape for reject, on a
+// second request of its own. REJECTED needs no such cleanup: it sits outside
+// ACTIVE_QUOTA_STATUSES, and LeaveService#cancel refuses anything that is not SUBMITTED or
+// APPROVED (409), so a REJECTED row is already inert, the same way a CANCELLED one is. What is
+// NOT built is the GENERAL case -- hr approving, or any actor/path other than this one -- so the
+// broader submit → approve → reconcile-quota story stays recorded in e2e-real/README.md as a
+// follow-up rather than faked here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const OWNER = 'employee'; // DEMO-EMP01 — the employee V21's SUBMITTED row belongs to.
@@ -93,13 +79,13 @@ function daysFromToday(days) {
  * WHY THIS EXISTS. A leave request whose range contains no working day is rejected 400 by
  * LeaveService#workingDaysBetween ("ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน"), so a single-day
  * request landing on a weekend fails for a reason that has nothing to do with what these tests
- * assert. A FIXED offset lands on a weekend roughly two days in every seven, which made this file
- * fail on a rolling ~2-day-a-week schedule — and the failure moved with the clock, not the code.
+ * assert. A FIXED offset lands on a weekend roughly two days in every seven, so the failure moves
+ * with the clock, not the code.
  *
  * The Bangkok base is what makes that non-obvious: after 17:00 UTC the Bangkok date is already
- * tomorrow, so the same CI job picks a different weekday depending on the hour it happens to run.
- * On 2026-08-11 the runs before 17:00Z chose Fri 25 Sep and passed; the runs after chose Sat 26
- * Sep and failed, with no code change between them. Confirmed against PRs #690, #691 and #692.
+ * tomorrow, so the same CI job picks a different weekday depending on the hour it happens to run
+ * (before 17:00Z it can land on a Friday and pass; after, on a Saturday and fail, with no code
+ * change between them).
  *
  * Weekends only. Public holidays are NOT skipped: they live in hr.holiday, vary by year, and
  * would need an API round-trip to resolve. If this ever fails on a Mon–Fri, check the calendar
@@ -160,10 +146,9 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
   });
 
   test('submitting VACATION now succeeds — the V139 hire-date regression guard', async () => {
-    // Before V139 this returned 400: hire_date was NULL, employeeAnnualQuota returned zero, and
-    // the request failed closed with no quota. It now lands SUBMITTED, which is #submit's normal
-    // outcome for a request that breaks no rule (there IS a SUBMITTED path now — see this file's
-    // header). Cancelled in the finally block below so the run leaves no live row behind even if
+    // With hire_date NULL, employeeAnnualQuota returns zero and the request fails closed with a
+    // 400. With the V139 backfill it lands SUBMITTED, which is #submit's normal outcome for a
+    // request that breaks no rule (see this file's header). Cancelled in the finally block below so the run leaves no live row behind even if
     // an assertion here throws first.
     const day = workingDayFromToday(45);
     const response = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
@@ -174,17 +159,15 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     });
 
     // Read the body BEFORE asserting: on a 400 the assertion below is what fails the test, and
-    // without this the response is discarded unread, which is why no run ever logged why.
+    // without this the response is discarded unread, so nothing would log why.
     const body = await response.text();
 
     expect(
       response.status(),
-      // The message reports the SERVER's reason rather than guessing one. The previous version
-      // asserted "the hire_date backfill is missing and the prorated quota is zero again" — a
-      // single hypothesis stated as fact. When this test began failing for an unrelated reason
-      // (the date landed on a Saturday, see workingDayFromToday), that message sent three separate
-      // investigations after a backfill the CI logs showed had applied correctly. A failure
-      // message that names the wrong cause is worse than one that names none.
+      // The message reports the SERVER's reason rather than guessing one: a guessed cause
+      // ("the hire_date backfill is missing") would misdirect when the real reason is unrelated
+      // (e.g. the date landed on a Saturday, see workingDayFromToday). A failure message that
+      // names the wrong cause is worse than one that names none.
       `POST /api/leave expected 200, got ${response.status()}: ${body}`
     ).toBe(200);
 
@@ -199,7 +182,7 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
         'quota must be non-zero — that is the whole point of the backfill'
       ).toBeGreaterThan(0);
     } finally {
-      // Cancel as HR, NOT as the owner — though both are legal now. LeaveService#cancel lets a
+      // Cancel as HR, NOT as the owner — though both are legal. LeaveService#cancel lets a
       // non-reviewer (the owner) cancel only while still SUBMITTED (`if (!reviewer &&
       // !"SUBMITTED".equals(...)) -> 409`), and #submit leaves this row exactly there, so an
       // owner-issued cancel would succeed too. HR is kept anyway: a REVIEWER's cancel is valid
@@ -207,11 +190,10 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
       // finally block that must clean up whatever state the assertions above left the row in.
       //
       // That cleanup is not cosmetic: VACATION's annual quota is 6.00 days, and CANCELLED is
-      // outside ACTIVE_QUOTA_STATUSES while SUBMITTED (like APPROVED before this branch) is
-      // inside it, so a handful of leaked runs exhausts the quota and every later run fails on a
-      // zero balance for a reason that looks nothing like the cause. Asserted rather than fired
-      // and forgotten, so a future change to the cancel gate surfaces here instead of as a slow
-      // quota leak.
+      // outside ACTIVE_QUOTA_STATUSES while SUBMITTED (like APPROVED) is inside it, so a handful
+      // of leaked runs exhausts the quota and every later run fails on a zero balance for a
+      // reason that looks nothing like the cause. Asserted rather than fired and forgotten, so a
+      // future change to the cancel gate surfaces here instead of as a slow quota leak.
       const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${created.id}/cancel`, {});
       expect(cleanup.status(), 'cleanup cancel must succeed or this spec is not re-runnable').toBe(200);
     }
@@ -226,7 +208,7 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
         'outright (#199)'
     ).toBe(true);
 
-    // ceo joined REVIEW_ALL_ROLES on 2026-09-01 (PR #885) — same flag, same non-mutating read, so
+    // ceo is in REVIEW_ALL_ROLES — same flag, same non-mutating read, so
     // this reads V21's shared row without spending it, exactly like the hr check just above.
     const ceoView = await sessions.ceo.get('/api/leave?status=SUBMITTED');
     expect(ceoView.status()).toBe(200);
@@ -365,9 +347,9 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
   // failure does not hide the others. None of these mutates: a 403 is refused before it writes,
   // and the status is re-read afterwards to prove it.
   //
-  // ceo is deliberately NOT in this list any more: REVIEW_ALL_ROLES gained ceo on 2026-09-01
-  // (PR #885), so asserting 403 for ceo here would pin the OLD rule. Its positive coverage is
-  // the "ceo can now approve and reject someone else's leave" test above.
+  // ceo is deliberately NOT in this list: REVIEW_ALL_ROLES includes ceo, so asserting 403 for
+  // ceo here would be wrong. Its positive coverage is the "ceo can now approve and reject
+  // someone else's leave" test above.
   for (const role of ['import', 'sales']) {
     test(`${role} can neither approve nor reject someone else's leave`, async () => {
       const pending = await seededSubmittedRequest(sessions.hr);

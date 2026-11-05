@@ -88,11 +88,9 @@ function scopeCopy(role, inboxOnly) {
   };
 }
 
-// One-line reason a deal is sitting in `role`'s worklist right now — the
-// per-card emphasis the brief asks for ("account: … the pending money
-// action", "import: lead with the pricing queue"). Presentation only, same
-// spirit as dealInScope in salesViewScope.js but specific enough to this
-// page's cards that it isn't worth exporting from that shared module.
+// One-line reason a deal is sitting in `role`'s worklist right now (per-card emphasis, e.g.
+// account: the pending money action, import: lead with the pricing queue). Presentation only, like
+// dealInScope in salesViewScope.js, but specific to this page's cards.
 function worklistReason(role, deal, catalog = EMPTY_STAGE_CATALOG) {
   if (role === 'account') {
     if (deal.paymentStatus === 'DEPOSIT_NOTICE_ISSUED') return 'รอยืนยันรับมัดจำ';
@@ -187,21 +185,16 @@ function matchesSearch(deal, query) {
   ].filter(Boolean).join(' ').toLowerCase().includes(value);
 }
 
-// ── Manager live pipeline (V83, Slice B1/B2 "kill the weekly report" — handoff
-// 103): the weekly-report replacement for sales_manager/ceo. `deal.stale` (no
-// deal_activity logged in 7 days — computed server/mock-side, see
-// dealTrackingMeta.js's computeStale) is unrelated to the DaysBadge/STALE_DAYS
-// above (days since the STAGE last changed) — this is "has anyone followed up
-// recently", not "how long has this deal sat in its stage".
+// ── Manager live pipeline (sales_manager/ceo) ──
+// `deal.stale` (no deal_activity logged in 7 days; computed server/mock-side, see
+// dealTrackingMeta.js's computeStale) is unrelated to the DaysBadge/STALE_DAYS above (days since
+// the STAGE last changed): "has anyone followed up recently", not "how long in this stage".
 const MANAGER_PIPELINE_ROLES = new Set(['sales_manager', 'ceo']);
 
 /**
- * No-recent-activity badge, shown per-deal for the manager pipeline view.
- * Used to also carry a win% badge (`effectiveWinProbability`), but that was
- * a forecasting number masquerading as a progress number — the win-weighted
- * forecast already appears in `TeamPipelineSummary` below the table, so
- * dropping it here (owner decision) loses nothing, it just stops repeating
- * it in the wrong place.
+ * No-recent-activity badge, shown per-deal for the manager pipeline view. There is no win%
+ * badge here: it is a forecast, not progress, and the win-weighted forecast already appears in
+ * `TeamPipelineSummary` below the table.
  */
 function TrackingBadges({ deal }) {
   if (!deal.stale) return null;
@@ -238,11 +231,9 @@ function groupDealsForPipeline(deals, catalog) {
   }
   const sumValue = (list) => list.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
   const forecast = expected.reduce((sum, deal) => {
-    // The SERVER's number (TicketSummaryDto.effectiveWinProbability). This is money-shaped output —
-    // it used to be re-derived here from a hand-copied stage→% table, and #714 is what that costs:
-    // V143 added QUOTE_OWNER, the copy did not, and every S5 deal silently contributed 0 to this
-    // sum. Issue #738. `?? 0` reproduces exactly that old fallback for a row without the field, so
-    // an unserved value under-counts rather than turning the whole forecast into NaN.
+    // The SERVER's number (TicketSummaryDto.effectiveWinProbability). This is money-shaped output:
+    // a hand-copied stage→% table drifted (it lacked QUOTE_OWNER, so every S5 deal contributed 0).
+    // `?? 0` makes an unserved value under-count rather than turn the whole forecast into NaN.
     const win = deal.effectiveWinProbability ?? 0;
     return sum + (Number(deal.amountPayable) || 0) * (win / 100);
   }, 0);
@@ -255,9 +246,8 @@ function groupDealsForPipeline(deals, catalog) {
 }
 
 /**
- * "ภาพรวมทีม" — the live-pipeline replacement for the weekly report: what
- * used to require every rep to email an Excel sheet is now this panel,
- * computed straight off the same deal list the table below renders.
+ * "ภาพรวมทีม": the live-pipeline replacement for the weekly report, computed off the same deal
+ * list the table below renders.
  */
 function TeamPipelineSummary({ groups }) {
   const items = [
@@ -310,53 +300,41 @@ function WorkStageCell({ deal, role, catalog, showTracking = false }) {
   );
 }
 
-// Lifecycles where the deal is not currently, actively moving through the
-// pipeline — a bare "ขั้นตอน N/14" fraction for one of these would newly
-// assert live progress that the old legend-less bar never claimed. Naming
-// the lifecycle alongside the fraction keeps the readout honest: "where it
-// stood when it stopped", not "where it is heading right now".
+// Lifecycles where the deal is not actively moving through the pipeline: a bare "ขั้นตอน N/14"
+// for one of these would assert live progress. Naming the lifecycle alongside the fraction keeps
+// it honest: "where it stood when it stopped", not "where it is heading".
 const PAUSED_OR_TERMINAL_LIFECYCLES = new Set(['CANCELLED', 'COMPLETED', 'ON_HOLD', 'DORMANT']);
 
 /**
- * Textual equivalent for the segmented progress bar's colour-coded fill
- * (never colour alone). `CLOSED_LOST` keeps its own fixed copy (no stage
- * fraction reads as progress on a lost deal). A deal with no resolvable
- * `salesStage` has nothing to report a fraction of. Every other non-ACTIVE
- * lifecycle gets its label prefixed onto the fraction (see
- * PAUSED_OR_TERMINAL_LIFECYCLES); a live ACTIVE deal gets the bare fraction.
+ * Textual equivalent for the segmented progress bar's colour-coded fill (never colour alone).
+ * `CLOSED_LOST` keeps its own fixed copy (no stage fraction reads as progress on a lost deal). A
+ * deal with no resolvable `salesStage` has nothing to report a fraction of. Every other non-ACTIVE
+ * lifecycle gets its label prefixed onto the fraction (see PAUSED_OR_TERMINAL_LIFECYCLES); a live
+ * ACTIVE deal gets the bare fraction.
  */
 function progressReadout(deal, catalog) {
   if (deal.lifecycle === 'CLOSED_LOST') return 'ไม่คืบหน้า (เสียงาน)';
   const idx = stageIndexIn(catalog, deal.salesStage);
-  // FIX F: the lifecycle prefix must be decided BEFORE the "no resolvable
-  // stage" early return, not after it. A CANCELLED/COMPLETED/ON_HOLD/DORMANT
-  // deal with a null/unrecognized `salesStage` (idx < 0) has no fraction to
-  // show, but it still has a lifecycle to report — testing that ordering the
-  // old way around meant such a deal displayed nothing anywhere saying it
-  // was cancelled. (DealStageCell now also badges CANCELLED/COMPLETED here
-  // — see FIX F6 — but this progress-column readout is the one place a deal
-  // with no resolvable stage still gets a lifecycle mention at all.)
+  // The lifecycle prefix is decided BEFORE the "no resolvable stage" early return: a
+  // CANCELLED/COMPLETED/ON_HOLD/DORMANT deal with a null/unrecognized `salesStage` has no fraction
+  // but still has a lifecycle to report. This readout is the one place such a deal gets a
+  // lifecycle mention at all (DealStageCell also badges CANCELLED/COMPLETED).
   const lifecyclePrefixed = PAUSED_OR_TERMINAL_LIFECYCLES.has(deal.lifecycle);
   if (idx < 0) {
     return lifecyclePrefixed ? dealLifecycleLabel(deal.lifecycle).label : 'ยังไม่ระบุขั้นตอน';
   }
-  // Position and total are on THIS deal's route, so a buyer-direct deal at S8 reads 4/11 — the same
-  // as its own deal page — not the catalog-wide 8/15. The route comes from the served
-  // `catalog.routes` keyed by the row's `entryChannel`; a row has no per-deal decisions payload
-  // and fetching one per row would be an N+1. No served route (UNSPECIFIED, unknown, absent) is
-  // all fifteen, i.e. what this always read.
+  // Position and total are on THIS deal's route, so a buyer-direct deal at S8 reads 4/11 (same as
+  // its deal page), not the catalog-wide 8/15. The route comes from the served `catalog.routes`
+  // keyed by the row's `entryChannel`; a per-row decisions fetch would be an N+1. No served route
+  // (UNSPECIFIED, unknown, absent) is all fifteen.
   const { position, total } = routePositionForChannel(catalog, deal.salesStage, deal.entryChannel);
   const fraction = `ขั้นตอน ${position}/${total}`;
   return lifecyclePrefixed ? `${dealLifecycleLabel(deal.lifecycle).label} · ${fraction}` : fraction;
 }
 
 /**
- * The `ความคืบหน้า` (progress) column: the segmented stage bar plus its
- * textual equivalent. Used to also show a completion percentage alongside
- * the fraction ("62% · ขั้นตอน 9/14") — with the manager-only win% badge
- * gone from this column (owner decision, see `TrackingBadges`), the percent
- * and the fraction were just saying the same thing twice, so only the
- * fraction remains.
+ * The `ความคืบหน้า` (progress) column: the segmented stage bar plus its textual equivalent. Only
+ * the fraction is shown, with no completion percentage (it said the same thing twice).
  */
 function ProgressCell({ deal, catalog }) {
   const lost = deal.lifecycle === 'CLOSED_LOST';
@@ -382,14 +360,9 @@ function DealStageCell({ deal, catalog }) {
   // null (render nothing) for UNSPECIFIED / unknown / absent: a route is never invented.
   const route = routeName(deal.entryChannel);
   const meta = findStage(catalog, deal.salesStage);
-  // FIX F6 (review-remediation): used to badge only ON_HOLD/DORMANT, so a
-  // CANCELLED or COMPLETED deal looked indistinguishable from a live one in
-  // this column — and specifically in this column, because the 721–1040px
-  // tablet band (see styles.css) hides the `progress` column outright, which
-  // is the only other place CANCELLED/COMPLETED ever got a mention
-  // (progressReadout's lifecycle prefix). Reuse the same
-  // PAUSED_OR_TERMINAL_LIFECYCLES set progressReadout already keys off, so
-  // the two stay in sync.
+  // Badges CANCELLED/COMPLETED too (not only ON_HOLD/DORMANT): in the 721–1040px tablet band
+  // (see styles.css) the `progress` column is hidden, so this column is the only other place those
+  // lifecycles get a mention. Reuses PAUSED_OR_TERMINAL_LIFECYCLES so the two stay in sync.
   const showLifecycleBadge = PAUSED_OR_TERMINAL_LIFECYCLES.has(deal.lifecycle);
   const lifecycle = dealLifecycleLabel(deal.lifecycle);
   return (
@@ -406,19 +379,15 @@ function DealStageCell({ deal, catalog }) {
 }
 
 /**
- * Mobile record card for a deal: identity, stage, progress, owner, freshness.
- * `reason`, when given, is a one-line worklist chip ("why this deal is in
- * your queue right now") shown right under the customer name — used by
- * import's card to lead with the pricing/procurement queue instead of
- * making the viewer read the full 14-stage label first. `showTracking`
- * (sales_manager/ceo only) adds the win%/stale badges below the stage —
- * the mobile equivalent of the manager-only DataTable column.
+ * Mobile record card for a deal: identity, stage, progress, owner, freshness. `reason`, when
+ * given, is a one-line worklist chip ("why this deal is in your queue right now") shown under the
+ * customer name; import's card uses it to lead with the pricing/procurement queue. `showTracking`
+ * (sales_manager/ceo only) adds the win%/stale badges below the stage, the mobile equivalent of
+ * the manager-only DataTable column.
+ *
+ * Mobile-only: the desktop table's whole row is the open target (DataTable's onRowClick), but a
+ * card isn't a table row, so it keeps this explicit button (see DataTable.jsx's onRowClick doc).
  */
-// Mobile-only now (Task 2d): the desktop table's own repeated `เปิด ›`
-// column is gone in favor of DataTable's onRowClick — the whole row is the
-// open target there. Mobile cards keep this explicit button since a card
-// isn't a table row DataTable can attach onRowClick to (see DataTable.jsx's
-// onRowClick doc comment).
 function DealOpenButton({ deal, onOpen }) {
   return (
     <Button
@@ -523,13 +492,10 @@ function buildDealColumns({ role, isManagerView, catalog }) {
       key: 'customer',
       header: 'ดีล / ลูกค้า / โครงการ',
       searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
-      // FIX A: this Link (not the row's own `onRowClick`, which DataTable now
-      // treats as a mouse-only convenience) is the row's keyboard and
-      // assistive-tech activation target, following the pattern
-      // PricingRequestQueuePage.jsx already argues for at its `requestCode`
-      // column. It also fixes the 721–1040px tablet band, which renders this
-      // desktop table (`useIsMobile` is <=720px) with no hover and — before
-      // this fix — no visible cue at all that a row was tappable.
+      // This Link (not the row's `onRowClick`, a mouse-only convenience) is the row's keyboard and
+      // assistive-tech activation target, like PricingRequestQueuePage.jsx's `requestCode` column.
+      // The 721–1040px tablet band renders this desktop table (`useIsMobile` is <=720px) with no
+      // hover, so it is also the only visible cue that a row is tappable.
       render: (deal) => (
         <span className="flex min-w-0 flex-col gap-0.5">
           <Link
@@ -569,26 +535,18 @@ function buildDealColumns({ role, isManagerView, catalog }) {
       sortAccessor: (deal) => new Date(deal.stageUpdatedAt ?? deal.updatedAt),
       render: (deal) => <DaysBadge stageUpdatedAt={deal.stageUpdatedAt ?? deal.updatedAt} />,
     },
-    // Row-level navigation (onRowClick, wired on the <DataTable> below)
-    // replaced the repeated `เปิด ›` button that used to close every row —
-    // identical on all 15, carrying no information. There used to be a
-    // trailing "ขั้นตอนถัดไป" (next action) column here too
-    // (dealWorklistActions.js), but `/tickets` is gated on
-    // canViewDealPipeline (sales/sales_manager/ceo only — permissions.js),
-    // and that resolver only ever returned a verb for account/import, who
-    // can never reach this page. The column was therefore a header plus an
-    // empty cell on every single row for every real viewer — removed
-    // outright (owner decision) rather than kept as permanent dead weight.
+    // Row-level navigation (onRowClick, wired on the <DataTable> below) replaces a repeated
+    // `เปิด ›` button. There is no "ขั้นตอนถัดไป" next-action column (dealWorklistActions.js):
+    // `/tickets` is gated on canViewDealPipeline (sales/sales_manager/ceo only, permissions.js), and
+    // that resolver only returned a verb for account/import, who never reach this page.
   ];
 }
 
 export function TicketListPage({ user, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // Phase filter + search live in the URL so list → detail → back keeps them.
-  // The old operational ?status= chips row was removed as redundant with the
-  // phase cards (user decision), and the stage cell no longer shows the legacy
-  // ticket status either (QA-27, owner ruling 2026-10-29).
+  // Phase filter + search live in the URL so list → detail → back keeps them. The stage cell does
+  // not show the legacy ticket status.
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
@@ -599,26 +557,19 @@ export function TicketListPage({ user, showToast }) {
   const hasWorklistDistinction = WORKLIST_ROLES.has(user.role);
   const inboxOnly = hasWorklistDistinction && searchParams.get('inbox') !== '0';
   const searchText = searchParams.get('q') ?? '';
-  // Manager live pipeline (V83, Slice B1/B2 — handoff 103): the weekly-report
-  // replacement, sales_manager/ceo only.
+  // Manager live pipeline, sales_manager/ceo only.
   const isManagerView = MANAGER_PIPELINE_ROLES.has(user.role);
   const [creating, setCreating] = useState(false);
   const filterToggleRef = useRef(null);
   const filterSheetRef = useRef(null);
-  // Owner feedback (role-scoped views, Sales branch): the LIFECYCLE/FLAGS chip
-  // rows were competing with the deal list for attention. They stay fully
-  // functional (same URL-param filters as before) but sit behind a collapsed
-  // "ตัวกรองเพิ่มเติม" expander now — collapsed by default for every role, and
-  // opened automatically whenever one of them becomes active (e.g. a deep link
-  // with ?life=... or ?flag=...) so an applied filter is surfaced, not hidden.
+  // The LIFECYCLE/FLAGS chip rows sit behind a collapsed "ตัวกรองเพิ่มเติม" expander (collapsed by
+  // default for every role), opened automatically when one becomes active (e.g. a deep link with
+  // ?life=... or ?flag=...).
   //
-  // Phase 4A: openness is now genuinely state-driven rather than
-  // `open || hasActiveFilter`. The old derivation made the sheet impossible to
-  // dismiss while a lifecycle/flag filter was applied — the close button, the
-  // scrim and Escape all became no-ops, which is unacceptable for what is a
-  // modal bottom sheet at <=720px. An applied filter is still never hidden:
-  // the always-visible "ตัวกรองที่ใช้" summary row and the count badge on the
-  // toggle keep reporting it after the sheet is closed.
+  // Openness is state-driven, not `open || hasActiveFilter`: that made the sheet impossible to
+  // dismiss while a filter was applied (close button, scrim and Escape became no-ops), which is
+  // unacceptable for a modal bottom sheet at <=720px. An applied filter is still never hidden: the
+  // always-visible "ตัวกรองที่ใช้" summary row and the toggle's count badge keep reporting it.
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(
     () => Boolean(searchParams.get('life') || searchParams.get('flag')),
   );
@@ -681,19 +632,16 @@ export function TicketListPage({ user, showToast }) {
     partial_delivery: allDeals.filter((deal) => deal.fulfillmentStatus === 'PARTIALLY_DELIVERED').length,
   }), [allDeals]);
 
-  // Manager live pipeline: computed off the FULL unfiltered list (independent of
-  // the phase/lifecycle/flag chips below), same "counts-from-allDeals" convention
-  // as flagCounts/lifecycleCounts above — a stable overview regardless of
-  // whatever the viewer happens to be filtering the table to right now.
+  // Manager live pipeline: computed off the FULL unfiltered list (independent of the
+  // phase/lifecycle/flag chips), like flagCounts/lifecycleCounts above, so the overview is stable
+  // whatever the table is filtered to.
   const pipelineGroups = useMemo(
     () => (isManagerView ? groupDealsForPipeline(allDeals, stageCatalog) : null),
     [allDeals, isManagerView, stageCatalog],
   );
 
-  // Role-scoped views, Phase A: how many of allDeals are actually in this
-  // role's worklist right now — same counts-from-allDeals convention as
-  // lifecycleCounts/flagCounts above (independent of the other active
-  // filters), used by the inbox toggle chips below.
+  // How many of allDeals are in this role's worklist right now (counts-from-allDeals, independent
+  // of the other filters); used by the inbox toggle chips below.
   const inboxCounts = useMemo(() => (hasWorklistDistinction ? {
     inbox: allDeals.filter((deal) => dealInScope(user.role, deal, stageCatalog)).length,
     all: allDeals.length,
@@ -721,13 +669,10 @@ export function TicketListPage({ user, showToast }) {
   const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
   const showMoreFilters = moreFiltersOpen;
   const activeMoreFiltersCount = (lifecycleFilter ? 1 : 0) + (flagFilter ? 1 : 0);
-  // <=720px the same markup is a fixed bottom sheet over a scrim — a real
-  // modal — while above that breakpoint it is an inline disclosure panel with
-  // the scrim hidden (styles.css: .ticket-filter-backdrop { display: none }
-  // until the mobile media query). Modal semantics are therefore
-  // breakpoint-scoped: Escape closes at any width, but the focus trap, the
-  // initial focus move and inerting the page behind only apply where the sheet
-  // actually covers the page.
+  // <=720px the same markup is a fixed bottom sheet over a scrim (a real modal); above that it is
+  // an inline disclosure panel with the scrim hidden (styles.css: .ticket-filter-backdrop). Modal
+  // semantics are breakpoint-scoped: Escape closes at any width, but the focus trap, initial focus
+  // move and inerting the page behind only apply where the sheet covers the page.
   const isMobile = useIsMobile();
   const mobileSheetOpen = showMoreFilters && isMobile;
 
@@ -764,17 +709,11 @@ export function TicketListPage({ user, showToast }) {
     return filters;
   }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText, stageCatalog]);
 
-  // Phase chips, WorklistFilters-driven (Task 1b/2). The "all" chip used to
-  // read "ดีลที่ดำเนินอยู่" ("active deals") over a count (`activePipelineCount`)
-  // that was deliberately ACTIVE-only — but the chip's action (`updateParam
-  // ('phase', '')`) clears the phase filter entirely, which lists every
-  // deal including CLOSED_LOST/CANCELLED/COMPLETED. The label matched its
-  // own count but misdescribed what clicking it actually does. Fixed (owner
-  // decision) by naming the chip after its action ("ทั้งหมด" — all) and
-  // dropping the count altogether rather than attaching a second, different
-  // number to it: the single statement of the filtered total is DataTable's
-  // own footer below, and the per-phase chips keep their own (honest, each
-  // matching exactly what selecting it filters to) counts.
+  // Phase chips, WorklistFilters-driven. The "all" chip is named after its action ("ทั้งหมด"),
+  // since clicking it clears the phase filter and lists every deal including
+  // CLOSED_LOST/CANCELLED/COMPLETED, and it carries no count: the filtered total is stated once, in
+  // DataTable's own footer, and the per-phase chips keep counts that match what selecting them
+  // filters to.
   const phaseChipItems = useMemo(() => [
     { key: '', label: 'ทั้งหมด' },
     ...stageCatalog.phases.map((phaseId) => ({
@@ -786,15 +725,12 @@ export function TicketListPage({ user, showToast }) {
   ], [phaseCounts, stageCatalog]);
 
   function selectPhase(key) {
-    // Clicking the already-active chip clears back to "all" — same toggle-off
-    // the old hand-rolled phase strip offered.
+    // Clicking the already-active chip clears back to "all".
     updateParam('phase', key && key === phaseFilter ? '' : key);
   }
 
-  // Memoized like phaseChipItems above (not a fresh array literal every
-  // render): WorklistFilters keys its scroll/resize-affordance effect on
-  // `[items]`, so a new array identity on every parent render was tearing
-  // that listener down and re-attaching it just as often, for no reason.
+  // Memoized like phaseChipItems: WorklistFilters keys its scroll/resize-affordance effect on
+  // `[items]`, so a new array identity each render would tear down and re-attach its listener.
   const inboxChipItems = useMemo(() => (hasWorklistDistinction ? [
     { key: '', label: 'ต้องดำเนินการ', count: inboxCounts.inbox },
     { key: '0', label: 'ทั้งหมด', count: inboxCounts.all },
@@ -923,22 +859,18 @@ export function TicketListPage({ user, showToast }) {
   return (
     <div
       className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ticket-list-page"
-      // `inert` removes the page behind the sheet from focus order, pointer
-      // hit-testing and the accessibility tree in one attribute. React 18 has
-      // no boolean-prop support for it, so the empty string is used to emit the
-      // bare HTML attribute; aria-hidden covers browsers without inert yet.
+      // `inert` removes the page behind the sheet from focus order, pointer hit-testing and the
+      // accessibility tree. React 18 has no boolean-prop support for it, so the empty string emits
+      // the bare HTML attribute; aria-hidden covers browsers without inert.
       {...(mobileSheetOpen ? { inert: '', 'aria-hidden': 'true' } : {})}
     >
       <SalesTabs role={user.role} />
       <PageHeader
         title="รายการดีล"
         subtitle="ติดตามดีลตามขอบเขตบทบาทและตัวกรองที่เลือก"
-        // This page used to key its own denser mobile heading/actions treatment
-        // off the shared `.page-heading`/`.page-actions` legacy classes via a
-        // `.ticket-list-page` ancestor selector in styles.css — deleted along
-        // with the base rule (Tailwind's utilities layer would have silently
-        // out-cascaded a legacy-layer override anyway, see styles-css-loses-to-
-        // tailwind-utilities). Reproduced here directly instead.
+        // Denser mobile heading/actions treatment, set here directly: a legacy-layer override via
+        // a `.ticket-list-page` ancestor selector in styles.css would lose to Tailwind's utilities
+        // layer (see styles-css-loses-to-tailwind-utilities).
         headingClassName="mobile:leading-[1.15]"
         subtitleClassName="mobile:mt-0.5 mobile:text-sm mobile:leading-[1.35]"
         actionsClassName="mobile:grid mobile:w-full mobile:grid-cols-[44px_minmax(0,1fr)] mobile:gap-2 [&>*:only-child]:mobile:col-start-1"
@@ -964,14 +896,8 @@ export function TicketListPage({ user, showToast }) {
         )}
       />
 
-      {/* Consolidated filter band (Task 2a): everything that used to be four
-          stacked full-width sections — the scope banner (eyebrow/title/
-          description + inbox toggle + a result-count restatement), and the
-          phase strip — now lives inside this one bordered band, alongside
-          search/more-filters/clear. Scope + phase + search are one filter
-          band, not three; DataTable's own footer stays the single statement
-          of "how many rows matched" (Task 2b) instead of restating it here
-          too. */}
+      {/* One bordered filter band: scope + phase + search/more-filters/clear. DataTable's own
+          footer stays the single statement of "how many rows matched". */}
       <section
         className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3.5 mobile:gap-2.5 mobile:p-2.5"
         aria-label="ขอบเขตและตัวกรองรายการดีล"
@@ -998,12 +924,9 @@ export function TicketListPage({ user, showToast }) {
           onSelect={selectPhase}
         />
 
-        {/* Spacing/reflow live here as utilities, not in styles.css: index.css
-            orders `@layer theme, legacy, utilities`, so a `.ticket-filter-bar`
-            rule in the legacy layer always loses to FilterBar's own utilities.
-            The previous CSS needed `display: grid !important` to win and its
-            gap/padding never applied at all. `mobile:` is the shared <=720px
-            variant from the Phase 3.4 token work. */}
+        {/* Spacing/reflow live here as utilities, not in styles.css: index.css orders
+            `@layer theme, legacy, utilities`, so a `.ticket-filter-bar` rule in the legacy layer
+            always loses to FilterBar's own utilities. `mobile:` is the shared <=720px variant. */}
         <FilterBar
           className="ticket-filter-bar !border-0 !bg-transparent !p-0 gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2"
           aria-label="ค้นหาและตัวกรองรายการดีล"
@@ -1129,23 +1052,16 @@ export function TicketListPage({ user, showToast }) {
         rows={deals}
         getRowKey={(deal) => deal.id}
         gridClassName="ticket-worklist-table"
-        // Task 2d: the repeated `เปิด ›` column (identical on every row) is
-        // gone — the row's onClick is now a mouse-only convenience for
-        // opening the deal (FIX A: the identity cell's own `<Link
-        // to={`/tickets/${deal.id}`}>` above is the keyboard/assistive-tech
-        // affordance, since a `<tr role="button">` would have pruned every
-        // other cell — customer name, ผู้ดูแล, the stage badge, the
-        // "ขั้นตอน N/14" readout — out of the accessibility tree). Same move
-        // `/finance` never needed because its whole action column already
-        // varied by row. Mobile cards are unaffected: they come from
-        // `mobileCard` below, entirely separate from `columns`, and already
-        // carry their own `DealOpenButton` affordance.
+        // No repeated `เปิด ›` column: the row's onClick is a mouse-only convenience for opening
+        // the deal. The identity cell's own `<Link to={`/tickets/${deal.id}`}>` above is the
+        // keyboard/assistive-tech affordance, since a `<tr role="button">` would prune every other
+        // cell (customer name, ผู้ดูแล, stage badge, "ขั้นตอน N/14") from the accessibility tree.
+        // Mobile cards come from `mobileCard` below, separate from `columns`, and carry their own
+        // `DealOpenButton`.
         onRowClick={openDeal}
-        // FIX G: restores the "filtered out of how many" denominator the old
-        // `.ticket-result-count` band used to show. `allDeals` is the whole
-        // role-scoped population before the phase/lifecycle/flag/inbox/search
-        // filters above are applied; DataTable only appends the clause when
-        // this differs from what actually matched.
+        // `allDeals` is the whole role-scoped population before the phase/lifecycle/flag/inbox/search
+        // filters; it gives the "filtered out of how many" denominator. DataTable appends the
+        // clause only when it differs from what matched.
         unfilteredTotal={allDeals.length}
         mobileCard={(deal) => (
           user.role === 'account'
@@ -1163,9 +1079,7 @@ export function TicketListPage({ user, showToast }) {
         }}
       />
 
-      {/* Task 2c: summary metrics belong after the worklist, not before it
-          (design principle #3, "next action before summary metrics") — this
-          used to render above the phase strip. */}
+      {/* Summary metrics come after the worklist ("next action before summary metrics"). */}
       {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
 
       {creating ? (

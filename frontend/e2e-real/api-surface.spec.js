@@ -21,15 +21,15 @@ import { ANONYMOUS_ALLOWLIST, apiSurface, isHeavyPath, readableSurface } from '.
 //   3. the surface is actually covered                  (nothing silently skipped)
 //
 // Property 3 is what keeps 1 and 2 honest over time. Without it "we cover the whole API" is a
-// claim about the day it was written — and for a while it was exactly that: driving the sweep
-// from API_ROUTES left 49 endpoints invisible and collapsed ~22 deal actions into one path that
-// matches no controller. See helpers/surface.js for the full account.
+// claim about the day it was written — driving the sweep from API_ROUTES would leave endpoints
+// invisible and collapse ~22 deal actions into one path that matches no controller. See
+// helpers/surface.js for the full account.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SURFACE = apiSurface();
 // The GET subset, taken from each endpoint's OWN declared verb rather than inferred by parsing
-// hrApi.js's `method:` option bags. That inference is what previously left 23 routes with no
-// resolved verb at all, silently outside the authenticated sweep.
+// hrApi.js's `method:` option bags, which would leave routes with no resolved verb silently
+// outside the authenticated sweep.
 const READABLE_SURFACE = readableSurface();
 
 test.describe('API surface', () => {
@@ -238,13 +238,11 @@ test.describe('API surface — authenticated sweep', () => {
   // Listing them as an EXACT expectation (not a filter, not a skip) keeps them visible in both
   // directions: a new server error fails the test, and so does fixing one of these without
   // removing its entry. A silent exclusion would let the first quietly become permanent.
-  // Empty, and that is the assertion — every entry this list once held has been fixed.
-  //
-  // It previously carried `priceImport.profile() /api/price-import/profile/999999 → 500`, reachable
-  // only by ceo and import (PriceImportController gates on requireAnyRole(user, "ceo", "import"),
-  // so every other role was refused 403 before the defect). PriceImportService#getRawProfile now
-  // catches EmptyResultDataAccessException and raises a 404, matching the idiom #loadProfile in the
-  // same class already used for the identical query.
+  // Empty, and that is the assertion — every known server error has been fixed. Example of what
+  // belongs here: an unknown id answering 500 instead of 404, reachable only by ceo and import
+  // (PriceImportController gates on requireAnyRole(user, "ceo", "import"), so every other role
+  // is refused 403 first). PriceImportService#getRawProfile catches
+  // EmptyResultDataAccessException and raises a 404, matching #loadProfile in the same class.
   //
   // Keep this as an exact expectation rather than deleting the machinery: the value is symmetric.
   // A new server error fails the test, and so does fixing one without removing its entry. Add a row

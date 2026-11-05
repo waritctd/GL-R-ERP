@@ -91,7 +91,7 @@ class LeaveDayMathTest {
         assertThat(byMonth).isEmpty();
     }
 
-    // --- Sub-day leave (2026-07-25): single-date range, may be a fractional remainder -----------
+    // --- Sub-day leave: single-date range, may be a fractional remainder -------------------------
 
     @Test
     void unpaidWorkingDaysByMonthSubDaySingleDateOverQuotaAttributesFractionalRemainder() {
@@ -113,18 +113,18 @@ class LeaveDayMathTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 2026-09-25 fix: the multi-day branch used to floor paidDays to a whole number of days
-    // (setScale(0, DOWN)) before ranking working days against it, silently discarding a fractional
-    // paid remainder. It now consumes paidDays as a running fractional balance against each 1.00-value
+    // The multi-day branch must not floor paidDays to a whole number of days (setScale(0, DOWN))
+    // before ranking working days against it, which would silently discard a fractional paid
+    // remainder. It consumes paidDays as a running fractional balance against each 1.00-value
     // counted day, so a boundary day where the balance runs out mid-day splits into a paid portion and
     // an unpaid portion instead of the whole day landing as unpaid.
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void unpaidWorkingDaysByMonthWithFractionalPaidSplitsTheBoundaryDayAcrossThreeWorkingDays() {
-        // The "บ๊ก" case: Mon 2026-07-13 .. Wed 2026-07-15 (3 consecutive weekdays), totalDays=3.00,
-        // paidDays=1.50. Under the OLD floor(1.50)=1 behaviour this would have marked 2.00 unpaid
-        // (ranks 2 and 3 wholly unpaid). The fix instead consumes the balance day by day: day 1 takes
+        // Mon 2026-07-13 .. Wed 2026-07-15 (3 consecutive weekdays), totalDays=3.00,
+        // paidDays=1.50. Flooring 1.50 to 1 would mark 2.00 unpaid
+        // (ranks 2 and 3 wholly unpaid). Instead the balance is consumed day by day: day 1 takes
         // 1.00 of the 1.50 (0.50 remains, 0 unpaid); day 2 takes the remaining 0.50 (0.50 unpaid); day
         // 3 has nothing left to consume (1.00 unpaid) -- total unpaid = 1.50, all in July.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
@@ -135,9 +135,9 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthWithFractionalPaidOverTwoDaysYieldsAHalfDayUnpaid() {
-        // The "สนั่น" case: Mon 2026-07-13 .. Tue 2026-07-14 (2 working days), totalDays=2.00,
-        // paidDays=1.50 -> the bug this fix targets: OLD floor(1.50)=1 gave unpaid=1.00 (the whole
-        // second day), the CORRECT answer is 0.50 (only the fraction of the second day beyond the
+        // Mon 2026-07-13 .. Tue 2026-07-14 (2 working days), totalDays=2.00,
+        // paidDays=1.50 -> flooring 1.50 to 1 would give unpaid=1.00 (the whole
+        // second day); the CORRECT answer is 0.50 (only the fraction of the second day beyond the
         // 1.50 paid balance).
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), new BigDecimal("1.50"), new BigDecimal("2.00"));
@@ -171,7 +171,7 @@ class LeaveDayMathTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // V118 cross-year quota fix (2026-08-02): totalDaysByYear / clipToYear /
+    // Cross-year quota: totalDaysByYear / clipToYear /
     // unpaidWorkingDaysByMonthAcrossYears -- the day-counting logic EXTENDED (not duplicated) to
     // attribute a request's days per calendar year instead of only per calendar month.
     // ─────────────────────────────────────────────────────────────────────
@@ -263,9 +263,9 @@ class LeaveDayMathTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // §5.4 MATERNITY calendar-day counting (V119, 2026-08-02): the new LeaveDayCountBasis-aware
-    // overloads. WORKING_DAYS-basis calls above are UNCHANGED (they hit the old no-basis overloads,
-    // which now delegate to WORKING_DAYS) -- these tests are additive coverage for CALENDAR_DAYS.
+    // §5.4 MATERNITY calendar-day counting: the LeaveDayCountBasis-aware
+    // overloads. WORKING_DAYS-basis calls above hit the no-basis overloads,
+    // which delegate to WORKING_DAYS -- these tests are additive coverage for CALENDAR_DAYS.
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
@@ -346,7 +346,7 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthAcrossYearsOnCalendarBasisIncludesTheYearBoundaryWeekend() {
-        // Cross-year composition (V118) under CALENDAR_DAYS (V119): Thu 2026-12-31 .. Mon 2027-01-04,
+        // Cross-year composition under CALENDAR_DAYS: Thu 2026-12-31 .. Mon 2027-01-04,
         // split 2026: 1 day (12/31) fully paid; 2027: 4 days (1/1 Fri-holiday-shaped, 1/2 Sat, 1/3
         // Sun, 1/4 Mon), 1 paid -> 3 unpaid, ALL of them counted even though two are a weekend.
         List<LeaveQuotaYearSplit> perYear = List.of(
@@ -394,7 +394,7 @@ class LeaveDayMathTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Schedule/holiday-aware working-day counting (2026-08-03): LeaveDayMath#workingDayPredicate and
+    // Schedule/holiday-aware working-day counting: LeaveDayMath#workingDayPredicate and
     // the predicate-accepting overloads it feeds. Pure unit coverage of the DECISION (which date
     // counts) -- LeaveScheduleHolidayAwareIntegrationTest proves the same thing survives into real
     // SQL (the employee->division/department join, the batched holiday read) through the real
@@ -570,7 +570,7 @@ class LeaveDayMathTest {
         assertThat(byMonth).containsExactly(Map.entry(LocalDate.parse("2026-08-01"), new BigDecimal("2.00")));
     }
 
-    // --- formatDuration (leave-records report, 2026-09): days/hours/minutes, NEVER a decimal -----
+    // --- formatDuration (leave-records report): days/hours/minutes, NEVER a decimal --------------
 
     @Test
     void formatDurationOnAWholeDayPrintsNoTrailingZeroHours() {

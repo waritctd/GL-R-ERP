@@ -21,10 +21,9 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
       reviewSummary: vi.fn(),
-      // LeavePolicyBar.jsx (rendered unconditionally by this page, 2026-08-14 reversal) probes
-      // this on every render. Without a mock here the call falls through to `undefined()` and
-      // throws inside the query -- react-query swallows that into a silent error state rather
-      // than crashing the suite, but a real mock is more honest than leaning on that.
+      // LeavePolicyBar.jsx (rendered unconditionally by this page) probes this on every render.
+      // Without a mock the call falls through to `undefined()` and throws inside the query --
+      // react-query swallows that into a silent error state, but a real mock is more honest.
       policyDocumentAvailable: vi.fn(),
       downloadPolicyDocument: vi.fn(),
     },
@@ -76,8 +75,8 @@ describe('LeaveSurfacePage', () => {
     renderLeaveSurfacePage();
 
     const tabs = await screen.findAllByRole('tab');
-    // "กฎการลา" is gone as of 2026-08-10 -- the §5 announcement is now the LeavePolicyBar above
-    // the tabs, so a plain employee with no reports has exactly ONE tab.
+    // "กฎการลา" is gone: the §5 announcement is the LeavePolicyBar above the tabs, so a plain
+    // employee with no reports has exactly ONE tab.
     expect(tabs.map((tab) => tab.textContent)).toEqual(
       expect.arrayContaining([expect.stringContaining('ของฉัน')]),
     );
@@ -89,9 +88,8 @@ describe('LeaveSurfacePage', () => {
     expect(screen.getByRole('tab', { name: /ของฉัน/ }).getAttribute('aria-selected')).toBe('true');
   });
 
-  // 2026-08 bugfix: "ลูกทีม" is the correctly-labelled, correctly-scoped home for the team-wide
-  // view that used to leak, mislabelled, into "ของฉัน" -- see leaveSurfaceTabs.js's hasTeamMembers
-  // and TeamLeaveTab.jsx's own header comment.
+  // "ลูกทีม" is the correctly-labelled, correctly-scoped home for the team-wide view -- see
+  // leaveSurfaceTabs.js's hasTeamMembers and TeamLeaveTab.jsx's header comment.
   it('a manager with a direct report in api.leave.employees() sees and can open "ลูกทีม"', async () => {
     const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
     api.leave.employees.mockResolvedValue({
@@ -154,9 +152,8 @@ describe('LeaveSurfacePage', () => {
     expect(teamIndex).toBeLessThan(reviewIndex);
   });
 
-  // Retargeted 2026-08-10: this used to click "กฎการลา", which no longer exists. A plain employee
-  // now has only one tab, so the ?tab= round-trip needs an actor with a second one -- a manager
-  // with a direct report, switching to "รอพิจารณา".
+  // Clicks a tab other than the default: a plain employee has only one tab, so the ?tab= round-trip
+  // needs an actor with a second one -- a manager with a direct report, switching to "รอพิจารณา".
   it('switching tabs writes ?tab= with replace (no new history entry)', async () => {
     const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
     api.leave.employees.mockResolvedValue({
@@ -210,21 +207,15 @@ describe('LeaveSurfacePage', () => {
     expect(await screen.findByText('พักผ่อน')).not.toBeNull();
   });
 
-  // Regression test for the double-scroll containment bug: the 16-field request
-  // form's FileUploadField renders a real `<input type="file">` visually hidden
-  // with Tailwind's `sr-only` utility, which is `position: absolute`. jsdom does
-  // not compute real layout/geometry, so this cannot assert scroll pixels the
-  // way the manual browser verification did (documentElement.scrollHeight ===
-  // clientHeight at five widths, with the absolute input's static position
-  // pinned at html.scrollHeight-1 pre-fix). What it CAN assert is the structural
-  // invariant the fix relies on: PageStack -- the single element between
-  // `.content-scroll` and that input -- must establish a CSS positioning
-  // context (anything other than `position: static`), or the input's containing
-  // block bubbles past `.content-scroll` to the document and drags the whole
-  // page (including this sticky tab bar) into an outer scroll with it.
-  // Leave HR-submit gate (2026-08-03): hr/ceo oversee leave but do not request it for
-  // themselves (owner ruling) -- presentation only, the real rule is
-  // LeaveService#resolveTargetEmployee's server-side 403. See leaveSurfaceTabs.js's
+  // Double-scroll containment: the request form's FileUploadField renders a real
+  // `<input type="file">` visually hidden with Tailwind's `sr-only` (`position: absolute`). jsdom
+  // does not compute layout, so this cannot assert scroll pixels; it asserts the structural
+  // invariant the fix relies on: PageStack -- the single element between `.content-scroll` and
+  // that input -- must establish a CSS positioning context (anything other than `position:
+  // static`), or the input's containing block bubbles past `.content-scroll` to the document and
+  // drags the whole page (including this sticky tab bar) into an outer scroll.
+  // hr/ceo oversee leave but do not request it for themselves -- presentation only, the real rule
+  // is LeaveService#resolveTargetEmployee's server-side 403. See leaveSurfaceTabs.js's
   // canSubmitOwnLeave/defaultLeaveSurfaceTabId.
   it('hr lands on "รอพิจารณา" by default and does not see the "ยื่นคำขอลา" CTA', async () => {
     const hr = { employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr', manager: false };
@@ -237,10 +228,9 @@ describe('LeaveSurfacePage', () => {
 
   it('ceo lands on "รอพิจารณา" by default and does not see the "ยื่นคำขอลา" CTA', async () => {
     const ceo = { employeeId: 2, name: 'ผู้บริหารระดับสูง', role: 'ceo', manager: false };
-    // ceo is in ROLE_PERMISSIONS.canReviewLeave (2026-09-01 CEO leave-approval reach), so
-    // "review" is unconditionally visible without waiting on any row to load -- this fixture row
-    // (still under the ceo's own direct management) is kept as a realistic seed rather than
-    // removed, since it also exercises the per-row canReview fallback path.
+    // ceo is in ROLE_PERMISSIONS.canReviewLeave, so "review" is unconditionally visible without
+    // waiting on any row to load; this fixture row (under the ceo's own direct management) is a
+    // realistic seed that also exercises the per-row canReview fallback path.
     api.leave.list.mockResolvedValue({
       requests: [{
         id: 802, employeeId: 10, employeeName: 'ลูกทีมของ CEO', managerEmployeeId: 2, status: 'SUBMITTED',
@@ -262,12 +252,11 @@ describe('LeaveSurfacePage', () => {
     expect(screen.getByRole('button', { name: 'ยื่นคำขอลา' })).not.toBeNull();
   });
 
-  // Regression: leaveSurfaceTabs.js's resolveTabLabel/resolveTabHelper exist to swap the "team"
-  // tab's copy for hr/ceo (they see every employee, not a real org-chart team -- "ลูกทีม" is a
-  // misleading label for them). That swap is only proven correct if something actually RENDERS
-  // the resolved label -- a test that only calls resolveTabLabel() directly, without also
-  // rendering LeaveSurfacePage and reading the tab's DOM text, would pass even if
-  // LeaveSurfacePage.jsx were reverted to read the tab's static `label`/`helper` fields instead.
+  // leaveSurfaceTabs.js's resolveTabLabel/resolveTabHelper swap the "team" tab's copy for hr/ceo
+  // (they see every employee, not a real org-chart team, so "ลูกทีม" is misleading). That is only
+  // proven if something actually RENDERS the resolved label: a test calling resolveTabLabel()
+  // directly would pass even if LeaveSurfacePage.jsx read the tab's static `label`/`helper` fields
+  // instead.
   it('an hr user with team members sees "พนักงานทั้งหมด", never the manager-facing "ลูกทีม" label', async () => {
     api.leave.employees.mockResolvedValue({
       employees: [

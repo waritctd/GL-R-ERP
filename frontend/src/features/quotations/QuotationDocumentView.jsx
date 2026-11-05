@@ -7,13 +7,12 @@ import {
   stripPhoneLabel,
 } from './quotationMeta.js';
 
-// v3b: the item table, totals and signature block follow the DOCUMENT's language, because this
-// view's whole job is to look like the page the customer receives. The Thai labels are the ones
-// every pre-v3b test and the printed F-SM-002 already use; the English ones are read off the
-// owner's F-SM-008 samples (QN6900902-6): Description & Conditions / Qty / Unit price / Disc. /
-// Net price / Amount (USD), Grand Total (USD) with NO VAT row, and Printed by / Quoted by /
-// Approved by / Ordered by. The surrounding panels (customer, terms) stay Thai — they are the
-// app's own chrome, not a reproduction of the form.
+// The item table, totals and signature block follow the DOCUMENT's language, because this view's
+// whole job is to look like the page the customer receives. The English labels are read off the
+// F-SM-008 samples (QN6900902-6): Description & Conditions / Qty / Unit price / Disc. / Net price /
+// Amount (USD), Grand Total (USD) with NO VAT row, and Printed by / Quoted by / Approved by /
+// Ordered by. The surrounding panels (customer, terms) stay Thai: they are the app's own chrome,
+// not a reproduction of the form.
 const DOC_LABELS = {
   TH: {
     description: 'รายละเอียด', quantity: 'จำนวน', unitPrice: 'ราคา/หน่วย', discount: 'ส่วนลด',
@@ -46,56 +45,43 @@ function quantityCell(item, language = 'TH') {
   return unit ? `${shown} ${unit}` : shown;
 }
 
-// `reflow-cards` (styles.css ~L1330, mirrored by every other DataTable-style grid in this app —
-// see OvertimePanel.jsx's OVERTIME_TABLE_GRID for the same pattern): below 720px it hides
-// `.table-head` and turns each `.data-row` into a single-column card whose `[data-label]` cells
-// print their own label via `::before`. Plain `mobile:grid-cols-1` (the previous rule here) only
-// stacked the six columns into six rows apiece with no labels — the head row's six orphan
-// headings and every body value unlabelled.
+// `reflow-cards` (styles.css): below 720px it hides `.table-head` and turns each `.data-row` into a
+// single-column card whose `[data-label]` cells print their own label via `::before` (see
+// OvertimePanel.jsx's OVERTIME_TABLE_GRID for the same pattern). Plain `mobile:grid-cols-1` would
+// stack the six columns with the head row's six orphan headings and every body value unlabelled.
 // ── Column floors: FIXED, identical in every row, and NOT band-scoped ────────────────────────
-// Two separate problems, one line.
-//
-// 1. A money column must never be shrunk below its own text. Every numeric track used to be
-//    `minmax(0, …)`, which lets the grid do exactly that, and `.data-row > span` is `nowrap` with
-//    `text-overflow: ellipsis` — so the loss did not show up as overflow, it showed up as a
-//    silently truncated baht figure. Measured on the demo's ฿1,524,369.36 line, เป็นเงิน was cut
-//    at every table width under 850px, and (this is the part the first attempt got wrong) ALSO on
-//    desktop at 1041–1150px, where the sidebar returns. So the floors are deliberately ungated:
-//    they fix a clip that was never confined to the tablet band.
+// 1. A money column must never be shrunk below its own text: `minmax(0, …)` lets the grid do that
+//    and `.data-row > span` is `nowrap` with `text-overflow: ellipsis`, so the loss shows up as a
+//    silently truncated baht figure (a ฿1,524,369.36 line was cut at every table width under 850px
+//    and on desktop at 1041–1150px, where the sidebar returns). So the floors are deliberately
+//    ungated.
 //
 // 2. The floors must be FIXED lengths, not `min-content`. The head row and each data row are
-//    SEPARATE grid containers, so `min-content` sizes every row from ITS OWN numbers: a row
-//    holding ฿1,524,369.36 floors its last track wide and squeezes the rest, while the row below
-//    it does not. Right-aligned currency then staggers row to row, and the header sits over
-//    neither — measured at up to 23px of drift at 721px, and 19px at 1041px. On a view whose whole
-//    job is to look like the printed form, that reads as broken. Fixed floors give every row the
-//    identical track list, so the columns stay on one rail at any width.
+//    SEPARATE grid containers, so `min-content` sizes every row from ITS OWN numbers and
+//    right-aligned currency staggers row to row (up to 23px of drift at 721px). Fixed floors give
+//    every row the identical track list.
 //
 // The values are the measured min-content of each column's WIDEST formattable value at the app's
 // 16px root (999,999 แผ่น · ฿999,999.99 · 99.99% · ฿999,999.99 · ฿999,999,999.99 → 90/88/54/88/123px),
-// rounded up — EXCEPT เป็นเงิน, which is sized for the FALLBACK font rather than Sarabun. Sarabun
-// arrives from Google Fonts with `display=swap`, so during the swap window, and permanently on the
-// on-prem deployment if that host cannot reach fonts.googleapis.com, `system-ui` renders instead
-// and every figure is ~14% wider: ฿99,999,999.99 measures 114px in Sarabun but 130.5px in the
-// fallback. A 7.75rem/124px floor covers Sarabun and silently clips the fallback from about ฿10M a
-// line upward, which a large project reaches. 8.25rem/132px covers both. It costs รายละเอียด 8px
-// at the narrowest in-band width, which is the right trade: the description wraps, the total does
-// not. They total 28.5rem; with gaps and panel padding that leaves ~100px for รายละเอียด in
-// the narrowest in-band container (655px at a 721px viewport), which is fine because รายละเอียด is
-// the one column that WRAPS — it is meant to absorb the squeeze, which is why it keeps `minmax(0, …)`.
+// rounded up, EXCEPT เป็นเงิน, which is sized for the FALLBACK font rather than Sarabun (Sarabun
+// arrives with `display=swap`, and on-prem, if fonts.googleapis.com is unreachable, `system-ui`
+// renders permanently, ~14% wider: ฿99,999,999.99 is 114px in Sarabun but 130.5px in the
+// fallback). 8.25rem/132px covers both. It costs รายละเอียด 8px at the narrowest in-band width, the
+// right trade: the description wraps, the total does not. They total 28.5rem; with gaps and panel
+// padding that leaves ~100px for รายละเอียด in the narrowest in-band container (655px at a 721px
+// viewport), which is fine because รายละเอียด is the one column that WRAPS, so it keeps
+// `minmax(0, …)`.
 //
-// `tablet:min-w-0` then releases `.reflow-cards`'s shared 900px floor for 721–1040px. THAT part is
-// band-scoped, and it is safe only because of the floors above: the table now shrinks to what its
-// numbers actually need instead of scrolling 245px sideways inside a 655px container (owner review,
-// 2026-09-10). styles.css loads in `layer(legacy)`, so the utility wins on layer order without
-// `!important`. Below 721px none of this applies — that band's own `min-width: 0 !important` and
-// `grid-template-columns: 1fr !important` turn these rows into labelled cards.
+// `tablet:min-w-0` releases `.reflow-cards`'s shared 900px floor for 721–1040px. THAT part is
+// band-scoped, and safe only because of the floors above. styles.css loads in `layer(legacy)`, so
+// the utility wins on layer order without `!important`. Below 721px none of this applies: that
+// band's own `min-width: 0 !important` and `grid-template-columns: 1fr !important` turn these rows
+// into labelled cards.
 const ITEM_GRID = 'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)] tablet:min-w-0 reflow-cards';
 
 /**
- * Read-only "clean document" view of a non-draft (or not-editable-by-this-viewer) quotation --
- * the plan's "Read view (non-draft) shows the same data as a clean document-like summary with the
- * signature block names (ผู้พิมพ์ / พนักงานขาย / ผู้จัดการฝ่ายขาย)".
+ * Read-only "clean document" view of a non-draft (or not-editable-by-this-viewer) quotation: a
+ * document-like summary with the signature block names (ผู้พิมพ์ / พนักงานขาย / ผู้จัดการฝ่ายขาย).
  */
 export function QuotationDocumentView({ quotation }) {
   const status = dealQuotationStatusLabel(quotation.docStatus);
@@ -107,11 +93,10 @@ export function QuotationDocumentView({ quotation }) {
   // employee has none on file — the renderer's rule (DealQuotationDto's *NameEn javadoc), so the
   // screen never shows an empty slot the paper would have filled.
   const name = (en, th) => (language === 'EN' ? (en || th) : th);
-  // V179 (owner feedback #4, 2026-09-14) — print-only ผู้พิมพ์/พนักงานขาย name override. Mirrors
-  // DealQuotationRenderAdapter#printedByName / #salesRepDisplayNameOrReal /
-  // #salesRepDisplayPhoneOrReal exactly, so this "clean document" preview can never show a
-  // different name than what the actual PDF/XLSX prints. Neither createdById/createdByName nor
-  // salesRepId/salesRepName themselves are touched — only which value this VIEW reads.
+  // Print-only ผู้พิมพ์/พนักงานขาย name override. Mirrors DealQuotationRenderAdapter#printedByName /
+  // #salesRepDisplayNameOrReal / #salesRepDisplayPhoneOrReal exactly, so this preview never shows a
+  // different name than the PDF/XLSX prints. createdById/createdByName and salesRepId/
+  // salesRepName are not touched, only which value this VIEW reads.
   const printedByName = quotation.printedByDisplayId != null
     ? name(quotation.printedByDisplayNameEn, quotation.printedByDisplayName)
     : name(quotation.createdByNameEn, quotation.createdByName);
@@ -120,7 +105,7 @@ export function QuotationDocumentView({ quotation }) {
     : name(quotation.salesRepNameEn, quotation.salesRepName);
   const quotedByPhone = quotation.salesRepDisplayId != null
     ? quotation.salesRepDisplayPhone : quotation.salesRepPhone;
-  // Owner ruling 2026-10-13: the paper prints ONLY the ผู้ติดต่อ phone/email typed on the quotation,
+  // The paper prints ONLY the ผู้ติดต่อ phone/email typed on the quotation,
   // and nothing when blank -- no customer-master or contact fallback -- so this panel shows the same.
   const typedPhone = stripPhoneLabel(quotation.orderedByPhone);
   const contactLine = joinPresent([
@@ -128,8 +113,8 @@ export function QuotationDocumentView({ quotation }) {
     typedPhone ? `โทร. ${typedPhone}` : null,
     quotation.orderedByEmail?.trim(),
   ]);
-  // V192.3 — ผู้ติดต่อ's Phone and Email: printed by DealQuotationRenderAdapter when filled
-  // (owner ruling 2026-10-13). Only the ones that were typed, so a missing one leaves no bare label.
+  // ผู้ติดต่อ's Phone and Email: printed by DealQuotationRenderAdapter when filled. Only the ones
+  // that were typed, so a missing one leaves no bare label.
   const salesContact = [['Phone', quotation.orderedByPhone], ['Email', quotation.orderedByEmail]]
     // A label-only phone ("โทร.") prints nothing, so it earns no block either; the raw value is shown.
     .filter(([label, value]) => (label === 'Phone' ? stripPhoneLabel(value) : value?.trim()));
@@ -144,12 +129,10 @@ export function QuotationDocumentView({ quotation }) {
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">โครงการ</span>
             <strong>{quotation.projectName ?? '-'}</strong>
-            {/* Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The PRINTED
-                document drops its "Project : …" line (DealQuotationRenderAdapter). This screen is
-                the internal view of the same document — the approver still needs to know which
-                project they are approving — so the name stays and the difference is said in
-                words beside it, rather than leaving screen and paper silently unequal. Only when
-                there is a name to hide: with none, nothing prints either way. */}
+            {/* The PRINTED document drops its "Project : …" line (DealQuotationRenderAdapter). This
+                screen is the internal view of the same document and the approver still needs to know
+                which project they are approving, so the name stays and the difference is said in
+                words beside it. Only when there is a name to hide. */}
             {quotation.hideProjectName && quotation.projectName?.trim() ? (
               <span className="block text-xs text-text-muted" data-testid="doc-project-hidden">
                 ไม่แสดงในใบเสนอราคา
@@ -164,11 +147,10 @@ export function QuotationDocumentView({ quotation }) {
             <span className="block text-2xs font-bold uppercase text-text-muted">วันที่เอกสาร</span>
             <strong>{formatThaiDate(quotation.quotationDate)}</strong>
           </div>
-          {/* The header lines the printed document carries (owner, 2026-09-11) — each rendered ONLY
-              when it has a value, so a missing one leaves no bare label and no dangling separator
-              (joinPresent). The contact name is the FROZEN snapshot the DTO carries; the phone and
-              e-mail are ONLY ผู้ติดต่อ's typed ones (V192.3, owner ruling 2026-10-13) -- what the
-              renderer prints. */}
+          {/* The header lines the printed document carries, each rendered ONLY when it has a value,
+              so a missing one leaves no bare label and no dangling separator (joinPresent). The
+              contact name is the FROZEN snapshot the DTO carries; the phone and e-mail are ONLY
+              ผู้ติดต่อ's typed ones, what the renderer prints. */}
           {contactLine ? (
             <div data-testid="doc-contact">
               {/* "ติดต่อผู้สั่งซื้อ", not a second "ผู้สั่งซื้อ": that word already heads the fourth
@@ -178,9 +160,9 @@ export function QuotationDocumentView({ quotation }) {
               <strong>{contactLine}</strong>
             </div>
           ) : null}
-          {/* V192.3 — ผู้ติดต่อ's typed Phone and Email, listed under their own words; they also
-              print (owner ruling 2026-10-13, reversing 2026-10-06's "sales record only") in the
-              ติดต่อผู้สั่งซื้อ / โทร. cells around it, and the note says so. `min-w-0` + overflow-wrap because an address has no spaces to break at. */}
+          {/* ผู้ติดต่อ's typed Phone and Email, listed under their own words; they also print in the
+              ติดต่อผู้สั่งซื้อ / โทร. cells around it, and the note says so. `min-w-0` + overflow-wrap
+              because an address has no spaces to break at. */}
           {salesContact.length ? (
             <div className="min-w-0" data-testid="doc-sales-contact">
               <span className="block text-2xs font-bold uppercase text-text-muted">ผู้ติดต่อ</span>
@@ -225,12 +207,10 @@ export function QuotationDocumentView({ quotation }) {
         {quotation.items.map((item, index) => (
           <div key={item.id ?? item.seq} className={`${ITEM_GRID} data-row`} data-line-type={lineTypeOf(item)}>
             <span data-label={labels.description} className="min-w-0">
-              {/* ONE ตำแหน่งติดตั้ง heading per RUN of equal labels (owner feedback F1,
-                  2026-09-10) — the same grouping the renderer applies to the printed document,
-                  and the same one locationGroupsFromItems rebuilds in the editor. Repeating the
-                  label on every row of a six-tile floor was the thing the owner was reacting to.
-                  Compared against the PREVIOUS item's label, never against a collected set, so
-                  the run structure survives an item order the rep chose deliberately. */}
+              {/* ONE ตำแหน่งติดตั้ง heading per RUN of equal labels: the same grouping the renderer
+                  applies to the printed document and locationGroupsFromItems rebuilds in the editor.
+                  Compared against the PREVIOUS item's label, never a collected set, so the run
+                  structure survives an item order the rep chose deliberately. */}
               {/* These sub-lines are <span>, NOT <div>, and that is load-bearing rather than a
                   style preference. `styles.css` clips on the WRAPPER — `.data-row > span` is
                   `white-space: nowrap; text-overflow: ellipsis` — and its escape hatch (the
@@ -247,11 +227,11 @@ export function QuotationDocumentView({ quotation }) {
               <span className="font-bold">{item.descriptionLine}</span>
               {item.sizeLine ? <span className="text-2xs text-text-muted">{item.sizeLine}</span> : null}
               {item.calculationLine ? <span className="text-2xs text-text-muted">{item.calculationLine}</span> : null}
-              {/* v3: "(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)" under a SPECIAL_SQM tile —
+              {/* "(ราคาพิเศษ 1,350 บาท/ตรม ราคารวมภาษีมูลค่าเพิ่ม)" under a SPECIAL_SQM tile —
                   a <span> for the same wrapper-clip reason as the two lines above. */}
               {item.specialPriceLine ? <span className="text-2xs text-text-muted">{item.specialPriceLine}</span> : null}
             </span>
-            {/* v3: a ส่วนลดพิเศษ row prints จำนวน -1, NO unit, NO ส่วนลด, a POSITIVE ราคา and
+            {/* A ส่วนลดพิเศษ row prints จำนวน -1, NO unit, NO ส่วนลด, a POSITIVE ราคา and
                 คงเหลือ and a NEGATIVE เป็นเงิน — her QN6900704-2, and what the server already
                 stores (quantity -1 × a positive net IS the negative amount), so nothing here is
                 special-cased beyond the two empty cells. */}
@@ -263,7 +243,7 @@ export function QuotationDocumentView({ quotation }) {
           </div>
         ))}
         <div className="flex flex-col items-end gap-1 border-t border-border px-5 py-4">
-          {/* v3b: the English form has NO subtotal/VAT rows — only Grand Total (USD). */}
+          {/* The English form has NO subtotal/VAT rows — only Grand Total (USD). */}
           {labels.vat ? (
             <>
               <span className="text-sm text-text-muted">{labels.subtotal} <span className="tabular-nums text-text">{money(quotation.subtotalAmount)}</span></span>
@@ -276,11 +256,9 @@ export function QuotationDocumentView({ quotation }) {
 
       <Panel title="เงื่อนไข">
         <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1 text-sm">
-          {/* Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): depositPercent === 0 reads as
-              "ไม่รับมัดจำ", not a phantom "0%" deposit demand (the same fix
-              DealQuotationRenderAdapter#depositLine already made for the printed document) — and
-              ส่วนที่เหลือ becomes เงื่อนไขการชำระเงิน, since a remainder is meaningless once there
-              is no deposit to take a remainder of. */}
+          {/* depositPercent === 0 reads as "ไม่รับมัดจำ", not a phantom "0%" deposit demand (as
+              DealQuotationRenderAdapter#depositLine does for the printed document), and ส่วนที่เหลือ
+              becomes เงื่อนไขการชำระเงิน, since a remainder is meaningless once there is no deposit. */}
           <div><span className="block text-2xs font-bold uppercase text-text-muted">มัดจำ</span>
             <strong>{quotation.depositPercent === 0 ? 'ไม่รับมัดจำ' : (quotation.depositPercent != null ? `${quotation.depositPercent}%` : '-')}</strong>
           </div>
@@ -291,9 +269,9 @@ export function QuotationDocumentView({ quotation }) {
             <strong>
               {quotation.depositPercent === 0 ? (
                 quotation.fullPaymentTerm ? fullPaymentTermLabel(quotation.fullPaymentTerm)
-                  // LEGACY (pre-V181): a zero-deposit row saved before this feature has no term —
-                  // mirror DealQuotationRenderAdapter#depositLine's own remainderMode-based
-                  // fallback text so this summary never disagrees with the printed document.
+                  // LEGACY: a zero-deposit row saved before the term existed has no term — mirror
+                  // DealQuotationRenderAdapter#depositLine's own remainderMode-based fallback text
+                  // so this summary never disagrees with the printed document.
                   : (quotation.remainderMode === 'CREDIT' && quotation.creditDays
                       ? `ชำระเต็มจำนวนเป็นเครดิต ${quotation.creditDays} วัน`
                       : 'ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า')
@@ -302,9 +280,8 @@ export function QuotationDocumentView({ quotation }) {
               )}
             </strong>
           </div>
-          {/* V178: DATE mode shows the rep's exact ภายในวันที่ deadline (validityUntil) instead of
-              a day count — same date format (formatThaiDate) the DAYS branch already used for
-              validityDate below it. */}
+          {/* DATE mode shows the rep's exact ภายในวันที่ deadline (validityUntil) instead of a day
+              count, in the same date format (formatThaiDate) as the DAYS branch below. */}
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">ยืนราคา</span>
             <strong>

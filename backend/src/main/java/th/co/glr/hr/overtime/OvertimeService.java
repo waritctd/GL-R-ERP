@@ -120,7 +120,7 @@ public class OvertimeService {
             effectiveTo,
             parseStatus(requestedStatus)
         ));
-        // feat/ot-nonworkday-rate-suggestion: batch-loaded, not a per-row lookup -- see
+        // Batch-loaded, not a per-row lookup -- see
         // attachSuggestions' Javadoc. Mirrors AttendanceDailyService#list's identical
         // division/department/holiday batching for the same reason: a per-row
         // OvertimeRepository#findDivisionId call here would be an N+1 on a screen that can list a
@@ -170,26 +170,22 @@ public class OvertimeService {
         validateEmployee(employeeId);
         validatePlannedWindow(request);
         validateRetroactiveWindow(request);
-        // Opus review finding F2: this used to live at the BOTTOM of validateRetroactiveWindow,
-        // which returns early for a work date that is today or later -- so a closed payroll month
-        // was only refused for BACKDATED submissions. Hoisted here so it runs for every submit,
-        // matching what this guard's own javadoc has always claimed. Harmless for the current
-        // seed-covered case (Jan-Jun 2026 is entirely in the past, so the old placement did fire),
-        // but the gap was real: record coverage for a current month and same-day OT sailed past
-        // submit, only to be refused a stage later at manager approval -- surfacing the error to
-        // the wrong person, after the request had already entered the queue.
+        // Not inside validateRetroactiveWindow: that returns early for a work date that is today or
+        // later, so a closed payroll month would only be refused for BACKDATED submissions. Checked
+        // here for every submit, otherwise same-day OT in a closed month would sail past submit
+        // and be refused a stage later at manager approval -- surfacing the error to the wrong
+        // person, after the request had already entered the queue.
         requirePayrollMonthOpen(request.workDate());
 
         int plannedMinutes = minutesBetween(request.plannedStartAt(), request.plannedEndAt());
         LocalDate payrollMonth = request.workDate().withDayOfMonth(1);
         // SECURITY: request.dayType() is unauthenticated client input and is deliberately never
-        // used to set pay -- it used to be (see git history / the P0 this fixed), which let a
-        // caller self-declare HOLIDAY (3.00x) on an ordinary Tuesday and get paid double what the
+        // used to set pay -- trusting it would let a caller self-declare HOLIDAY (3.00x) on an
+        // ordinary Tuesday and get paid double what the
         // work was worth, with nothing in the approval UI to contradict the lie. day_type/
         // pay_rate_multiplier at submit are always DERIVED -- from hr.holiday (V115) OR the
         // employee's resolved WorkSchedule non-workday, via suggestDayType -- never DECLARED by the
-        // caller. THIS STILL HOLDS after feat/ot-nonworkday-rate-suggestion: what changed is that an
-        // AUTHORIZED APPROVER may later override the suggestion at approval time (see
+        // caller. An AUTHORIZED APPROVER may later override the suggestion at approval time (see
         // ApproveOvertimeRequest.dayType, honoured only inside managerApprove/ceoDirectApprove,
         // from an actor who already passed this request's approve gate) -- request.dayType() here
         // is the submitter's own field, and it is a REQUEST, not a pay input, at every stage. It is
@@ -311,14 +307,12 @@ public class OvertimeService {
         requireCeo(user);
         requirePayrollMonthOpen(existing.workDate());
 
-        // request.dayType() is DELIBERATELY never read here. The freeze point does not move
-        // (feat/ot-nonworkday-rate-suggestion): day_type/pay_rate_multiplier were already computed
-        // and frozen at managerApprove, on the two-stage route this method is the second half of --
-        // this final CEO sign-off inherits that decision, same as payable_minutes/salary_basis
-        // already do (see OvertimeRepository#ceoApprove's SQL, which does not write those columns
-        // at all). Letting the CEO override a second time here would need a second decision point;
-        // that is out of scope for this fix -- see ApproveOvertimeRequest's Javadoc and this fix's
-        // PR body.
+        // request.dayType() is DELIBERATELY never read here. day_type/pay_rate_multiplier were
+        // already computed and frozen at managerApprove, on the two-stage route this method is the
+        // second half of -- this final CEO sign-off inherits that decision, same as
+        // payable_minutes/salary_basis already do (see OvertimeRepository#ceoApprove's SQL, which
+        // does not write those columns at all). Letting the CEO override a second time here would
+        // need a second decision point -- see ApproveOvertimeRequest's Javadoc.
         int updated = overtimeRepository.ceoApprove(id, actorEmployeeId, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
@@ -420,18 +414,17 @@ public class OvertimeService {
         OvertimeRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
         boolean manager = managesEmployee(existing.employeeId(), user);
-        // CEO-approval-reach follow-on (2026-09-01 owner ruling): "whoever approves it can also
-        // cancel it". Round 1 excluded a reports-to-an-executive employee's division manager from
-        // `manager` above (correctly -- managesEmployee), but left such a request cancellable by
-        // NOBODY once past SUBMITTED: self-cancel is SUBMITTED-only (see the status guard below),
-        // and the division manager who would ordinarily fill the "manager" role here has no
-        // standing for this employee at all. A ceo actor now gets the SAME manager-equivalent
-        // reach `manager` would have given a division manager, but ONLY when there genuinely is no
+        // Whoever approves it can also cancel it. `manager` above excludes a
+        // reports-to-an-executive employee's division manager (managesEmployee), which would leave
+        // such a request cancellable by NOBODY once past SUBMITTED: self-cancel is SUBMITTED-only
+        // (see the status guard below), and the division manager who would ordinarily fill the
+        // "manager" role here has no standing for this employee at all. A ceo actor gets the SAME
+        // manager-equivalent reach `manager` would have given a division manager, but ONLY when there genuinely is no
         // manager stage for this employee (hasManagerStage false) -- an employee who DOES have a
         // reachable division manager is unaffected, so this does not hand the CEO a second,
         // parallel cancel path for every ordinary request. Self is deliberately excluded (mirrors
         // managesEmployee's own self-exclusion): a CEO cancelling their OWN overtime is untouched
-        // by this ruling and keeps the ordinary self-cancel (SUBMITTED-only) rule below.
+        // by this and keeps the ordinary self-cancel (SUBMITTED-only) rule below.
         boolean ceoActingForManagerlessEmployee = !manager
             && "ceo".equals(user.role())
             && existing.employeeId() != actorEmployeeId
@@ -471,7 +464,7 @@ public class OvertimeService {
      * once and not re-priced later (see {@code OvertimeRepository#findSalaryBasisAsOf}'s Javadoc
      * and {@code PayrollRepository#findApprovedOvertimePayByEmployee}'s comment on the same rule).
      *
-     * <p>{@code dayType} is what actually becomes pay (feat/ot-nonworkday-rate-suggestion): {@code
+     * <p>{@code dayType} is what actually becomes pay: {@code
      * approverDayType}, when the approver supplied one, WINS outright; otherwise this falls back to
      * {@link #suggestDayType}, re-derived HERE at approval time rather than trusted from whatever
      * was stored at submit — the calendar/schedule can be corrected between submission and
@@ -530,8 +523,7 @@ public class OvertimeService {
     }
 
     /**
-     * The system's SUGGESTION for {@code dayType} -- one of THREE distinct values this fix
-     * (feat/ot-nonworkday-rate-suggestion) introduces (see this fix's PR body for the full model):
+     * The system's SUGGESTION for {@code dayType} -- one of THREE distinct values:
      * the system's suggestion (this method, never a pay input by itself), the employee's REQUEST
      * ({@code SubmitOvertimeRequest.dayType}, pre-filled from this but freely editable, never a pay
      * input either), and the approver's DECISION ({@link ApproveOvertimeRequest#dayType}, the ONLY
@@ -570,9 +562,8 @@ public class OvertimeService {
      * day_type}/{@code pay_rate_multiplier} written at {@link #submit}, and is the DEFAULT {@link
      * #calculate} falls back to at {@link #managerApprove}/{@link #ceoDirectApprove} -- but the
      * approver may override it with an explicit {@link ApproveOvertimeRequest#dayType}, and THAT
-     * choice, not this method's answer, is what actually freezes into pay. This is the policy
-     * change this fix makes: the schedule/holiday rows in the DB may be wrong, so nothing pays 3x
-     * without a human confirming it at approval.
+     * choice, not this method's answer, is what actually freezes into pay. The schedule/holiday
+     * rows in the DB may be wrong, so nothing pays 3x without a human confirming it at approval.
      */
     private OvertimeDayType suggestDayType(long employeeId, LocalDate workDate) {
         boolean holiday = holidayCalendar.isHoliday(workDate);
@@ -609,20 +600,18 @@ public class OvertimeService {
      *       ordinary working day" -- AND the calendar has ZERO rows for the work date's year at all
      *       (see {@link HolidayCalendar#hasHolidaysForYear}'s Javadoc). That is worth flagging: an
      *       unrecorded public holiday could still be hiding on this date, and nobody has loaded the
-     *       year to rule it out. <b>Narrowed</b> (feat/ot-nonworkday-rate-suggestion) from "fires
-     *       whenever the calendar has zero rows for the year, unconditionally" to "fires only when
-     *       the suggestion is WORKDAY": a suggestion of HOLIDAY is never unverified in this sense --
-     *       it is either a recorded {@code hr.holiday} row (unambiguous) or the employee's own
+     *       year to rule it out. It fires only when the suggestion is WORKDAY, not whenever the
+     *       calendar has zero rows for the year: a suggestion of HOLIDAY is never unverified in
+     *       this sense -- it is either a recorded {@code hr.holiday} row (unambiguous) or the employee's own
      *       resolved non-workday (a weekend, or a six-day schedule's Sunday), and a schedule-derived
      *       non-workday does not become less certain just because nobody has also loaded the
      *       public-holiday calendar for the year.
      *   <li><b>The claim disagrees with the suggestion.</b> The employee's {@code dayType} field is
-     *       a REQUEST the submit form pre-fills from the suggestion but leaves freely editable
-     *       (owner ruling, 2026-08-08) — they may submit a value that disagrees with it, in EITHER
-     *       direction, and the request is accepted either way. <b>This replaces</b> the previous
-     *       behaviour of refusing an over-claim outright (400) when the calendar could actively
-     *       disprove it — see this fix's PR body for why that refusal was removed. The disagreement
-     *       is flagged here instead, for the approver to see before they decide.
+     *       a REQUEST the submit form pre-fills from the suggestion but leaves freely editable —
+     *       they may submit a value that disagrees with it, in EITHER direction, and the request is
+     *       accepted either way (an over-claim is NOT refused with a 400, even when the calendar
+     *       could disprove it). The disagreement is flagged here instead, for the approver to see
+     *       before they decide.
      * </ol>
      *
      * <pre>
@@ -637,7 +626,7 @@ public class OvertimeService {
      * <p>An unrecognised non-blank claim string is still refused outright (400) by {@link
      * #parseOvertimeDayType}, called first, unconditionally -- that is a 400 about SYNTAX (the
      * value is not a recognised {@link OvertimeDayType} name), not about the claim being wrong, and
-     * this fix does not relax it.
+     * this method does not relax it.
      */
     private String resolveDayTypeSubmitNote(String claim, OvertimeDayType suggested, LocalDate workDate) {
         OvertimeDayType claimedDayType = parseOvertimeDayType(claim);
@@ -763,8 +752,8 @@ public class OvertimeService {
     }
 
     /**
-     * Bounds a retroactive request. Advance notice was removed on CEO instruction — anyone may file
-     * for today or for a past date, including for themselves — so the only remaining limits are
+     * Bounds a retroactive request. There is no advance-notice rule — anyone may file
+     * for today or for a past date, including for themselves — so the only limits are
      * that the claim must still be payable and that the employee has explained why it is late.
      */
     private void validateRetroactiveWindow(SubmitOvertimeRequest request) {
@@ -858,12 +847,11 @@ public class OvertimeService {
      * True when {@code user} manages the given employee: a ฝ่าย manager sharing the employee's
      * division, excluding self, AND the employee does not report to an active executive.
      *
-     * <p>{@code reports_to_employee_id} deliberately does NOT grant approval rights. It used to,
-     * and was removed on the owner's instruction so that overtime matches
-     * {@code AttendanceService.resolveScope}, which has always been division-only. The self
+     * <p>{@code reports_to_employee_id} deliberately does NOT grant approval rights, so that
+     * overtime matches {@code AttendanceService.resolveScope}, which is division-only. The self
      * exclusion is what sends a ผู้จัดการ's own request straight to the CEO.
      *
-     * <p><b>CEO-approval-reach follow-on (2026-09-01):</b> {@code reports_to_employee_id} now DOES
+     * <p><b>CEO-approval reach:</b> {@code reports_to_employee_id} DOES
      * feed into this decision, but only to REMOVE a manager, never to grant one -- an employee whose
      * {@code reports_to_employee_id} points at an active executive (division {@code md}, or a
      * position containing "กรรมการ") has no manager stage at all, regardless of what their division
@@ -961,12 +949,6 @@ public class OvertimeService {
         );
     }
 
-    private void requireStatus(OvertimeRequestDto request, OvertimeStatus status) {
-        if (!status.name().equals(request.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
-        }
-    }
-
     private boolean canViewAll(UserPrincipal user) {
         return user != null && VIEW_ALL_ROLES.contains(user.role());
     }
@@ -975,9 +957,8 @@ public class OvertimeService {
      * Notifies whoever can actually act on the new request — the employee's ฝ่าย manager(s), or the
      * CEO when there is no manager stage.
      *
-     * <p>This used to notify {@code reports_to_employee_id}. That became wrong the moment approval
-     * went division-only: it put the request in front of someone who cannot clear it, while the
-     * person who can never heard about it. Reading the approver list from the same place the routing
+     * <p>Not {@code reports_to_employee_id}: approval is division-only, so that would put the request
+     * in front of someone who cannot clear it, while the person who can never hears about it. Reading the approver list from the same place the routing
      * decision comes from is what keeps the two in step.
      */
     private void notifySubmitted(OvertimeRequestDto request) {

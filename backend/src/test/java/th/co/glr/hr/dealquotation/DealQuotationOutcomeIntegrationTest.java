@@ -88,13 +88,13 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-DB coverage for GLA-123 slice S3: customer outcome (R9) on a PRICING_REQUEST-origin
+ * Real-DB coverage for customer outcome (R9) on a PRICING_REQUEST-origin
  * quotation, the R8 one-finalized-quotation-per-deal guard across BOTH คำขอราคา origins (this new
  * engine AND the legacy {@code customerquotation/} chain, which share ONE {@code sales.quotation}
  * table), and confirm order (R9, {@code OrderConfirmationService#confirmOrder} reused unchanged).
  *
  * <p>Fixture setup is a trimmed copy of {@code DealQuotationPricingRequestApprovalIntegrationTest}
- * (S2's own suite) — same helper shapes — PLUS the legacy {@link CustomerQuotationService} and
+ * — same helper shapes — PLUS the legacy {@link CustomerQuotationService} and
  * {@link OrderConfirmationService} wiring {@code OrderConfirmationIntegrationTest} uses, since R8
  * and confirm-order both genuinely span both engines / the Step 6 bridge.
  */
@@ -193,7 +193,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             legacyQuotationRepository);
         orderConfirmation = new OrderConfirmationService(
             pricingRequests, tickets, ticketService, legacyQuotationRepository, depositNoticeService, notifications);
-        // GLA-123 slice S3 BLOCKER 2 fix — without this wiring, reconcileTicketItems silently
+        // Without this wiring, reconcileTicketItems silently
         // falls back to the PR item's own requestedQty for every test in this file, which would
         // make the "quantity edited on the quotation" regression test below pass vacuously.
         orderConfirmation.wireDealQuotationRepository(quotationRepository);
@@ -244,10 +244,10 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     // ── Deposit notice from the pricing-request route when the accepted quotation is NEW-engine ──
-    // QA finding 2026-10-18 (develop QA stack): DealDepositPanel/DepositNoticePage call
+    // DealDepositPanel/DepositNoticePage call
     // POST /pricing-requests/{id}/deposit-notice whenever a QUOTATION_ACCEPTED pricing request exists;
-    // that route read only legacy CustomerQuotation rows and answered 409 for every deal quoted
-    // through DealQuotationService.createFromPricingRequest. Direct quotations never take this route.
+    // that route must also read NEW-engine quotations (reading only legacy CustomerQuotation rows
+    // answers 409 for every deal quoted through DealQuotationService.createFromPricingRequest). Direct quotations never take this route.
 
     @Test
     void createDepositNoticeFromQuotation_newEngineIssuedNotAccepted_still409() {
@@ -290,7 +290,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(depositNoticeCount()).isZero();
     }
 
-    /** #1170's quotation guards, reached only by a deal still REQUIRED with a 0% quotation (confirmed
+    /** The quotation guards, reached only by a deal still REQUIRED with a 0% quotation (confirmed
      * before the policy sync): both routes refuse on the quotation and write nothing. */
     @Test
     void createDepositNotice_requiredDealWithZeroQuotation_bothRoutes409OnTheQuotation_andWriteNothing() {
@@ -330,8 +330,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", ticketId), Long.class)).isZero();
     }
 
-    /** The ticket route (POST /api/tickets/{id}/deposit-notice/draft) had no owner check, unlike
-     * update/issue: another rep could draft on this deal and read its lines, prices and customer. */
+    /** The ticket route (POST /api/tickets/{id}/deposit-notice/draft) must check the owner, like
+     * update/issue: otherwise another rep could draft on this deal and read its lines, prices and customer. */
     @Test
     void createDraft_ticketRoute_byNonOwningSales_refusedAndWritesNothing() {
         var emptyRequest = new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null);
@@ -382,7 +382,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     /** Engines are exclusive per pricing request, not per ticket: a sibling pricing request's
      * older legacy ISSUED quotation must not supply the lines or the percent of the draft, on
      * either route. The customer answered this quotation and not the sibling, so it governs the
-     * ticket route too (owner ruling 2026-10-23). The draft bills this quotation's own percent, a
+     * ticket route too. The draft bills this quotation's own percent, a
      * NULL one as the 30% its PDF prints. */
     @ParameterizedTest(name = "quotation percent {0} bills {1}")
     @CsvSource({", 0.30", "20, 0.20"})
@@ -470,7 +470,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         }
     }
 
-    // ── A ไม่รับมัดจำ quotation puts the deal on the no-deposit payment path (owner ruling 2026-10-22) ──
+    // ── A ไม่รับมัดจำ quotation puts the deal on the no-deposit payment path ──
     // confirmOrder syncs sales.ticket.deposit_policy from the confirmed quotation's 0%, so the import
     // request and final-payment gates open without a manual waiveDeposit, and no route can bill a deposit.
 
@@ -534,7 +534,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /** Both draft routes refuse a deal whose policy bypasses the deposit notice. A 30% quotation keeps
-     * #1166's percent guard out of the way, so the PR route reaches the shared policy check. */
+     * percent guard out of the way, so the PR route reaches the shared policy check. */
     @Test
     void depositDraft_onAWaivedDeal_bothRoutes409OnThePolicy_andWriteNothing() {
         DealQuotationDto accepted = acceptedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"), 30);
@@ -555,7 +555,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(depositNoticeCount()).isZero();
     }
 
-    /** Review finding 2026-10-22: issue() never checked the amount. A deal confirmed before the policy
+    /** issue() must check the amount. A deal confirmed before the policy
      * sync shipped is still REQUIRED, and its ticket-route draft reads the quotation's 0% per ticket. */
     @Test
     void issue_zeroAmountDraft_409_staysDraft_andConsumesNoNumber() {
@@ -668,8 +668,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.EXPIRED);
     }
 
-    /** QA-13: a customer-change revision supersedes the request but leaves its ISSUED quotation
-     * live (owner ruling 2026-08-13). No outcome may be recorded on that quotation — the
+    /** A customer-change revision supersedes the request but leaves its ISSUED quotation
+     * live. No outcome may be recorded on that quotation — the
      * revision is the live chain now. */
     @Test
     void recordOutcome_onIssuedQuotationOfASupersededPricingRequest_refused_writesNothing() {
@@ -709,7 +709,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             .docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
     }
 
-    /** F4 (QA-13 sibling): revising the ISSUED quotation of a SUPERSEDED or CANCELLED request is refused too. */
+    /** Sibling of the customer-change case above: revising the ISSUED quotation of a SUPERSEDED or CANCELLED request is refused too. */
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"SUPERSEDED", "CANCELLED"})
     void createRevision_onIssuedQuotationOfADeadPricingRequest_refused_writesNothing(String deadStatus) {
@@ -728,16 +728,13 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", issued.id()), Long.class)).isZero();
     }
 
-    /** GLA-123 slice S3 BLOCKER-B fix (Opus review against real Postgres, 2026-09-23):
-     * REVISION_REQUESTED was missing from {@code hasLivePricingRequestQuotation}'s non-live set,
-     * even though S3 (this slice's own recordOutcome) is what makes that outcome reachable —
-     * proven end to end against real Postgres before the fix: create refused (409, "a live
-     * quotation still exists"), cancel/update refused (not DRAFT), re-recording an outcome
-     * refused (not ISSUED), and the expiry sweep never touches it (ISSUED-only). Every exit
-     * 409'd — a permanent dead end for any deal the customer asked to change. NOT D12 (revising an
-     * ACCEPTED quotation, out of scope) — this is an ISSUED quotation, squarely R9/S3's own
-     * concern. Fixed by adding REVISION_REQUESTED to the non-live set, the SAME recovery path
-     * REJECTED/EXPIRED already have. */
+    /** REVISION_REQUESTED must be in {@code hasLivePricingRequestQuotation}'s non-live set,
+     * because recordOutcome makes that outcome reachable. Without it every exit 409s — create
+     * refused ("a live quotation still exists"), cancel/update refused (not DRAFT),
+     * re-recording an outcome refused (not ISSUED), and the expiry sweep never touches it
+     * (ISSUED-only) — a permanent dead end for any deal the customer asked to change. This is
+     * an ISSUED quotation (revising an ACCEPTED one is out of scope). REVISION_REQUESTED shares
+     * the recovery path REJECTED/EXPIRED already have. */
     @Test
     void revisionRequestedOutcome_isNotAPermanentDeadEnd_createSucceedsFromTheSameDecision() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
@@ -770,7 +767,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         DealQuotationDto reIssued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(reIssued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
 
-        // B-4 (owner ruling 2026-10-17): one live offer per deal, so the re-issue retires the old
+        // One live offer per deal, so the re-issue retires the old
         // REVISION_REQUESTED row. It is kept for audit, as SUPERSEDED.
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
@@ -827,15 +824,13 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     // Confirm order (R9) — OrderConfirmationService#confirmOrder reused UNCHANGED, driven from a
     // PRICING_REQUEST-origin accepted quotation.
     //
-    // GLA-123 slice S3 BLOCKER 2 fix (Opus review against real Postgres, 2026-09-23): this
-    // section's own header comment used to claim "reconcileTicketItems reads pricing_request_item
-    // directly (never the quotation)" — true of the METHOD's plumbing, but WRONG about which
-    // number ends up correct: S1 lets sales edit a PRICING_REQUEST-origin quotation line's
+    // Sales can edit a PRICING_REQUEST-origin quotation line's
     // quantity after the PR was authored (excluded from requireCeoApprovalIfChanged, so no CEO
-    // re-approval needed), and reconcileTicketItems used to write the PR's ORIGINAL quantity
-    // regardless, silently discarding the customer's actual accepted quantity. The two tests below
+    // re-approval needed), so reconcileTicketItems must write the quotation's accepted quantity,
+    // not the PR's ORIGINAL one (which would silently discard the customer's actual accepted
+    // quantity). The two tests below
     // are the accepted-quotation-quantity regression (edited) and its unedited counterpart
-    // (proving the fix did not change the already-correct case).
+    // (proving the already-correct case is unchanged).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -874,7 +869,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             Map.of("id", originalTicketItemId), BigDecimal.class);
         assertThat(reconciledQty).isEqualByComparingTo(requestedQty);
 
-        // GLA-123 slice S3 MAJOR-B fix — qty_sqm must be reconciled too, not just qty. Unedited
+        // qty_sqm must be reconciled too, not just qty. Unedited
         // case: derived from the accepted quotation's own qty x sqmPerPiece (0.36), which agrees
         // with the PR's own requestedQtySqm here since nothing was edited.
         BigDecimal reconciledQtySqm = jdbc.queryForObject(
@@ -884,7 +879,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             WastageCalculator.sqmQuantityFromPieces(requestedQty.intValueExact(), new BigDecimal("0.36")));
     }
 
-    /** GLA-123 slice S3 BLOCKER 2 — real-DB reproduction of the reviewer's exact scenario: PR
+    /** Real-DB reproduction: PR
      * authored at 10 pieces, quotation line edited to 25 before submit/approve/issue, customer
      * accepts, confirmOrder must reconcile ticket_item.qty to 25 (the ACCEPTED quotation's own
      * quantity), never silently back to 10 (the PR's original, now-stale quantity). */
@@ -920,10 +915,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(reconciledQty).isEqualByComparingTo("25");
         assertThat(reconciledQty).isNotEqualByComparingTo(prOriginalQty);
 
-        // GLA-123 slice S3 MAJOR-B fix (Opus review against real Postgres, 2026-09-23): qty
-        // moving to 25 while qty_sqm silently kept the PR's ORIGINAL 10-piece area (3.6000, from
-        // sqmPerPiece 0.36 x 10) was a genuine contradiction between the two columns on the SAME
-        // row, proven live. qty_sqm must now move WITH qty: 25 pieces x 0.36 sqm/piece = 9.00,
+        // qty moving to 25 while qty_sqm kept the PR's ORIGINAL 10-piece area (3.6000, from
+        // sqmPerPiece 0.36 x 10) would contradict the two columns on the SAME
+        // row. qty_sqm must move WITH qty: 25 pieces x 0.36 sqm/piece = 9.00,
         // via the shared WastageCalculator#sqmQuantityFromPieces (never reimplemented locally).
         BigDecimal reconciledQtySqm = jdbc.queryForObject(
             "SELECT qty_sqm FROM sales.ticket_item WHERE item_id = :id",
@@ -934,9 +928,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // GLA-123 item 8 / slice S3 MAJOR 4 fix (Opus review against real Postgres, 2026-09-23):
-    // DealQuotationRepository#findByTicket used to be DEAL_DIRECT-only, so a deal whose only
-    // quotation is PRICING_REQUEST-origin returned an EMPTY list from GET
+    // DealQuotationRepository#findByTicket must not be DEAL_DIRECT-only, or a deal whose only
+    // quotation is PRICING_REQUEST-origin returns an EMPTY list from GET
     // /tickets/{id}/deal-quotations — the endpoint both DealDocumentRegister.jsx's
     // directQuotationsQuery and DealDirectQuotationPanel.jsx call to render "ใบเสนอราคา" at all.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -952,15 +945,13 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // GLA-123 slice S3 BLOCKER-A fix (Opus review against real Postgres, 2026-09-23):
-    // MAJOR 4's own widening of #findByTicket's RESULT SET (above) was not matched by a widening
-    // of #listForTicket's own per-row VISIBILITY rule, which stayed the DEAL_DIRECT-shaped
-    // VIEW_ROLES {sales,sales_manager,ceo,import,account} + a full hasQuotationGrant bypass — so
-    // import/account/any canCreateQuotation-granted employee could now read a PRICING_REQUEST
+    // Visibility: widening #findByTicket's RESULT SET (above) must not widen #listForTicket's
+    // per-row VISIBILITY rule beyond the DEAL_DIRECT-shaped
+    // VIEW_ROLES {sales,sales_manager,ceo,import,account} + a full hasQuotationGrant bypass —
+    // otherwise import/account/any canCreateQuotation-granted employee could read a PRICING_REQUEST
     // row's unitPrice/discountPct/netUnitPrice through this endpoint, which on THIS origin are the
-    // CEO's own approved price and discount (two prior owner rulings restrict them to
-    // PRICING_REQUEST_VIEW_ROLES with no grant bypass). Reproduced live: listForTicket as import
-    // returned the full item list including discountPct=10.00. Chosen fix: the unauthorized
+    // CEO's own approved price and discount (restricted to
+    // PRICING_REQUEST_VIEW_ROLES with no grant bypass). The unauthorized
     // PRICING_REQUEST row is FILTERED OUT of the list entirely (not field-stripped) — see
     // #listForTicket's own comment for why that matches every sibling list/count surface on this
     // class.
@@ -975,7 +966,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(forTicket).as("import must not see the PRICING_REQUEST-origin row at all").isEmpty();
     }
 
-    // 2026-09-30 owner ruling (REVERSES M3 FOR ACCOUNT ONLY): account may read a PRICING_REQUEST-origin
+    // Account may read a PRICING_REQUEST-origin
     // quotation and download its PDF -- but only on a deal inside the account list scope
     // (TicketRepository.isInAccountScope, i.e. live and at S10+). Every other role's gate is unchanged.
     @Test
@@ -1011,7 +1002,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
-    // Ruling 3 as approved: account sees number, total and each line's NET unit price -- never the CEO list
+    // Account sees number, total and each line's NET unit price -- never the CEO list
     // price or discount. Stripped at the service layer on EVERY JSON read account can reach (get, listForTicket).
     private static final java.util.Set<String> PRICE_INTERNAL_KEYS = java.util.Set.of(
         "unitPrice", "discountPct", "specialPriceSqm", "adjustmentPct", "adjustmentAmount", "catalogPriceId",
@@ -1091,7 +1082,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             new org.springframework.jdbc.core.namedparam.MapSqlParameterSource("s", stage).addValue("id", ticketId));
     }
 
-    // 2026-09-30: this granted actor has the ACCOUNT role, so the account scope rule (H1) now decides it:
+    // This granted actor has the ACCOUNT role, so the account scope rule decides it:
     // below S10 the can_create_quotation grant must NOT open the deal (403) -- the grant never bypassed
     // the PRICING_REQUEST gate, and it does not bypass the account scope either.
     @Test
@@ -1116,13 +1107,12 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             .as("ceo sees the row").extracting(DealQuotationDto::id).contains(issued.id());
     }
 
-    /** GLA-123 slice S3 MAJOR-A fix (Opus review, 2026-09-23): the ONLY real-DB regression
-     * coverage for BLOCKER 1's fix ({@code findForPricingRequest} switched from the DRAFT-only
-     * {@code findOpenDraftForPricingRequest} to {@code findLatestForPricingRequest}) — the 4
-     * frontend tests added alongside BLOCKER 1 stub the API response directly and cannot see a
-     * backend regression; mutating this method back to the old reader left all 73 of them green.
+    /** The ONLY real-DB regression coverage for {@code findForPricingRequest} reading
+     * {@code findLatestForPricingRequest} rather than the DRAFT-only
+     * {@code findOpenDraftForPricingRequest} — the frontend tests stub the API response directly
+     * and cannot see a backend regression.
      * Asserts the method returns the quotation for ISSUED, ACCEPTED and EXPIRED — every status
-     * past DRAFT the old reader silently returned {@code Optional.empty()} for. */
+     * past DRAFT the DRAFT-only reader would return {@code Optional.empty()} for. */
     @Test
     void findForPricingRequest_returnsTheQuotationPastDraft_issuedAcceptedAndExpired() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
@@ -1148,7 +1138,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             .get().extracting(DealQuotationDto::docStatus).isEqualTo(QuotationStatus.EXPIRED);
     }
 
-    /** GLA-123 slice S3 MINOR-2 fix (Opus review, 2026-09-23) — mirrors
+    /** Mirrors
      * {@code CustomerQuotationService#issue}'s own wrong-quotation replay guard: a replayed
      * clientRequestId resolving to a DIFFERENT quotation than the one this call actually named
      * must 409, not silently hand back the other quotation's DTO with nothing recorded on the one
@@ -1170,18 +1160,16 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issuedB.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    /** GLA-123 slice S3 MINOR-3 fix (Opus review, 2026-09-23) — S3 round-3 review coverage gap
-     * (NEW-4): V75's {@code (issued_by, outcome_client_request_id)} partial unique index is
+    /** Cross-engine clientRequestId collision: V75's {@code (issued_by, outcome_client_request_id)} partial unique index is
      * TABLE-WIDE across both คำขอราคา origins, but each engine's own {@code
      * findIdByOutcomeClientRequestId} is origin-scoped ({@code origin IS NULL} for the legacy
      * chain, {@code origin = 'PRICING_REQUEST'} for this one — see each repository method's own
      * Javadoc). So the SAME actor reusing a {@code clientRequestId} across the TWO ENGINES does
      * not replay-match on either side (each side's own scoped lookup finds nothing), and instead
      * falls through to the UPDATE, which then hits the table-wide unique index as a bare {@code
-     * DataIntegrityViolationException} — MINOR-3 catches that and turns it into the same clean 409
-     * MINOR-2's same-engine guard above already gives, rather than letting it surface as an
-     * uncaught 500. This is the cross-engine direction of the collision the reviewer's own probe
-     * proved live (legacy-then-new); {@link
+     * DataIntegrityViolationException} — the service catches that and turns it into the same clean 409
+     * the same-engine guard above gives, rather than letting it surface as an
+     * uncaught 500. This is the legacy-then-new direction of the collision; {@link
      * #recordOutcome_crossEngineClientRequestIdCollision_newThenLegacy_refused409} below proves the
      * reverse order. */
     @Test
@@ -1275,10 +1263,10 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         return quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
     }
 
-    /** GLA-123 slice S3 BLOCKER 2 — same as {@link #issuedNewOriginQuotation}, except the
+    /** Same as {@link #issuedNewOriginQuotation}, except the
      * quotation's own line quantity is edited AFTER create, BEFORE submit, to {@code
-     * editedPiecesInput} — exactly the "sales edits the quantity on the quotation" case S1
-     * explicitly allows (excluded from {@code requireCeoApprovalIfChanged}, so no CEO
+     * editedPiecesInput} — the "sales edits the quantity on the quotation" case, which is
+     * allowed (excluded from {@code requireCeoApprovalIfChanged}, so no CEO
      * re-approval is needed and a plain sales_manager approval suffices here, matching
      * production). */
     private DealQuotationDto issuedNewOriginQuotationWithEditedQuantity(String recipient, BigDecimal prQty,
@@ -1438,8 +1426,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    /** {@code account} role, NO {@code can_create_quotation} grant — part of the BLOCKER-A
-     * wrong-way-round matrix (mirrors this class's own {@code importActor}). */
+    /** {@code account} role, NO {@code can_create_quotation} grant — part of the
+     * visibility wrong-way-round matrix (mirrors this class's own {@code importActor}). */
     private UserPrincipal accountActor(String suffix) {
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

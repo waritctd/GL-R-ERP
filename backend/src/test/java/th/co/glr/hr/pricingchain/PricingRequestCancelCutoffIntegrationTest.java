@@ -582,7 +582,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
     }
 
     /**
-     * Ploy 11-03: a deal with an ISSUED ใบขอซื้อ (IR) already tells import via DEAL_LOST / DEAL_CANCELLED, so the
+     * A deal with an ISSUED ใบขอซื้อ (IR) already tells import via DEAL_LOST / DEAL_CANCELLED, so the
      * cascade sends the assigned staffer no second PRICING_REQUEST_CANCELLED for the same action.
      */
     @Test

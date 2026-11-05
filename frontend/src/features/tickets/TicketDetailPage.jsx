@@ -1,14 +1,7 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app
- * conformance-pass: radius normalized to the §8 scale (card/panel surfaces → --radius-md;
- * rounded-lg/xl/[6px] were off the sm/md/lg/pill scale — "20px is reserved, not a default").
- * No logic, data, permission, or layout-metric changes. See DESIGN.md §8 (shape) / §20 (anti-patterns).
- * conformance-pass (slice 2 flow A, SLICE-2-FLOW-A.md §D/§E): ใบเสนอราคา panel route choice as two
- * sibling header buttons (no dialog, §16) + one muted helper line; three direct-quotation CTA states
- * through the existing sticky slot + ConfirmDialog; GLA-136 quotation-only banner removed (IA §7).
- * Tokens only, no new colour/font/radius. pre-emit critique: P4 H4 E4 S4 R4 V5.
- * conformance-pass (one pricing route per deal, owner ruling 2026-09-30): ใบเสนอราคาตรง is hidden
- * while the deal holds a live คำขอราคา (and while those load); the route-comparison helper line
- * already goes with it. No new control, colour or layout. pre-emit critique: P4 H4 E4 S4 R4 V5.
+ * Tokens only (no new colour/font/radius); radius on the DESIGN.md §8 scale, see also §20
+ * (anti-patterns). The ใบเสนอราคา panel's route choice is two sibling header buttons (no
+ * dialog, §16); ใบเสนอราคาตรง is hidden while the deal holds a live คำขอราคา.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -104,13 +97,11 @@ const IN_PAGE_JUMP_TARGET = {
   // salesActions.js SALES_ACTION keys
   follow_up: 'deal-tracking-panel',
   log_activity: 'deal-tracking-panel',
-  // Stages 13-14 (ส่งมอบสินค้า) belong to Sales too now (owner ruling 2026-08-17, additive to
-  // import/CEO) — salesActions.js's RECORD_DELIVERY bucket reuses importActions.js's
-  // nextFulfilmentActionCode (not nextImportAction) to decide this, so it needs its own entry
-  // here. Import's camelCase `recordDelivery` below is now UNREACHABLE -- nextImportAction
-  // stopped emitting it when ImportOverview handed delivery PROMPTING to Sales -- but it is
-  // kept rather than deleted: it maps to this same panel, so it is already correct if import
-  // is ever re-prompted, and the underlying capability was never removed (#818 was additive).
+  // Stages 13-14 (ส่งมอบสินค้า) belong to Sales too, additive to import/CEO: salesActions.js's
+  // RECORD_DELIVERY bucket reuses importActions.js's nextFulfilmentActionCode (not
+  // nextImportAction), so it needs its own entry. Import's camelCase `recordDelivery` below is
+  // unreachable (nextImportAction no longer emits it) but kept: it maps to this same panel, so it is
+  // already correct if import is ever re-prompted.
   record_delivery: 'deal-fulfilment-panel',
   // importActions.js codes
   issueImportRequest: 'deal-fulfilment-panel',
@@ -123,22 +114,15 @@ const IN_PAGE_JUMP_TARGET = {
   // to the resolver's `to` instead of scrolling to a control on this page.
 };
 
-// Ticket-detail IA rebuild Phase 2: every one of the jump targets above (and
-// the ref-opened CREATE_PCR/CONFIRM_ORDER panels) now lives
-// inside a conditionally-MOUNTED TabPanel (Tabs.jsx keeps only the active
-// tab's children mounted — see its own doc comment). A trigger that lives
-// OUTSIDE the tabs (the sticky header primary CTA, the header's "⋯" overflow
-// menu) can be clicked while a DIFFERENT tab is active, in which case the
-// target element/ref doesn't exist yet — `scrollToSection` would silently
-// no-op and a forwardRef call would silently no-op, exactly the "control
-// flips a flag inside an unmounted panel and vanishes" dead end this
-// branch's brief calls out. `runOnTab` (defined inside the component, where
-// `activeTab`/`setActiveTab` live) switches to the owning tab FIRST and only
-// then performs the jump/ref-call, once that tab's own panel has mounted.
+// Every jump target above (and the ref-opened CREATE_PCR/CONFIRM_ORDER panels) lives inside a
+// conditionally-MOUNTED TabPanel (Tabs.jsx keeps only the active tab's children mounted). A trigger
+// OUTSIDE the tabs (the sticky header primary CTA, the "⋯" overflow menu) can be clicked while a
+// DIFFERENT tab is active, when the target element/ref doesn't exist and `scrollToSection` or a
+// forwardRef call would silently no-op. `runOnTab` (inside the component, where
+// `activeTab`/`setActiveTab` live) switches to the owning tab FIRST, then performs the
+// jump/ref-call once that tab's panel has mounted.
 const JUMP_TARGET_TAB = {
-  // Slice C2b: DealTrackingPanel moved from the old `activity` tab into
-  // `deal` (see ticketDetailTabs.js's own comment on that tab) — this jump
-  // target moves with it, unchanged element id.
+  // DealTrackingPanel lives in the `deal` tab (see ticketDetailTabs.js).
   'deal-tracking-panel': 'deal',
   'deal-fulfilment-panel': 'fulfilment',
 };
@@ -153,18 +137,12 @@ function scrollToSection(id) {
   el.focus?.({ preventScroll: true });
 }
 
-// Ticket-detail IA rebuild Phase 2: the "ประวัติการดำเนินการ" events panel that
-// used to render inline here (with its own EVENT_KIND_LABEL/eventDotClass/
-// PAYMENT_TRACK_KINDS/FULFILLMENT_TRACK_KINDS) is merged with the deal-
-// tracking activity log into DealHistoryPanel.jsx (กิจกรรม tab) — that
-// component owns its own identical copies of those constants now; nothing
-// here references them any more.
+// The "ประวัติการดำเนินการ" events panel is merged with the deal-tracking activity log into
+// DealHistoryPanel.jsx (กิจกรรม tab), which owns its own copies of the event constants.
 
 const TERMINAL = ['closed', 'cancelled'];
 
-// docStatusColors (quotation revision docStatus -> StatusBadge-matching
-// tokens) moved into DealLegacyQuotations.jsx (ia-extract Slice C1) — it had
-// exactly one caller and that caller moved with it.
+// docStatusColors lives in DealLegacyQuotations.jsx, its only caller.
 
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
@@ -202,13 +180,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // loading/no-ticket early returns: the pending-tab-action effect that
   // reads `activeTab` cannot itself come after a conditional return.
   const role = user.role;
-  // Role-scoped views, Phase A: which of the sections below this viewer's
-  // role gets in full vs. hidden entirely. See salesViewScope.js —
-  // presentation only, never a security boundary. Ticket-detail IA rebuild
-  // Phase 2: these section ids now compose ticketDetailTabs.js's 7 tabs
-  // (each tab owns one or more of them) rather than gating an inline
-  // SectionPeek — a role-hidden section's TAB is simply absent from the
-  // tablist, there is no more per-section peek fallback on the page itself.
+  // Which sections this viewer's role gets in full vs. hidden entirely (salesViewScope.js;
+  // presentation only, never a security boundary). These section ids compose
+  // ticketDetailTabs.js's tabs; a role-hidden section's TAB is simply absent from the tablist.
   const sections = visibleSections(role);
 
   // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth
@@ -222,12 +196,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     .filter((tab) => visibleTabIds.includes(tab.id))
     .map((tab) => ({ id: tab.id, label: tab.label, helper: tab.helper }));
 
-  // Runs a cross-tab trigger's real action (a scroll, or a ref-call into a
-  // panel that lives in a different tab) — switching to that tab first if
-  // we're not already on it. See JUMP_TARGET_TAB's own doc comment for why
-  // this exists: every such panel is now conditionally MOUNTED (Tabs.jsx's
-  // TabPanel), so calling straight through would silently no-op on any tab
-  // but the target one.
+  // Runs a cross-tab trigger's real action (a scroll, or a ref-call into a panel in a different
+  // tab), switching to that tab first if needed. See JUMP_TARGET_TAB's doc comment: every such
+  // panel is conditionally MOUNTED (Tabs.jsx's TabPanel), so calling straight through would no-op
+  // on any tab but the target one.
   function runOnTab(tabId, run) {
     if (activeTab === tabId) { run(); return; }
     pendingTabActionRef.current = { tabId, run };
@@ -270,9 +242,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // trigger above and does not affect scrollTop/scrollHeight.
   const ticketStickyChromeRef = useRef(null);
   const [ticketChromeCondensed, setTicketChromeCondensed] = useState(false);
-  // Review V10: an open menu in the sticky header holds it as it is — condensing moves the header's
-  // buttons to another place, which remounts the menu and closes it.
-  // A condense that came while a menu was open is applied when it closes.
+  // An open menu in the sticky header holds it as it is: condensing moves the header's buttons,
+  // which remounts the menu and closes it. A condense that came while a menu was open is applied
+  // when it closes.
   const headerMenuOpenRef = useRef(false);
   const heldCondensedRef = useRef(null);
   const onHeaderMenuOpenChange = useCallback((open) => {
@@ -283,21 +255,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }, []);
 
-  // Imperative handle onto DealStagePanel (see its own doc comment): the
-  // header overflow menu / bottom danger zone trigger its modals from here,
-  // but DealStagePanel stays the sole owner of whether each is actually
-  // available and of the modal/mutation itself.
+  // Imperative handle onto DealStagePanel (see its doc comment): the header overflow menu / bottom
+  // danger zone trigger its modals from here, but DealStagePanel stays the sole owner of whether
+  // each is available and of the modal/mutation itself.
   const dealStagePanelRef = useRef(null);
-  // Imperative handle onto PricingRequestPanel (FIX 1, ticket-detail IA
-  // rebuild Phase 1 clutter follow-up): the sticky header's CREATE_PCR
-  // primary CTA opens this panel's own create modal directly instead of
-  // duplicating a second "สร้างคำขอราคา" button — same convention as
-  // dealStagePanelRef above.
+  // Imperative handle onto PricingRequestPanel: the sticky header's CREATE_PCR primary CTA opens
+  // its create modal directly instead of duplicating a second "สร้างคำขอราคา" button (same
+  // convention as dealStagePanelRef above).
   const pricingRequestPanelRef = useRef(null);
-  // Imperative handle onto DealQuotationPanel (clutter follow-up round 2,
-  // FIX 2): the sticky header's CONFIRM_ORDER primary CTA triggers this
-  // panel's confirm directly instead of scrolling to a second copy of the
-  // button — same convention as the two refs above.
+  // Imperative handle onto DealQuotationPanel: the sticky header's CONFIRM_ORDER primary CTA
+  // triggers its confirm directly instead of scrolling to a second copy of the button.
   const dealQuotationPanelRef = useRef(null);
   const fulfilmentPanelRef = useRef(null);
 
@@ -310,17 +277,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // state because edit-items and create are two separate mounted trees.
   const [editCatalogResults, setEditCatalogResults] = useState([]);
   const [editCatalogFocus, setEditCatalogFocus] = useState(null);
-  // Mirrors TicketCreateModal's onCatalogInput/applyCatalogItem — brand/model typing searches the
+  // Mirrors TicketCreateModal's onCatalogInput/applyCatalogItem: brand/model typing searches the
   // catalog (debounced), a pick fills the row via the shared applyCatalogPick and clears that row's
   // required-field errors.
   //
-  // Real keystroke: mutates the row AND searches. Kept separate from onEditCatalogFieldFocus below
-  // — review round 2 caught a regression where re-focusing an already-filled ยี่ห้อ/รุ่น box (no
-  // keystroke, value unchanged) used to run through this same mutating path, silently re-running
-  // the brand→factory lockstep and catalog-link CLEAR on every focus. For a row loaded from the
-  // server with a real catalog link (catalogPriceId/catalogProductCode), simply tabbing into and
-  // back out of the field wiped that link before save — a data-loss bug proved end-to-end (focus
-  // brand+model, then save, dropped catalogPriceId and reset factory from the unchanged brand).
+  // Real keystroke: mutates the row AND searches. Kept separate from onEditCatalogFieldFocus below:
+  // re-focusing an already-filled ยี่ห้อ/รุ่น box (no keystroke) through this mutating path would
+  // re-run the brand→factory lockstep and catalog-link CLEAR, so tabbing into and out of a field on
+  // a server-loaded row wiped catalogPriceId/catalogProductCode before save (data loss).
   function onEditCatalogInput(index, field, value) {
     setEditDraft((d) => d.map((r, i) => (i === index ? applyDescriptiveFieldEdit(r, field, value) : r)));
     clearFieldError(`editItems.${field}.${index}`);
@@ -345,22 +309,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [reviseScope, setReviseScope] = useState('QTY_OR_NOTE');
   const [reviseReason, setReviseReason] = useState('');
 
-  // UX-03 (slice 5a + 5b): inline field-level validation for the payment /
-  // delivery modals, plus (5b) the revise form (a modal since Slice C2a) and
-  // the edit-items rows. One shared dict, keyed per-form/per-row so a stale error can
-  // never bleed into another: 'payment.amount' | 'revise.reason' |
-  // 'editItems.<field>.<rowIndex>' (per-row, per-field — brand/model/size/qty; see the
-  // fix/ticket-edit-items-required-markers required-field check and the edit-items save handler).
-  // ('quotation.*'/'reject.reason'/'override.<itemId>' were retired along
-  // with ticket-native pricing/quotation — Phase 2 Slice S1/S2; 'delivery.lines'
-  // moved out along with the delivery/stock modals themselves — Phase 3 Slice
-  // S4, see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md —
-  // DealFulfilmentPanel owns its own, simpler mutation-level error toasts
-  // instead, matching DealQuotationPanel's convention.)
-  // fieldRefs holds the DOM node for each key so a failed submit can
-  // scroll/focus the first invalid control. Same shape as the fieldErrors/
-  // fieldRefs/clearFieldError pattern already used in TicketCreateModal.jsx,
-  // CeoSettingsPage.jsx and DepositNoticePage.jsx on this branch.
+  // Inline field-level validation for the payment / delivery modals, the revise form (a modal) and
+  // the edit-items rows. One shared dict, keyed per-form/per-row so a stale error can't bleed into
+  // another: 'payment.amount' | 'revise.reason' | 'editItems.<field>.<rowIndex>' (per-row,
+  // per-field: brand/model/size/qty). DealFulfilmentPanel owns its own delivery error toasts.
+  // fieldRefs holds the DOM node for each key so a failed submit can scroll/focus the first invalid
+  // control (same shape as TicketCreateModal.jsx, CeoSettingsPage.jsx and DepositNoticePage.jsx).
   const [fieldErrors, setFieldErrors] = useState({});
   const fieldRefs = useRef({});
   function clearFieldError(key) {
@@ -406,8 +360,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     receiptRef: '',
     allowOverpayment: false,
   });
-  // Delivery/stock-reservation modal state moved into DealFulfilmentPanel
-  // (Phase 3 Slice S4 — see docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md).
+  // Delivery/stock-reservation modal state lives in DealFulfilmentPanel.
 
   // Comment
   const [commentText, setCommentText] = useState('');
@@ -430,16 +383,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const ticket = ticketQuery.data ?? null;
 
   // FX rates power the "≈ x บาท" companion figure next to a factory price quoted in a foreign
-  // currency (the catalog is EUR + USD only). Plain currency conversion — no markup, no
-  // multiplier: the ราคาตั้ง (ประมาณการ) estimate this page used to render was removed on the
-  // owner's instruction (UAT feedback, 2026-08-10) along with dealEstimatePricing.js, because a
-  // marked-up supplier cost shown next to real quoted prices read as a selling price it never was.
-  // The fetch degrades silently by design — retry: false, no error toast — because this is
-  // optional display enrichment, not critical page data (same non-critical pattern as
-  // attachmentsQuery below). When a rate is missing the original currency stands alone; it is
-  // never converted at an assumed 1:1.
-  // PR A: the deal's quotation rows (DEAL_DIRECT + PRICING_REQUEST origin), for the sticky
-  // "แก้ใบเสนอราคา" CTA. Same key/fn as DealDocumentRegister so the two share one fetch.
+  // currency (the catalog is EUR + USD only). Plain currency conversion, no markup: a marked-up
+  // supplier cost shown next to real quoted prices read as a selling price it never was. The fetch
+  // degrades silently (retry: false, no error toast) because it is optional display enrichment (like
+  // attachmentsQuery below). A missing rate leaves the original currency alone, never converted at
+  // an assumed 1:1.
+  // The deal's quotation rows (DEAL_DIRECT + PRICING_REQUEST origin), for the sticky "แก้ใบเสนอราคา"
+  // CTA. Same key/fn as DealDocumentRegister so the two share one fetch.
   const dealQuotationsQuery = useQuery({
     queryKey: queryKeys.dealQuotationsByTicket(Number(ticketId)),
     queryFn: () => api.dealQuotations.listForTicket(Number(ticketId)).then((r) => r.items ?? []),
@@ -457,24 +407,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
     return map;
   }, [fxRatesQuery.data]);
-  // FIX 2 (Opus review), rewritten for issue #389. Still an identity-aware gate rather than a
-  // role-only one — the deal's participants (createdById/assignedToId) reach its documents
-  // regardless of role — but the ROLE half is no longer this page's private invention: it mirrors
-  // TicketAccessPolicy.canViewDocuments, which is `sales`- AND `import`-scoped to participation.
+  // Identity-aware gate, not role-only: the deal's participants (createdById/assignedToId) reach
+  // its documents regardless of role, and the ROLE half mirrors TicketAccessPolicy.canViewDocuments
+  // (`sales`- AND `import`-scoped to participation).
   //
-  // What changed: `account` used to be filtered out here, faithfully mirroring a backend gate
-  // that 403'd it — but that 403 was the bug. account is the role asked to confirm deposit and
-  // final-payment receipts against exactly these files, so hiding the tab would have left #389's
-  // fix invisible. A non-assignee `import` stays filtered out, unchanged: AttachType spans
-  // SIGNED_QUOTATION/INVOICE, which carry the approved customer price that salesViewScope already
-  // hides from import (quotation/dealQuotation/payment/depositNotice all false) and that the
-  // backend refuses it on three other endpoints. `hr` needs no mention — route-gated off this
-  // page entirely, and now refused by the backend too.
+  // `account` is NOT filtered out: it confirms deposit and final-payment receipts against exactly
+  // these files. A non-assignee `import` stays filtered out: AttachType spans
+  // SIGNED_QUOTATION/INVOICE, which carry the approved customer price that salesViewScope hides
+  // from import and the backend refuses it on three other endpoints. `hr` is route-gated off this
+  // page entirely and refused by the backend.
   //
-  // Computed here (rather than after the loading/no-ticket early return below, where `isOwner`
-  // already lives) so the attachments query never fires for a viewer the backend would 403 —
-  // same reasoning as `activitiesQuery`'s own `enabled` gate for FIX 1. Presentation projection
-  // of the backend gate, not a new authorization rule.
+  // Computed here (before the loading/no-ticket early return, where `isOwner` lives) so the
+  // attachments query never fires for a viewer the backend would 403, like `activitiesQuery`'s
+  // `enabled` gate. A presentation projection of the backend gate, not a new authorization rule.
   const documentsTicketSummary = ticket?.summary ?? null;
   const canViewDocumentsTab = Boolean(documentsTicketSummary) && (
     user.id === documentsTicketSummary.createdById
@@ -490,22 +435,19 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryKey: queryKeys.ticketActions(ticketId),
     queryFn: () => api.tickets.actions(ticketId),
     enabled: !!ticketId && !!ticket,
-    // Keep the previous action list while a refetch is in flight — every doAction
-    // invalidates this query, and without a placeholder the whole cockpit's buttons
-    // vanish for a beat on each action (visible flicker; Opus review finding).
+    // Keep the previous action list while a refetch is in flight: every doAction invalidates this
+    // query, and without a placeholder the cockpit's buttons vanish for a beat on each action.
     placeholderData: (previous) => previous,
   });
   const availableActions = actionsQuery.data?.availableActions ?? [];
-  // Per-stage verdicts from TicketService.stageDecisions — which stages this user may move THIS
-  // deal to, which need a written reason, and why each refused one is refused. Replaces the local
-  // canSetStage/allowedTargetStages copies this page used to run.
+  // Per-stage verdicts from TicketService.stageDecisions: which stages this user may move THIS deal
+  // to, which need a written reason, and why each refused one is refused.
   const stageDecisions = actionsQuery.data?.stageDecisions ?? [];
   const actionNames = new Set(availableActions.map((action) => action.action));
   const hasAction = (action) => actionNames.has(action);
-  // isLoading-only (not isFetching): this gate swaps the ENTIRE page for a
-  // full skeleton. Using isFetching too would flash that skeleton on every
-  // quiet background refetch (window refocus, another tab's invalidate) —
-  // same reasoning as TicketDashboard's loading gate in slice A (handoff 62).
+  // isLoading-only (not isFetching): this gate swaps the ENTIRE page for a skeleton, and
+  // isFetching would flash it on every quiet background refetch (window refocus, another tab's
+  // invalidate).
   const loading = ticketQuery.isLoading;
   const canViewPricingRequests = ['sales', 'import', 'ceo', 'sales_manager'].includes(user?.role);
 
@@ -516,8 +458,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const paymentReceipts = paymentsQuery.data ?? [];
 
-  // Delivery history (ticketDeliveries) moved into DealFulfilmentPanel's own
-  // query (Phase 3 Slice S4) — this page no longer reads it directly.
+  // Delivery history lives in DealFulfilmentPanel's own query.
 
   // Commit 6: the deal's own pricing requests — read here (not inside
   // PricingRequestPanel) so DealStagePanel's substep strip can also key off
@@ -529,9 +470,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const pricingRequests = canViewPricingRequests ? (pricingRequestsQuery.data ?? []) : [];
 
-  // Deal tracking (V83, Slice B1/B2 "kill the weekly report" — handoff 103): visible to
-  // the deal owner (sales), sales_manager, ceo — mirrors salesViewScope.js's dealTracking
-  // section id (import/account have no business in it) and TicketService.requireDealOwnership.
+  // Deal tracking: visible to the deal owner (sales), sales_manager, ceo (mirrors salesViewScope.js's
+  // dealTracking section id and TicketService.requireDealOwnership; import/account have no business
+  // in it).
   const canViewDealTracking = ['sales', 'sales_manager', 'ceo'].includes(user?.role);
   const activitiesQuery = useQuery({
     queryKey: queryKeys.ticketActivities(ticketId),
@@ -540,9 +481,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
 
-  // Owner rulings 2026-10-28: the main button creates the deposit notice / remaining invoice, so the
-  // sales rep's page reads both. Same keys and shapes as DealPaymentSection's reads,
-  // so the cache is shared (one fetch).
+  // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
+  // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
   const readsDocs = role === 'sales' && ticket?.summary?.createdById === user.id && !!ticketId;
   const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
   const remainingInvoicesQuery = useQuery({
@@ -550,8 +490,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
     enabled: readsDocs,
   });
-  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry (QA-09). Read for every role
-  // the backend lets read stored IRs, since the header's การนำเข้า chip (QA-22) follows them on every tab.
+  // Same key/fn as DealFulfilmentPanel's own read, so the two share one cache entry. Read for every
+  // role the backend lets read stored IRs, since the header's การนำเข้า chip follows them on every tab.
   const storedIrQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
@@ -583,8 +523,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const attachmentsQuery = useQuery({
     queryKey: queryKeys.ticketAttachments(ticketId),
     queryFn: () => api.attachments.list(ticketId).then((r) => r.attachments ?? []),
-    // FIX 2: never fire this request for a viewer AttachmentController would
-    // 403 — see `canViewDocumentsTab`'s own doc comment above.
+    // Never fire this request for a viewer AttachmentController would 403: see
+    // `canViewDocumentsTab` above.
     enabled: !!ticketId && canViewDocumentsTab,
   });
   const attachments = attachmentsQuery.data ?? [];
@@ -594,15 +534,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Attachment load failures were silently swallowed before ("non-critical")
   // — preserved as-is, no error toast wired up here.
 
-  // Factory-configs email-draft flow lived here only to back the now-removed
-  // propose-price UI (Phase 2 Slice S2 — see docs/agent-handoffs/104); that
-  // whole aggregate is gone from the ticket-native flow, so there is nothing
-  // left on this page to fetch factoryConfigs for.
+  // No factoryConfigs fetch: the ticket-native propose-price flow is gone.
 
-  // Shared post-mutation side effects: the ticket-detail fast path (backend
-  // returns the full ticket, so no refetch needed) plus the deliberate
-  // staleness fix — list/dashboard/notifications went stale after every
-  // action before this slice and nothing refreshed them.
+  // Shared post-mutation side effects: the ticket-detail fast path (the backend returns the full
+  // ticket, so no refetch) plus refreshing list/dashboard/notifications, which would otherwise go
+  // stale after every action.
   function applyTicketUpdate(updatedTicket) {
     if (updatedTicket) {
       queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
@@ -622,12 +558,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
   }
 
-  // Same UI-draft reset the old doAction ran on every successful action.
+  // The UI-draft reset every successful action runs.
   function resetActionDrafts() {
-    // UX-03: a successful action closes every modal below (payment among
-    // them; delivery/stock moved to DealFulfilmentPanel, Phase 3 Slice S4) —
-    // clear every field error along with them so a stale one can never greet
-    // the user on the next open.
+    // A successful action closes every modal below (payment among them), so clear every field
+    // error with them: a stale one must not greet the user on the next open.
     setFieldErrors({});
     setEditMode(false);
     setEditDraft([]);
@@ -638,9 +572,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setCommentText('');
   }
 
-  // Generic action mutation — a drop-in replacement for the old doAction(fn,
-  // successMsg) helper. mutationFn/onSuccess receive the same (fn, successMsg)
-  // pair as variables so every ~17 action call site below is unchanged.
+  // Generic action mutation: mutationFn/onSuccess receive the (fn, successMsg) pair as variables,
+  // so every action call site below shares it.
   const actionMutation = useMutation({
     mutationFn: ({ fn }) => fn(),
     onSuccess: (response, { successMsg }) => {
@@ -652,20 +585,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const actionLoading = actionMutation.isPending;
 
-  // doAction swallows its own rejection (mutateAsync always rejects even
-  // after onError runs) so call sites keep firing it without a try/catch,
-  // exactly like the old imperative doAction.
+  // doAction swallows its own rejection (mutateAsync always rejects, even after onError runs) so
+  // call sites can fire it without a try/catch.
   async function doAction(fn, successMsg) {
     try {
       await actionMutation.mutateAsync({ fn, successMsg });
     } catch { /* onError above already toasted */ }
   }
 
-  // Slice 2 §E — "ยืนยันคำสั่งซื้อ" for an APPROVED direct quotation, from the sticky CTA. The same
-  // endpoint (and the same confirm copy) as the quotation editor's own action: hrApi's
-  // dealQuotations.promoteToDeal in this tree (slice 1 renames it confirmOrder). Not routed through
-  // actionMutation: that one expects a `{ ticket }` response, this endpoint answers `{ result }`.
-  // Every refusal surfaces the server's own Thai message and re-reads the deal (it changed under us).
+  // "ยืนยันคำสั่งซื้อ" for an APPROVED direct quotation, from the sticky CTA. The same endpoint (and
+  // confirm copy) as the quotation editor's own action (hrApi's dealQuotations.promoteToDeal). Not
+  // routed through actionMutation: that expects a `{ ticket }` response, this endpoint answers
+  // `{ result }`. Every refusal surfaces the server's own Thai message and re-reads the deal.
   const confirmOrderDirectMutation = useMutation({
     mutationFn: (quotationId) => api.dealQuotations.promoteToDeal(quotationId),
     onSuccess: () => {
@@ -681,7 +612,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
   });
 
-  // PR A — sticky "แก้ใบเสนอราคา": mint a revision of the target quotation and open it. The server
+  // Sticky "แก้ใบเสนอราคา": mint a revision of the target quotation and open it. The server
   // (DealQuotationService#createRevision) re-checks owner + status and refuses a second open
   // revision (409); its Thai message is surfaced as-is.
   const reviseQuotationMutation = useMutation({
@@ -716,8 +647,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   function createQuotationFromRequest(pricingRequestId) {
     createQuotationFromRequestMutation.mutate(pricingRequestId, {
       onSuccess: (res) => { if (res?.quotation?.id) navigate(`/quotations/${res.quotation.id}`); },
-      // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on the
-      // request page.
+      // A refusal (legacy price mode, an old-engine quotation, …): both engines' controls are on
+      // the request page.
       onError: (error) => { if (error?.status === 409) navigate(`/pricing-requests/${pricingRequestId}`); },
     });
   }
@@ -732,16 +663,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // list has to be re-read — otherwise the button only appears after the user
       // navigates away and back.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      // `queryKeys.ticket` never existed — queryKeys.js defines ticketDetail/
-      // ticketActions/ticketAttachments/… but no bare `ticket`. Calling it threw
-      // `TypeError: queryKeys.ticket is not a function` HERE, as the third
-      // statement: the two invalidations above had already run, so the file
-      // list and the action list refreshed and the upload looked fine, but the
-      // handler aborted before `showToast` below. react-query does not route an
-      // onSuccess throw to onError, and handleUploadAttachment's `catch {}`
-      // swallowed the rejected mutateAsync — so a successful upload reported
-      // NOTHING to the user, and the ticket detail (whose summary drives the
-      // invoiceOnFile close gate) was never refetched.
+      // Use queryKeys.ticketDetail (there is no bare `queryKeys.ticket`): a throw here, after the
+      // two invalidations, would abort before `showToast`. react-query does not route an onSuccess
+      // throw to onError and handleUploadAttachment's `catch {}` swallows the rejection, so a
+      // successful upload would report nothing and the ticket detail (whose summary drives the
+      // invoiceOnFile close gate) would never refetch.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', `แนบไฟล์ ${file.name} แล้ว`);
     },
@@ -764,8 +690,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const deletingAttachment = deleteAttachmentMutation.isPending;
 
-  // Deal tracking (V83, Slice B1/B2 — handoff 103): full-replace PUT, response is the
-  // full ticket detail (same applyTicketUpdate fast path the actionMutation above uses).
+  // Deal tracking: full-replace PUT; the response is the full ticket detail (same
+  // applyTicketUpdate fast path as actionMutation above).
   const updateTrackingMutation = useMutation({
     mutationFn: (payload) => api.tickets.updateTracking(ticketId, payload),
     onSuccess: (response) => {
@@ -775,10 +701,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  // addActivity returns the bare DealActivityDto (not a ticket), so it invalidates
-  // rather than reusing applyTicketUpdate's setQueryData fast path — the ticket detail
-  // still needs a refetch because `stale` and the stage-advance readiness both depend
-  // on the activity that was just logged.
+  // addActivity returns the bare DealActivityDto (not a ticket), so it invalidates rather than using
+  // applyTicketUpdate's setQueryData fast path: the ticket detail needs a refetch because `stale`
+  // and the stage-advance readiness depend on the activity just logged.
   const addActivityMutation = useMutation({
     mutationFn: (payload) => api.tickets.addActivity(ticketId, payload),
     onSuccess: () => {
@@ -790,8 +715,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     onError: (err) => showToast('error', err.message || 'บันทึกไม่สำเร็จ'),
   });
 
-  // Manual refresh — today's fix: refresh both the ticket AND its attachments
-  // (the old button only ever reloaded the ticket).
+  // Manual refresh: refreshes both the ticket AND its attachments.
   function refreshTicket() {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
@@ -841,14 +765,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       }
     };
     const onBreakpoint = () => { if (mobileQuery?.matches) setTicketChromeCondensed(false); };
-    // The IntersectionObserver only fires as a sentinel crosses the scroll viewport. It does NOT
-    // re-fire when the content below grows/shrinks or the viewport resizes while the sentinels stay
-    // on the same side — which can leave the condensed state stale: a page that was too short to
-    // condense (Gate A failed) grows tall enough but stays expanded, or a condensed page shrinks
-    // below the condense line but stays condensed. Re-derive the state synchronously from the
-    // sentinels' current positions on those events (same dead-band as onIntersect). Needs real
-    // geometry, so it no-ops where the scroll box can't be measured (unit tests) — there the IO
-    // path drives, exactly as before.
+    // The IntersectionObserver fires only as a sentinel crosses the scroll viewport; it does NOT
+    // re-fire when content below grows/shrinks or the viewport resizes while the sentinels stay on
+    // the same side, which can leave the condensed state stale (a page too short to condense that
+    // grows tall stays expanded; a condensed page that shrinks stays condensed). Re-derive the
+    // state synchronously from the sentinels' current positions on those events (same dead-band as
+    // onIntersect). Needs real geometry, so it no-ops where the scroll box can't be measured (unit
+    // tests); there the IO path drives.
     const reevaluate = () => {
       if (mobileQuery?.matches) { setTicketChromeCondensed(false); return; }
       if (!scroller || scroller.clientHeight === 0) return;
@@ -891,9 +814,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     let lastWritten = null;
     const writeHeight = () => {
       const height = Math.ceil(chrome.getBoundingClientRect().height);
-      // Skip the write when the rounded height is unchanged — the condense/expand transition fires
-      // the ResizeObserver on every intermediate frame, but the pixel value only changes some of
-      // them, and most frames land on a value already written.
+      // Skip the write when the rounded height is unchanged: the condense/expand transition fires
+      // the ResizeObserver on every intermediate frame, but most frames land on a value already
+      // written.
       if (height > 0 && height !== lastWritten) {
         lastWritten = height;
         document.documentElement.style.setProperty('--deal-header-h', `${height}px`);
@@ -943,11 +866,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <SkeletonText lines={4} />
           </div>
         </Panel>
-        {/* bordered/px-5 py-4 (vs. the legacy 16px-inline/0-vertical .table-panel >
-            .panel-header) is the same small, deliberate shift the CommissionPage
-            port (f7c2cace) already accepted for this exact class of header —
-            Panel.Header's own doc comment calls the old borderless header a
-            defect fixed by construction. */}
+        {/* bordered/px-5 py-4 (vs. the legacy 16px-inline/0-vertical .table-panel > .panel-header)
+            is a small deliberate shift, as in the CommissionPage port; Panel.Header's doc comment
+            calls the old borderless header a defect. */}
         <Panel flush>
           <Panel.Header bordered>
             <Skeleton width="30%" height={16} />
@@ -973,22 +894,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   }
 
   const { summary, items, events, quotations } = ticket;
-  // QA-33: the billing form is the only writer of lastFollowUpAt, so ติดตามล่าสุด is the later of it and the newest activity.
+  // The billing form is the only writer of lastFollowUpAt, so ติดตามล่าสุด is the later of it and the newest activity.
   const latestFollowUp = [summary.lastFollowUpAt, ...activities.map((a) => a.activityDate)].filter(Boolean).sort().pop() ?? null;
-  // B5 fix: when sales.ticket_item is still empty (pre-order-confirmation), the items grid
-  // below falls back to the deal's live pricing-request/quotation line items instead of
-  // showing "0 รายการ" — see TicketService#get (backend) for the exact pick rule. Those rows
-  // are NOT ticket_item, so they render read-only: no edit affordance, no add-item control.
+  // While sales.ticket_item is still empty (pre-order-confirmation), the items grid falls back to
+  // the deal's live pricing-request/quotation line items instead of "0 รายการ" (see
+  // TicketService#get for the pick rule). Those rows are NOT ticket_item, so they render
+  // read-only: no edit affordance, no add-item control.
   const fromPricingChain = ticket.fromPricingChain ?? false;
-  // GLA-136's `quotationOnly` switch (no stage panel / CTA / overflow on a quotation-first deal) is
-  // gone: slice 1 (2ed3468e) made that flag provenance only and the IA (§7, "Nothing hidden") makes
-  // such a deal an ordinary one, so nothing on this page reads it any more.
+  // Nothing on this page reads `quotationOnly`: a quotation-first deal is an ordinary deal
+  // (IA §7, "Nothing hidden").
   const st = summary.status;
   const isOwner = user.id === summary.createdById;
-  // Issue #389: reading a deal's documents is now the same question as reading the deal (so
-  // account/import reach the เอกสาร panel and hr no longer does), but WRITING one stays narrow —
-  // TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo. Mirrored here so
-  // the panel does not offer account/import an upload the backend answers with a 403.
+  // Reading a deal's documents is the same question as reading the deal (account/import reach the
+  // เอกสาร panel, hr does not), but WRITING stays narrow: TicketAccessPolicy.canManageDocuments is
+  // participant OR sales_manager/ceo. Mirrored here so the panel does not offer account/import an
+  // upload the backend answers with a 403.
   const canManageDocuments = isOwner
     || (summary.assignedToId != null && user.id === summary.assignedToId)
     || ROLE_PERMISSIONS.canManageTicketDocuments.includes(role);
@@ -997,9 +917,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // ข้อ 10.1: Import sees only rawPrice + proposedPrice — NOT approvedPrice or CEO-set prices
   const showApproved = ROLE_PERMISSIONS.canApproveReject.includes(role) || ROLE_PERMISSIONS.canCreateTickets.includes(role);
   const showCalcBreakdown = ROLE_PERMISSIONS.canApproveReject.includes(role) && items.some((it) => it.calcedCost != null);
-  // The standalone ราคาตั้ง column (Slice F) was removed 2026-08-10 — see the fxRatesQuery comment
-  // above. Its three fixed columns (ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน) are now followed directly by
-  // whichever price columns the role is allowed to see, so each variant lost exactly one track.
+  // There is no standalone ราคาตั้ง column (see the fxRatesQuery comment above): three fixed columns
+  // (ยี่ห้อ/รุ่น · สี/เนื้อผิว · จำนวน) are followed by whichever price columns the role may see.
   const itemsGridCols = showCalcBreakdown
     ? 'minmax(0,1.4fr) minmax(0,1fr) minmax(0,0.5fr) minmax(0,0.9fr) minmax(0,0.9fr) minmax(0,0.9fr)'
     : showProposed
@@ -1009,18 +928,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const ps = summary.paymentStatus;
   const fs = summary.fulfillmentStatus;
   const isSales   = ROLE_PERMISSIONS.canCreateTickets.includes(role);
-  // GLA-118 (owner ruling 2026-09-20, part A): recording ANY payment — confirmFinalPayment/
-  // recordPayment alike — is account ONLY now, no CEO fallback (canConfirmPayments still includes
-  // ceo and backs /finance visibility, so it is deliberately NOT used for the flags below) —
-  // mirrors TicketService's new PAYMENT_RECORD_ROLES exactly.
+  // Recording ANY payment (confirmFinalPayment/recordPayment alike) is account ONLY, no CEO
+  // fallback; mirrors TicketService's PAYMENT_RECORD_ROLES. canConfirmPayments still includes ceo
+  // and backs /finance visibility, so it is deliberately NOT used for the flags below.
   const isMoneyRecorder = role === 'account';
-  // (deliveryDone / dualTrackDone removed with the single-step close: the close
-  // gate is now the server's three-party sequence, surfaced via availableActions.)
-  // Slice A "chip diet": DealStagePanel's own read-only "ส่งมอบ x/y" badge
-  // (the only consumer of totalOrdered/totalDelivered) was removed as a
-  // straight duplicate of DealFulfilmentPanel's own aggregate + progress bar,
-  // which already computes the same totals from this same `items` prop — see
-  // DealStagePanel.jsx's own doc comment.
+  // The close gate is the server's three-party sequence, surfaced via availableActions.
+  // DealStagePanel has no "ส่งมอบ x/y" badge: it would duplicate DealFulfilmentPanel's aggregate +
+  // progress bar, which computes the same totals from this same `items` prop.
 
   // Documents that already exist stay reachable from the deal-stage panel
   // through the later stages: the latest quotation file. The deposit-notice
@@ -1041,12 +955,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }))
     .filter((group) => group.quotations.length > 0);
 
-  // Moved verbatim from the now-deleted TicketContextPanel.jsx (ticket-workspace
-  // IA rebuild, Slice B): who the deal's pricing request is currently assigned
-  // to, for the ภาพรวม tab's "ผู้เกี่ยวข้อง" section below. `canViewPricingRequests`
-  // is the same role-scoped readout the panel used — a viewer without pricing-
-  // request visibility gets 'ไม่แสดงในมุมมองนี้' rather than a widened peek at who
-  // owns it.
+  // Who the deal's pricing request is currently assigned to, for the ภาพรวม tab's "ผู้เกี่ยวข้อง"
+  // section. `canViewPricingRequests` is the role-scoped readout: a viewer without pricing-request
+  // visibility gets 'ไม่แสดงในมุมมองนี้' rather than a peek at who owns it.
   const pricingSummary = activePricingRequestsSummary(pricingRequests);
   const latestPr = pricingSummary ? pricingSummary.requests[pricingSummary.requests.length - 1] : null;
   const assignedImport = canViewPricingRequests
@@ -1060,34 +971,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // quote stages.
   const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
-    // Ticket-level submit/pickup/propose-price/calculate-prices/override-item-price/approve/
-    // reject/generate-quotation are retired (Phase 2 Slice S1/S2 "engine collapse" — see
-    // docs/agent-handoffs/104_feat-deal-workspace-unification.md). Pricing now runs entirely on
-    // the PricingRequest chain (PricingRequestPanel below the items table + DealQuotationPanel
-    // for the customer-facing quotation tail + order-confirm). The deposit-notice
-    // create/issue/view affordance (formerly generateDocument here) and the
-    // deposit-payment confirmation (formerly confirmDepositPaid here) both moved
-    // into DealPaymentSection, and the fulfilment chain
-    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived/
-    // reserveStock/recordDelivery/completeDelivery, formerly defined here)
-    // moved into DealFulfilmentPanel (Phase 3 Slice S4 — see
-    // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md), which
-    // owns its own mutations against the same hrApi methods rather than
-    // routing through this page's shared actionMutation.
+    // Pricing runs entirely on the PricingRequest chain (PricingRequestPanel below the items table
+    // + DealQuotationPanel for the customer-facing quotation tail + order-confirm). The
+    // deposit-notice and deposit-payment affordances live in DealPaymentSection, and the
+    // fulfilment chain (issueImportRequest/markIrSent/markShipping/markGoodsReceived/reserveStock/
+    // recordDelivery/completeDelivery) in DealFulfilmentPanel, which owns its own mutations against
+    // the same hrApi methods rather than this page's shared actionMutation.
     // Not once the order is confirmed (ps set, ขั้น 10+): no new pricing round can start on the deal.
     revise:            (st === 'approved' || st === 'quotation_issued' || st === 'document_issued') && ps == null && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner,
-    // Three-party close (V55): ฝ่ายบัญชี confirms, then the CEO verifies. Sales is
-    // no longer part of the sequence, so there is no owner/canCreateTickets gate
-    // here — the server decides and we mirror its availableActions.
+    // Three-party close: ฝ่ายบัญชี confirms, then the CEO verifies. Sales is not part of the
+    // sequence, so there is no owner/canCreateTickets gate: the server decides and we mirror its
+    // availableActions.
     confirmClose:       hasAction('CONFIRM_CLOSE'),
     revokeCloseConfirm: hasAction('REVOKE_CLOSE_CONFIRM'),
     verifyClose:        hasAction('VERIFY_CLOSE'),
     cancel:           hasAction('CANCEL') && !TERMINAL.includes(st)   && isOwner,
     comment:          !TERMINAL.includes(st),
-    // B5 fix: a fallback (fromPricingChain) grid shows borrowed quotation lines, not real
-    // ticket_item rows — there is nothing here for editItems to save, so the affordance (and,
-    // since it is the only entry point into edit mode, the add-item control inside it) is
-    // hidden rather than left to fail server-side.
+    // A fallback (fromPricingChain) grid shows borrowed quotation lines, not real ticket_item rows,
+    // so there is nothing for editItems to save: the affordance (and the add-item control inside
+    // edit mode) is hidden rather than left to fail server-side.
     editItems: hasAction('EDIT_ITEMS') && EDITABLE_STATUSES.includes(st) && ROLE_PERMISSIONS.canCreateTickets.includes(role) && isOwner && !fromPricingChain,
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && ps == null && isSales, // not at CUSTOMER_CONFIRMED: a re-confirm moves nothing and would hide สร้างใบแจ้งยอดเงินรับมัดจำ (2026-10-28)
@@ -1096,44 +998,27 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     downloadRemainingInvoice: isRemainingInvoiceReady({ status: st, fulfillmentStatus: fs }) && isSales,
   };
 
-  // Slice C2b: the FIX 2 (Opus review) per-instance เอกสาร (attachments)
-  // filter that used to live here — `tabItems`/`activeTab` are role-level
-  // only, but the old `documents` (attachments) tab additionally needed
-  // `canViewDocumentsTab`'s per-instance identity check — is gone. That
-  // content now lives inside `history`, an unconditionally-visible tab, so
-  // there is no longer a TAB to filter out or fall back from; the identity
-  // check instead gates just the attachments panel as an inner render
-  // condition (see the `history` TabPanel below). No tab in
-  // ticketDetailTabs.js is per-instance gated any more, so `tabItems`/
-  // `activeTab` are used directly, unfiltered.
+  // No tab is per-instance gated: `tabItems`/`activeTab` are role-level only and used directly,
+  // unfiltered. The attachments panel's identity check (`canViewDocumentsTab`) is an inner render
+  // condition inside the always-visible `history` tab (see its TabPanel below).
   const visibleTabItems = tabItems;
   const visibleActiveTab = activeTab;
 
-  // การดำเนินการอื่น ๆ (ticket-detail IA rebuild Phase 1's leftover grab-bag —
-  // see workState.js's own doc comment for where its other siblings went)
-  // is dissolved as of Slice C2b: `can.editItems` moves into the items
-  // table's own panel header (it's an items action) and `can.revokeCloseConfirm`
-  // moves into the money tab (it's a close-lifecycle action, unrelated to
-  // items) — each rendered directly at its new site below rather than behind
-  // one shared `hasActions` flag. The empty-draft hint travels with
-  // `can.editItems` into the items panel.
+  // `can.editItems` lives in the items table's panel header (it's an items action) and
+  // `can.revokeCloseConfirm` in the money tab (a close-lifecycle action), each rendered at its own
+  // site rather than behind one shared `hasActions` flag. The empty-draft hint travels with
+  // `can.editItems`.
 
-  // Next-action summary for the current viewer only — derived strictly from the
-  // `can` flags above (which already encode real status+role permission checks).
-  // Verified against backend/mock transition handlers (see api.tickets.* in
-  // src/api/mockApi.js) so the wording matches what the button actually does.
-  // Never invents an owner or action the data can't support. 'revise' is
-  // deliberately NOT in this cascade any more (Phase-1 audit finding #1): it
-  // describes an OPTIONAL action, not something blocking the deal's progress,
-  // so it no longer competes for the one sticky primary CTA slot — it is
-  // still fully reachable, from the header overflow menu.
+  // Next-action summary for the current viewer only, derived strictly from the `can` flags above
+  // (which encode real status+role permission checks), so the wording matches what the button does
+  // (see api.tickets.* in src/api/mockApi.js). Never invents an owner or action the data can't
+  // support. 'revise' is deliberately NOT in this cascade: it is an OPTIONAL action, not a blocker,
+  // so it must not compete for the one sticky primary CTA slot; it stays reachable from the header
+  // overflow menu.
   const NEXT_ACTION_STEPS = [
-    // Dual-track steps: re-issuing/working the customer quotation lives in
-    // DealQuotationPanel, the deposit-notice/deposit-payment steps live in
-    // DealPaymentSection, and the fulfilment chain
-    // (issueImportRequest/markIrSent/markShipping/markGoodsReceived) lives in
-    // DealFulfilmentPanel (Phase 3 Slice S4) — so this list only covers the
-    // operational chain this page's own primaryAction button still drives.
+    // Dual-track steps: the customer quotation lives in DealQuotationPanel, the deposit-notice /
+    // deposit-payment steps in DealPaymentSection, and the fulfilment chain in DealFulfilmentPanel,
+    // so this list covers only the operational chain this page's own primaryAction still drives.
     ['confirmCustomer',  'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
     ['confirmFinalPayment','ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
     ['confirmClose',      'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
@@ -1149,37 +1034,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Kept to the fact only (design law: brief — who/what, not
   // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
-  // !isMoneyRecorder on the two payment-wait lines (P3, review round 2): account is the ONLY role
-  // that CLEARS these two waits (confirmDeposit/confirmFinalPayment — see nextAccountAction in
-  // accountActions.js) — for account specifically, this line would otherwise read "รอชำระมัดจำ"
-  // right next to their own resolver-derived "ยืนยันรับมัดจำ" primary CTA button, stating the same
-  // fact twice (once as a call to action, once as a blocker) instead of pairing the blocker with a
-  // role that ISN'T the one who can act on it — exactly the contradiction this line's own doc
-  // comment above warns against.
-  //
-  // GLA-118 review fix: this used to read `!isAccount`, which ALSO suppressed the blocker for the
-  // CEO — isAccount (canConfirmPayments) still includes ceo for SET_BILLING's sake, but
-  // recording/confirming a payment is account-only now (see isMoneyRecorder above), so the CEO no
-  // longer clears either wait and must see the same read-only status a sales/import viewer does,
-  // not silence.
-  // QA-27: the CEO can only verify an ACTIVE deal (canVerifyClose), so on any other lifecycle — COMPLETED
-  // after the verify, or cancelled/lost/paused — there is no CEO step left to wait for.
+  // !isMoneyRecorder on the two payment-wait lines: account is the ONLY role that CLEARS these
+  // waits (confirmDeposit/confirmFinalPayment, see nextAccountAction in accountActions.js), so for
+  // account the blocker would read "รอชำระมัดจำ" beside its own "ยืนยันรับมัดจำ" primary CTA, stating
+  // the same fact twice. The CEO is not a money recorder either (isAccount/canConfirmPayments still
+  // includes ceo for SET_BILLING), so the CEO must see the same read-only status as sales/import.
+  // The CEO can only verify an ACTIVE deal (canVerifyClose), so on any other lifecycle (COMPLETED
+  // after the verify, or cancelled/lost/paused) there is no CEO step left to wait for.
   const blocker = closeConfirmedAt && !can.verifyClose && (summary?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
     ? 'รอ CEO ตรวจสอบปิดงาน'
     : ps === 'DEPOSIT_NOTICE_ISSUED' && !isMoneyRecorder ? 'รอชำระมัดจำ'
       : ps === 'AWAITING_FINAL_PAYMENT' && !isMoneyRecorder ? 'รอชำระส่วนที่เหลือ'
         : null;
 
-  // The cockpit's primary action: the ONE workflow button for this viewer's
-  // current sub-step (moved verbatim out of การดำเนินการอื่น ๆ). The
-  // customer-quotation issue/outcome/confirm-order actions live in
-  // DealQuotationPanel, the deposit-notice/deposit-payment actions live in
-  // DealPaymentSection, and the fulfilment chain
-  // (issue IR/mark sent/shipping/goods received) lives in
-  // DealFulfilmentPanel (Phase 3 Slice S4 — see
-  // docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md) — all
-  // three have their own primary buttons, so this page's own primaryAction
-  // no longer drives that chain.
+  // The cockpit's primary action: the ONE workflow button for this viewer's current sub-step. The
+  // customer-quotation actions live in DealQuotationPanel, the deposit-notice/deposit-payment
+  // actions in DealPaymentSection, and the fulfilment chain in DealFulfilmentPanel, each with its
+  // own primary buttons, so this page's primaryAction does not drive them.
   const primaryAction = can.confirmCustomer ? (
     <Button type="button" variant="primary" disabled={actionLoading} data-testid="ticket-detail-confirm-customer"
       onClick={() => doAction(() => api.tickets.confirmCustomer(ticketId), 'ลูกค้ายืนยันแล้ว')}>
@@ -1205,28 +1076,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     </Button>
   ) : null;
 
-  // Sticky action bar (ticket-detail IA rebuild Phase 1). `primaryAction`
-  // above (confirmCustomer/finalPayment/close/verify) is a REAL, server-
-  // gated button — when it exists it always wins, unchanged. workState.js's
-  // resolveWorkState fills the gap for every earlier cascade step
-  // (CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER/FOLLOW_UP/LOG_ACTIVITY for
-  // sales; the fulfilment chain for import; deposit/final-payment/close-
-  // ready for account) that this page has no dedicated `can.*` button for —
-  // rendered as a "jump to the real control" convenience (in-page scroll,
-  // or a real route when the control lives elsewhere), never a duplicate of
-  // the mutation itself.
+  // Sticky action bar. `primaryAction` above (confirmCustomer/finalPayment/close/verify) is a REAL,
+  // server-gated button and always wins. workState.js's resolveWorkState fills the gap for every
+  // earlier cascade step (CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER/FOLLOW_UP/LOG_ACTIVITY for
+  // sales; the fulfilment chain for import; deposit/final-payment/close-ready for account) that
+  // this page has no `can.*` button for, as a "jump to the real control" convenience (in-page
+  // scroll, or a real route when the control lives elsewhere), never a duplicate of the mutation.
   //
-  // CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are the exceptions to "jump,
-  // don't duplicate" (FIX 1 + FIX 2, Phase-1 clutter follow-up rounds 1/2):
-  // each used to scroll to a panel that ALSO rendered its own button with
-  // the exact same label — visible twice at once, since a sticky bar never
-  // scrolls out of view. CREATE_PCR/CONFIRM_ORDER now trigger their owning
-  // panel directly via a forwardRef (pricingRequestPanelRef / dealQuotationPanelRef);
-  // ISSUE_QUOTATION writes the new-engine quotation right here. No panel renders
-  // a trigger of its own — the sticky bar is the only copy of each label.
-  // PR A — the quotation "แก้ใบเสนอราคา" would revise: the newest row this viewer may revise per
+  // CREATE_PCR/ISSUE_QUOTATION/CONFIRM_ORDER are the exceptions to "jump, don't duplicate": a
+  // panel that also rendered its own same-label button would show it twice at once (a sticky bar
+  // never scrolls away). CREATE_PCR/CONFIRM_ORDER trigger their owning panel via a forwardRef
+  // (pricingRequestPanelRef / dealQuotationPanelRef); ISSUE_QUOTATION writes the quotation right
+  // here. No panel renders its own trigger: the sticky bar is the only copy of each label.
+  // The quotation "แก้ใบเสนอราคา" would revise: the newest row this viewer may revise per
   // quotationMeta.canReviseDealQuotation (the single rule; owner + status live there), plus any
-  // open revision draft already hanging off it. Same query key as DealDocumentRegister, so one fetch.
+  // open revision draft hanging off it. Same query key as DealDocumentRegister, so one fetch.
   const dealQuotationRows = dealQuotationsQuery.data ?? [];
   const confirmedRow = dealQuotationRows.find((q) => q.id === confirm?.quotationId);
   const reviseCandidate = dealQuotationRows
@@ -1240,8 +1104,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const reviseTarget = reviseCandidate
     ? { quotationId: reviseCandidate.id, number: reviseCandidate.number, openDraftId: openRevisionDraft?.id }
     : null;
-  // For the sales route choice, the redo and the approval wait (owner ruling 2026-10-27). Empty
-  // while the list loads: requests then go by status.
+  // For the sales route choice, the redo and the approval wait. Empty while the list loads:
+  // requests then go by status.
   const quotationByRequest = newestQuotationByRequest(dealQuotationRows);
   // The deal's served route (catalog.routes for its entryChannel); null until the catalog loads.
   // Review V5: until the quotation list is read, a sent designer quotation may be being redone —
@@ -1249,12 +1113,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // (Read once is enough: a failed refetch keeps the rows it read.)
   const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
-  // PR A: at the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
-  // replacement for the primary บันทึกผลใบเสนอราคา — the client may simply accept the original.
+  // At the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
+  // replacement for the primary บันทึกผลใบเสนอราคา: the client may simply accept the original.
   const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
-  // The backend refuses a non-owner for both documents (2026-10-28): no main button for them.
+  // The backend refuses a non-owner for both documents: no main button for them.
   const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'create_import_request'];
   // Like the quotation list above: with the deal's request list unread, a DRAFT may be hiding, so no create_pcr.
   const requestListUnread = canViewPricingRequests && pricingRequestsQuery.data === undefined;
@@ -1274,29 +1138,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const confirmOrderCta = ['confirm_order', 'confirm_order_direct'].includes(workStateAction?.key);
   const ctaStage = confirmOrderCta ? 'ORDER_RECEIVED'
     : requestStageAhead ? requestStage : null;
-  // Mirrors DealStagePanel's own `next`/`canAdvance` byte-for-byte, PLUS the
-  // explicit `isActiveLifecycle` guard DealStagePanel got "for free" from
-  // which JSX branch rendered its old inline "เลื่อนไป" button (only the
-  // plain-ACTIVE branch — never ON_HOLD/DORMANT/lost, which each render their
-  // own dedicated recovery/reopen actions instead) — same class of implicit
-  // gate this file already had to make explicit for canEditStage/
-  // canHoldDeal/canDormantDeal above (ON_HOLD lifecycle regression, see that
-  // describe block in TicketDetailPage.test.jsx).
+  // Mirrors DealStagePanel's own `next`/`canAdvance`, PLUS an explicit `isActiveLifecycle` guard:
+  // DealStagePanel got it "for free" from which JSX branch rendered its inline "เลื่อนไป" button
+  // (only the plain-ACTIVE branch, never ON_HOLD/DORMANT/lost, which render their own recovery
+  // actions), the same implicit gate made explicit for canEditStage/canHoldDeal/canDormantDeal
+  // above.
   //
-  // Deliberately NOT this file's own `hasAction(action)` above (single-arg,
-  // "is this action name present at all") — DealStagePanel's own hasAction
-  // takes a second `targetStage` argument and requires an exact match, so an
-  // ADVANCE_STAGE entry for some OTHER target stage would false-positive
-  // through the single-arg version. Checked directly against
-  // `availableActions` here so this stays byte-identical to DealStagePanel's
-  // gate, not just same-named.
+  // Not this file's single-arg `hasAction(action)`: DealStagePanel's hasAction takes a second
+  // `targetStage` argument and requires an exact match, so an ADVANCE_STAGE entry for some OTHER
+  // target stage would false-positive through the single-arg version. Checked directly against
+  // `availableActions` so it stays identical to DealStagePanel's gate.
   const next = isActiveLifecycle && !lost ? nextOnRoute(stageCatalog, summary.salesStage, stageDecisions) : null;
   const hasAdvanceStageAction = Boolean(next) && availableActions.some(
     (item) => item.action === 'ADVANCE_STAGE' && item.targetStage === next.code,
   );
-  // No local re-derivation left: hasAdvanceStageAction IS the server's verdict for this exact
-  // target (TicketService.addStageActions now derives ADVANCE_STAGE from stageDecisions, so it
-  // reflects the fact gates too, not just the role gate).
+  // hasAdvanceStageAction IS the server's verdict for this exact target (TicketService
+  // .addStageActions derives ADVANCE_STAGE from stageDecisions, so it reflects the fact gates too).
   const canAdvance = Boolean(next) && !next.auto && hasAdvanceStageAction;
   // The one block the rep clears themselves (follow-up date + an activity since the last move),
   // read off the server's own reason, as DealStagePanel's `readinessBlocked` does.
@@ -1309,41 +1166,22 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     const actionKey = workStateAction.key ?? workStateAction.code;
     const jumpId = IN_PAGE_JUMP_TARGET[actionKey];
     const to = workStateAction.to;
-    // data-testid="ticket-primary-action" + data-action={actionKey}: a
-    // stable e2e hook for this slot (added after PR #343's CI break —
-    // "ออกใบเสนอราคา"/"ยืนยันคำสั่งซื้อ" moved here from DealQuotationPanel's
-    // own buttons, which took their old `deal-quotation-issue`/
-    // `deal-quotation-confirm-order` testids with them when they were
-    // deleted, leaving nothing for e2e/pcr-chain.spec.js and
-    // e2e/deposit-fulfilment-close.spec.js to click). Deliberately generic
-    // and reused across every branch below rather than a per-action id:
-    // this bar is the ONE sticky primary slot on the page and its rendered
-    // action changes with the deal's stage/role, so a spec should assert
-    // "the primary slot is now offering X" (via data-action) rather than
-    // hard-code a label- or action-specific testid that would need
-    // updating every time the resolver's cascade changes. The real
-    // `can.*`-gated buttons above (confirmCustomer/confirmFinalPayment/
-    // confirmClose/verifyClose) keep their own long-lived
-    // `ticket-detail-confirm-*`/`ticket-detail-verify-close` testids
-    // unchanged — those are already stable, already covered by e2e specs,
-    // and are a different kind of primary (server-gated, not
-    // resolver-derived), so they are not folded into this generic id.
-    // `!jumpId` is load-bearing: an action that has an in-page target on THIS page must scroll to
-    // it, never navigate away, even when its resolver supplies a `to`.
+    // data-testid="ticket-primary-action" + data-action={actionKey}: a stable e2e hook for this
+    // slot. It is generic and reused across every branch below because this bar is the ONE sticky
+    // primary slot and its action changes with stage/role, so a spec asserts "the primary slot now
+    // offers X" (via data-action) instead of a per-action testid. The server-gated `can.*` buttons
+    // above (confirmCustomer/confirmFinalPayment/confirmClose/verifyClose) keep their own
+    // `ticket-detail-confirm-*`/`ticket-detail-verify-close` testids.
+    // `!jumpId` is load-bearing: an action with an in-page target on THIS page must scroll to it,
+    // never navigate away, even when its resolver supplies a `to`.
     //
-    // Before the /fulfilment workspace existed, nextImportAction returned `/tickets/:id` for the
-    // four fulfilment codes, so this condition was false for them and the cascade fell through to
-    // the `else if (jumpId)` branch below — the sticky button scrolled down to
-    // DealFulfilmentPanel, where the real server-gated control lives. Pointing those codes at
-    // /fulfilment made this branch fire instead, so an import user standing ON the deal, one
-    // scroll away from the button they wanted, was ejected to a list page to find the same deal
-    // again. That is a longer round trip than the one the workspace exists to remove, and it
-    // silently disabled four IN_PAGE_JUMP_TARGET entries while recordDelivery — which kept a
-    // `/tickets/:id` `to` — went on scrolling, so one bar had two behaviours.
+    // nextImportAction points the four fulfilment codes at /fulfilment; without `!jumpId` an import
+    // user standing on the deal, one scroll from the real button on DealFulfilmentPanel, would be
+    // sent to a list page, and four IN_PAGE_JUMP_TARGET entries would stop working while
+    // recordDelivery (whose `to` is /tickets/:id) kept scrolling.
     //
-    // Deciding it here rather than in nextImportAction is deliberate: the resolver serves the
-    // dashboard and the workspace too, and for THOSE callers /fulfilment is the correct
-    // destination. Only this page knows it already contains the target.
+    // Decided here rather than in nextImportAction because the resolver also serves the dashboard
+    // and the workspace, where /fulfilment is correct. Only this page knows it contains the target.
     if (to && to !== `/tickets/${ticketId}` && !jumpId) {
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => navigate(to)}>
@@ -1353,12 +1191,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_pcr') {
-      // Ticket-detail IA rebuild Phase 2: PricingRequestPanel now lives
-      // inside the "สินค้าและราคา" tab (Slice C2b renamed/merged the old
-      // "ราคา" tab into `items` — same panel, same mount point), mounted
-      // only while that tab is active — `runOnTab` switches to it first,
-      // then calls the ref (see this component's own doc comment on
-      // `runOnTab`).
+      // PricingRequestPanel lives in the "สินค้าและราคา" tab, mounted only while that tab is active:
+      // `runOnTab` switches to it first, then calls the ref.
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate())}>
           <Icon name="plus" size={14} />
@@ -1367,10 +1201,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'quote_next_party') {
-      // Owner ruling 2026-10-27: "เสนอราคา<next party>" once a designer/owner quotation is sent. More
-      // than one party left: a menu, later parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain
-      // button. Each opens the price-request form with ผู้รับ pre-filled. SK-03 (2026-10-29): the menu
-      // trigger reads the neutral "เสนอราคา" (it no longer names just the first party).
+      // "เสนอราคา<next party>" once a designer/owner quotation is sent. More than one party left: a
+      // menu, later parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain button. The menu
+      // trigger reads the neutral "เสนอราคา". Each opens the price-request form with ผู้รับ pre-filled.
       const parties = workStateAction.parties;
       const openFor = (party) => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party }));
       stickyPrimaryAction = parties.length > 1 ? (
@@ -1445,7 +1278,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'confirm_order') {
-      // DealQuotationPanel now lives inside the "เอกสาร" tab (see comment above).
+      // DealQuotationPanel lives in the "เอกสาร" tab.
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab('documents', () => dealQuotationPanelRef.current?.openConfirmOrder())}>
           {workStateAction.label}
@@ -1478,10 +1311,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'confirm_order_direct') {
-      // Slice 2 §E — an APPROVED direct quotation: the customer's order is confirmed right here,
-      // behind the same confirm the quotation editor uses (consequential and irreversible —
-      // DESIGN.md principle 10). SUBMIT and the approvers' action need no branch of their own: both
-      // carry a `to` (/quotations/:id), which the first branch above already navigates.
+      // An APPROVED direct quotation: the customer's order is confirmed right here, behind the same
+      // confirm the quotation editor uses (consequential and irreversible, DESIGN.md principle 10).
+      // SUBMIT and the approvers' action need no branch: both carry a `to` (/quotations/:id), which
+      // the first branch above navigates.
       stickyPrimaryAction = (
         <Button
           type="button"
@@ -1498,8 +1331,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'advance_stage') {
-      // ขั้น 1–2 are moved by hand (owner ruling 2026-10-15). Offered only when the rep can move:
-      // DealStagePanel's startAdvance moves at once when ready, else opens its follow-up + activity form.
+      // ขั้น 1–2 are moved by hand. Offered only when the rep can move: DealStagePanel's startAdvance
+      // moves at once when ready, else opens its follow-up + activity form.
       if (canAdvance || advanceAwaitsReadiness) {
         advanceInHeader = true;
         stickyPrimaryLabel = `เลื่อนไป: ${next.no}. ${dealStageLabel(next.code, summary.entryChannel).label}`;
@@ -1511,8 +1344,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         );
       }
     } else if (jumpId) {
-      // Every IN_PAGE_JUMP_TARGET id now lives inside a tab — JUMP_TARGET_TAB
-      // names which one, so runOnTab can switch there before scrolling.
+      // Every IN_PAGE_JUMP_TARGET id lives inside a tab; JUMP_TARGET_TAB names which, so runOnTab can
+      // switch there before scrolling.
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => runOnTab(JUMP_TARGET_TAB[jumpId] ?? activeTab, () => scrollToSection(jumpId))}>
           {workStateAction.label}
@@ -1523,73 +1356,48 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }
 
-  // The work-state banner line (IA region 4/6/7). The "ถึงคิวคุณ: <label>"
-  // prefix is gone everywhere — it duplicated the CTA sitting right next to
-  // it and read as distracting rather than informative. What replaces it
-  // splits by WHERE the label came from:
+  // The work-state banner line. Resolver-derived CTAs (workStateAction, the branches above) render
+  // `workStateAction.label` verbatim on the button, so the line would repeat it: null, the button
+  // carries it alone. The four `can.*` CTAs differ: `nextAction` is a descriptive SENTENCE
+  // ("ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน") naming the precondition and the
+  // consequence, while the button is a terse verb ("ยืนยันพร้อมปิดงาน"), and no other surface says
+  // it, so they keep their line, prefix-free.
   //
-  //  - Resolver-derived CTAs (workStateAction, the branches above) render
-  //    `workStateAction.label` verbatim on the button, so the line was that
-  //    same string twice. Nulled — the button carries it alone.
-  //  - The four `can.*` CTAs are different: `nextAction` is a descriptive
-  //    SENTENCE ("ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน")
-  //    naming the precondition and the consequence, while the button is a
-  //    terse verb ("ยืนยันพร้อมปิดงาน"). Nulling those threw away real
-  //    information, and — since the ticket-workspace IA rebuild Slice B
-  //    retired the context rail that used to carry this line as a fallback —
-  //    there is no other surface on the page left to say it. They keep
-  //    their line, prefix-free.
+  // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set only by that
+  // four-branch cascade, and it always wins over the resolver.
   //
-  // `primaryAction` (not stickyPrimaryLabel) is the discriminator: it is set
-  // only by that four-branch cascade, and it always wins over the resolver.
-  //
-  // Slice 2: workState can hand back its own finished line (`workState.bannerText` — the rep's
-  // direct quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line. The เสนอราคา
-  // <party> primary also carries one (owner ruling 2026-10-27), shown beside its button.
+  // workState can hand back its own finished line (`workState.bannerText`: the rep's direct
+  // quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line. The เสนอราคา<party>
+  // primary also carries one, shown beside its button.
   const bannerText = primaryAction
     ? nextAction
     : stickyPrimaryLabel
       ? (workState.bannerText ?? null)
       : (workState.bannerText || blocker);
 
-  // Overflow-menu / danger-zone availability — mirrors DealStagePanel's own
-  // canEditStage/canLost/canHold/canDormant gates byte-for-byte (same
-  // hasAction/stageDecisions reads on the same server payload) so the header
-  // menu never offers something that panel itself wouldn't also allow. DealStagePanel stays the single actual authority —
-  // see its own doc comment on why the ref-exposed open functions re-check
-  // these same conditions instead of trusting the caller.
-  // DealStagePanel only ever rendered its แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก
-  // dormant row inside its final "lifecycle is plain ACTIVE" JSX branch
-  // (neither the ON_HOLD/DORMANT recovery banner nor the lost banner) — that
-  // branch position, not just the four `can*` booleans, was what kept e.g.
-  // "พัก dormant" from also appearing on an ON_HOLD deal (which legitimately
-  // has MARK_DORMANT in availableActions, since ON_HOLD -> DORMANT is a real
-  // transition — DealStagePanel's OWN ON_HOLD banner already offers that
-  // exact button). Mirrored explicitly here so the header overflow menu
-  // can't duplicate it.
+  // Overflow-menu / danger-zone availability mirrors DealStagePanel's canEditStage/canLost/canHold/
+  // canDormant gates (same hasAction/stageDecisions reads on the same server payload) so the header
+  // menu never offers something that panel wouldn't allow. DealStagePanel stays the single
+  // authority (its ref-exposed open functions re-check these conditions instead of trusting the
+  // caller). It rendered its แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก dormant row only in its final "lifecycle
+  // is plain ACTIVE" JSX branch, and that branch position kept "พัก dormant" off an ON_HOLD deal
+  // (which legitimately has MARK_DORMANT in availableActions, and whose own banner already offers
+  // that button). Mirrored explicitly here so the header menu can't duplicate it.
   const canEditStage = isActiveLifecycle && hasAction('UPDATE_STAGE')
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLostDeal = isActiveLifecycle && hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
   const canHoldDeal = isActiveLifecycle && hasAction('PLACE_ON_HOLD');
   const canDormantDeal = isActiveLifecycle && hasAction('MARK_DORMANT');
 
-  // Stage-advance readiness (dealTrackingMeta.js's own gate, shared with
-  // DealTrackingPanel's badge): lifted up here (Phase-1 audit finding #3,
-  // "y=870") so it can sit right next to the "เลื่อนไป" action wherever that
-  // action itself renders — first DealStagePanel's own inline button, now
-  // (FIX 2, Phase-1 clutter follow-up) the header overflow menu item below.
-  // Only ever consulted when canAdvance is also true, and canAdvance is only
-  // ever true for a sales-gated next stage (every import/account-gated stage
-  // in SALES_STAGES is `auto: true`), so `activities` being empty for
-  // import/account viewers (canViewDealTracking below) never matters here.
+  // Stage-advance readiness (dealTrackingMeta.js's gate, shared with DealTrackingPanel's badge),
+  // lifted here so it sits next to the "เลื่อนไป" action in the header overflow menu. Consulted
+  // only when canAdvance is true, which is only true for a sales-gated next stage (every
+  // import/account-gated stage in SALES_STAGES is `auto: true`), so `activities` being empty for
+  // import/account viewers never matters.
   //
-  // `activitiesQuery.isLoading` guards the initial fetch: `activities`
-  // defaults to `[]` before that query resolves, which would otherwise read
-  // as "not ready" for a beat on every load — a false negative that briefly
-  // disables เลื่อนไป (and shows the gate hint) for a deal that may actually
-  // already be ready, before flipping back. Treated as ready while loading
-  // (matches the button's pre-Phase-1 behaviour, which never waited on this
-  // query at all) rather than as not-ready.
+  // `activitiesQuery.isLoading` guards the initial fetch: `activities` defaults to `[]`, which would
+  // read as "not ready" for a beat on every load and briefly disable เลื่อนไป. Treated as ready
+  // while loading.
   const readyToAdvance = activitiesQuery.isLoading
     || isReadyToAdvance(summary, hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt)));
 
@@ -1600,10 +1408,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   function handleOpenHold() { dealStagePanelRef.current?.openHold(); }
   function handleOpenDormant() { dealStagePanelRef.current?.openDormant(); }
   function handleOpenAdvance() { dealStagePanelRef.current?.openAdvance(); }
-  // ขอแก้ไข (Revise) opens as a modal (Slice C2a) — it no longer lives inside
-  // a tab, so unlike handleOpenAdvance/handleOpenEditStage's siblings this
-  // needs no runOnTab wrapper to switch tabs first; a plain flag flip is
-  // enough regardless of which tab is active when the overflow item fires.
+  // ขอแก้ไข (Revise) opens as a modal, so it needs no runOnTab wrapper: a plain flag flip works
+  // whichever tab is active.
   function handleOpenRevise() { setShowReviseForm(true); clearFieldError('revise.reason'); }
 
   // react-hooks/refs (react-hooks v7's Compiler-oriented ruleset — see this
@@ -1617,26 +1423,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // violation.
   // eslint-disable-next-line react-hooks/refs
   const overflowItems = [
-    // FIX 2 (Phase-1 clutter follow-up): "เลื่อนไป" moved out of DealStagePanel
-    // into the overflow — the sticky header's own primary CTA is now the ONE
-    // resolver-derived primary, so a second, filled-indigo "primary" button
-    // sitting in the pipeline panel no longer competes with it for attention.
-    // Its gate travels with it: shown only when canAdvance (the real
-    // ADVANCE_STAGE/canSetStage gate — unchanged), and disabled-with-reason
-    // (never silently hidden) when the readiness precondition isn't met yet.
-    // FIX 3 (P2, clutter-follow-up review round 2): the old inline buttons
-    // these overflow items replaced were each `disabled={actionLoading}` —
-    // a mutation already in flight blocked a second click on the SAME
-    // action. `disabled` here (rendered via OverflowMenu's aria-disabled,
-    // see its own doc comment) has to carry that same condition now that
-    // the click no longer runs through a native `disabled` button attribute
-    // — without it, reopening the menu mid-mutation and clicking again fired
-    // a second request (the second `updateStage` landing as a 409, "Deal is
-    // already in stage X" — TicketService.java:1143). The re-check inside
-    // each opener (DealStagePanel's openAdvance/openEditStage/openHold/
-    // openDormant) is the actual guard; this is the visible half of the
-    // same fix, so the item doesn't invite a click it's about to reject.
-    // While ยืนยันคำสั่งซื้อ is the primary, a second เลื่อนไป would compete with it (SK-08).
+    // "เลื่อนไป" lives in the overflow, not DealStagePanel: the sticky header's primary CTA is the
+    // ONE resolver-derived primary, so a second filled primary in the pipeline panel would compete
+    // with it. Shown only when canAdvance (the real ADVANCE_STAGE/canSetStage gate), and
+    // disabled-with-reason (never silently hidden) when the readiness precondition isn't met.
+    // `disabled={actionLoading}` has to carry the old inline buttons' in-flight condition (rendered
+    // via OverflowMenu's aria-disabled, see its doc comment): without it, reopening the menu
+    // mid-mutation and clicking again fires a second request (a 409 "Deal is already in stage X",
+    // TicketService.java:1143). The re-check inside each opener (DealStagePanel's
+    // openAdvance/openEditStage/openHold/openDormant) is the actual guard; this is the visible
+    // half. While ยืนยันคำสั่งซื้อ is the primary, a second เลื่อนไป would compete with it.
     canAdvance && !confirmOrderCta && {
       key: 'advanceStage',
       label: summary.salesStage === 'PROCUREMENT' && next
@@ -1653,8 +1449,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     },
     canHoldDeal && { key: 'hold', label: 'พักดีลไว้', disabled: actionLoading, onSelect: handleOpenHold },
     canDormantDeal && { key: 'dormant', label: 'พัก dormant', disabled: actionLoading, onSelect: handleOpenDormant },
-    // Owner ruling 2026-10-27 ("always in ⋯"): a sent designer/owner quotation's outcome is recorded on
-    // its request page, whatever the primary is.
+    // A sent designer/owner quotation's outcome is recorded on its request page, whatever the
+    // primary is ("always in ⋯").
     outcomeSecondary && {
       key: 'recordQuotationOutcome',
       label: outcomeSecondary.label,
@@ -1698,13 +1494,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     }
   }
 
-  // UX-34: Final Payment used to fire straight off the primary-action button
-  // with no confirmation — the least-guarded action in the app despite being
-  // one of the most financially consequential (auto-records a full BALANCE
-  // receipt server-side, see TicketService.confirmFinalPayment). Routed
-  // through the same confirm-dialog + doAction pattern as cancelTicket below:
-  // doAction already swallows/toasts its own error, so unconditionally
-  // closing the dialog afterwards matches that existing behavior.
+  // Final Payment is confirmed through a confirm-dialog + doAction (like cancelTicket below)
+  // because it auto-records a full BALANCE receipt server-side (TicketService.confirmFinalPayment),
+  // one of the most financially consequential actions. doAction swallows/toasts its own error, so
+  // closing the dialog afterwards is unconditional.
   async function confirmFinalPaymentAction() {
     await doAction(() => api.tickets.confirmFinalPayment(ticketId), 'ชำระครบแล้ว');
     setConfirm(null);
@@ -1760,8 +1553,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       allowOverpayment: false,
     });
     setPaymentModal(true);
-    // UX-03: reset on open so a stale error from a previous attempt never
-    // greets the user on reopen.
+    // Reset on open so a stale error never greets the user on reopen.
     setFieldErrorsForPrefix('payment.', {});
   }
 
@@ -1770,8 +1562,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setFieldErrorsForPrefix('payment.', {});
   }
 
-  // openDeliveryModal/closeDeliveryModal/openStockModal moved into
-  // DealFulfilmentPanel (Phase 3 Slice S4).
+  // openDeliveryModal/closeDeliveryModal/openStockModal live in DealFulfilmentPanel.
 
   return (
     <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-36' : ''}`}>
@@ -1782,20 +1573,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           collapse — and no scroll-position feedback loop. */}
       <div ref={expandSentinelRef} data-testid="deal-chrome-expand-sentinel" aria-hidden="true" className="pointer-events-none absolute left-0 top-0 h-px w-px" />
       <div ref={condenseSentinelRef} data-testid="deal-chrome-condense-sentinel" aria-hidden="true" className="pointer-events-none absolute left-0 top-14 h-px w-px" />
-      {/* F-14 (ticket-detail IA rebuild Phase 1): the breadcrumb is the single
-          up-nav — a full-width "กลับ" bar underneath it just repeated the same
-          affordance as page chrome. Verified safe to drop: every e2e "กลับ"
-          locator is scoped to the create-deal modal, not this page bar (see
-          frontend/e2e/) — onBack itself is unchanged, still reachable via the
-          breadcrumb's "ดีล" crumb. */}
+      {/* The breadcrumb is the single up-nav (onBack is still reachable via its "ดีล" crumb). */}
       <Breadcrumbs items={[{ label: 'ดีล', onClick: onBack }, { label: summary.code || summary.customerName || summary.title }]} />
 
-      {/* Deal Workspace state header (Phase 2 Slice S2, folded into the
-          ticket-detail IA rebuild Phase 1 — see DealStateHeader.jsx's own doc
-          comment): deal code/title/customer + lifecycle × stage × PCR ×
-          payment × fulfilment at a glance, the ONE work-state banner line,
-          the sticky primary CTA, and the "⋯" overflow. Subsumes the old bare
-          header (title/code/status/refresh). */}
+      {/* Deal Workspace state header (see DealStateHeader.jsx's doc comment): deal code/title/
+          customer + lifecycle × stage × PCR × payment × fulfilment at a glance, the ONE work-state
+          banner line, the sticky primary CTA, and the "⋯" overflow. */}
       <div
         ref={ticketStickyChromeRef}
         data-testid="ticket-detail-sticky-chrome"
@@ -1816,8 +1599,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             onMenuOpenChange={onHeaderMenuOpenChange}
           />
           <div className="border-t border-border bg-surface px-4 sm:px-5">
-            {/* onSurface: this strip is on a white card, unlike the two
-                page-background call sites — see Tabs.jsx. */}
+            {/* onSurface: this strip is on a white card, unlike the two page-background call
+                sites (see Tabs.jsx). */}
             <Tabs
               onSurface
               items={visibleTabItems}
@@ -1830,25 +1613,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </div>
       </div>
 
-      {/* Ticket-workspace IA rebuild Slice B ("retire the context rail, one
-          comment composer"): this was a two-column grid (`xl:grid-cols-[minmax(0,1fr)_20rem]`)
-          with the sticky context rail as the second column — now a single
-          full-width stack, since the rail is gone and its four sections were
-          redistributed (see the overview TabPanel above and DealHistoryPanel
-          below) rather than replaced with a second column of anything else. */}
+      {/* A single full-width stack: the context rail is gone and its four sections live in the
+          overview TabPanel above and DealHistoryPanel below. */}
       {/* min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt: desktop-only header clearance on the content's
           descendants, never on the sticky header's own controls (focusing those must not scroll the page)
           and not inside non-portalled Modal bodies (role="dialog").
           `mobile` is max-width:720px, so the two bands never overlap. */}
       <div className="flex min-w-0 flex-col gap-4 min-[721px]:[&_*:not([role=dialog]_*)]:scroll-mt-[calc(var(--deal-header-h,18rem)_+_var(--space-4))]">
 
-      {/* Deal pipeline (V50): the 14-stage journey with stage-gated doc actions.
-          Generation buttons reuse the exact handlers/permissions of the action
-          row; once a document exists (quotation / ใบแจ้งยอดมัดจำ) it stays
-          reachable from here through the later stages too. */}
-      {/* GLA-136's "ดีลนี้เป็นดีลใบเสนอราคาเท่านั้น — ยังไม่เข้า pipeline" banner, and the branch that
-          swapped this stage panel out for it, are gone (slice 1 backend 2ed3468e + IA §7 "Nothing
-          hidden"): a quotation-first deal is an ordinary deal and renders exactly like one. */}
+      {/* Deal pipeline: the 14-stage journey with stage-gated doc actions. Generation buttons reuse
+          the exact handlers/permissions of the action row; once a document exists (quotation /
+          ใบแจ้งยอดมัดจำ) it stays reachable from here through the later stages. A quotation-first deal
+          renders like any other. */}
       <div className="min-w-0">
       <DealStagePanel
         ref={dealStagePanelRef}
@@ -1859,9 +1635,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         events={ticket.events}
         quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
         ctaStage={ctaStage}
-        // primaryAction now lives solely in DealStateHeader above (Phase 2 Slice S2's
-        // "one primary CTA" — see its own doc comment) — not passed here too, to avoid
-        // rendering the exact same button twice on one page.
+        // primaryAction lives solely in DealStateHeader above ("one primary CTA"); not passed here
+        // too, to avoid rendering the same button twice.
         advanceReady={readyToAdvance}
         advanceInHeader={advanceInHeader}
         actionLoading={actionLoading}
@@ -1875,13 +1650,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onSetEntryChannel={(payload) => doAction(() => api.tickets.setEntryChannel(ticketId, payload), 'บันทึกช่องทางรับงานแล้ว')}
         docActions={(can.downloadRemainingInvoice || (sections.quotation && latestQuotation)) ? (
           <>
-            {/* Import/account (role-scoped views, Phase A): the view-only
-                quotation download link isn't role-gated by `can.*` —
-                sections.quotation hides it for the role that has no business
-                in that document. The deposit-notice create/issue/view
-                affordance moved to DealPaymentSection; the
-                Import Request button moved to DealFulfilmentPanel (Phase 3
-                Slice S4). */}
+            {/* Import/account: the view-only quotation download link isn't role-gated by `can.*`;
+                sections.quotation hides it for the role that has no business in that document. The
+                deposit-notice affordance lives in DealPaymentSection and the Import Request button
+                in DealFulfilmentPanel. */}
             {sections.quotation && latestQuotation && (
               <Button type="button" variant="text" size="sm" className="min-h-0 gap-1.5 text-sm font-bold"
                 disabled={downloadingQuotationKey === `${latestQuotation.id}-pdf`}
@@ -1903,24 +1675,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       />
       </div>
 
-      {/* Ticket-detail IA rebuild Phase 2 built the seven role-projected tabs
-          from docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
-          "Tabs (the deal's depth)", grouped by system object. Slice C2b
-          ("the 7→6 tab restructure") regroups them into six tabs grouped by
-          JOB instead — ดีล · สินค้าและราคา · เอกสาร · การเงิน · จัดซื้อ-ส่งมอบ ·
-          ประวัติ — per the owner-approved IA. ticketDetailTabs.js still
-          decides which ones this viewer's role may see at all (never a
-          security boundary, same as salesViewScope.js it reads from), and
-          Tabs.jsx keeps only the active one mounted.
-          FIX 2 (Opus review) used to filter the `documents` (attachments)
-          tab a second time here for its per-instance `canViewDocumentsTab`
-          identity gate. That tab is gone — DealAttachmentsPanel now lives
-          inside `history` (an unconditionally-visible tab) behind an INNER
-          render condition instead, so no tab in ticketDetailTabs.js is
-          per-instance gated any more and this second filter is no longer
-          needed (`visibleTabItems`/`visibleActiveTab` above are now plain
-          aliases of `tabItems`/`activeTab` — see that assignment's own
-          comment). */}
+      {/* Six role-projected tabs grouped by JOB: ดีล · สินค้าและราคา · เอกสาร · การเงิน ·
+          จัดซื้อ-ส่งมอบ · ประวัติ (see docs/ui-repair/02-information-architecture/
+          TICKET_INFORMATION_ARCHITECTURE.md). ticketDetailTabs.js decides which ones this viewer's
+          role may see at all (never a security boundary, like salesViewScope.js), and Tabs.jsx keeps
+          only the active one mounted. No tab is per-instance gated: DealAttachmentsPanel lives inside
+          `history` behind an INNER render condition, so `visibleTabItems`/`visibleActiveTab` above
+          are plain aliases of `tabItems`/`activeTab`. */}
       <div className="min-w-0">
       <TabPanel id="deal" idPrefix="ticket-detail" active={visibleActiveTab === 'deal'}>
           {/* วันสำคัญ / ผู้เกี่ยวข้อง, with the assignedImport role-scoped readout. */}
@@ -1945,22 +1706,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             </section>
           </div>
 
-          {/* Slice C2b: DealTrackingPanel moved in from the old "activity"
-              tab — same `canViewDealTracking` gate, moved verbatim (see
-              ticketDetailTabs.js's own comment on this tab and
-              JUMP_TARGET_TAB's own doc comment above for the jump-target
-              relocation). */}
+          {/* DealTrackingPanel, behind the `canViewDealTracking` gate (see ticketDetailTabs.js and
+              JUMP_TARGET_TAB's doc comment). */}
           {canViewDealTracking ? (
-            // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see
-            // IN_PAGE_JUMP_TARGET above) — tabIndex so the jump can actually move
-            // focus here. On desktop the content wrapper's descendant scroll-margin
-            // (measured header height) clears the sticky header for every focus /
-            // scrollIntoView target, jump targets and Tab-focused controls alike; the
-            // jump lands the target just below the expanded header, and when the header
-            // then condenses, the shell's overflow-anchor:none (see AppShell) keeps scrollTop so the content shifts
-            // up by the shrink, leaving the target just below the condensed header.
-            // Mobile keeps its own 420px because the chrome is static there, with a
-            // fixed bottom action bar.
+            // id: the sticky bar's FOLLOW_UP/LOG_ACTIVITY jump target (see IN_PAGE_JUMP_TARGET
+            // above); tabIndex so the jump can move focus here. On desktop the content wrapper's
+            // descendant scroll-margin (measured header height) clears the sticky header for every
+            // focus / scrollIntoView target; the jump lands just below the expanded header, and when
+            // the header condenses the shell's overflow-anchor:none (see AppShell) keeps scrollTop so
+            // the target ends up just below the condensed header. Mobile keeps its own 420px because
+            // the chrome is static there, with a fixed bottom action bar.
             <div id="deal-tracking-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
               <DealTrackingPanel
                 summary={summary}
@@ -1975,11 +1730,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="items" idPrefix="ticket-detail" active={visibleActiveTab === 'items'}>
-          {/* flush + title/actions picks up Panel's standard bordered-header inset
-              (20px/16px, border-border-subtle) in place of the old inline 14px/18px
-              padding and var(--color-border) rule — the same small, disclosed shift
-              the CommissionPage port (f7c2cace) already made for this exact
-              "table-topped panel with its own inline header padding" case. */}
+          {/* flush + title/actions picks up Panel's standard bordered-header inset (20px/16px,
+              border-border-subtle), the same small shift as the CommissionPage port. */}
           <Panel
             flush
             title={`รายการสินค้า (${editMode ? editDraft.length : items.length} รายการ)`}
@@ -2006,17 +1758,15 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         <Button type="button" variant="icon" className="text-danger" aria-label={`ลบรายการที่ ${index + 1}`}
                           onClick={() => {
                             setEditDraft((d) => d.filter((_, i) => i !== index));
-                            // Removing a row shifts every later row's index down by
-                            // one — reindex their qty errors along with it so an
-                            // error never ends up pinned to the wrong (now
-                            // different) row.
+                            // Removing a row shifts every later row's index down by one: reindex
+                            // their qty errors so an error never ends up pinned to the wrong row.
                             setFieldErrors((prev) => {
                               let changed = false;
                               const next = {};
                               Object.entries(prev).forEach(([k, v]) => {
-                                // Any editItems.<field>.<rowIndex> key — brand/model/size/qty —
-                                // not just qty, so a required-field error never ends up pinned to
-                                // the wrong (now different) row after a delete.
+                                // Any editItems.<field>.<rowIndex> key (brand/model/size/qty), so a
+                                // required-field error never ends up pinned to the wrong row after
+                                // a delete.
                                 const m = k.match(/^editItems\.([a-zA-Z]+)\.(\d+)$/);
                                 if (!m) { next[k] = v; return; }
                                 const [, field, idxStr] = m;
@@ -2033,14 +1783,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       )}
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      {/* Fields/labels/placeholders and the catalog autocomplete on ยี่ห้อ/รุ่น now
-                          come from ticketItemFields.jsx, shared with TicketCreateModal.jsx — this
-                          used to be a hand-rolled 6-field map (including its own separate โรงงาน
-                          input, no asterisks, no catalog search) that had drifted from create's
-                          labels ('ชื่อยี่ห้อ' vs 'ยี่ห้อ / โรงงาน') and dropped required-field
-                          validation entirely (UAT: reopening a deal to edit items showed no red
-                          asterisks and only failed with a backend 400). ยี่ห้อ and โรงงาน are one
-                          field, same as create — see applyDescriptiveFieldEdit's brand branch. */}
+                      {/* Fields/labels/placeholders and the catalog autocomplete on ยี่ห้อ/รุ่น come
+                          from ticketItemFields.jsx, shared with TicketCreateModal.jsx. ยี่ห้อ and
+                          โรงงาน are one field, same as create (see applyDescriptiveFieldEdit's
+                          brand branch). */}
                       <CatalogAutocompleteField
                         id={`edit-item-${index}-brand`}
                         label={ITEM_FIELD_META.brand.label}
@@ -2250,12 +1996,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 <div className="flex gap-2">
                   <Button type="button" variant="primary" disabled={actionLoading}
                     onClick={() => {
-                      // UX-03 (slice 5b) covered qty only ("กรุณากรอกจำนวนสินค้าให้ครบทุกรายการ" →
-                      // one message per row). fix/ticket-edit-items-required-markers adds the
-                      // ยี่ห้อ/รุ่น/ขนาด required-field check that TicketCreateModal has always had
-                      // and edit-items never did — the UAT report this branch fixes. Errors are
-                      // built row-then-field (brand, model, size, then qty/qtySqm), which is also
-                      // the order focusFirstInvalid walks to land on the first invalid control
+                      // Per-row required-field errors (brand, model, size, then qty/qtySqm), in the
+                      // order focusFirstInvalid walks to land on the first invalid control
                       // top-to-bottom.
                       const rowErrors = {};
                       const order = [];
@@ -2268,29 +2010,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                             order.push(key);
                           }
                         }
-                        // Qty rule now matches create's basis-aware requiredQtyField — a review
-                        // round found the OLD rule (always check item.qty, regardless of basis)
-                        // could deadlock the SQM branch: for a catalog row with NO ตร.ม./แผ่น
-                        // factor, "จำนวน (แผ่น)" renders as a read-only derived display in SQM
-                        // mode (never an input), so a rep who filled พื้นที่ (ตร.ม.) correctly
-                        // could never satisfy a check on a field they had no way to edit.
-                        // Confirmed safe to align rather than leave as a known gap: create's own
-                        // zod schema (ticketItemFields.jsx's missingQtyMessage call site in
-                        // TicketCreateModal.jsx's makeItemSchema) never validates qty for SQM
-                        // basis either, and the backend already accepts that shape —
-                        // TicketItemRequest.java's qty/qtySqm (backend/src/main/java/th/co/glr/hr/
-                        // ticket/TicketItemRequest.java:24-25) carry no @NotNull/@Positive,
-                        // TicketService#mergeEditedItemsPreservingPricing (TicketService.java:
-                        // 2263-2316) passes both straight through, and sales.ticket_item.qty is
-                        // NOT NULL with no CHECK > 0 (db/migration/V6__sales_ticket_schema.sql:46;
-                        // the only qty>0 CHECKs in the schema are on unrelated tables —
-                        // sales.delivery_record_item, V54__fulfilment_and_delivery.sql:26, and
-                        // sales.pricing_request_item, V59__pricing_request_foundation.sql:77, a
-                        // later-stage entity with its own DB-enforced positive qty that a ticket
-                        // item's qty never feeds into directly). Both create's and edit's payloads
-                        // already coerce to `qty: Number(item.qty) || 0` regardless, so this is a
-                        // shape create already sends and the backend already accepts via the same
-                        // editItems endpoint — not a new contract.
+                        // The qty rule matches create's basis-aware requiredQtyField. Always
+                        // checking item.qty could deadlock the SQM branch: for a catalog row with NO
+                        // ตร.ม./แผ่น factor, "จำนวน (แผ่น)" is a read-only derived display in SQM
+                        // mode, so a rep who filled พื้นที่ (ตร.ม.) could never satisfy a check on a
+                        // field they can't edit. Safe to align: create's zod schema never validates
+                        // qty for SQM basis either, and the backend accepts that shape
+                        // (TicketItemRequest's qty/qtySqm carry no @NotNull/@Positive,
+                        // TicketService#mergeEditedItemsPreservingPricing passes both through, and
+                        // sales.ticket_item.qty is NOT NULL with no CHECK > 0). Both payloads
+                        // already coerce to `qty: Number(item.qty) || 0`.
                         const qtyField = requiredQtyField(item.unitBasis);
                         const qtyValue = item[qtyField];
                         if (!qtyValue || Number(qtyValue) <= 0) {
@@ -2315,9 +2044,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           qtySqm: item.qtySqm != null && item.qtySqm !== '' ? Number(item.qtySqm) : null,
                           proposedPrice: item.proposedPrice != null && item.proposedPrice !== '' ? Number(item.proposedPrice) : null,
                           currency: item.currency ?? 'THB',
-                          // Round-trips the deal-creation catalog link (V110) — editDraft rows
-                          // are seeded straight from the fetched `items` (which already carry
-                          // it), and the row inputs above clear it on any descriptive hand-edit.
+                          // Round-trips the deal-creation catalog link: editDraft rows are seeded
+                          // from the fetched `items` (which carry it), and the row inputs above
+                          // clear it on any descriptive hand-edit.
                           catalogPriceId: item.catalogPriceId ?? null,
                           catalogProductCode: item.catalogProductCode?.trim() || null,
                           // Sent unconditionally (true and false) so un-flagging a stock line reaches the
@@ -2416,9 +2145,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           <code className={cn('font-bold', item.manualPrice != null ? 'text-override' : 'text-success')}>
                             {item.manualPrice != null ? formatMoney(item.manualPrice) : item.calcedPrice != null ? formatMoney(item.calcedPrice) : '—'}
                           </code>
-                          {/* CEO manual-override entry (D10) was ticket-native and retired along
-                              with calculatePrices/approve — this is now a read-only readout of
-                              whatever the 3 stranded legacy tickets already carry. */}
+                          {/* A read-only readout of whatever the 3 stranded legacy tickets already
+                              carry (the ticket-native CEO manual override is retired). */}
                           {item.manualPrice != null && <small className="block text-2xs text-override">override</small>}
                         </span>
                       </>
@@ -2437,10 +2165,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               </>
             )}
 
-            {/* Slice C2b: this hint travels with can.editItems into the
-                items panel — same condition, unchanged, moved verbatim from
-                the old (now-dissolved) การดำเนินการอื่น ๆ grab-bag below the
-                table. */}
+            {/* The empty-draft hint travels with can.editItems into the items panel. */}
             {st === 'draft' && isOwner && items.length === 0 && (
               <div className="p-[0_18px_16px]">
                 <span className="rounded-md border border-border bg-surface-subtle px-3 py-2 text-xs text-text-muted">
@@ -2450,16 +2175,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             )}
           </Panel>
 
-          {/* id: the sticky bar's CREATE_PCR jump target (see
-              IN_PAGE_JUMP_TARGET above). Slice C2b: PricingRequestPanel
-              merges in here from the old whole-tab-gated "ราคา" tab — the
-              old tab-level predicate
-              (`Boolean(sections.pricingRequest) && canViewPricingRequests`,
-              see ticketDetailTabs.js's own comment on the `items` tab)
-              becomes this INNER render condition instead, reproduced
-              exactly: `items` itself is unconditionally visible, so nothing
-              upstream any longer enforces `sections.pricingRequest` for
-              this panel. */}
+          {/* id: the sticky bar's CREATE_PCR jump target (see IN_PAGE_JUMP_TARGET above). The
+              panel's render condition is `Boolean(sections.pricingRequest) &&
+              canViewPricingRequests` (see ticketDetailTabs.js's `items` tab): `items` itself is
+              unconditionally visible, so nothing upstream enforces `sections.pricingRequest`. */}
           <div id="pricing-request-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
             {canViewPricingRequests && Boolean(sections.pricingRequest) ? (
               <PricingRequestPanel ref={pricingRequestPanelRef} ticketId={ticketId} deal={summary} ticketItems={items} user={user} showToast={showToast} />
@@ -2468,19 +2187,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="documents" idPrefix="ticket-detail" active={visibleActiveTab === 'documents'}>
-          {/* Slice D ("the เอกสาร document register"): one read-only roll-up of
-              every document family — quotations (below, unchanged), the
-              deposit notice + remaining invoice, and formal attachments —
-              gated PER ROW FAMILY inside the component itself (this tab's own
-              `isVisible` is now `() => true`, per ticketDetailTabs.js's own
-              comment on this tab). `attachments`/`attachLoading` are the SAME
-              query this page already runs for the ประวัติ tab's
-              DealAttachmentsPanel (gated at that query's own `enabled` by
-              `canViewDocumentsTab`, so it never fires an extra request here,
-              and never fires at all for a viewer it would 403) — reused
-              rather than re-fetched, so the two roll-ups of the same data
-              can never drift. See DealDocumentRegister.jsx's own header
-              comment for the exact three gates and their backend citations. */}
+          {/* The เอกสาร document register: one read-only roll-up of every document family
+              (quotations below, the deposit notice + remaining invoice, formal attachments), gated
+              PER ROW FAMILY inside the component (this tab's `isVisible` is `() => true`, see
+              ticketDetailTabs.js). `attachments`/`attachLoading` are the SAME query the ประวัติ
+              tab's DealAttachmentsPanel uses (gated at that query's `enabled` by
+              `canViewDocumentsTab`, so it never fires an extra request, nor at all for a viewer it
+              would 403), so the two roll-ups can't drift. See DealDocumentRegister.jsx's header
+              comment for the three gates and their backend citations. */}
           <DealDocumentRegister
             depositCtaShown={workStateAction?.key === 'create_deposit_notice'}
             ticketId={ticketId}
@@ -2496,21 +2210,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             attachLoading={attachLoading}
           />
 
-          {/* "เอกสาร" (formerly "ใบเสนอราคา", tab id renamed `quotations` →
-              `documents` in Slice C2b — same content, same gate; this id
-              previously belonged to the attachments tab, whose content moved
-              to `history` below, see ticketDetailTabs.js's own comment).
-              Phase 2 Slice S2: the customer-facing tail of the
-              PricingRequest chain (issue/outcome + confirm-order), pulled
-              onto the deal page. Renders nothing until a request reaches
-              APPROVED_FOR_QUOTATION — see DealQuotationPanel's own doc
-              comment. The factory/costing/CEO-price steps that precede that
-              stay on PricingRequestDetailPage, linked from inside the panel.
-              The sticky bar's CONFIRM_ORDER primary CTA no longer scrolls
-              here (FIX 2, clutter follow-up round 2) — it calls
-              dealQuotationPanelRef directly — but the id/scroll-mt
-              wrapper stays for any other in-page anchor that might still
-              want it. */}
+          {/* "เอกสาร" tab: the customer-facing tail of the PricingRequest chain (issue/outcome +
+              confirm-order) on the deal page. Renders nothing until a request reaches
+              APPROVED_FOR_QUOTATION (see DealQuotationPanel's doc comment); the factory/costing/
+              CEO-price steps before that stay on PricingRequestDetailPage, linked from inside the
+              panel. The sticky bar's CONFIRM_ORDER CTA calls dealQuotationPanelRef directly, but the
+              id/scroll-mt wrapper stays for any other in-page anchor. */}
           {sections.dealQuotation && canViewPricingRequests ? (
             <div id="deal-quotation-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
               <DealQuotationPanel ref={dealQuotationPanelRef} ticketId={ticketId} pricingRequests={pricingRequests} quotationByRequest={quotationByRequest} user={user} showToast={showToast}
@@ -2518,12 +2223,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 depositNoticeExists={depositNotice != null} />
             </div>
           ) : null}
-          {/* Legacy ticket-native quotation rows (region 12's "docs") join the
-              PCR-based quotation tail above, in this same tab — see
-              TICKET_INFORMATION_ARCHITECTURE.md's ใบเสนอราคา row. Extracted to
-              DealLegacyQuotations.jsx (ia-extract Slice C1); it returns null
-              itself when quotationGroups is empty, matching the
-              `quotationGroups.length > 0` half of this gate exactly. */}
+          {/* Legacy ticket-native quotation rows join the PCR-based quotation tail above, in this
+              tab (DealLegacyQuotations.jsx); it returns null itself when quotationGroups is empty,
+              matching the `quotationGroups.length > 0` half of this gate. */}
           {sections.quotation ? (
             <DealLegacyQuotations
               quotationGroups={quotationGroups}
@@ -2534,9 +2236,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="money" idPrefix="ticket-detail" active={visibleActiveTab === 'money'}>
-          {/* Owner design 2026-10-31: the whole การเงิน tab is one "การชำระเงิน" panel (balance, the
-              three document steps, the timeline). Same sections.payment audience the old strip and
-              timeline had. */}
+          {/* The whole การเงิน tab is one "การชำระเงิน" panel (balance, the three document steps, the
+              timeline), with the sections.payment audience. */}
           {sections.payment ? (
             <div>
               <DealPaymentSection
@@ -2562,16 +2263,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             </div>
           ) : null}
 
-          {/* Slice C2b: relocated here from the dissolved การดำเนินการอื่น ๆ
-              grab-bag — a close-lifecycle action, not an items action, so it
-              belongs with การเงิน rather than สินค้าและราคา. Gate unchanged
-              (`can.revokeCloseConfirm`). Rendered as its own section rather
-              than nested inside the `sections.payment`-gated panel above,
-              since the real server gate (`canRevokeCloseConfirmation`,
-              account/ceo-only) doesn't itself depend on `sections.payment` —
-              though for both those roles it is always true anyway (see
-              ticketDetailTabs.js's own comment on this tab's gate), so the
-              action can never end up stranded behind a hidden `money` tab. */}
+          {/* A close-lifecycle action, so it belongs with การเงิน rather than สินค้าและราคา (gate:
+              `can.revokeCloseConfirm`). Its own section, not nested in the `sections.payment`-gated
+              panel: the real server gate (`canRevokeCloseConfirmation`, account/ceo-only) doesn't
+              depend on `sections.payment`, though for both roles it is always true anyway (see
+              ticketDetailTabs.js), so it can't be stranded behind a hidden `money` tab. */}
           {can.revokeCloseConfirm && (
             <Panel className="bg-surface-muted mt-4">
               <div className="flex flex-wrap gap-2.5 p-[12px_18px]">
@@ -2587,14 +2283,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="fulfilment" idPrefix="ticket-detail" active={visibleActiveTab === 'fulfilment'}>
-          {/* "การส่งมอบ / นำเข้า" (Phase 3 Slice S4 — see
-              docs/agent-handoffs/105_feat-deal-deposit-fulfilment-unify.md):
-              the deal-level IR → shipping → goods-received → delivery chain
-              (import/CEO act, sales/account/ceo see progress), plus an
-              optional per-factory PO detail — replacing the "การส่งมอบสินค้า"
-              panel and the IR button/delivery/stock modals that used to live
-              directly on this page. Reuses the existing `delivery` section
-              id (salesViewScope.js) rather than adding a parallel one.
+          {/* "การส่งมอบ / นำเข้า": the deal-level IR → shipping → goods-received → delivery chain
+              (import/CEO act, sales/account/ceo see progress), plus an optional per-factory PO
+              detail. Reuses the `delivery` section id (salesViewScope.js).
               id (DOM): the sticky bar's import-role fulfilment jump target. */}
           <div id="deal-fulfilment-panel" tabIndex={-1} className="mobile:scroll-mt-[420px] outline-none">
             {sections.delivery ? (
@@ -2612,22 +2303,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
 
       <TabPanel id="history" idPrefix="ticket-detail" active={visibleActiveTab === 'history'}>
-          {/* "ประวัติดีล" (IA rebuild): merges the ticket's audit trail
-              (ticket.events, formerly its own "ประวัติการดำเนินการ" panel) with
-              the deal-tracking activity log (formerly DealTrackingPanel's own
-              "ประวัติการติดตาม (Activity log)" list) into one chronological
-              stream — regions 17+18 of TICKET_INFORMATION_ARCHITECTURE.md.
-              FIX 1 (Opus review, owner decision): the audit trail (events)
-              and the comment box (`can.comment`) are backed by
-              `TicketService.projectForRole`/`comment`'s `requireViewAccess`,
-              which every viewer of the deal passes — so they are NOT
-              re-gated on `canViewDealTracking` here; only the follow-up feed
-              (`activities`) and its add-activity form stay gated on
-              `requireDealOwnership`, per TicketIaAuthzMatrixIntegrationTest's
-              activities_* cases. DealTrackingPanel itself (win%/designer/
-              owner/buyer/next-follow-up) is NOT part of this tab any more —
-              Slice C2b moved it into `deal` above, unchanged gate — see
-              ticketDetailTabs.js's own comment on this tab. */}
+          {/* "ประวัติดีล": merges the ticket's audit trail (ticket.events) with the deal-tracking
+              activity log into one chronological stream (regions 17+18 of
+              TICKET_INFORMATION_ARCHITECTURE.md). The audit trail and the comment box
+              (`can.comment`) are backed by `TicketService.projectForRole`/`comment`'s
+              `requireViewAccess`, which every viewer of the deal passes, so they are NOT re-gated on
+              `canViewDealTracking`; only the follow-up feed (`activities`) and its add-activity form
+              stay gated on `requireDealOwnership` (TicketIaAuthzMatrixIntegrationTest's activities_*
+              cases). DealTrackingPanel is in the `deal` tab. */}
           <DealHistoryPanel
             events={events}
             activities={activities}
@@ -2643,30 +2326,12 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             addingActivity={addActivityMutation.isPending}
           />
 
-          {/* Slice C2b: DealAttachmentsPanel folds in here from the old
-              `documents` (attachments) tab — that id now holds different
-              content (see the `documents` TabPanel above and
-              ticketDetailTabs.js's own comment on the id reuse). That old
-              tab's own `() => true` role gate travels with it, but its
-              per-instance `canViewDocumentsTab` check — formerly a TAB-level
-              filter in `visibleTabItems`/`visibleActiveTab` (the old
-              'documents' special-casing, now removed — see that
-              assignment's own comment above) — is now this INNER render
-              condition instead, since `history` itself is unconditionally
-              visible and has no tab-level analogue left to filter. Anyone
-              `canViewDocumentsTab` excludes still reaches this whole tab
-              (the history stream above), just not this panel — see
-              `canViewDocumentsTab`'s own doc comment near its declaration
-              for the underlying predicate (unchanged: createdById/
-              assignedToId participant OR
-              ROLE_PERMISSIONS.canViewTicketDocuments).
-              R5: Attachments. Extracted to DealAttachmentsPanel.jsx
-              (ia-extract Slice C1) — the long "why no ใบกำกับภาษี control
-              here" comment lives there now, verbatim, since it explains that
-              panel's own JSX. `canUpload`/`notTerminal` are computed here
-              (instead of handing the raw `st`/TERMINAL pair down) so the
-              child only ever sees clean booleans; they reproduce the
-              original `!TERMINAL.includes(st) && ...` guards exactly. */}
+          {/* DealAttachmentsPanel lives in this unconditionally-visible tab behind an INNER render
+              condition, `canViewDocumentsTab` (createdById/assignedToId participant OR
+              ROLE_PERMISSIONS.canViewTicketDocuments; see its doc comment). Anyone it excludes
+              still reaches the history stream above, just not this panel. `canUpload`/`notTerminal`
+              are computed here so the child only sees clean booleans (they reproduce the original
+              `!TERMINAL.includes(st) && ...` guards). */}
           {canViewDocumentsTab ? (
             <DealAttachmentsPanel
               attachments={attachments}
@@ -2789,14 +2454,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Modal>
       )}
 
-      {/* ขอแก้ไข (Revise) — Slice C2a: converted from an inline "ภาพรวม" tab
-          section into a modal, same pattern as paymentModal
-          above. The old inline version opened ~400px below its overflow-menu
-          trigger and forced a tab switch (runOnTab('overview', …)) plus a
-          scroll-into-view just to reveal itself — disorienting, and it also
-          meant a menu item outside every tab silently changed which tab was
-          active. A modal has no tab to switch to, so handleOpenRevise is now
-          a plain flag flip (see its own doc comment). */}
+      {/* ขอแก้ไข (Revise) is a modal, like paymentModal above: an inline section opened ~400px below
+          its overflow-menu trigger and forced a tab switch plus scroll-into-view. handleOpenRevise
+          is a plain flag flip (see its doc comment). */}
       {can.revise && showReviseForm && (
         <Modal
           title="ขอแก้ไข"
@@ -2807,10 +2467,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 onClick={() => { setShowReviseForm(false); setReviseReason(''); clearFieldError('revise.reason'); }}>
                 ยกเลิก
               </Button>
-              {/* This button is already disabled={!reviseReason.trim()} (unchanged
-                  below), so the guard inside onClick is defensive/unreachable
-                  through the UI — wired for consistency with the other 3 forms
-                  in this slice, not because a user can trigger it here. */}
+              {/* This button is already disabled={!reviseReason.trim()}, so the guard inside onClick
+                  is defensive and unreachable through the UI; it is wired for consistency with the
+                  other forms. */}
               <Button type="button" variant="primary" disabled={actionLoading || !reviseReason.trim()}
                 onClick={() => {
                   if (!reviseReason.trim()) {

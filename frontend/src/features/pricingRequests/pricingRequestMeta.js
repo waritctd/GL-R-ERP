@@ -1,102 +1,72 @@
-// Canonical metadata for the PricingRequest aggregate (commit 6): one deal may
-// have several pricing requests (one per recipient / re-quote round), each
-// walking from sales submission through Import factory communication and
-// costing submission. Mirrors PricingRequestStatus /
-// PricingRequestRecipient / QuantityType / PricingRequestEventKind (backend
-// pricingrequest/ package).
+// Canonical metadata for the PricingRequest aggregate: one deal may have several pricing requests
+// (one per recipient / re-quote round), each walking from sales submission through Import factory
+// communication and costing submission. Mirrors PricingRequestStatus / PricingRequestRecipient /
+// QuantityType / PricingRequestEventKind (backend pricingrequest/ package).
 //
 // NOTE: every predicate here only drives which buttons/options the UI shows —
 // the backend (PricingRequestService) re-checks everything server-side. Mock
 // authz approximates the Java service and is NOT authoritative (see
 // CLAUDE.md "Mock API contract").
 
-// There is deliberately no bare PRICING_REQUEST_STATUSES array here. One existed until it was
-// removed as dead: nothing in the repo ever imported it, and ALLOWED_TRANSITIONS below already
-// carries the identical eleven statuses as its key set — but is actually read, by canTransition.
-// A second copy that nothing consumes only drifts: that array had already gone stale once and
-// needed QUOTATION_ISSUED / QUOTATION_ACCEPTED added to catch it up, silently and with no test to
-// notice. If you need the status set, take Object.keys(ALLOWED_TRANSITIONS).
+// There is deliberately no bare PRICING_REQUEST_STATUSES array here: ALLOWED_TRANSITIONS below
+// carries the identical statuses as its key set and is actually read, by canTransition. Take
+// Object.keys(ALLOWED_TRANSITIONS) for the status set.
 
-// Mirrors PricingRequestStatus.ALLOWED (backend pricingrequest/PricingRequestStatus.java:107-179)
-// — key for key, value for value. DRAFT -> DRAFT is deliberately absent: editing a draft's fields
-// is a mutation guarded by status = DRAFT, not a state transition.
+// Mirrors PricingRequestStatus.ALLOWED (backend pricingrequest/PricingRequestStatus.java) — key for
+// key, value for value. DRAFT -> DRAFT is deliberately absent: editing a draft's fields is a
+// mutation guarded by status = DRAFT, not a state transition.
 //
-// ⚠️ THIS IS A HAND-COPIED MIRROR — but it is now GUARDED. pricingRequestMeta.test.js parses
+// ⚠️ THIS IS A HAND-COPIED MIRROR, but it is GUARDED: pricingRequestMeta.test.js parses
 // PricingRequestStatus.java out of the backend source tree and asserts this object against it, key
-// for key and value for value, the same way stageCatalog.test.js and dealTrackingMeta.test.js
-// already guard DealStage / WinProbabilityDefaults. Issue #743.
+// for key and value for value (the same way stageCatalog.test.js and dealTrackingMeta.test.js guard
+// DealStage / WinProbabilityDefaults). A vitest suite can pin these values but cannot, on its own,
+// notice that the backend moved; the parse does.
 //
-// That guard is what this comment used to say did not exist, and its absence is exactly how the
-// table went stale: a vitest suite CAN pin these values but cannot, on its own, notice that the
-// backend moved — which is why the old suite asserted
-// canTransition('READY_FOR_CEO_REVIEW','CANCELLED') === false under a heading claiming to mirror
-// the backend, for months after #718 made it true (issue #731). Re-syncing by hand resets that
-// clock; the parse stops it.
+// The durable fix is to SERVE the verdict on the pricing-request DTO the way `stageDecisions` does
+// for deal stages, at which point there is no mirror left to test. That verdict would have to ride
+// on PricingRequestSummaryDto, not just PricingRequestDetailDto: PricingRequestPanel.jsx calls
+// canCancelPricingRequest on LIST rows from api.pricingRequests.listForTicket (summary shape),
+// never a detail fetch. Until then, KEEP this table and canTransition as-is.
 //
-// The durable fix is still to SERVE the verdict on the pricing-request DTO the way `stageDecisions`
-// does for deal stages — pricing requests have no equivalent of /api/meta/deal-stages — at which
-// point there is no mirror left to test. Until such a field exists, the parse is the strongest
-// guard available.
+// Notable edges: cancel is refused only from QUOTATION_ISSUED onward (READY_FOR_CEO_REVIEW /
+// CEO_REVIEWING / APPROVED_FOR_QUOTATION declare a CANCELLED edge); EVERY non-terminal status
+// declares a SUPERSEDED edge, and QUOTATION_ACCEPTED deliberately does NOT — it is terminal,
+// because amending an accepted deal is an ORDER amendment, not a quotation revision
+// (canCreateCustomerRevision reads that set). COSTING_REVISION_REQUIRED is retired (the CEO owns
+// costing; returnToImport goes straight to AWAITING_FACTORY_RESPONSE).
 //
-// Re-synced 2026-08-14 against the Java source, which had moved in three ways:
-//   - #718 widened cancel: READY_FOR_CEO_REVIEW / CEO_REVIEWING / APPROVED_FOR_QUOTATION all now
-//     declare a CANCELLED edge, and cancel is refused only from QUOTATION_ISSUED onward. Those
-//     three missing edges are what hid the ยกเลิก button (issue #731).
-//   - Owner ruling 2026-08-13 (reissue-through-CEO-chain): EVERY non-terminal status declares a
-//     SUPERSEDED edge, and QUOTATION_ACCEPTED deliberately does NOT — it is terminal, because
-//     amending an accepted deal is an ORDER amendment, not a quotation revision. That set is what
-//     canCreateCustomerRevision now reads (issue #734).
-//   - V141 retired COSTING_REVISION_REQUIRED entirely (the CEO owns costing; returnToImport goes
-//     straight to AWAITING_FACTORY_RESPONSE), so its key is gone from here too. This USED TO be
-//     a mock-only relic — mockApi.js's returnPricingDecisionToImport wrote the retired status and
-//     demoSales.js seeded a fixture in it — but issue #741 fixed both: the mock write now matches
-//     the backend, and demoSales.js:615 seeds AWAITING_FACTORY_RESPONSE with a comment recording
-//     why.
 // Exported for the guard only — pricingRequestMeta.test.js compares it against the parsed Java.
-// Application code goes through canTransition; do not read the table directly. Three callers do
-// today: canCancelPricingRequest below (:269, asks CANCELLED), mockApi.js's pricing-request cancel
-// handler (imports canTransition at :41 as pricingRequestCanTransition, also asks CANCELLED), and
-// PricingRequestDetailPage.jsx's canCreateCustomerRevision (:594, asks SUPERSEDED — issue #734
-// above). Not all three ask the same question, which is why the guard checks every edge for every
-// status rather than just the ones any one caller happens to exercise.
-//
-// #753 decision (2026-08-14): KEEP this table and canTransition as-is; do not delete, do not edit
-// an entry. The durable fix is still to SERVE the verdict rather than mirror it (above) — not done
-// here because the verdict would have to ride on PricingRequestSummaryDto, not just
-// PricingRequestDetailDto: PricingRequestPanel.jsx (:161, :178) calls canCancelPricingRequest on
-// LIST rows from api.pricingRequests.listForTicket (returns List<PricingRequestSummaryDto>, the
-// same summary shape the /pricing-requests queue endpoint returns), never a detail fetch. That is
-// a list-response-payload change, out of scope for the untidy sweep that closed #753. What holds
-// the line meanwhile: this file's test parses PricingRequestStatus.java out of the backend source
-// and asserts this table against it key-for-key, value-for-value, both directions, plus a
-// non-vacuous-parse assertion — a backend edge change turns the suite red instead of drifting
-// silently. That guard, not the re-sync above, is what stopped the clock.
+// Application code goes through canTransition; do not read the table directly. Three callers use
+// it: canCancelPricingRequest below (asks CANCELLED), mockApi.js's pricing-request cancel handler
+// (via canTransition, also asks CANCELLED), and PricingRequestDetailPage.jsx's
+// canCreateCustomerRevision (asks SUPERSEDED). They ask different questions, which is why the
+// guard checks every edge for every status rather than the ones any one caller exercises.
 export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
   // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change
   // revision whose items are identical to its parent's copies the parent's factory quotes and has
   // nothing left for Import to do (PricingRequestService.carryFactoryQuotesForwardOnSubmit).
   SUBMITTED: ['IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
-  // V140: Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
+  // Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
   // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product.
-  // Stock lines (V194): IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW mirrors the backend edge added by
-  // #1094 for a request with nothing left for Import to quote (see PricingRequestStatus.ALLOWED).
+  // Stock lines: IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW mirrors the backend edge for
+  // a request with nothing left for Import to quote (see PricingRequestStatus.ALLOWED).
   IMPORT_REVIEWING: ['AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
-  // V141: FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
+  // FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
   // once every item's quote is resolvable — there is no Import-driven costing step in between.
   AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // The back-edge to AWAITING_FACTORY_RESPONSE is FactoryQuoteService.receive()'s revision branch:
   // a factory sends a revised price while the request already sits with the CEO, so the request is
   // pulled back until Import re-marks the revised quote ready.
   READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
-  // V141: PricingDecisionService.returnToImport sends the request to AWAITING_FACTORY_RESPONSE,
+  // PricingDecisionService.returnToImport sends the request to AWAITING_FACTORY_RESPONSE,
   // not to a dedicated "revise the costing" status — the CEO's next startReview recomputes cost.
   CEO_REVIEWING: ['APPROVED_FOR_QUOTATION', 'AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
   // Step 4: the ONLY forward exit is issuing a customer quotation (CustomerQuotationService.issue).
   APPROVED_FOR_QUOTATION: ['QUOTATION_ISSUED', 'CANCELLED', 'SUPERSEDED'],
   // Step 5: the customer's ACCEPTED outcome is the one forward exit from QUOTATION_ISSUED
   // (CustomerQuotationService.recordOutcome). REJECTED/REVISION_REQUESTED/EXPIRED deliberately
-  // do NOT transition the pricing request at all. No CANCELLED edge — #718's cutoff.
+  // do NOT transition the pricing request at all. No CANCELLED edge: cancel is refused from QUOTATION_ISSUED onward.
   QUOTATION_ISSUED: ['QUOTATION_ACCEPTED', 'SUPERSEDED'],
   QUOTATION_ACCEPTED: [],
   SUPERSEDED: [],
@@ -128,8 +98,7 @@ export function quantityTypeLabel(value) {
 }
 
 // Mirrors th.co.glr.hr.pricingrequest.UnitBasis: the canonical unit-basis codes shared across
-// the pricing-request / factory-quote / costing aggregate (financial-integrity review Finding
-// B, commit 3). requestedUnit stays a free-text display label alongside this canonical code —
+// the pricing-request / factory-quote / costing aggregate. requestedUnit stays a free-text display label alongside this canonical code —
 // PricingRequestCreateModal's unit input writes both from the same select.
 export const UNIT_BASIS_OPTIONS = [
   { code: 'PER_PIECE', label: 'แผ่น' },
@@ -233,26 +202,25 @@ export function isCustomerQuotationEditable(quotation) {
 }
 
 /**
- * Mirrors the reissue-through-CEO-chain refusal in CustomerQuotationService.update (:226-240,
- * owner ruling 2026-08-13): a REVISION may not carry ANY discount, so a non-zero salesDiscount on
- * a quotation with a parent is a 409. A first quotation is untouched — there the CEO's own
- * decision supplied the ceiling/floor, so discounting inside it is authority the CEO granted.
+ * Mirrors the reissue-through-CEO-chain refusal in CustomerQuotationService.update: a REVISION may
+ * not carry ANY discount, so a non-zero salesDiscount on a quotation with a parent is a 409. A
+ * first quotation is untouched — there the CEO's own decision supplied the ceiling/floor, so
+ * discounting inside it is authority the CEO granted.
  *
- * This reads the SERVER's own `parentQuotationId` (CustomerQuotationDtos.java:29) rather than
- * re-deriving "is this a revision" from docStatus. That distinction is the whole bug (issue #733):
- * a revision IS a DRAFT, so isCustomerQuotationEditable is true for it and the page offered a
- * discount input that could only ever 409. #703 also stopped createRevision carrying prior
- * discounts forward, so a rep opening a revision sees every discount at zero — retyping one is the
- * natural reaction, and it was the exact action the backend rejected.
+ * This reads the SERVER's own `parentQuotationId` (CustomerQuotationDtos.java) rather than
+ * re-deriving "is this a revision" from docStatus: a revision IS a DRAFT, so
+ * isCustomerQuotationEditable is true for it and the page would offer a discount input that could
+ * only 409. createRevision does not carry prior discounts forward, so a rep opening a revision
+ * sees every discount at zero, and retyping one is the natural reaction.
  *
- * Editability of the discount is therefore narrower than editability of the quotation: description
- * and item notes stay writable on a revision, only the money does not.
+ * Editability of the discount is therefore narrower than editability of the quotation:
+ * description and item notes stay writable on a revision, only the money does not.
  */
 export function isCustomerQuotationDiscountEditable(quotation) {
   return isCustomerQuotationEditable(quotation) && quotation?.parentQuotationId == null;
 }
 
-// ── CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
+// ── CEO discount-approval workflow. Mirrors
 // DiscountApprovalService. ──────────────────────────────────────────────────────────────
 
 /**
@@ -314,7 +282,7 @@ export function confirmOrderBlockedReason(pr) {
 /** Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's gate: sales (ticket owner)
  * only, reachable once the bridge action above has run (the endpoint's own precondition —
  * ticket.status=quotation_issued — is only true after confirmOrder). `acceptedQuotation` is the
- * page's new-engine quotation, when it has one: a ไม่รับมัดจำ (0%) one 409s on the server (#1173),
+ * page's new-engine quotation, when it has one: a ไม่รับมัดจำ (0%) one 409s on the server,
  * so it is not offered. The deal's deposit policy is not on the pricing-request payload. Never
  * offered while the deal has an ISSUED deposit notice (one per deal,
  * DepositNoticeService.createDraftFromQuotation). */
@@ -338,19 +306,14 @@ export function canCancelPricingRequest(user, pr) {
 }
 
 /**
- * Deal-level pricing-request summary for DealStagePanel's glance strip (Fix 3
- * of the review-remediation plan). Replaces the old `latestPricingRequest`
- * (highest-id-wins) reduction, which was actively misleading in two ways: (a)
- * a DRAFT created after an active IMPORT_REVIEWING request has a higher id
- * and hid the request Import is actually working on, and (b) a cancelled
- * newest request made the whole strip vanish even though an older request
- * was still live. This surfaces every non-CANCELLED request instead of
- * picking one "latest" — CANCELLED requests are dead ends with nothing left
- * to track, so they're the one status intentionally excluded.
+ * Deal-level pricing-request summary for DealStagePanel's glance strip. Surfaces every
+ * non-CANCELLED request rather than a single "latest" (highest-id-wins would let a DRAFT created
+ * after an active IMPORT_REVIEWING request hide the request Import is working on, and a cancelled
+ * newest request would make the strip vanish while an older one is live). CANCELLED requests are
+ * dead ends with nothing left to track, so they are the one status excluded.
  *
- * Returns null when there is nothing live to show (no requests at all, or
- * every request is CANCELLED) so the caller can render nothing, same as
- * before.
+ * Returns null when there is nothing live to show (no requests at all, or every request is
+ * CANCELLED) so the caller can render nothing.
  */
 export function activePricingRequestsSummary(pricingRequests = []) {
   const active = pricingRequests.filter((pr) => pr.status !== 'CANCELLED');
@@ -431,8 +394,7 @@ export function ceoGateBlockerMessage(request, factoryQuotes = []) {
 }
 
 /**
- * Groups a pricing request's factory quotes by factory (owner-supplied mockup, 2026-08-16 —
- * "grouped by factory" is an explicit requirement). `factoryQuotes` holds full revision history —
+ * Groups a pricing request's factory quotes by factory (an explicit requirement). `factoryQuotes` holds full revision history —
  * FactoryQuoteService.receive() supersedes-and-creates-a-new-row on every response after the
  * first, and PricingRequestDetailPage has always rendered that history unfiltered — so a factory
  * asked twice can own several rows here, only one of them `current`.

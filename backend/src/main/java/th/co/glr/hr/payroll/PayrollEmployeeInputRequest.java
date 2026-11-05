@@ -16,10 +16,8 @@ public record PayrollEmployeeInputRequest(
     @PositiveOrZero BigDecimal specialPay6,
     @PositiveOrZero BigDecimal specialPay7,
     @PositiveOrZero BigDecimal specialPay8,
-    // พิเศษ 9 (2026-07-29, V95) -- originally appended as ค่าเช่าบ้าน. F7 correction (Opus review,
-    // 2026-07-30): the accountant's-workbook renumbering (handoff section 9d, later the same day)
-    // moved ค่าเช่าบ้าน to specialPay2 instead and specialPay9 is now เงินรางวัล/เงินช่วยเหลืออื่นๆ --
-    // see PayrollComponent's javadoc for the CURRENT, authoritative slot -> label mapping.
+    // พิเศษ 9 (V95) is เงินรางวัล/เงินช่วยเหลืออื่นๆ; ค่าเช่าบ้าน is specialPay2. See PayrollComponent's
+    // javadoc for the authoritative slot -> label mapping.
     @PositiveOrZero BigDecimal specialPay9,
     @PositiveOrZero BigDecimal nonTaxableIncome,
     @PositiveOrZero BigDecimal unpaidLeaveDays,
@@ -42,24 +40,22 @@ public record PayrollEmployeeInputRequest(
     @PositiveOrZero BigDecimal educationDonation,
     @PositiveOrZero BigDecimal generalDonation,
     @PositiveOrZero BigDecimal politicalDonation,
-    // Reconciliation additions (2026-07-21, C4): the three missing pre-tax deductions (sheet columns
-    // Z/AA/AB). HR types these per run, unlike director remuneration which lives on the employee.
+    // The three pre-tax deductions (sheet columns Z/AA/AB). HR types these per run, unlike director
+    // remuneration which lives on the employee.
     @PositiveOrZero BigDecimal warningLetterDeduction,
     @PositiveOrZero BigDecimal customerReturnDeduction,
     @PositiveOrZero BigDecimal otherPretaxDeduction,
-    // Withholding-tax override (2026-07-24, V88): the PER-RUN value HR types for this employee this
+    // Withholding-tax override (V88): the PER-RUN value HR types for this employee this
     // run. NULLABLE and meaningful -- null = "no per-run override" (fall back to the employee standing
     // override, else compute); a non-null value (including 0) WINS over the standing value. Read RAW
     // via withholdingTaxOverride() below (NOT through safe()) so null is preserved -- coercing it to
     // zero would silently force "withhold nothing" on every run. @PositiveOrZero still allows null.
     @PositiveOrZero BigDecimal withholdingTaxOverride,
-    // ---- Task 2 additions (2026-07-29). See docs/agent-handoffs/119_feat-payroll-classification-
-    // and-hr-declarations.md.
     // เงินโบนัส / อื่นๆ (V96 payroll_line columns). commissionPay keeps its automatic CommissionService
-    // feed (handoff section 10, "do NOT add an HR-typed commission field") -- these two are the
-    // one-off fields HR types explicitly, per employee, per run.
+    // feed (there is deliberately no HR-typed commission field) -- these two are the one-off fields
+    // HR types explicitly, per employee, per run.
     // ค่าอาหาร and เบี้ยเลี้ยง (ตจว/ตปท) -- V97. Real columns in the accountant's ledger (2026.xlsx
-    // cols K and P) that this system had no field for until 2026-07-29. HR-typed per run.
+    // cols K and P). HR-typed per run.
     @PositiveOrZero BigDecimal mealAllowance,
     // เบี้ยเลี้ยง split per มาตรา 42 -- exemption is PARTIAL, so a single amount plus a flag cannot
     // express it. HR makes the split against the rate that applied; the system cannot derive it
@@ -69,8 +65,7 @@ public record PayrollEmployeeInputRequest(
     // Which limb applied. Required whenever any per-diem is paid -- the two carry different evidence
     // obligations, and an unattributable tax position is one nobody can defend later.
     PerDiemBasis perDiemBasis,
-    // Dedicated one-off pay (2026-07-29, V94/V96 -- both branches added this pair; declared once).
-    // Both are ข้อ 2.5 เงินพิเศษ -- see PayrollCalculator.
+    // Dedicated one-off pay (V94/V96). Both are ข้อ 2.5 เงินพิเศษ -- see PayrollCalculator.
     @PositiveOrZero BigDecimal bonusPay,
     @PositiveOrZero BigDecimal otherOneOffPay,
     // ลูกค้าคืนสินค้า earned/unearned flag (handoff section 6). false (default) = not yet earned, so
@@ -84,7 +79,7 @@ public record PayrollEmployeeInputRequest(
     // Nullable: null falls back to the stored standing declaration, same per-field-override pattern
     // as every other allowance field (see PayrollService#mergeAllowances).
     @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(4) Integer parentCareCount,
-    // Daily-rate support (2026-07-30): days worked THIS period, HR-typed, only meaningful for a
+    // Daily-rate support: days worked THIS period, HR-typed, only meaningful for a
     // pay_type = 'D' employee (hr.employee.current_salary is that employee's PER-DAY rate, not a
     // monthly figure -- see PayrollEmployeeSnapshot#payType). One-off like bonusPay/otherOneOffPay
     // above -- re-entered fresh every run, never carried forward, since a day count is specific to
@@ -92,22 +87,20 @@ public record PayrollEmployeeInputRequest(
     // employee this run (same "0 unless entered" convention every other one-off field already
     // follows) and is a complete no-op for a monthly employee, who never reads this field at all.
     //
-    // Finding 4 fix (Opus review, 2026-07-30): @PositiveOrZero alone had no upper bound, so a
-    // calendar-impossible day count (e.g. 45 in a 31-day month) was accepted and paid in full, and a
-    // genuine typo (a 5-digit value) would overflow days_worked's NUMERIC(6,2) column with a raw
-    // Postgres error. @Max(31) is this DTO-layer bound -- the file's own convention (see
-    // parentCareCount above); PayrollService#calculateLine additionally refuses > 31 with a clean
-    // Thai message before any INSERT, since this annotation is only enforced through @Valid
-    // (the /process and /preview controller endpoints), not a direct service call.
+    // @PositiveOrZero alone has no upper bound, so a calendar-impossible day count (e.g. 45 in a
+    // 31-day month) would be paid in full, and a typo (a 5-digit value) would overflow days_worked's
+    // NUMERIC(6,2) column with a raw Postgres error. @Max(31) is this DTO-layer bound -- the file's
+    // own convention (see parentCareCount above); PayrollService#calculateLine additionally refuses
+    // > 31 with a clean Thai message before any INSERT, since this annotation is only enforced
+    // through @Valid (the /process and /preview controller endpoints), not a direct service call.
     @PositiveOrZero @Max(31) BigDecimal daysWorked
 ) {
     /**
-     * Legacy 44-arg constructor: the full signature as it stood right before {@code daysWorked}
-     * (daily-rate support, 2026-07-30) existed -- i.e. through {@code parentCareCount}. Keeps every
-     * 44-arg positional call site compiling unchanged (a large share of this package's test suite
-     * constructs this record at exactly this arity); {@code daysWorked} defaults to {@code null},
-     * a no-op for a monthly employee and "no gross computed this run" for a daily-rate one, same as
-     * any other call site that simply omits the field.
+     * Legacy 44-arg constructor: the full signature before {@code daysWorked} existed, i.e. through
+     * {@code parentCareCount}. Keeps every 44-arg positional call site compiling unchanged (a large
+     * share of this package's test suite constructs this record at exactly this arity); {@code
+     * daysWorked} defaults to {@code null}, a no-op for a monthly employee and "no gross computed
+     * this run" for a daily-rate one.
      */
     public PayrollEmployeeInputRequest(
         Long employeeId,

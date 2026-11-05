@@ -55,19 +55,18 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  * current APPROVED {@code sales.pricing_decision} into a draft, editable-within-limits, then
  * issued customer quotation — extending the EXISTING {@code sales.quotation}/
  * {@code sales.quotation_item} aggregate and reusing {@link QuotationRenderer} and
- * {@link TicketService}'s own stage-advance, per the owner's decision recorded in the branch
- * handoff. Deliberately never reads or writes legacy {@code sales.ticket_item} price columns —
+ * {@link TicketService}'s own stage-advance. Deliberately never reads or writes legacy
+ * {@code sales.ticket_item} price columns —
  * the spine of every price on a Step 4 quotation is
  * {@code pricing_decision_item.approved_selling_price_per_requested_unit}.
  *
- * <p><b>CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155).</b> Discount
- * Policy B below (the class javadoc on the three below-minimum checks that used to hard-refuse
- * every discount, since Phase 1/#805 auto-populates the minimum AS the approved price) is now an
- * APPROVAL gate rather than an outright refusal:
+ * <p><b>CEO discount-approval workflow (V155).</b> Discount
+ * Policy B (the three below-minimum checks; the minimum is auto-populated AS the approved price)
+ * is an APPROVAL gate rather than an outright refusal:
  * <ul>
  *   <li>{@link #applyItemUpdates} and {@link #buildItem} (used by {@link #create}/{@link
- *       #createRevision}) no longer THROW on a below-minimum price — Sales may save it.</li>
- *   <li>{@link #issue} is the one site that still refuses — now "below minimum AND not
+ *       #createRevision}) do not THROW on a below-minimum price — Sales may save it.</li>
+ *   <li>{@link #issue} is the one site that refuses — "below minimum AND not
  *       CEO-approved AT THIS EXACT PRICE", not merely "below minimum".</li>
  *   <li>{@link #raiseDiscountApprovalsIfNeeded} is the shared helper all three writers call after
  *       the item row(s) exist, to open (or silently reuse) a {@code
@@ -88,7 +87,7 @@ public class CustomerQuotationService {
     // there is no positive grant for account to read a customer quotation either, so it stays
     // forbidden end-to-end, not just for writes.
     private static final Set<String> VIEW_ROLES = Set.of("sales", "sales_manager", "ceo", "import");
-    // Package-private (review fix, 2026-09-15): CustomerQuotationRepository#mapQuotation (R-H)
+    // Package-private: CustomerQuotationRepository#mapQuotation (R-H)
     // reuses this exact constant for its own document-level VAT rather than declaring a second
     // copy of "0.07" in the same package.
     static final BigDecimal VAT_RATE = new BigDecimal("0.07");
@@ -102,10 +101,10 @@ public class CustomerQuotationService {
     private final QuotationRenderer renderer;
     private final NotificationRepository notifications;
     private final DiscountApprovalRepository discountApprovals;
-    // GLA-123 slice S1 fix (Opus review M2, 2026-09-20) — mutual exclusivity with the NEW
+    // Mutual exclusivity with the NEW
     // (DealQuotationService#createFromPricingRequest) create path for the same pricing request.
-    // Setter-injected, not a constructor parameter, so every existing hand-wired
-    // `new CustomerQuotationService(...)` test call site (20 of them) keeps compiling unchanged —
+    // Setter-injected, not a constructor parameter, so the hand-wired
+    // `new CustomerQuotationService(...)` test call sites keep compiling —
     // same device as DealQuotationService's own #wirePricingRequestDependencies.
     private th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations;
 
@@ -126,7 +125,7 @@ public class CustomerQuotationService {
     }
 
     /** See {@link #dealQuotations}'s own Javadoc. {@code required = false} so a deployment (or a
-     * hand-wired test) that never exercises the M2 mutual-exclusivity check is unaffected. */
+     * hand-wired test) that never exercises the mutual-exclusivity check is unaffected. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void wireDealQuotationRepository(th.co.glr.hr.dealquotation.DealQuotationRepository dealQuotations) {
         this.dealQuotations = dealQuotations;
@@ -158,7 +157,7 @@ public class CustomerQuotationService {
         }
         PricingDecisionSalesViewDto salesView = decisions.findApprovedSalesView(pricingRequestId)
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้"));
-        // GLA-123 slice S1 fix (Opus review M2, 2026-09-20): mutual exclusivity — refuse starting
+        // Mutual exclusivity — refuse starting
         // the OLD chain if the NEW one (DealQuotationService#createFromPricingRequest) already
         // has a live quotation for this PR. Mirror image of that method's own check.
         if (dealQuotations != null && dealQuotations.hasLivePricingRequestQuotation(pricingRequestId)) {
@@ -175,8 +174,8 @@ public class CustomerQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
 
-        // Owner ruling 2026-09-18: the FIRST quotation on this chain is numbered exactly like the
-        // direct quotation flow already is — "QT-<year>-<seq>-1", the suffix starting at 1 from
+        // The FIRST quotation on this chain is numbered exactly like the
+        // direct quotation flow — "QT-<year>-<seq>-1", the suffix starting at 1 from
         // the very first document, not a bare number. QuotationNumbering is shared with
         // DealQuotationRepository so the two flows can never drift on this format.
         String number = QuotationNumbering.revisionNumber(quotations.nextQuotationCode(), 1);
@@ -274,17 +273,17 @@ public class CustomerQuotationService {
             if (discount.compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่ติดลบ");
             }
-            // Reissue-through-CEO-chain (owner ruling 2026-08-13): a REVISION draft may not carry
+            // Reissue-through-CEO-chain: a REVISION draft may not carry
             // any discount at all. Removing createRevision's discount carry-forward on its own
-            // would have closed nothing — the revision it produces is a DRAFT, and this very
+            // would close nothing — the revision it produces is a DRAFT, and this very
             // method is what Sales would call next to put the discount straight back. The two
-            // changes only close the loophole together.
+            // rules only close the loophole together.
             //
             // Scoped to revisions (parentQuotationId != null) on purpose. Discount Policy B on a
-            // FIRST quotation is untouched: there the CEO's own decision supplied
-            // minimum_selling_price_per_requested_unit (Phase 1 UI simplification, owner ruling
-            // 2026-08-16: ส่วนลดสูงสุด/discount_ceiling_pct is retired system-wide; the floor is
-            // now auto-populated with the approved selling price unless the CEO explicitly set a
+            // FIRST quotation is unaffected: there the CEO's own decision supplied
+            // minimum_selling_price_per_requested_unit (ส่วนลดสูงสุด/discount_ceiling_pct is
+            // retired system-wide; the floor is
+            // auto-populated with the approved selling price unless the CEO explicitly set a
             // lower one — see PricingDecisionService#approve), so discounting down to that floor
             // is authority the CEO granted, not authority Sales took. The ruling is about moving a
             // price AFTER the customer has been given one.
@@ -302,8 +301,8 @@ public class CustomerQuotationService {
             if (finalUnitPrice.compareTo(BigDecimal.ZERO) < 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่เกินราคาที่อนุมัติ");
             }
-            // Discount Policy B (owner's decision) — Phase 2 (2026-08-16): a below-minimum price
-            // is NO LONGER a hard refusal here. Sales may save it; raiseDiscountApprovalsIfNeeded
+            // Discount Policy B: a below-minimum price
+            // is not a hard refusal here. Sales may save it; raiseDiscountApprovalsIfNeeded
             // (called by the public update() method once every item in this batch is written)
             // opens a CEO approval request for it. issue() is the one site that still blocks the
             // document, and only when the line is both below minimum AND not yet approved AT
@@ -353,8 +352,8 @@ public class CustomerQuotationService {
             }
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาไม่ได้อยู่ในสถานะที่ออกได้ (" + quotation.docStatus() + ")");
         }
-        // Discount-approval gate, Phase 2 (owner ruling 2026-08-16): a below-minimum line no
-        // longer refuses unconditionally — it refuses only when it is ALSO not yet CEO-approved
+        // Discount-approval gate: a below-minimum line does not
+        // refuse unconditionally — it refuses only when it is ALSO not yet CEO-approved
         // at exactly its current price. discountApprovals.isApproved is the price-binding check:
         // an approval granted at a DIFFERENT price (e.g. before this line was edited again) does
         // not count, so an edit after approval always lands back here. See
@@ -375,9 +374,9 @@ public class CustomerQuotationService {
         }
 
         PricingRequestSummaryDto summary = requirePricingRequest(quotation.pricingRequestId());
-        // Reissue-through-CEO-chain (owner ruling 2026-08-13): the replacement offer now exists,
+        // Reissue-through-CEO-chain: the replacement offer now exists,
         // so the offers it replaces stop being live. Until this point the parent chain's issued
-        // quotation stayed ISSUED and valid on purpose — the customer held a real offer for the
+        // quotation stays ISSUED and valid on purpose — the customer holds a real offer for the
         // whole time the new chain ran, and if the CEO had refused the new price there was
         // something to fall back to. Deliberately placed AFTER the issue compare-and-set above:
         // a failed issue must not retire the old offer.
@@ -444,7 +443,6 @@ public class CustomerQuotationService {
     public CustomerQuotationDto createRevision(long quotationId, CreateRevisionRequest request, UserPrincipal actor) {
         CustomerQuotationDto source = requireQuotation(quotationId);
         requireEditAccess(source, actor);
-        // Step 5 (design correction 3, "compatibility fix on createRevision's guard"):
         // recordOutcome writes ISSUED -> REVISION_REQUESTED immediately when Sales records what
         // the customer said, BEFORE they pick commercial-only vs cost-affecting — so a
         // commercial-only correction must be reachable from REVISION_REQUESTED too, not only the
@@ -472,19 +470,19 @@ public class CustomerQuotationService {
 
         List<NewItem> items = new ArrayList<>();
         for (PricingDecisionSalesItemDto item : salesView.items()) {
-            // Reissue-through-CEO-chain (owner ruling 2026-08-13): EVERY line is rebuilt at the
-            // CEO-approved price, discount ZERO. This method used to carry the prior revision's
-            // per-line discount forward, and that carry-forward — together with a follow-up
-            // update() on the new draft — was the loophole that let Sales move a customer-facing
+            // Reissue-through-CEO-chain: EVERY line is rebuilt at the
+            // CEO-approved price, discount ZERO. Carrying the prior revision's
+            // per-line discount forward — together with a follow-up
+            // update() on the new draft — would let Sales move a customer-facing
             // price after issue on their own authority, entirely outside the pricing chain. A
-            // price or quantity change after issue must now go through
+            // price or quantity change after issue must go through
             // PricingRequestService#createCustomerChangeRevision, which ends in a fresh CEO
             // decision. What survives here is genuinely non-commercial: validity date, terms,
             // contact details, typos.
             //
-            // The visible consequence, stated rather than hidden: if the superseded revision
+            // The visible consequence: if the superseded revision
             // carried a discount, the correction reissues at the CEO-approved price, i.e. HIGHER
-            // than what the customer was last shown. That is the ruling — Sales cannot keep a
+            // than what the customer was last shown. That is the rule — Sales cannot keep a
             // price concession alive through a "typo fix". Re-granting it is a
             // createCustomerChangeRevision away.
             items.add(buildItem(item, BigDecimal.ZERO));
@@ -494,14 +492,13 @@ public class CustomerQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         CustomerDto customer = ticket.customerId() != null ? customers.findById(ticket.customerId()).orElse(null) : null;
 
-        // Owner ruling 2026-09-18: a revision is versioning, not a new document — it keeps the
+        // A revision is versioning, not a new document — it keeps the
         // SAME base number and bumps the "-n" suffix, exactly like the direct quotation flow
         // (DealQuotationRepository#baseNumber/#revisionNumber, shared here via
-        // QuotationNumbering). This used to call quotations.nextQuotationCode() and mint an
-        // entirely unrelated number for every revision.
+        // QuotationNumbering), not a fresh quotations.nextQuotationCode() number.
         //
         // baseNumber() also carries the legacy-bare-number fallback: a quotation issued BEFORE
-        // this change has no "-1" suffix at revisionNo == 1 (those rows are never rewritten — see
+        // the "-n" numbering has no "-1" suffix at revisionNo == 1 (those rows are never rewritten — see
         // QuotationNumbering's Javadoc), so revising one produces "{bare}-2", not "{bare}-1" and
         // not a fresh code.
         // nextRevisionNo (not source.quotationRevisionNo() + 1) — see that repository method's own
@@ -528,14 +525,14 @@ public class CustomerQuotationService {
                 + (request.reason() != null && !request.reason().isBlank() ? " — " + request.reason().trim() : ""));
         CustomerQuotationDto created = requireQuotation(newId);
         // Currently inert here too (see create()'s identical comment) — every item on a revision
-        // is rebuilt at ZERO discount by design (the reissue-through-CEO-chain ruling above), so
+        // is rebuilt at ZERO discount by design (the reissue-through-CEO-chain rule above), so
         // none can ever be below minimum. Wired for the same defense-in-depth reason.
         raiseDiscountApprovalsIfNeeded(summary, created, actor);
         return created;
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Step 5: Customer Decision and Commercial Revisions.
+    // Customer Decision and Commercial Revisions.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** The only outcomes a client may record — EXPIRED is sweep-only, rejected explicitly below. */
@@ -549,8 +546,8 @@ public class CustomerQuotationService {
      * {@link #issue}). On ACCEPTED, also transitions the pricing request
      * {@code QUOTATION_ISSUED -> QUOTATION_ACCEPTED}. Emits exactly one
      * {@code sales.pricing_request_event} and one CEO-visibility notification per outcome —
-     * REJECTED/REVISION_REQUESTED deliberately do NOT change the pricing request's own status
-     * (design correction 2); Sales decides what happens next (a new revision via
+     * REJECTED/REVISION_REQUESTED deliberately do NOT change the pricing request's own status;
+     * Sales decides what happens next (a new revision via
      * {@link #createRevision}/{@code PricingRequestService.createCustomerChangeRevision}, or a
      * separate ticket-level lost-deal action outside this method's scope).
      */
@@ -565,15 +562,14 @@ public class CustomerQuotationService {
         }
         CustomerQuotationDto quotation = requireQuotation(quotationId);
         requireEditAccess(quotation, actor);
-        // GLA-123 slice S3 MAJOR 3 fix (Opus review against real Postgres, 2026-09-23): this used
-        // to take lockTicketForUpdate (FOR UPDATE on sales.ticket) BEFORE lockPricingRequest (the
-        // advisory lock on the PR id) — the OPPOSITE order every other path in this class
-        // (#issue) and DealQuotationService#approveAndIssuePricingRequestOrigin already takes:
-        // advisory lock first, THEN a ticket-row touch later in the same transaction (addEvent's
-        // own FK acquires FOR KEY SHARE on sales.ticket). Two transactions taking the SAME two
-        // locks in opposite orders is a textbook deadlock, and it reproduced live against real
-        // Postgres: "ERROR: deadlock detected ... FOR KEY SHARE OF x". Swapped to match every
-        // other path — pricing-request advisory lock FIRST, ticket-row lock second. R8 still
+        // Lock order: taking lockTicketForUpdate (FOR UPDATE on sales.ticket) BEFORE
+        // lockPricingRequest (the advisory lock on the PR id) is the OPPOSITE order every other
+        // path in this class (#issue) and DealQuotationService#approveAndIssuePricingRequestOrigin
+        // takes: advisory lock first, THEN a ticket-row touch later in the same transaction
+        // (addEvent's own FK acquires FOR KEY SHARE on sales.ticket). Two transactions taking the
+        // SAME two locks in opposite orders is a textbook deadlock ("ERROR: deadlock detected ...
+        // FOR KEY SHARE OF x" on real Postgres). So: pricing-request advisory lock FIRST,
+        // ticket-row lock second. R8 still
         // serialises correctly: hasAcceptedQuotation is checked below AFTER both locks are held,
         // so it does not matter which one was acquired first, only that the ticket row IS locked
         // before that check runs — which it still is.
@@ -583,8 +579,8 @@ public class CustomerQuotationService {
         if (outcomeClientRequestId != null) {
             Optional<Long> replay = quotations.findIdByOutcomeClientRequestId(actor.id(), outcomeClientRequestId);
             if (replay.isPresent()) {
-                // MINOR-2 fix (Opus review, 2026-09-23) — mirrors #issue's own identical guard
-                // (:337): a replay resolving to a DIFFERENT quotation than the one this call
+                // Mirrors #issue's own identical guard:
+                // a replay resolving to a DIFFERENT quotation than the one this call
                 // actually named is a genuine conflict, not a silent "success" — without this, the
                 // caller would get back some OTHER quotation's DTO with no outcome recorded on the
                 // one they meant to act on, and no error to notice it by.
@@ -612,16 +608,16 @@ public class CustomerQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
         }
-        // MINOR-3 fix (Opus review, 2026-09-23): V75's own (issued_by, outcome_client_request_id)
+        // V75's own (issued_by, outcome_client_request_id)
         // partial unique index is TABLE-WIDE (both origins share sales.quotation), but the two
-        // engines' own #findIdByOutcomeClientRequestId lookups are now each origin-scoped (this
-        // one origin IS NULL, DealQuotationRepository's origin = 'PRICING_REQUEST' — see that
-        // method's own MINOR-2 Javadoc). So the SAME actor reusing a clientRequestId across the
-        // two recordOutcome endpoints no longer replay-matches on EITHER side, and instead
-        // deterministically hits the DB constraint here as a bare DataIntegrityViolationException
-        // — a 500 with no Thai message. Scoping the index itself by origin (a migration) was
-        // judged not worth it for this slice; catching the violation and turning it into the same
-        // clean 409 #issue's own wrong-quotation guard above already uses is the cheaper fix.
+        // engines' own #findIdByOutcomeClientRequestId lookups are each origin-scoped (this
+        // one origin IS NULL, DealQuotationRepository's origin = 'PRICING_REQUEST'). So the SAME
+        // actor reusing a clientRequestId across the two recordOutcome endpoints does not
+        // replay-match on EITHER side, and instead deterministically hits the DB constraint here
+        // as a bare DataIntegrityViolationException — a 500 with no Thai message. Scoping the
+        // index itself by origin (a migration) is not worth it; catching the violation and
+        // turning it into the same clean 409 #issue's own wrong-quotation guard above uses is the
+        // cheaper fix.
         int rows;
         try {
             rows = quotations.recordOutcome(quotationId, request.outcome(), blankToNull(request.customerNote()),
@@ -676,7 +672,7 @@ public class CustomerQuotationService {
      * external system), scoped to Step 4/5 quotations only (see
      * {@link CustomerQuotationRepository#expireOverdueQuotations}'s own Javadoc). Emits one event
      * + one CEO-visibility notification per quotation flipped, and NEVER changes the pricing
-     * request's own status (design correction 2). Returns the number of quotations expired, for
+     * request's own status. Returns the number of quotations expired, for
      * the worker/tests to assert against without a second query.
      */
     @Transactional
@@ -689,7 +685,7 @@ public class CustomerQuotationService {
                     "ใบเสนอราคาลูกค้า " + row.number() + " หมดอายุ", null);
                 notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
                     PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED, "ใบเสนอราคาลูกค้า " + row.number() + " หมดอายุ");
-                // P2 B6: the rep who owns the deal chases the customer or re-quotes -- unless the deal is lost/cancelled.
+                // The rep who owns the deal chases the customer or re-quotes -- unless the deal is lost/cancelled.
                 if (!tickets.isDeadDeal(summary.ticketId())) {
                     notifications.notifyEmployeeAtLink(summary.ticketCreatedById(),
                         PricingRequestEventKind.CUSTOMER_QUOTATION_EXPIRED,
@@ -706,7 +702,7 @@ public class CustomerQuotationService {
     // snapshot already populates the exact legacy columns
     // (brand/qty/raw_unit/unit_price/customer_name/...) TicketRepository.findQuotationItemsByQuotationId
     // and QuotationRenderer.toXlsx/toPdf already read, so PDF and XLSX derive from the SAME
-    // stored snapshot without a second rendering implementation (rule 11).
+    // stored snapshot without a second rendering implementation.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     public byte[] renderPdf(long quotationId, UserPrincipal actor) {
@@ -765,8 +761,8 @@ public class CustomerQuotationService {
         if (finalUnitPrice.compareTo(BigDecimal.ZERO) < 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ส่วนลดต้องไม่เกินราคาที่อนุมัติ");
         }
-        // Discount Policy B — Phase 2 (2026-08-16): a below-minimum price is no longer refused
-        // HERE either (see the identical change in applyItemUpdates). There is currently no
+        // Discount Policy B: a below-minimum price is not refused
+        // HERE either (see the identical rule in applyItemUpdates). There is currently no
         // create-time discount input, so this remains unreachable today: buildItem's only two
         // callers, create() and createRevision(), both pass ZERO. Both callers run
         // raiseDiscountApprovalsIfNeeded AFTER insertion (once the item rows — and their ids —
@@ -810,7 +806,7 @@ public class CustomerQuotationService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Discount-approval gate, Phase 2 (owner ruling 2026-08-16, V155)
+    // Discount-approval gate (V155)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -864,7 +860,7 @@ public class CustomerQuotationService {
     }
 
     /**
-     * The FILE read only (renderPdf / renderXlsx). 2026-09-30 owner ruling: {@code account} may download the
+     * The FILE read only (renderPdf / renderXlsx). {@code account} may download the
      * document the customer received -- an ISSUED / SENT / ACCEPTED quotation -- of a deal inside its list scope
      * ({@code TicketRepository#isInAccountScope}). This is deliberately NOT added to {@link #VIEW_ROLES}: account
      * still cannot get / list / create / edit / record outcomes, so nothing else in this service opens to it.

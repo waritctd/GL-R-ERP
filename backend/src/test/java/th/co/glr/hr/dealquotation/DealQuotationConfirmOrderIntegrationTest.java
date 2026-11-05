@@ -71,20 +71,20 @@ import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
- * Quotation ↔ deal linking, slice 1 (IA §7, owner decisions D1–D7 approved 2026-09-30) — real-DB,
+ * Quotation ↔ deal linking — real-DB,
  * real-service proof for "ยืนยันคำสั่งซื้อ" on a direct quotation
  * ({@link DealQuotationService#confirmOrderFromDirectQuotation}, {@code POST
  * /api/deal-quotations/{id}/confirm-order}; {@code …/promote-to-deal} is kept as an alias for one
- * release), and for the reversal of GLA-136's "hide the quotation-first deal" rule.
+ * release). A quotation-first deal is NOT hidden from the pipeline.
  *
- * <p>What changed from GLA-136 (#1083), and is pinned here:
+ * <p>Pinned here:
  * <ul>
- *   <li>the {@code quotation_only} precondition is DROPPED — an ordinary deal with an APPROVED
- *       direct quotation confirms too; {@code quotation_only} (V193) is provenance only;</li>
+ *   <li>there is no {@code quotation_only} precondition — an ordinary deal with an APPROVED
+ *       direct quotation confirms too; {@code quotation_only} is provenance only;</li>
  *   <li>a quotation-first deal is a real pipeline deal: it is listed, and stage / entry-channel /
  *       tender writes work on it;</li>
- *   <li>the items and pricing-request refusals are RE-KEYED from the flag to "this deal has a live
- *       DEAL_DIRECT quotation" ({@link DirectQuotationLocks}).</li>
+ *   <li>the items and pricing-request refusals are keyed on "this deal has a live
+ *       DEAL_DIRECT quotation", not the flag ({@link DirectQuotationLocks}).</li>
  * </ul>
  *
  * <p>Every service is the production class, hand-wired against real Postgres (no Mockito anywhere):
@@ -188,7 +188,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     // ticket-keyed money side (deposit-notice draft) unlocks.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** The quotation-first ("ghost") deal still confirms — the GLA-136 happy path, unchanged. */
+    /** The quotation-first ("ghost") deal confirms. */
     @Test
     void quotationFirstGhost_stillConfirms_landsAtOrderReceived_withQuotationLines_andDepositDraftUnlocks() {
         long ghost = quotationOnlyTicket(salesActor);
@@ -252,11 +252,11 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(((Number) events.get(0).get("related_document_id")).longValue()).isEqualTo(approved.id());
 
         // The money side unlocks: the ticket-level deposit-notice draft (keyed on quotation_issued)
-        // now succeeds, autofilled from the DEAL_DIRECT APPROVED quotation (#1069).
+        // now succeeds, autofilled from the DEAL_DIRECT APPROVED quotation.
         DepositNoticeDto draft = depositNoticeService.createDraft(ghost,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
         assertThat(draft.ticketId()).isEqualTo(ghost);
-        // Owner ruling 2026-10-23: the ส่วนลดพิเศษ ADJUSTMENT row (qty -1, -100.00) is folded into the
+        // The ส่วนลดพิเศษ ADJUSTMENT row (qty -1, -100.00) is folded into the
         // goods lines by amount: TILE 10 x 100 and PLAIN 2 x 500 take 50.00 each. No negative qty, the
         // descriptions are the goods lines' own, and the subtotal is the quotation's 1,900.
         assertThat(draft.items())
@@ -269,7 +269,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             .last().isEqualTo("ค่าขนส่ง");
         assertThat(draft.subtotal()).isEqualByComparingTo("1900.00");
 
-        // The page sends every line back on save; @PositiveOrZero qty used to refuse the whole PUT.
+        // The page sends every line back on save; a @PositiveOrZero qty would refuse the whole PUT.
         DepositNoticeDraftRequest pagePut = new DepositNoticeDraftRequest(
             draft.customerName(), draft.customerTaxId(), draft.customerAddress(), draft.projectName(),
             draft.reference(), draft.depositPercent(), draft.notes(),
@@ -294,10 +294,10 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     /**
-     * The precondition GLA-136 had and this slice DROPS: a deal created the ordinary way (deal page,
+     * A deal created the ordinary way (deal page,
      * {@code quotation_only = FALSE}, never a ghost) with an APPROVED direct quotation confirms the
      * order exactly like a quotation-first one — S10, CUSTOMER_CONFIRMED, the quotation's lines, one
-     * event. Under GLA-136 this was a 409 "อยู่ใน pipeline อยู่แล้ว".
+     * event (not a 409 "อยู่ใน pipeline อยู่แล้ว").
      */
     @Test
     void ordinaryDeal_withApprovedDirectQuotation_confirmsOrder_landsAtOrderReceived() {
@@ -358,8 +358,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // P1 hand-off notifications: confirm-order from a direct quotation tells the CEO (A7a), and
-    // account too when the order carries no deposit (A7b). Bell row AND email path are pinned.
+    // Hand-off notifications: confirm-order from a direct quotation tells the CEO, and
+    // account too when the order carries no deposit. Bell row AND email path are pinned.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     private static final String ORDER_CONFIRMED_TITLE = "ลูกค้ายืนยันคำสั่งซื้อแล้ว";
@@ -454,8 +454,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertNothingPromoted(ghost);
     }
 
-    /** Owner ruling 2026-10-22: a ไม่รับมัดจำ (0%) direct quotation confirms onto the no-deposit
-     * payment path, so final payment is no longer blocked by a deposit that will never exist. */
+    /** A ไม่รับมัดจำ (0%) direct quotation confirms onto the no-deposit
+     * payment path, so final payment is not blocked by a deposit that will never exist. */
     @Test
     void zeroDepositDirectQuotation_confirmsOntoTheNoDepositPath_andFinalPaymentIsNoLongerBlocked() {
         long deal = pipelineTicket(salesActor);
@@ -473,7 +473,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(after.paymentStatus()).isEqualTo("CUSTOMER_CONFIRMED");
         assertConflict(() -> depositNoticeService.createDraft(deal,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor), "ไม่ต้องเก็บมัดจำ");
-        // The whole 0% walk (owner ruling 2026-10-27: 0% skips the deposit path automatically).
+        // The whole 0% walk (0% skips the deposit path automatically).
         assertThat(ticketService.actions(deal, salesActor).availableActions())
             .extracting(TicketResponses.TicketActionDto::action).doesNotContain("ISSUE_DEPOSIT_NOTICE");
         ticketService.requireImportRequestIssuable(after); // a REQUIRED deal 409s here with no deposit
@@ -487,9 +487,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     /**
-     * Owner ruling 2026-10-28: once the order is confirmed from a direct quotation, THAT quotation can no longer
-     * be revised (a revision's approval would supersede the agreed order and move the payable). Replaces the five
-     * #1173 tests that revised a confirmed quotation (their policy-sync scenarios are no longer reachable).
+     * Once the order is confirmed from a direct quotation, THAT quotation can no longer
+     * be revised (a revision's approval would supersede the agreed order and move the payable).
      */
     @Test
     void confirmedDirectQuotation_cannotBeRevised_409_andNoRowIsWritten() {
@@ -505,7 +504,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     /**
-     * Round 3: the two leaks around the revise gate. After the order is confirmed from v1, no OTHER direct
+     * The two leaks around the revise gate: after the order is confirmed from v1, no OTHER direct
      * quotation on the deal may be created from it (clone), submitted, or approved -- approving one would supersede
      * the confirmed v1, move the payable and flip the deposit policy. v1 stays APPROVED, nothing is written.
      */
@@ -558,7 +557,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(summary(deal).depositPolicy()).isEqualTo("REQUIRED");
     }
 
-    /** Review finding 2: confirming the order must not strand the deal's other open direct quotations. */
+    /** Confirming the order must not strand the deal's other open direct quotations. */
     @Test
     void confirmOrder_cancelsTheDealsOtherOpenDirectQuotations_andLeavesTheConfirmedOneAlone() {
         long deal = pipelineTicket(salesActor);
@@ -576,7 +575,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(quotationService.get(pending.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.CANCELLED);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :k",
             Map.of("id", deal, "k", TicketEventKind.CANCELLED), Integer.class)).isEqualTo(2);
-        // P2 B7: only the quotation that was WAITING on approval had told the SM and CEO "รออนุมัติ", so only that
+        // Only the quotation that was WAITING on approval had told the SM and CEO "รออนุมัติ", so only that
         // cancellation un-tells them (FYI); the DRAFT clone never reached them. Link = the cancelled document.
         TicketSummaryDto d = summary(deal);
         String message = salesActor.name() + " ยกเลิกใบเสนอราคา " + pending.number()
@@ -589,8 +588,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     }
 
     /**
-     * Review fix: a quotation another transaction moves DRAFT -> PENDING_APPROVAL while the confirmation is in flight
-     * must still be reported as pending (so SM + CEO get the B7 notice). tx1 holds the row lock with the flip
+     * A quotation another transaction moves DRAFT -> PENDING_APPROVAL while the confirmation is in flight
+     * must still be reported as pending (so SM + CEO get the cancellation notice). tx1 holds the row lock with the flip
      * uncommitted; the confirmation blocks on it; once tx1 commits, the cancel must see the PENDING row.
      */
     @Test
@@ -778,7 +777,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     // A quotation-first deal is a real pipeline deal (IA §7) — listed, and movable by hand.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Inverted from GLA-136's "excludes … until promoted": the quotation-first deal is listed (and
+    /** The quotation-first deal is listed (and
      * counted) from the moment it exists, for the owning rep and for the manager. */
     @Test
     void repsOwnList_includesTheQuotationFirstDeal() {
@@ -806,7 +805,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(summary(ghost).salesStage()).isEqualTo(DealStage.PRESENTATION);
     }
 
-    /** Wrong-way-round: removing the quotation-only refusal did not open the deal to a non-owner. */
+    /** Wrong-way-round: with no quotation-only refusal, the deal is still not open to a non-owner. */
     @Test
     void updateStage_onQuotationFirstDeal_byNonOwner_isStill403() {
         long ghost = quotationOnlyTicket(salesActor);
@@ -911,12 +910,12 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
      * V193's backfill predicate includes {@code sales_stage = 'LEAD_APPROACH'} — "it has never left
      * the pipeline's starting point".
      *
-     * <p><b>Why every fixture is now reset to LEAD_APPROACH, and why that is not cheating.</b> Since
-     * the owner's 2026-10-16 ruling ({@code .design/quote-stage-gates} D-2) creating a quotation
-     * moves the deal onto its recipient's stage, so {@code quotationService.create} no longer leaves
+     * <p><b>Why every fixture is reset to LEAD_APPROACH, and why that is not cheating.</b> Creating
+     * a quotation moves the deal onto its recipient's stage ({@code .design/quote-stage-gates}
+     * D-2), so {@code quotationService.create} does not leave
      * ANY of these deals at LEAD_APPROACH. That has no production consequence — V193 is a one-shot
-     * backfill that already ran, and Flyway will never run it again — but it wrecks this test in a
-     * way worth stating plainly, because five of the six assertions would still have been GREEN:
+     * backfill that already ran, and Flyway will never run it again — but without the resets
+     * five of the six assertions would still be GREEN:
      *
      * <ul>
      *   <li>{@code ghost} fails outright (the one true positive, no longer matched).
@@ -929,8 +928,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
      * <p>So the resets restore each case to having exactly ONE reason to be excluded, which is what
      * makes the test evidence rather than coincidence. This is legitimate here specifically because
      * the section's own header says V193 is re-executed verbatim over HAND-SHAPED rows: the job is
-     * to reconstruct the historical state V193 was written against, and post-D-2 the service itself
-     * can no longer produce it. {@code advancedStage} is deliberately NOT reset — it is the case
+     * to reconstruct the historical state V193 was written against, which the service itself
+     * can no longer produce. {@code advancedStage} is deliberately NOT reset — it is the case
      * that tests the stage clause.
      */
     @Test
@@ -990,7 +989,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     /** Exactly what the quotation editor's inline create sends (QuotationEditorPage
      * #handleInlineCreate): no contact, no items, a follow-up date, and quotationOnly=true. */
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // W3-03 (owner ruling 2026-10-29): confirm-order on a DIRECT quotation must hand each
+    // Confirm-order on a DIRECT quotation must hand each
     // ticket_item the quotation line's catalogue link and factory, as the pricing-request route does —
     // otherwise สร้างใบ IR 409s "รายการนี้ยังไม่ได้ระบุโรงงาน" and nobody can fix it.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1089,7 +1088,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         return quotationService.approve(created.id(), new ApproveRequest(null), salesManagerActor);
     }
 
-    /** Revise {@code source} to {@code draft}'s terms, submit, and approve — the reviewer's F1 sequence. */
+    /** Revise {@code source} to {@code draft}'s terms, submit, and approve. */
     private DealQuotationDto approvedRevision(DealQuotationDto source, UpsertDealQuotationRequest draft) {
         DealQuotationDto revision = quotationService.createRevision(source.id(), salesActor);
         quotationService.update(revision.id(), draft, salesActor);
@@ -1154,14 +1153,12 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     /**
      * Every refusal above asserts through here: the promotion wrote NOTHING.
      *
-     * <p><b>The stage assertion changed with the owner's 2026-10-16 quote-stage ruling</b>
-     * ({@code .design/quote-stage-gates} D-2), and the change is the point rather than an
-     * accommodation. It used to read {@code isEqualTo(LEAD_APPROACH)}, which conflated two
+     * <p><b>The stage assertion is QUOTE_OWNER, not LEAD_APPROACH</b>
+     * ({@code .design/quote-stage-gates} D-2). {@code isEqualTo(LEAD_APPROACH)} would conflate two
      * different claims: "the promotion did not happen" (what this helper is for) and "nothing
      * whatsoever has moved this deal's stage" (an accident of the fixture). Creating the quotation
-     * now moves the ghost deal onto its recipient's stage — {@code directDraft()} addresses the
-     * OWNER, so ขั้น 5 — so the old assertion failed on all nine call sites while the behaviour it
-     * exists to protect was untouched.
+     * moves the ghost deal onto its recipient's stage — {@code directDraft()} addresses the
+     * OWNER, so ขั้น 5.
      *
      * <p>Asserted as QUOTE_OWNER rather than merely "not ORDER_RECEIVED" deliberately: that is the
      * STRONGER statement. It says the refused promotion moved the stage neither forward nor back,

@@ -1,10 +1,7 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Bento Grid · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (spans follow the fixed bucket importance order, never the data; every tile shows a real count and amount) */
-import { useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../api/index.js';
-import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
@@ -15,6 +12,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
 import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
+import { dedupeById, rowAmount, useAccountTickets } from '../finance/accountTickets.js';
 
 // Money-pulse bucket meta (Bento Grid). `span` encodes IMPORTANCE, not data: overdue is the 2x2 lead
 // tile, the deposit step is double-wide, the commission step is the slim closing strip.
@@ -42,19 +40,6 @@ const CTA_VARIANT = {
   recordInvoiceCommission: 'text',
 };
 
-function dedupeById(...lists) {
-  const seen = new Map();
-  lists.flat().forEach((ticket) => {
-    if (ticket && !seen.has(ticket.id)) seen.set(ticket.id, ticket);
-  });
-  return [...seen.values()];
-}
-
-function rowAmount(ticket) {
-  const outstanding = Number(ticket.amountOutstanding ?? 0);
-  return outstanding > 0 ? outstanding : Number(ticket.amountPayable ?? 0);
-}
-
 /**
  * Account (ฝ่ายบัญชี) role-scoped landing: money pulse + "สิ่งที่ต้องทำ"
  * worklist, mirrors ImportOverview's conveyor-pulse pattern but keyed on
@@ -80,19 +65,7 @@ function rowAmount(ticket) {
 export function AccountOverview({ user, employee, dashboardSummary, showToast }) {
   const navigate = useNavigate();
 
-  const scopedQuery = useQuery({
-    queryKey: queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list({}).then((r) => r.tickets ?? []),
-  });
-  const closedPaidQuery = useQuery({
-    queryKey: queryKeys.ticketListBySalesStage('CLOSED_PAID'),
-    queryFn: () => api.tickets.list({ salesStage: 'CLOSED_PAID' }).then((r) => r.tickets ?? []),
-  });
-
-  useEffect(() => {
-    const error = scopedQuery.error || closedPaidQuery.error;
-    if (error) showToast?.('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
-  }, [scopedQuery.error, closedPaidQuery.error, showToast]);
+  const { scopedQuery, closedPaidQuery } = useAccountTickets(showToast);
 
   const loading = scopedQuery.isLoading || closedPaidQuery.isLoading;
 

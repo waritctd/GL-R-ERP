@@ -11,9 +11,9 @@ import { focusQuotationField } from '../quotations/QuotationChecklist.jsx';
 import { ceilPieces, defaultLeadTimeForOrigin, originCountryFromCode, piecesPerSqmFromSqmPerPiece, recipientForEntryChannel, validateQuotationItem } from '../quotations/quotationMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-// CR-1 (GLA-167, R1 / F4): the currency and price unit Sales fixes on each line; import cannot
-// change them afterwards. The currency list is the trade currencies this business quotes in (the
-// same ones the FX table tracks); the unit list is UnitBasis's four codes.
+// The currency and price unit Sales fixes on each line; import cannot change them afterwards. The
+// currency list is the trade currencies this business quotes in (same as the FX table); the unit
+// list is UnitBasis's four codes.
 const REQUEST_CURRENCY_OPTIONS = ['THB', 'EUR', 'USD', 'CNY'];
 
 // price_catalog.price_unit -> UnitBasis. 'unknown' (or anything else) is NOT guessed: the unit stays
@@ -34,11 +34,11 @@ function termsFromCatalog(cat) {
 }
 
 /**
- * What a catalogue pick sets on THIS form, over QuotationItemRow.pickCatalog's own patch. That one keeps
- * the row's origin (and so its lead time) and falls back to the row's thickness, which is right for a
- * direct-deal rep's deliberate choice but wrong here: a PCR row's origin/thickness/box count were seeded
- * from the deal's previous product, and a pick means "the database has the information" (owner ruling
- * 2026-10-18), so the picked product's values replace them, blanks included.
+ * What a catalogue pick sets on THIS form, over QuotationItemRow.pickCatalog's own patch. That one
+ * keeps the row's origin (and so its lead time) and falls back to the row's thickness, which suits
+ * a direct-deal rep's deliberate choice but not here: a PCR row's origin/thickness/box count were
+ * seeded from the deal's previous product, and a pick means "the database has the information", so
+ * the picked product's values replace them, blanks included.
  */
 function catalogPickPatch(cat) {
   const originCountry = originCountryFromCode(cat.originCountryCode) || '';
@@ -53,12 +53,12 @@ function catalogPickPatch(cat) {
 }
 
 /**
- * UAT item 3 (owner ruling 2026-10-18): on a hand-typed line the currency and unit "default
- * automatically if the database has the information, otherwise sales fills them by hand". The
- * database has it when the typed โรงงาน names a catalogue factory: `items` are the catalogue rows
- * `GET /api/catalog/prices?q=<brand>` returned (the search also matches product fields, so only the
- * rows whose factory IS the typed name count). Returns null when none match; a field the matching
- * rows disagree on comes back '' so a wrong value is never pre-filled silently.
+ * On a hand-typed line the currency and unit default automatically if the database has the
+ * information, otherwise sales fills them by hand. The database has it when the typed โรงงาน names
+ * a catalogue factory: `items` are the rows `GET /api/catalog/prices?q=<brand>` returned (the
+ * search also matches product fields, so only rows whose factory IS the typed name count). Returns
+ * null when none match; a field the matching rows disagree on comes back '' so a wrong value is
+ * never pre-filled silently.
  */
 function termsFromFactoryMatches(brand, items = []) {
   const wanted = String(brand ?? '').trim().toLowerCase();
@@ -86,55 +86,45 @@ function patchRow(item, patch) {
   return next;
 }
 
-// ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ were removed from this form
-// (owner request, 2026-08-11): Sales does not have that information at คำขอราคา time, so the
-// four inputs only ever collected noise. The BACKEND CONTRACT IS UNCHANGED —
-// PricingRequestItemRequest.quantityType is still @NotBlank, and the other three are still
-// nullable columns — so every payload below keeps carrying all four. They are simply no longer
-// user-editable:
+// ลักษณะจำนวน / วันที่ต้องการส่งมอบ / สถานที่ส่งมอบ / ข้อกำหนดพิเศษ are not editable on this form:
+// Sales does not have that information at คำขอราคา time. The BACKEND CONTRACT still needs them
+// (PricingRequestItemRequest.quantityType is @NotBlank, the other three are nullable columns), so
+// every payload keeps carrying all four:
 //   - create mode sends this default plus three nulls;
-//   - edit/revision mode PRESERVES whatever the persisted request already holds (see
-//     itemFromExisting), because buildPayload writes the FULL item representation and nulling a
-//     field here would silently erase data on any draft created before this change.
+//   - edit/revision mode PRESERVES what the persisted request holds (see itemFromExisting),
+//     because buildPayload writes the FULL item and nulling a field would erase existing data.
 const DEFAULT_QUANTITY_TYPE = 'ESTIMATE';
 
 /**
- * V185 (Phase 1 of the sales-flow redesign, owner ruling 2026-09-18): the item form Sales fills
- * is now the SAME as the direct-deal quotation's TILE row — this literally reuses
- * `QuotationItemRow` (see `../quotations/QuotationItemRow.jsx`) with `hidePricing` — minus
- * price/discount, which stay a later phase (the CEO will enter price/discount/วิธีกรอกราคา once
- * that phase lands). Sales no longer types a quantity/unit directly either: the server derives
- * requestedQty/requestedUnit/requestedUnitBasis from the tile fields via the SAME
- * `WastageCalculator` the direct-deal quotation uses (`PricingRequestService#resolveItems`) — see
- * that method's own Javadoc for the full derivation.
+ * The item form Sales fills is the SAME as the direct-deal quotation's TILE row: it reuses
+ * `QuotationItemRow` (see `../quotations/QuotationItemRow.jsx`) with `hidePricing`, minus
+ * price/discount (the CEO enters those later). Sales does not type a quantity/unit directly: the
+ * server derives requestedQty/requestedUnit/requestedUnitBasis from the tile fields via the SAME
+ * `WastageCalculator` the direct-deal quotation uses (`PricingRequestService#resolveItems`, see
+ * its Javadoc).
  *
- * The manual "ค้นหา Catalog" picker this modal used to have (removed 2026-08-11, replaced by a
- * background fuzzy-match effect) is gone entirely — QuotationItemRow's own รุ่น/ค้นหาแคตตาล็อก
- * typeahead (live search against the SAME `GET /catalog/prices` endpoint) replaces both. A
- * catalogue pick auto-fills brand from the catalogue's factory name, exactly as it does on the
- * direct-deal form — see that component's own `pickCatalog`.
+ * QuotationItemRow's รุ่น/ค้นหาแคตตาล็อก typeahead (live search against `GET /catalog/prices`)
+ * is the only catalogue picker. A pick auto-fills brand from the catalogue's factory name, as on
+ * the direct-deal form (see its `pickCatalog`).
  *
- * โรงงาน labelling (owner ruling 2026-09-18, reversed from an earlier ยี่ห้อ ruling): the SEPARATE
- * free-text `factory` input the OLD form had is still gone entirely — Sales no longer types a
+ * โรงงาน labelling: there is no separate free-text `factory` input; Sales does not type a
  * factory, and the `factory` column and Import's `SetItemFactoryRequest` gap-fill are untouched.
- * What replaces it is the SAME field the direct-deal form calls ยี่ห้อ (the `brand` column,
- * catalogue-auto-filled) — but on THIS form it is labelled โรงงาน instead, via
- * `QuotationItemRow`'s `brandLabel` prop. This is a label choice only: the value sales enters
- * here is still stored in `brand`, never in `factory`.
+ * Instead the field the direct-deal form calls ยี่ห้อ (the `brand` column, catalogue-auto-filled)
+ * is labelled โรงงาน here via `QuotationItemRow`'s `brandLabel` prop. Label only: the value is
+ * still stored in `brand`, never in `factory`.
  *
- * รายละเอียดสินค้า: the direct-deal form has no such field. This form maps its
- * หมายเหตุรายการ input (QuotationItemRow's own itemNotes field — same position as on the
- * direct-deal row) onto the existing `productDescription` column instead of showing a dedicated
- * box, so the column is not lost and Import still sees whatever notes Sales left.
+ * รายละเอียดสินค้า: the direct-deal form has no such field. The หมายเหตุรายการ input
+ * (QuotationItemRow's itemNotes) maps onto the existing `productDescription` column, so Import
+ * still sees whatever notes Sales left.
  */
 function emptyItemFromTicketItem(ticketItem) {
   // Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes its sqm quantity in
   // AREA mode; a PIECE-basis line quotes its piece count in PIECES mode.
   const quantityMode = ticketItem?.unitBasis === 'SQM' ? 'AREA' : 'PIECES';
-  // Owner ruling 2026-10-18 ("fill from catalogue"): a catalogue-linked deal line brings the
-  // catalogue's thickness / pieces-per-box / factory country along (TicketItemDto.catalog* via
-  // TicketRepository#findItemsByTicketId), and the origin implies the same default lead time a
-  // catalogue pick gets (QuotationItemRow.pickCatalog). A hand-typed deal line has none of it.
+  // A catalogue-linked deal line brings the catalogue's thickness / pieces-per-box / factory
+  // country along (TicketItemDto.catalog* via TicketRepository#findItemsByTicketId), and the origin
+  // implies the same default lead time a catalogue pick gets (QuotationItemRow.pickCatalog). A
+  // hand-typed deal line has none of it.
   const fromCatalog = Boolean(ticketItem?.catalogPriceId);
   const seededOrigin = fromCatalog ? (originCountryFromCode(ticketItem.catalogOriginCountryCode) || '') : '';
   const seededLeadTime = defaultLeadTimeForOrigin(seededOrigin);
@@ -145,11 +135,10 @@ function emptyItemFromTicketItem(ticketItem) {
     // hand-typed ("custom") deal line, or a line created before V110 existed.
     sourceTicketItemId: ticketItem?.id ?? null,
     catalogPriceId: ticketItem?.catalogPriceId ?? null,
-    // Carried through unchanged, same as the pre-V185 form did: this row has no UI for either
-    // field (variantId never had one; the old form's dedicated โรงงาน input that WROTE `factory`
-    // is gone per the 2026-09-18 ruling above), but a ticket_item that already carries a variant
-    // pick or a factory (e.g. Import already resolved one before Sales revises the deal) must not
-    // be silently nulled when this row round-trips through pricingRequestItemInputFromRow below.
+    // Carried through unchanged: this row has no UI for either field, but a ticket_item that
+    // already carries a variant pick or a factory (e.g. Import resolved one before Sales revises
+    // the deal) must not be nulled when the row round-trips through
+    // pricingRequestItemInputFromRow below.
     variantId: ticketItem?.variantId ?? null,
     factory: ticketItem?.factory ?? null,
     productCode: ticketItem?.catalogProductCode ?? '',
@@ -165,8 +154,7 @@ function emptyItemFromTicketItem(ticketItem) {
     catalogSqmPerPiece: null,
     catalogPriceUnit: ticketItem?.catalogPriceUnit ?? null,
     catalogSizeText: null,
-    // CR-1: auto-filled only from a CATALOGUE line (the ticket item already resolved one); a
-    // hand-typed line starts blank and required.
+    // Auto-filled only from a CATALOGUE line; a hand-typed line starts blank and required.
     requestedCurrency: ticketItem?.catalogPriceId ? termsFromCatalog({ currency: ticketItem.catalogCurrency, priceUnit: ticketItem.catalogPriceUnit }).requestedCurrency : '',
     requestedPriceUnitBasis: ticketItem?.catalogPriceId ? termsFromCatalog({ currency: ticketItem.catalogCurrency, priceUnit: ticketItem.catalogPriceUnit }).requestedPriceUnitBasis : '',
     sqmPerBox: null,
@@ -176,13 +164,13 @@ function emptyItemFromTicketItem(ticketItem) {
     wastageMode: 'PERCENT',
     wastageValue: 0,
     piecesPerBox: fromCatalog ? (ticketItem.catalogPcsPerBox ?? '') : '',
-    // Owner-approved "sell loose pieces" default, same as the direct-deal form: every new row
-    // rounds up to a full box unless the rep opts out.
+    // Same default as the direct-deal form: every new row rounds up to a full box unless the rep
+    // opts out.
     roundToFullBox: true,
     originCountry: seededOrigin,
-    // QA-04: sales flags stock per line; seeded from the deal line. IN_THAILAND is the only value this form sets.
+    // Sales flags stock per line, seeded from the deal line. IN_THAILAND is the only value this form sets.
     stockSource: ticketItem?.sourcedFromStock ? 'IN_THAILAND' : null,
-    // GLA-125: typed name when originCountry = "อื่นๆ" — see QuotationItemRow's own comment.
+    // Typed name when originCountry = "อื่นๆ" (see QuotationItemRow).
     originCountryOther: null,
     leadTimeMinDays: seededLeadTime.leadTimeMinDays,
     leadTimeMaxDays: seededLeadTime.leadTimeMaxDays,
@@ -197,27 +185,20 @@ function emptyItemFromTicketItem(ticketItem) {
   };
 }
 
-// V185 (Opus review finding #3, 2026-09-18): a PCR item created with the OLD (pre-V185) form has
-// no quantityMode/areaSqm/piecesInput at all — only the legacy requestedQty/requestedQtySqm/
-// requestedUnitBasis it was persisted with. Without this helper, itemFromExisting's plain
-// `item?.quantityMode ?? 'AREA'` / `item?.areaSqm ?? ''` defaults open EVERY legacy line with
-// quantityMode AREA and an EMPTY จำนวน field, silently losing the quantity that was actually
-// requested — the rep sees a blank box with no clue what was there before.
+// A PCR item created with the legacy form has no quantityMode/areaSqm/piecesInput, only the
+// requestedQty/requestedQtySqm/requestedUnitBasis it was persisted with. Without this helper,
+// itemFromExisting's plain `quantityMode ?? 'AREA'` / `areaSqm ?? ''` defaults would open EVERY
+// legacy line in AREA mode with an EMPTY จำนวน field, silently hiding the quantity requested.
 //
-// This recovers what it can, and is honest about what it cannot:
+// Recovers what it can:
 //   - PER_SQM   -> AREA mode, seeded from requestedQtySqm (falling back to requestedQty, the SAME
-//                  number under the old basis when no separate sqm figure was stored) — the field
-//                  now shows the number that was actually requested, not a stale wire-only one.
-//   - PER_PIECE -> PIECES mode, seeded from requestedQty directly (1:1, no conversion needed).
-//   - PER_BOX / PER_LINEAR_M -> neither AREA nor PIECES is a lossless translation of a box count
-//     or a linear-metre length, so the field is left for the rep to re-enter (owner ruling: every
-//     required field must be filled before saving regardless), but the ORIGINAL quantity + unit
-//     is surfaced as read-only text via `legacyQuantityNote` (QuotationItemRow's `hint` on the
-//     จำนวน field — see that component's own comment) so the rep can see what to re-type instead
-//     of guessing.
-//   - A row that already has a `quantityMode` (i.e. NOT a legacy row — created or last saved
-//     under the new form) is left completely untouched; this only ever fires for the pre-V185
-//     shape.
+//                  number under the old basis when no separate sqm figure was stored).
+//   - PER_PIECE -> PIECES mode, seeded from requestedQty (1:1).
+//   - PER_BOX / PER_LINEAR_M -> neither AREA nor PIECES is a lossless translation, so the field is
+//     left for the rep to re-enter (every required field must be filled before saving), but the
+//     ORIGINAL quantity + unit is shown read-only via `legacyQuantityNote` (QuotationItemRow's
+//     `hint` on the จำนวน field).
+//   - A row that already has a `quantityMode` is untouched; this only fires for the legacy shape.
 function legacySeededQuantity(item) {
   if (item?.quantityMode) {
     return {
@@ -245,8 +226,7 @@ function legacySeededQuantity(item) {
         `รายการเดิมระบุจำนวน ${item.requestedQty} ${item.requestedUnit || unitLabel} — กรุณาระบุจำนวนใหม่ (พื้นที่หรือจำนวนแผ่น)`,
     };
   }
-  // No recognizable legacy basis/quantity at all (e.g. a row that predates even requestedQty
-  // being populated) — same blank-AREA default itemFromExisting always used.
+  // No recognizable legacy basis/quantity at all: same blank-AREA default itemFromExisting uses.
   return { quantityMode: 'AREA', areaSqm: '', piecesInput: '', legacyQuantityNote: null };
 }
 
@@ -254,21 +234,15 @@ function legacySeededQuantity(item) {
 // Existing catalog identity is preserved so editing a draft does not erase its product snapshot.
 function itemFromExisting(item) {
   const quantitySeed = legacySeededQuantity(item);
-  // V185 (Opus review finding #3, CORRECTED by a second review pass — finding N1): a legacy
-  // PER_PIECE row has no sqmPerPiece of its own either, but one CAN be reconstructed from the two
-  // legacy numbers it DOES have — requestedQtySqm was always requestedQty × sqmPerPiece at the
-  // time it was derived under that basis, so dividing them back out recovers the original figure
-  // exactly (mirrors WastageCalculator#sqmQuantityFromPieces's own multiplication, in reverse).
+  // A legacy PER_PIECE row has no sqmPerPiece either, but it can be reconstructed:
+  // requestedQtySqm was requestedQty × sqmPerPiece when derived, so dividing back out recovers it
+  // (mirrors WastageCalculator#sqmQuantityFromPieces in reverse).
   //
-  // This must be PER_PIECE-ONLY. A PER_SQM row's requestedQtySqm is NOT pieces × sqmPerPiece — it
-  // IS the requested area itself (often literally equal to requestedQty, see
-  // legacySeededQuantity's own PER_SQM branch above), so dividing the two back out there yields a
-  // meaningless ~1.0 "ตร.ม./แผ่น" rather than the tile's real size. That fake sqmPerPiece would
-  // then have the server derive piecesFinal ≈ areaSqm (e.g. 144 ตร.ม. -> "144 pieces" instead of
-  // the ~400 a real ~0.36 ตร.ม./แผ่น tile would give), silently ordering the wrong quantity. A
-  // PER_SQM (or PER_BOX/PER_LINEAR_M) legacy row is therefore left with NO derived sqmPerPiece —
-  // the rep must fill in ตร.ม./แผ่น by hand, exactly like every other still-missing required
-  // field on a legacy row.
+  // Must be PER_PIECE-ONLY. A PER_SQM row's requestedQtySqm IS the requested area (often equal to
+  // requestedQty, see legacySeededQuantity), so dividing yields a meaningless ~1.0 "ตร.ม./แผ่น".
+  // The server would then derive piecesFinal ≈ areaSqm (144 ตร.ม. -> "144 pieces" instead of ~400
+  // for a ~0.36 ตร.ม./แผ่น tile) and order the wrong quantity. PER_SQM / PER_BOX / PER_LINEAR_M
+  // legacy rows get NO derived sqmPerPiece; the rep fills ตร.ม./แผ่น by hand.
   const legacySqmPerPiece = item?.sqmPerPiece == null && item?.requestedUnitBasis === 'PER_PIECE'
     && item?.requestedQtySqm != null && Number(item.requestedQtySqm) > 0
     && item?.requestedQty != null && Number(item.requestedQty) > 0
@@ -279,10 +253,10 @@ function itemFromExisting(item) {
     id: item?.id ?? null,
     sourceTicketItemId: item?.sourceTicketItemId ?? null,
     catalogPriceId: item?.productId ?? null,
-    // Same rationale as emptyItemFromTicketItem above: no editor UI writes either field, but the
-    // persisted request may already carry one (Import's SetItemFactoryRequest sets `factory`
-    // directly in the DB, independent of this modal) — preserve it through the round-trip instead
-    // of letting pricingRequestItemInputFromRow send an implicit null on every save.
+    // As in emptyItemFromTicketItem: no editor UI writes either field, but the persisted request
+    // may already carry one (Import's SetItemFactoryRequest sets `factory` directly in the DB), so
+    // preserve it through the round-trip instead of letting pricingRequestItemInputFromRow send
+    // an implicit null on every save.
     variantId: item?.variantId ?? null,
     factory: item?.factory ?? null,
     productCode: item?.productCode ?? '',
@@ -294,25 +268,22 @@ function itemFromExisting(item) {
     thicknessMm: item?.thicknessMm ?? null,
     sqmPerPiece: item?.sqmPerPiece ?? legacySqmPerPiece,
     piecesPerSqmDisplay: null,
-    // A reloaded draft's own field carries no recorded provenance (that is UI-only state, never
-    // persisted) — 'manual' just means "not freshly resolved from a catalog pick this session",
-    // which is the honest reading for every field a GET just handed back. A value RECOVERED from
-    // the legacy requestedQtySqm/requestedQty pair (legacySqmPerPiece) is equally "manual" by
-    // this same reasoning — it is still not a catalog pick.
+    // A reloaded draft's field has no recorded provenance (UI-only state, never persisted):
+    // 'manual' means "not freshly resolved from a catalog pick this session". A value recovered
+    // from the legacy requestedQtySqm/requestedQty pair (legacySqmPerPiece) is equally 'manual'.
     sqmPerPieceSource: (item?.sqmPerPiece ?? legacySqmPerPiece) != null ? 'manual' : null,
     catalogSqmPerPiece: null,
     catalogPriceUnit: null,
     catalogSizeText: null,
-    // CR-1: what Sales fixed on the persisted line; blank for a legacy line (must be completed).
+    // What Sales fixed on the persisted line; blank for a legacy line (must be completed).
     requestedCurrency: item?.requestedCurrency ?? '',
     requestedPriceUnitBasis: item?.requestedPriceUnitBasis ?? '',
     sqmPerBox: item?.sqmPerBox ?? null,
     quantityMode: quantitySeed.quantityMode,
     areaSqm: quantitySeed.areaSqm,
     piecesInput: quantitySeed.piecesInput,
-    // Opus review finding #3: read-only text for a legacy PER_BOX/PER_LINEAR_M line's original
-    // quantity — see legacySeededQuantity's own comment. Client-only; never sent on the wire (not
-    // read by pricingRequestItemInputFromRow).
+    // Read-only text for a legacy PER_BOX/PER_LINEAR_M line's original quantity (see
+    // legacySeededQuantity). Client-only; never sent (pricingRequestItemInputFromRow ignores it).
     legacyQuantityNote: quantitySeed.legacyQuantityNote,
     wastageMode: item?.wastageMode ?? 'NONE',
     wastageValue: item?.wastageValue ?? 0,
@@ -351,18 +322,15 @@ function generateClientRequestId() {
     ?? '00000000-0000-4000-8000-' + String(Date.now()).slice(-12).padStart(12, '0');
 }
 
-/** The wire `PricingRequestItemRequest` for one editor row — the inverse of
+/** The wire `PricingRequestItemRequest` for one editor row: the inverse of
  * emptyItemFromTicketItem/itemFromExisting. requestedQty/requestedQtySqm/requestedUnit/
  * requestedUnitBasis are never sent: the server derives all four from the fields below
- * (PricingRequestService#resolveItems). `factory`/`variantId` ARE sent — round-tripped from
- * whatever `item.factory`/`item.variantId` already holds (seeded by emptyItemFromTicketItem /
- * itemFromExisting above) — because PricingRequestRepository.replaceItems deletes and re-inserts
- * every item on every create/update/createCustomerChangeRevision: omitting either field here
- * would silently NULL a factory Import already assigned via SetItemFactoryRequest on every sales
- * save, and would disable FactoryQuoteCarryForward.sameProductAndQuantity's factory match on the
- * next revision. (Fixed 2026-09-18 per Opus review finding #1 — this comment previously, and
- * incorrectly, claimed the fifth field "stays whatever Import/the catalog snapshot already set"
- * despite never being sent at all.) */
+ * (PricingRequestService#resolveItems). `factory`/`variantId` ARE sent, round-tripped from
+ * `item.factory`/`item.variantId`, because PricingRequestRepository.replaceItems deletes and
+ * re-inserts every item on every create/update/createCustomerChangeRevision: omitting either
+ * would NULL a factory Import already assigned via SetItemFactoryRequest on every sales save, and
+ * would disable FactoryQuoteCarryForward.sameProductAndQuantity's factory match on the next
+ * revision. */
 function pricingRequestItemInputFromRow(item) {
   return {
     // No `id` field: unlike the direct-deal quotation's ItemInput, PricingRequestItemRequest has
@@ -397,14 +365,12 @@ function pricingRequestItemInputFromRow(item) {
     roundToFullBox: item.roundToFullBox !== false,
     originCountry: item.originCountry || null,
     stockSource: item.stockSource ?? null,
-    // GLA-125: sent as-typed; the server (PricingRequestService#resolveItem) is what clears this
-    // when originCountry is not "อื่นๆ" — this row-level payload builder does no normalization
-    // itself, matching how it never normalizes any other field either (server-side derivation
-    // only, see resolveItem's own Javadoc).
+    // Sent as-typed; the server (PricingRequestService#resolveItem) clears it when originCountry
+    // is not "อื่นๆ". This builder does no normalization, like every other field.
     originCountryOther: item.originCountryOther?.trim() || null,
     leadTimeMinDays: item.leadTimeMinDays ?? null,
     leadTimeMaxDays: item.leadTimeMaxDays ?? null,
-    // CR-1: the locked terms import will see on the factory card.
+    // The locked terms import will see on the factory card.
     requestedCurrency: item.requestedCurrency || null,
     requestedPriceUnitBasis: item.requestedPriceUnitBasis || null,
     quantityType: item.quantityType ?? DEFAULT_QUANTITY_TYPE,
@@ -415,49 +381,35 @@ function pricingRequestItemInputFromRow(item) {
 }
 
 /**
- * Create/submit modal for a new PricingRequest (commit 6), extended in the
- * review-remediation plan (Fix 2) to double as the edit modal for an existing
- * DRAFT: pass `mode="edit"` + `initialValue` (that request's summary + items,
- * as returned by `api.pricingRequests.get`) and `updateFn` instead of
- * `createFn`/`submitFn`. One component, not a forked near-duplicate — create
- * and edit differ only in how the form seeds its initial state and what the
- * footer buttons do; every field, validation, and row layout below is shared.
+ * Create/submit modal for a new PricingRequest. Also the edit modal for an existing DRAFT: pass
+ * `mode="edit"` + `initialValue` (that request's summary + items, as returned by
+ * `api.pricingRequests.get`) and `updateFn` instead of `createFn`/`submitFn`. Create and edit
+ * differ only in how the form seeds its state and what the footer buttons do; every field,
+ * validation and row layout is shared.
  *
- * Review remediation (COMMIT 5, P1 finding 3): a third `mode="revision"`
- * reuses the exact same seeding/catalog-picker/attachment-uploader machinery
- * to let Sales actually EDIT a customer-change revision's items — product,
- * collection, size, quantity, recipient, required date, adding/removing
- * lines — instead of the old PricingRequestDetailPage.revisionPayload
- * helper, which copied the current request verbatim and only collected a
- * revision reason, so the resulting DRAFT was always commercially identical
- * to its parent. Pass `mode="revision"` + `initialValue` (the CURRENT
- * request, same shape as edit mode) + `createRevisionFn`. The prior
- * (parent) request is never touched by this mode — no `updateFn` call is
- * ever made against it; the backend's own `createCustomerChangeRevision`
- * supersedes the parent as a side effect of creating the new DRAFT, keeping
- * the parent's own submitted record immutable.
+ * `mode="revision"` reuses the same seeding/catalog-picker/attachment machinery so Sales can EDIT
+ * a customer-change revision's items (product, size, quantity, recipient, required date, adding/
+ * removing lines). Pass `initialValue` (the CURRENT request, same shape as edit) +
+ * `createRevisionFn`. The parent request is never updated by this mode: the backend's
+ * `createCustomerChangeRevision` supersedes it as a side effect of creating the new DRAFT, so the
+ * parent's submitted record stays immutable.
  *
- * Item rows seed from the deal's existing ticket_item rows in create mode
- * (carrying sourceTicketItemId so Import can trace a request line back to the
- * original product line) or from the request's own persisted items in edit/
- * revision mode, but every field stays editable either way —
- * PricingRequestItemRequest carries its own independent descriptive copy, not
- * a read-only mirror of ticket_item.
+ * Item rows seed from the deal's ticket_item rows in create mode (carrying sourceTicketItemId so
+ * Import can trace a line back to the product line) or from the request's persisted items in
+ * edit/revision mode; every field stays editable either way, since PricingRequestItemRequest
+ * carries its own descriptive copy, not a read-only mirror of ticket_item.
  *
- * recipientContactId is wired to a real customer-contact picker (GLA-125 follow-up,
- * 2026-09-18 — the SAME `QuotationContactPicker` the direct-deal quotation editor uses, see the
- * `contact` state's own comment below for why it is bound to recipientContactId and never
- * cross-wired into recipientLabel's own auto-fill). recipientLabel (free text) remains
- * independently required either way — PricingRequestService.validateRecipientIdentifiable
- * accepts either recipientContactId or recipientLabel, and this modal's own validate() still
- * requires recipientLabel unconditionally (a contact pick is additive, not a replacement).
+ * recipientContactId is bound to a customer-contact picker (the SAME `QuotationContactPicker` as
+ * the direct-deal quotation editor; see the `contact` state's comment for why it never feeds
+ * recipientLabel's auto-fill). recipientLabel (free text) stays required regardless:
+ * PricingRequestService.validateRecipientIdentifiable accepts either, but this modal's validate()
+ * requires recipientLabel unconditionally (a contact pick is additive).
  */
 export function PricingRequestCreateModal({
   ticketItems = [], deal = null, onClose, onCreated, createFn, submitFn,
   mode = 'create', initialValue = null, updateFn, createRevisionFn,
-  // GLA-125 follow-up: passed straight through to QuotationContactPicker's own error toasts
-  // (a failed contact create/edit-in-place) — optional, so a caller with no toast plumbing of
-  // its own (none currently omit it, but the picker itself tolerates an absent one) still works.
+  // Passed to QuotationContactPicker's error toasts (failed contact create/edit-in-place).
+  // Optional: the picker tolerates an absent one.
   showToast,
   // Create mode only: ผู้รับ pre-selected from the deal page's เสนอราคา menu (else the deal's entry channel's party).
   initialRecipientType = null,
@@ -469,8 +421,8 @@ export function PricingRequestCreateModal({
   // ticket_item rows instead.
   const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
-  // QA-12 (owner ruling 2026-10-29): the backend (GLA-102 requireUnchangedRecipientType) 409s any
-  // recipientType change on a revision child — createCustomerChangeRevision and updateDraft alike.
+  // The backend (requireUnchangedRecipientType) 409s any recipientType change on a revision child,
+  // in createCustomerChangeRevision and updateDraft alike.
   const recipientLocked = isRevision || (isEdit && initialSummary?.parentPricingRequestId != null);
   const seededRecipientType = seedsFromExisting
     ? (initialSummary?.recipientType ?? 'DESIGNER')
@@ -485,15 +437,11 @@ export function PricingRequestCreateModal({
   // ผู้รับ chip must never overwrite what they typed (see the effect below). Stays false forever
   // in edit/revision mode since nothing ever writes recipientLabel from `deal` there.
   const [recipientLabelTouched, setRecipientLabelTouched] = useState(false);
-  // GLA-125 follow-up (owner directive, 2026-09-18): ผู้ติดต่อ — the SAME `QuotationContactPicker`
-  // the direct-deal quotation editor uses, bound to the SAME wire field the schema already
-  // reserved for it (`recipientContactId`, V59) — this modal previously always sent that field as
-  // `null` with no picker at all (see pricingRequestItemInputFromRow-era comment history). This is
-  // deliberately SEPARATE from ผู้รับคำขอราคา (recipientType/recipientLabel above, which answers
-  // "who is this PRICING REQUEST for" — designer/owner/buyer — a PCR-only categorisation with no
-  // equivalent on the quotation): ผู้ติดต่อ answers "which registered customer CONTACT actually
-  // placed the order", exactly the quotation's own question, so it is never cross-wired into
-  // recipientLabel's own auto-fill from `deal`/recipientType.
+  // ผู้ติดต่อ: the SAME `QuotationContactPicker` as the direct-deal quotation editor, bound to the
+  // existing `recipientContactId` wire field (V59). Deliberately SEPARATE from ผู้รับคำขอราคา
+  // (recipientType/recipientLabel above: "who is this PRICING REQUEST for", a PCR-only category):
+  // ผู้ติดต่อ is "which registered customer CONTACT placed the order", as on the quotation, so it
+  // is never cross-wired into recipientLabel's auto-fill from `deal`/recipientType.
   //
   // Seeded only from a persisted request's `recipientContactId` (edit/revision), as a stand-in
   // `{ id, firstName }` that the picker's `onResolve` completes once its contact list loads.
@@ -502,10 +450,9 @@ export function PricingRequestCreateModal({
       ? { id: initialSummary.recipientContactId, firstName: initialSummary.recipientLabel ?? '', lastName: '' }
       : null
   ));
-  // customerId/customerName: `deal` (create mode) or the persisted request's own summary (edit/
-  // revision mode, GLA-125's `PricingRequestSummaryDto.customerId` addition) — whichever this mode
-  // actually has. Without a customerId the picker just shows "เลือกลูกค้าก่อน" and stays disabled,
-  // same as the direct-deal editor's own picker when its equivalent is unresolved.
+  // customerId/customerName: `deal` (create mode) or the persisted request's own summary
+  // (edit/revision mode), whichever applies. Without a customerId the picker shows "เลือกลูกค้าก่อน"
+  // and stays disabled, like the direct-deal editor's picker.
   const pickerCustomerId = deal?.customerId ?? initialSummary?.customerId ?? null;
   const pickerCustomerName = deal?.customerName ?? initialSummary?.customerName ?? '';
   const [requiredDate, setRequiredDate] = useState(() => initialSummary?.requiredDate ?? '');
@@ -516,22 +463,16 @@ export function PricingRequestCreateModal({
   const [note, setNote] = useState(() => (
     seedsFromExisting ? (initialSummary?.note ?? '') : (deal?.note ?? '')
   ));
-  // GLA-125 (owner ruling 2026-09-18): header terms mirroring the direct-deal quotation's own
-  // (V165/V179/V180) — NOT yet carried onto the quotation itself (Phase 3). All optional.
+  // Header terms mirroring the direct-deal quotation's own (V165/V179/V180), not yet carried onto
+  // the quotation itself. All optional.
   //
-  // The "เงื่อนไขสำหรับใบเสนอราคา" input box that used to edit these was REMOVED (owner request,
-  // 2026-09-30): Sales does not decide payment terms / validity / display-name / dept-unit at
-  // คำขอราคา time, so the box only ever collected noise before the CEO costing phase — exactly the
-  // same reasoning that retired the four quantity/delivery inputs on 2026-08-11 (see
-  // DEFAULT_QUANTITY_TYPE's own comment above). The BACKEND CONTRACT IS UNCHANGED — every field
-  // below is still sent by buildPayload — so these are now read-only, preserved values rather than
-  // user inputs:
-  //   - create mode has no persisted request, so each stays blank and sends null (nothing was
-  //     ever entered);
-  //   - edit/revision mode PRESERVES whatever the persisted request already holds, so removing the
-  //     box never nulls a term a draft was saved with. This is why they remain seeded from
-  //     initialSummary rather than dropped from the payload.
-  // Kept as plain constants (not useState) precisely because nothing sets them anymore.
+  // No input edits these: Sales does not decide payment terms / validity / display-name / dept-unit
+  // at คำขอราคา time. The BACKEND CONTRACT still takes them (buildPayload sends every field), so
+  // they are read-only, preserved values:
+  //   - create mode has no persisted request, so each stays blank and sends null;
+  //   - edit/revision mode PRESERVES what the persisted request holds, so a saved term is never
+  //     nulled. That is why they are seeded from initialSummary rather than dropped.
+  // Plain constants (not useState) because nothing sets them.
   const paymentTermMode = initialSummary?.paymentTermMode ?? '';
   const creditDays = initialSummary?.creditDays != null ? String(initialSummary.creditDays) : '';
   const validityDays = initialSummary?.validityDays != null ? String(initialSummary.validityDays) : '';
@@ -575,11 +516,9 @@ export function PricingRequestCreateModal({
   // QuotationEditorPage uses for the direct-deal form's own itemErrorsByRow.
   const [itemFieldErrors, setItemFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
-  // Fix 1 (review-remediation plan): once createFn has succeeded once, its
-  // resulting id is held here so a retry (create succeeded, then submitFn
-  // failed — or the user switches from "submit" to "save draft" after that
-  // failure) reuses the same draft instead of calling createFn again and
-  // orphaning a duplicate. Always null in edit mode (there is no create step).
+  // Once createFn has succeeded, its id is held here so a retry (create succeeded, then submitFn
+  // failed, or the user switches from "submit" to "save draft") reuses the same draft instead of
+  // calling createFn again and orphaning a duplicate. Always null in edit mode.
   const [createdId, setCreatedId] = useState(null);
 
   // Pricing Request attachments (V69, review remediation COMMIT 4): Sales may optionally attach
@@ -686,11 +625,10 @@ export function PricingRequestCreateModal({
     }
   }
 
-  // UAT item 1 (2026-10-18): the new row lands at the bottom of a tall modal, so focus must follow it.
-  // Same mechanism as QuotationEditorPage.jsx:947 — the add records the row's clientId in a ref, the
-  // effect resolves it to the DOM id the row rendered with (ids carry the flat index) and focuses it
-  // once. A ref, not state: consumed exactly once, and nothing but an explicit add ever sets it, so a
-  // re-render from typing elsewhere can never pull focus back to the added row.
+  // The new row lands at the bottom of a tall modal, so focus must follow it. Same mechanism as
+  // QuotationEditorPage.jsx:947: the add records the row's clientId in a ref, the effect resolves
+  // it to the DOM id the row rendered with (ids carry the flat index) and focuses it once. A ref,
+  // not state: only an explicit add sets it, so typing elsewhere never pulls focus back.
   const pendingFocusRef = useRef(null);
   useEffect(() => {
     const pending = pendingFocusRef.current;
@@ -728,7 +666,7 @@ export function PricingRequestCreateModal({
       const copy = { ...cur[index], clientId: newItemClientId(), id: null, sourceTicketItemId: null };
       return [...cur.slice(0, index + 1), copy, ...cur.slice(index + 1)];
     });
-    // UAT item 1 (2026-10-18): the copy lands at index + 1 and starts clean; every row after it moves down one.
+    // The copy lands at index + 1 and starts clean; every row after it moves down one.
     setItemFieldErrors((cur) => reindexErrors(cur, (i) => (i > index ? i + 1 : i)));
   }
 
@@ -751,24 +689,21 @@ export function PricingRequestCreateModal({
     items.forEach((item, index) => {
       const fieldErrors = validateQuotationItem(item, 'NET', 'TH', {
         skipPricing: true,
-        // GLA-125: ประเทศต้นทาง is required on THIS form (owner ruling 2026-09-18). ระยะเวลานำเข้า is
-        // NOT (owner ruling 2026-10-18: import gives the time) — the origin's default still rides
-        // along on the wire, and the field itself is hidden (hideLeadTime below).
-        requireOriginCountry: !item.stockSource, // QA-04: a stock line has no import origin (backend exempts it)
+        // ประเทศต้นทาง is required on THIS form. ระยะเวลานำเข้า is NOT (import gives the time):
+        // the origin's default still rides along on the wire, and the field is hidden (hideLeadTime).
+        requireOriginCountry: !item.stockSource, // a stock line has no import origin (backend exempts it)
       });
       // The lead-time range check still runs inside validateQuotationItem, but its error renders only in
       // the field hideLeadTime removes, so it could block a save with nothing red on screen. The server
       // still refuses min > max, with a visible banner.
       delete fieldErrors.leadTimeMinDays;
-      // Opus review finding #2 (2026-09-18): a cheap, DISPLAY-ONLY early warning for the same
-      // case PricingRequestService#resolveItem now rejects server-side with a 400 -- AREA mode
-      // deriving 0 pieces. The server rounds every fraction of a piece UP, so a positive area is at
-      // least 1 piece unless pieces/ตร.ม. itself rounds to 0.00 -- the only case this still catches. Mirrors ONLY
-      // piecesPerSqmFromSqmPerPiece's already-DISPLAY-ONLY reciprocal (see that helper's own
-      // comment), never WastageCalculator itself, so it deliberately does NOT catch every
-      // zero-piece cause the server checks (e.g. an explicit piecesInput of 0 would already be
-      // caught by the `piecesInput` check above via a different message) -- the server stays the
-      // authoritative check either way; this only saves the common case a round trip.
+      // DISPLAY-ONLY early warning for the case PricingRequestService#resolveItem rejects with a
+      // 400: AREA mode deriving 0 pieces. The server rounds every fraction of a piece UP, so a
+      // positive area is at least 1 piece unless pieces/ตร.ม. itself rounds to 0.00, the only case
+      // this catches. Mirrors piecesPerSqmFromSqmPerPiece's display-only reciprocal, never
+      // WastageCalculator, so it does not catch every zero-piece cause (an explicit piecesInput of
+      // 0 is caught by the `piecesInput` check above). The server stays authoritative; this saves
+      // the common case a round trip.
       if (!fieldErrors.areaSqm && item?.quantityMode === 'AREA') {
         const area = Number(item?.areaSqm);
         const piecesPerSqm = piecesPerSqmFromSqmPerPiece(item?.sqmPerPiece);
@@ -776,7 +711,7 @@ export function PricingRequestCreateModal({
           fieldErrors.areaSqm = 'จำนวนที่คำนวณได้จะเป็น 0 ชิ้น กรุณาระบุพื้นที่ให้มากขึ้น';
         }
       }
-      // CR-1 (R1): currency + price unit are required on every line sales submits.
+      // Currency + price unit are required on every line sales submits.
       if (!item?.requestedCurrency) fieldErrors.requestedCurrency = 'กรุณาระบุสกุลเงิน';
       if (!item?.requestedPriceUnitBasis) fieldErrors.requestedPriceUnitBasis = 'กรุณาระบุหน่วยราคา';
       if (Object.keys(fieldErrors).length) next[index] = fieldErrors;
@@ -788,23 +723,21 @@ export function PricingRequestCreateModal({
   function buildPayload({ includeClientRequestId = false } = {}) {
     const payload = {
       recipientType,
-      // GLA-125 follow-up: ผู้ติดต่อ, wired to the SAME `recipientContactId` column this modal
-      // always sent as implicitly undefined before — see the `contact` state's own comment above.
+      // ผู้ติดต่อ goes in the existing `recipientContactId` column (see the `contact` state).
       recipientContactId: contact?.id ?? null,
       recipientLabel: recipientLabel.trim(),
       requiredDate: requiredDate || null,
       customerTargetPrice: customerTargetPrice !== '' ? Number(customerTargetPrice) : null,
       targetCurrency: targetCurrency.trim() || null,
       note: note.trim() || null,
-      // GLA-125 header terms.
+      // Header terms.
       paymentTermMode: paymentTermMode || null,
       creditDays: paymentTermMode === 'CREDIT' && creditDays !== '' ? Number(creditDays) : null,
       validityDays: validityDays !== '' ? Number(validityDays) : null,
       printedByDisplayId: printedByDisplayId !== '' ? Number(printedByDisplayId) : null,
       salesRepDisplayId: salesRepDisplayId !== '' ? Number(salesRepDisplayId) : null,
-      // ฝ่าย has no field any more (owner, 2026-10-06: "remove ฝ่าย field completely"), on this form
-      // or on the quotation. Always null, so a value an older draft still carries is cleared by the
-      // next save instead of riding along unseen.
+      // ฝ่าย has no field any more, on this form or on the quotation. Always null, so a value an
+      // older draft carries is cleared by the next save instead of riding along unseen.
       deptCode: null,
       unitCode: unitCode.trim() || null,
       omitContactHonorific,
@@ -814,11 +747,9 @@ export function PricingRequestCreateModal({
     return payload;
   }
 
-  // Review remediation (COMMIT 5, P1 finding 3): CustomerChangeRevisionRequest is buildPayload's
-  // shape plus revisionReason — and, unlike create/edit, always carries a clientRequestId (the
-  // backend's own idempotency guard against a duplicate submit of the same revision).
-  // recipientContactId now travels through buildPayload's own field (GLA-125 follow-up) like
-  // every other field here — no separate override needed.
+  // CustomerChangeRevisionRequest is buildPayload's shape plus revisionReason, and, unlike
+  // create/edit, always carries a clientRequestId (the backend's idempotency guard against a
+  // duplicate submit of the same revision).
   function buildRevisionPayload() {
     return {
       ...buildPayload({ includeClientRequestId: true }),
@@ -826,17 +757,12 @@ export function PricingRequestCreateModal({
     };
   }
 
-  // Fix 1 (review-remediation plan): both create-mode actions below share the
-  // same duplicate-draft guard. If createFn already succeeded once (createdId
-  // is set) — either because a prior submit-to-import attempt created the
-  // draft and then failed at the submit step, or the user clicked "บันทึกร่าง"
-  // again after that — neither handler calls createFn a second time. Instead
-  // they push the CURRENT form state onto the existing draft via updateFn
-  // (update-then-submit/save, not "reset createdId and create fresh"): the
-  // user may well have edited the form to fix whatever made the first attempt
-  // fail (e.g. a validation error), and discarding createdId would silently
-  // resurrect the create-twice bug this fix exists to close. onCreated() still
-  // fires either way so the caller's normal close+refresh flow is unchanged.
+  // Both create-mode actions below share a duplicate-draft guard. If createFn already succeeded
+  // (createdId set), because a prior submit attempt created the draft and then failed at the submit
+  // step or the user clicked "บันทึกร่าง" again, neither handler calls createFn again. They push
+  // the CURRENT form state onto the existing draft via updateFn: the user may have edited the form
+  // to fix what failed, and resetting createdId would resurrect the create-twice bug.
+  // onCreated() fires either way so the caller's close+refresh flow is unchanged.
   async function handleSaveDraft() {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
@@ -885,8 +811,7 @@ export function PricingRequestCreateModal({
     }
   }
 
-  // Edit mode (Fix 2): a straight update of the persisted DRAFT — no create
-  // step, no submit step, just PUT the full editable representation.
+  // Edit mode: a straight PUT of the persisted DRAFT's full editable representation.
   async function handleUpdate() {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
@@ -903,13 +828,10 @@ export function PricingRequestCreateModal({
     }
   }
 
-  // Revision mode (COMMIT 5, P1 finding 3): creates a brand-new DRAFT customer-change revision
-  // carrying whatever edits the user made to the seeded (current-request) form state above —
-  // never an UPDATE against initialSummary.id, which stays the immutable parent record.
-  // createCustomerChangeRevision is a single atomic backend call (unlike create mode's separate
-  // create-then-submit), so there is no intermediate "draft created, now push a second write"
-  // step to guard against re-creating on retry the way Fix 1 does for create mode — a failed
-  // attempt here has created nothing server-side to orphan.
+  // Revision mode: creates a brand-new DRAFT customer-change revision from the edited form state,
+  // never an UPDATE against initialSummary.id (the immutable parent). createCustomerChangeRevision
+  // is a single atomic backend call, so there is no half-done state to guard against on retry: a
+  // failed attempt created nothing server-side.
   async function handleCreateRevision() {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
@@ -1016,10 +938,9 @@ export function PricingRequestCreateModal({
           />
         </label>
 
-        {/* GLA-125 follow-up: ผู้ติดต่อ — see the `contact` state's own comment above for why
-            this is deliberately separate from ผู้รับคำขอราคา above. Renders disabled ("เลือกลูกค้า
-            ก่อน") when neither `deal` nor the persisted request carries a customerId — a request
-            whose ticket predates customer linkage, or a mock/test fixture that never set one. */}
+        {/* ผู้ติดต่อ: separate from ผู้รับคำขอราคา above (see the `contact` state). Disabled ("เลือกลูกค้า
+            ก่อน") when neither `deal` nor the persisted request carries a customerId (a ticket
+            without customer linkage, or a test fixture that never set one). */}
         <QuotationContactPicker
           idPrefix="pcr-contact"
           customerId={pickerCustomerId}
@@ -1054,11 +975,10 @@ export function PricingRequestCreateModal({
           <textarea className="min-h-16" value={note} onChange={(e) => setNote(e.target.value)} placeholder="ข้อมูลเพิ่มเติมสำหรับฝ่ายนำเข้า (ถ้ามี)" />
         </label>
 
-        {/* The "เงื่อนไขสำหรับใบเสนอราคา" box (payment term / validity / display-name / dept-unit,
-            plus the read-only ช่องทางรับงาน line) was removed on 2026-09-30 per owner request —
-            Sales does not set quotation terms at คำขอราคา time. The underlying fields are still
-            carried on the wire (see the header-terms constants above), so an existing draft's saved
-            terms survive an edit; there is simply no longer any input for them here. */}
+        {/* No input for the quotation header terms (payment term / validity / display-name /
+            dept-unit) or the read-only ช่องทางรับงาน line: Sales does not set them at คำขอราคา time.
+            They are still carried on the wire (see the header-terms constants above), so a saved
+            draft's terms survive an edit. */}
         <div>
           <div className="mb-2 text-sm font-bold text-text-secondary">รายการสินค้า *</div>
           <ul className="m-0 grid list-none gap-3 pl-0">
@@ -1069,16 +989,15 @@ export function PricingRequestCreateModal({
                 index={index}
                 hidePricing
                 brandLabel="โรงงาน"
-                // GLA-125 (owner ruling 2026-09-18): ประเทศต้นทาง (and its "อื่นๆ" typed name) is
-                // required on THIS form only — direct-deal keeps it optional. ระยะเวลานำเข้า is not
-                // asked here at all (owner ruling 2026-10-18: import gives the time).
+                // ประเทศต้นทาง (and its "อื่นๆ" typed name) is required on THIS form only;
+                // direct-deal keeps it optional. ระยะเวลานำเข้า is not asked here (import gives the time).
                 requireOriginCountry={!item.stockSource}
                 hideLeadTime
                 errors={itemFieldErrors[index] ?? {}}
                 onChange={(patch) => updateItem(index, patch)}
                 onRemove={items.length > 1 ? () => removeItem(index) : undefined}
                 onDuplicate={() => duplicateItem(index)}
-                // CR-1: a catalogue pick auto-fills the currency + unit; sales may still change them.
+                // A catalogue pick auto-fills the currency + unit; sales may still change them.
                 onCatalogPicked={(cat) => updateItem(index, catalogPickPatch(cat))}
                 renderTerms={(row, rowIndex) => {
                   const rowErrors = itemFieldErrors[rowIndex] ?? {};

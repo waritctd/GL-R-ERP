@@ -13,7 +13,7 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
 
 /**
- * ใบแจ้งหนี้ส่วนที่เหลือ — now a STORED, versioned document (V188, GLA-99 step 2): DRAFT ->
+ * ใบแจ้งหนี้ส่วนที่เหลือ — a STORED, versioned document: DRAFT ->
  * ISSUED -> SUPERSEDED, minted on the shared GLR<yy><seq>-<version> sequence. This dialog covers
  * the whole lifecycle in one place:
  *
@@ -25,12 +25,11 @@ const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', S
  *    and "ออกใบแจ้งหนี้" (issue — mints the real number).
  *  - A live ISSUED document (no draft) -> a read-only summary, "ออกฉบับแก้ไข" (revise — prepares a
  *    new correcting DRAFT), and a download button.
- *  - Every ISSUED/SUPERSEDED version is listed below, each individually downloadable — including,
- *    per P4 (GLA-99 step 2 review-round-2), while a revision DRAFT is open above it: the document
- *    being corrected stays ISSUED (see RemainingInvoiceService#revise's own Javadoc) and must stay
- *    reachable/downloadable, not disappear behind the draft editor.
+ *  - Every ISSUED/SUPERSEDED version is listed below, each individually downloadable — including
+ *    while a revision DRAFT is open above it: the document being corrected stays ISSUED (see
+ *    RemainingInvoiceService#revise's Javadoc) and must stay reachable/downloadable.
  *
- * `canWrite` (R4, owner ruling 2026-09-20 — GLA-99 step 2 review-round-1): the caller must pass
+ * `canWrite`: the caller must pass
  * whether the VIEWING user is this deal's owning sales rep — EXACTLY the predicate
  * `DepositNoticeService#requireDepositNoticeIssueGate`/mockApi's own
  * `requireRemainingInvoiceWriteGate` enforce server-side (sales role + `user.id ===
@@ -94,14 +93,11 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
           ) : (
             <WaitingForSalesState />
           )}
-          {/* P4 (Opus review, GLA-99 step 2 review-round-2, 2026-09-20): this used to live ONLY
-              inside the `issued` branch above, so opening a revision (draft && canWrite both true,
-              while the predecessor is still ISSUED per RemainingInvoiceService#revise's own
-              Javadoc) hid the live ISSUED document AND its download entirely — the caller could see
-              nothing of what they were about to replace. `history` already includes every
-              non-DRAFT row (the live ISSUED one included, per its own filter above), so hoisting
-              this out to render unconditionally alongside EITHER branch is enough: a revision in
-              progress still shows the predecessor's own download button here. */}
+          {/* Rendered unconditionally alongside EITHER branch: opening a revision (draft && canWrite
+              both true, while the predecessor is still ISSUED per RemainingInvoiceService#revise's
+              Javadoc) must not hide the live ISSUED document AND its download. `history` already
+              includes every non-DRAFT row (the live ISSUED one included), so a revision in progress
+              still shows the predecessor's own download button here. */}
           {history.length > 0 ? (
             <VersionHistory versions={history} onDownload={handleDownloadVersion} />
           ) : null}
@@ -111,7 +107,7 @@ export function RemainingInvoiceDialog({ ticketId, canWrite = true, onClose, onD
   );
 }
 
-/** R4: nothing issued yet, and the viewer is not the deal's owning sales rep — there is nothing
+/** Nothing issued yet, and the viewer is not the deal's owning sales rep — there is nothing
  * for them to write OR to read/download, so the dialog says so plainly instead of either hiding
  * itself (which would look like the feature is broken) or showing controls that would only 403. */
 function WaitingForSalesState() {
@@ -147,7 +143,7 @@ function VersionHistory({ versions, onDownload }) {
 }
 
 /** Read-only summary of the currently-live ISSUED document, plus the "ออกฉบับแก้ไข" action —
- * hidden when `canWrite` is false (R4): a non-owning viewer still reads/downloads, never revises. */
+ * hidden when `canWrite` is false: a non-owning viewer still reads/downloads, never revises. */
 function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
   const [revising, setRevising] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -222,15 +218,12 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     [templatesQuery.data],
   );
 
-  // P7 (Opus review, GLA-99 step 2 review-round-2, 2026-09-20): RESTORES the deposit-reference
-  // suggestion list review-round-1's own nit had dropped as "not cheap" — that reasoning was
-  // wrong. `api.tickets.remainingInvoiceOptions` (the stateless preview) still serves
-  // `depositReferenceOptions`, and CreateForm below already queries it for exactly this purpose.
-  // The fix is a NON-BLOCKING query feeding a <datalist> ONLY, same pattern as the reference
-  // field's own `list=` attribute — it never calls setState/prefills a form field from this
-  // result. That preserves the invariant review-round-1 was protecting (the editor's own FIELD
-  // VALUES still come only from the stored `draft` row, pinned by this file's own "prefills the
-  // editor from the stored draft" test) while giving the field its suggestion list back.
+  // Restores the deposit-reference suggestion list: `api.tickets.remainingInvoiceOptions` (the
+  // stateless preview) still serves `depositReferenceOptions`, and CreateForm below already queries
+  // it for this. A NON-BLOCKING query feeding a <datalist> ONLY (like the reference field's own
+  // `list=`); it never prefills a form field from this result, which preserves the invariant that
+  // the editor's own FIELD VALUES come only from the stored `draft` row (pinned by this file's test
+  // "prefills the editor from the stored draft").
   const depositReferenceOptionsQuery = useQuery({
     queryKey: queryKeys.remainingInvoiceOptions(draft.ticketId, draft.customerQuotationId),
     queryFn: () => api.tickets.remainingInvoiceOptions(draft.ticketId, draft.customerQuotationId)
@@ -251,7 +244,7 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
   const [notes, setNotes] = useState(draft.notes ?? []);
   const [saving, setSaving] = useState(false);
   const [issuing, setIssuing] = useState(false);
-  // Issuing mints the legal document number and cannot be undone, so it asks first (W4-07, owner ruling 2026-10-30).
+  // Issuing mints the legal document number and cannot be undone, so it asks first.
   const [confirmingIssue, setConfirmingIssue] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -283,11 +276,10 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
     }
   }
 
-  // R2 (Opus review, GLA-99 step 2 review-round-1): "ออกใบแจ้งหนี้" must not silently discard
-  // edits the caller typed but never clicked "บันทึก" for — issue() on the backend freezes
-  // whatever is LAST SAVED on the row (it only re-snapshots the COMPUTED content, per O3; the
-  // dialog fields reference/depositReference/docDate/notes are preserved verbatim, never
-  // recomputed there). So this saves the CURRENT form state first, then issues.
+  // "ออกใบแจ้งหนี้" must not silently discard edits typed but never saved with "บันทึก": issue() on the
+  // backend freezes whatever is LAST SAVED on the row (it only re-snapshots the COMPUTED content;
+  // the dialog fields reference/depositReference/docDate/notes are preserved verbatim). So this
+  // saves the CURRENT form state first, then issues.
   async function handleIssue() {
     setConfirmingIssue(false);
     setError(null);
@@ -440,9 +432,9 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
 }
 
 /**
- * No live document yet — the pre-existing stateless prefill preview
- * (`api.tickets.remainingInvoiceOptions`), unchanged, but its terminal action now creates a
- * STORED DRAFT (`api.storedRemainingInvoices.createDraft`) instead of downloading a one-shot file.
+ * No live document yet — the stateless prefill preview (`api.tickets.remainingInvoiceOptions`),
+ * whose terminal action creates a STORED DRAFT (`api.storedRemainingInvoices.createDraft`) instead
+ * of downloading a one-shot file.
  */
 function CreateForm({ ticketId, onCreated }) {
   const [selectedQuotationId, setSelectedQuotationId] = useState(null);
@@ -462,8 +454,7 @@ function CreateForm({ ticketId, onCreated }) {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
 
-  // See the pre-V188 revision of this file for the full reasoning on why this effect keys on
-  // `options` itself, not a derived scalar — unchanged by this branch.
+  // This effect keys on `options` itself, not a derived scalar.
   useEffect(() => {
     if (!options) return;
     setReference(options.defaultReference ?? '');

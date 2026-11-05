@@ -70,20 +70,19 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-DB coverage for Phase 2 of the sales pricing-flow redesign (owner rulings 2026-09-18/19,
- * V187): the CEO price-mode picker (NET / SPECIAL_SQM / DIRECT_NET) on {@code sales.pricing_decision}
- * (+ {@code _item}), the mandatory CEO-only stripping of every new field for any other role that
- * can reach {@link PricingDecisionService#get}/{@link PricingDecisionService#list} (import), and
- * the Opus-review follow-up (2026-09-19): the auto-calculated list price (ruling A), "ปรับราคาเอง"
- * kept as the NET list-price override (ruling B), mode-switch net recompute (finding #2), the
- * silent-success fix (finding #3), oversized/scale validation (findings #4/#5), explicit clear
- * semantics (finding #6), and a real customer-quotation IT proving a CEO discount never raises a
- * discount-approval request (finding #8).
+ * Real-DB coverage for the CEO price-mode picker (NET / SPECIAL_SQM / DIRECT_NET) on
+ * {@code sales.pricing_decision} (+ {@code _item}), the mandatory CEO-only stripping of every new
+ * field for any other role that can reach {@link PricingDecisionService#get}/{@link
+ * PricingDecisionService#list} (import), the auto-calculated list price, "ปรับราคาเอง"
+ * kept as the NET list-price override, mode-switch net recompute, no silent success on a no-op
+ * save, oversized/scale validation, explicit clear
+ * semantics, and a real customer-quotation IT proving a CEO discount never raises a
+ * discount-approval request.
  *
  * <p>Setup mirrors {@link PricingDecisionIntegrationTest} (same fixtures, same helper shapes) —
- * duplicated here rather than shared, to avoid coupling this new-feature suite's lifecycle to an
- * already-large existing file. {@link #twoItemPricingRequest()}'s items are the Phase 1 (V185)
- * new-form shape (PER_PIECE, {@code sqmPerPiece} set) — the ONLY shape Phase 2's mode picker is
+ * duplicated here rather than shared, to avoid coupling this suite's lifecycle to an
+ * already-large existing file. {@link #twoItemPricingRequest()}'s items are the new-form
+ * shape (PER_PIECE, {@code sqmPerPiece} set) — the ONLY shape the mode picker is
  * eligible for.
  */
 class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegrationTest {
@@ -154,8 +153,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct("Factory B-CEOP", "IT", "TEST-B-CEOP-001",
             new BigDecimal("100.00"), "THB", "per_piece");
-        // The "starts uncostable" fixture the override/approve ITs below need is now a FREE-TEXT
-        // line (see freeTextUncostableItem): since #1150 a null catalogue thickness no longer makes
+        // The "starts uncostable" fixture the override/approve ITs below need is a FREE-TEXT
+        // line (see freeTextUncostableItem): a null catalogue thickness does not make
         // a line uncostable (resolveThicknessMm falls back to the Sales value), so the line links no
         // catalog PRODUCT — it is uncostable for lack of a resolvable origin country instead.
         // The factory ROW must still exist, though: costShipment's factoryConfigs.findByName (an
@@ -176,7 +175,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Owner ruling A: the auto-calculated formula price is a REAL stored value (list_unit_price),
+    // The auto-calculated formula price is a REAL stored value (list_unit_price),
     // not a placeholder — NET with zero discount must approve without the CEO typing anything.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -210,11 +209,10 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Owner correction (2026-09-19): list_unit_price is NEVER a client input -- it must be
+    // list_unit_price is NEVER a client input -- it must be
     // refreshed by every path that recomputes the formula reference, or an item that starts
     // uncostable can become costable via overrideItemCost yet stay permanently unable to reach a
-    // NET approval (review finding #1's deadlock through a second door -- the exact bug the
-    // coordinator's correction identified in the original Phase 2 implementation).
+    // NET approval (a deadlock).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -291,7 +289,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Opus review minor #1 (2026-09-19): "ปรับราคาเอง" only ever clears the uncosted gate for
+    // "ปรับราคาเอง" only ever clears the uncosted gate for
     // NET (or no mode chosen yet) -- DIRECT_NET/SPECIAL_SQM never consult the override at all, so
     // it must never fake-clear their gate. Reproduced end to end against a genuine new-form
     // decision (an uncosted item, via the same oneItemUncostedSubmittedCosting fixture the
@@ -342,8 +340,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void approve_uncostedNetItem_withOverride_stillApproves_reviewMinor1ScopedCorrectly() {
-        // The fix must be precisely scoped: NET (and legacy/no-mode-yet) still lets "ปรับราคาเอง"
-        // clear the uncosted gate, because ruling B makes the override NET's effective list price
+        // The guard must be precisely scoped: NET (and legacy/no-mode-yet) still lets "ปรับราคาเอง"
+        // clear the uncosted gate, because the override is NET's effective list price
         // -- there IS real price backing (the CEO's own explicit figure), just not a landed cost.
         long pricingRequestId = oneItemUncostedSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
@@ -361,7 +359,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Opus review minor #3 (2026-09-19): an override or margin large enough to overflow a derived
+    // An override or margin large enough to overflow a derived
     // NUMERIC column must 400, never reach Postgres as a raw overflow 500.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -425,10 +423,10 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         PricingDecisionDto decision = startNewFormReview();
         PricingDecisionItemDto itemA = decision.items().get(0);
         PricingDecisionItemDto itemB = decision.items().get(1);
-        // list_unit_price is server-derived (ruling A) -- pin a round fixture value for both
+        // list_unit_price is server-derived -- pin a round fixture value for both
         // items so the discount arithmetic below is exact. itemB gets NO discount sent at all;
         // it still ends up priced because setting the mode recomputes EVERY item's net from its
-        // own stored list price (finding #2's recomputeNetsForModeSwitch), not just the items
+        // own stored list price (recomputeNetsForModeSwitch), not just the items
         // named in this call.
         setListUnitPriceForTest(itemA.id(), new BigDecimal("1000"));
         setListUnitPriceForTest(itemB.id(), new BigDecimal("500"));
@@ -466,7 +464,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
         BigDecimal expected = WastageCalculator.netPerPieceFromSpecialSqm(new BigDecimal("1350"), new BigDecimal("0.36"));
         assertThat(updatedA.netUnitPrice()).isEqualByComparingTo(expected);
-        // Owner's own pinned sample (WastageCalculatorTest): 1350 @ 0.36 sqm/piece -> 453.84.
+        // Pinned sample (WastageCalculatorTest): 1350 @ 0.36 sqm/piece -> 453.84.
         assertThat(updatedA.netUnitPrice()).isEqualByComparingTo("453.84");
     }
 
@@ -483,7 +481,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Owner ruling B: "ปรับราคาเอง" REPLACES the auto-calculated price as NET's list price;
+    // "ปรับราคาเอง" REPLACES the auto-calculated price as NET's list price;
     // discount still applies on top of it.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -506,7 +504,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review finding #2: switching the mode recomputes every item's net from ITS OWN stored
+    // Switching the mode recomputes every item's net from ITS OWN stored
     // inputs for the NEW mode, never leaving a stale figure from the old mode.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -564,7 +562,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review finding #3: a no-op save must not log PRICING_DECISION_UPDATED or change anything.
+    // A no-op save must not log PRICING_DECISION_UPDATED or change anything.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -607,9 +605,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         decisionService.update(decision.id(),
             new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
 
-        // Only discountPct sent -- listUnitPrice is not even a settable field any more -- must
-        // still derive a net from the auto-populated list price (review finding #3, second half;
-        // owner correction 2026-09-19 makes this the ONLY way a NET item is ever priced now).
+        // Only discountPct sent -- listUnitPrice is not even a settable field -- must
+        // still derive a net from the auto-populated list price (this is the ONLY way a NET
+        // item is ever priced).
         PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             null, List.of(discountItem(itemA.id(), new BigDecimal("10")))),
             ceoActor);
@@ -619,17 +617,15 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review findings #4/#5: bounds matching column scale, 400 not 500; round to 2dp before
+    // Bounds matching column scale, 400 not 500; round to 2dp before
     // deriving the net so the stored input and the stored net always agree.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void update_oversizedDirectNetPrice_is400_neverAServerError() {
-        // listUnitPrice is no longer a client-settable field at all (owner correction, 2026-09-19
-        // -- see UpdatePricingDecisionItemRequest's own Javadoc), so its own oversized-value test
-        // is retired; directNetPrice (NUMERIC(14,2), same MAX_PRICE_14_2 bound) previously had NO
-        // dedicated oversized-value coverage of its own, so this repoints there instead of simply
-        // deleting the case findings #4/#5 exist to guard.
+        // listUnitPrice is not a client-settable field at all (see
+        // UpdatePricingDecisionItemRequest's own Javadoc), so it needs no oversized-value test;
+        // directNetPrice (NUMERIC(14,2), same MAX_PRICE_14_2 bound) is the field covered here.
         PricingDecisionDto decision = startNewFormReview();
         long itemId = decision.items().get(0).id();
         assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
@@ -668,7 +664,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review finding #6: explicit clear semantics -- a blanked discount really clears to 0.
+    // Explicit clear semantics -- a blanked discount really clears to 0.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -694,9 +690,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     void update_setAndClearSameField_is400() {
         PricingDecisionDto decision = startNewFormReview();
         long itemId = decision.items().get(0).id();
-        // discountPct now stands in for the old listUnitPrice set+clear case (listUnitPrice is no
-        // longer client-settable at all) -- exercises the exact same requireNotSetAndCleared guard
-        // (review finding #6).
+        // discountPct stands in for a set+clear case (listUnitPrice is not
+        // client-settable) -- exercises the requireNotSetAndCleared guard.
         assertThatThrownBy(() -> decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             null, "NET", List.of(new UpdatePricingDecisionItemRequest(itemId, null, null, null, null, false,
                 new BigDecimal("10"), true, null, false, null, false))),
@@ -706,13 +701,13 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Validation (pre-existing coverage, still true under the new rulings)
+    // Validation
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void approve_blocksWhenAnyNewFormItemHasNoNetPrice() {
-        // DIRECT_NET, not NET: NET auto-fills list_unit_price for every item (owner ruling A), so
-        // leaving an item "un-priced" under NET no longer reproduces a missing net once a mode is
+        // DIRECT_NET, not NET: NET auto-fills list_unit_price for every item, so
+        // leaving an item "un-priced" under NET does not reproduce a missing net once a mode is
         // picked. DIRECT_NET has no auto-fill at all -- typing it for only ONE of the two items is
         // what actually leaves the other with netUnitPrice == null here.
         PricingDecisionDto decision = startNewFormReview();
@@ -887,7 +882,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review finding #8: a real-DB IT driving a new-form decision (WITH a CEO discount) through
+    // A real-DB IT driving a new-form decision (WITH a CEO discount) through
     // CustomerQuotationService create + issue, proving NO discount-approval request is raised.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -901,8 +896,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             null, "NET", List.of(
                 // A REAL discount (10%) -- the whole point of this test: approved ==
-                // minimum for a new-form item (owner ruling), so a discounted NET price must
-                // still never trip customerquotation's V155 per-line discount-approval gate.
+                // minimum for a new-form item, so a discounted NET price must
+                // still never trip customerquotation's per-line discount-approval gate.
                 discountItem(itemA.id(), new BigDecimal("10")),
                 discountItem(itemB.id(), new BigDecimal("5")))),
             ceoActor);
@@ -941,12 +936,12 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         return count == null ? 0 : count;
     }
 
-    /** Owner correction (2026-09-19): {@code listUnitPrice} is no longer a client-settable field
-     * on {@link UpdatePricingDecisionItemRequest} at all — the CEO never types it (ruling A), it is
+    /** {@code listUnitPrice} is not a client-settable field
+     * on {@link UpdatePricingDecisionItemRequest} — the CEO never types it, it is
      * always the server-computed formula price, refreshed by {@code deriveListAndNet} whenever the
-     * formula reference changes ({@code overrideItemCost}/{@code recomputeCostingInPlace}). This
-     * replaces the old {@code netItem(itemId, listUnitPrice, discountPct)} shape — callers that need
-     * a NET-mode net derived from a KNOWN, round list price now call {@link
+     * formula reference changes ({@code overrideItemCost}/{@code recomputeCostingInPlace}).
+     * Callers that need
+     * a NET-mode net derived from a KNOWN, round list price call {@link
      * #setListUnitPriceForTest} first (a direct fixture write, exactly like this file already does
      * for {@code sqm_per_piece} below) and then send only the discount here. */
     private UpdatePricingDecisionItemRequest discountItem(long itemId, BigDecimal discountPct) {
@@ -969,8 +964,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             null, false, null, false, null, false);
     }
 
-    /** Test-only fixture setup (owner correction, 2026-09-19): {@code list_unit_price} can no
-     * longer be set through the CEO API — it is always server-derived from the landed-cost formula,
+    /** Test-only fixture setup: {@code list_unit_price} cannot
+     * be set through the CEO API — it is always server-derived from the landed-cost formula,
      * whose own output is not a round number. Several tests below need a DETERMINISTIC list price
      * to pin an exact discount/net arithmetic result independently of that formula, so they poke
      * the column directly here, exactly like this file already pokes {@code sqm_per_piece} in
@@ -1047,9 +1042,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
      * A free-text import line (no catalog link) that reaches startReview UNCOSTABLE and set aside
      * (frozenLandedCost == null), so the CEO's override/approve gates below have something to act on.
      *
-     * <p>This replaced the old "catalog product with a null thickness" fixture: since #1150
-     * (Sales-entered thickness → costing, owner ruling 2026-10-15), LandedCostCalculator#resolveThicknessMm
-     * falls back to the line's own thicknessMm, so a null CATALOG thickness no longer makes a line
+     * <p>A "catalog product with a null thickness" is not a usable fixture:
+     * LandedCostCalculator#resolveThicknessMm
+     * falls back to the line's own thicknessMm, so a null CATALOG thickness does not make a line
      * uncostable — the Sales value (required at submit) costs it. The surviving set-aside path is a
      * line with no resolvable ORIGIN country: resolveOriginCountryCode reads the catalogue only (no
      * request fallback), so a line with productId == null has no country and is set aside before the

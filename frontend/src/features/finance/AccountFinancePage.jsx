@@ -1,9 +1,8 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Stat-Led · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (lead figure is the real outstanding total of the loaded rows and always paired with words; worklist keeps the subgrid columns) */
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
@@ -15,6 +14,7 @@ import { fetchDashboardSummary } from '../../hooks/useHrData.js';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { nextAccountAction } from '../tickets/accountActions.js';
+import { dedupeById, rowAmount, useAccountTickets } from './accountTickets.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
 import { MONEY_TRACK, moneyMilestoneOf } from './moneyMilestone.js';
 
@@ -29,19 +29,6 @@ const ACTION_FILTERS = [
 ];
 
 const money = (value) => (value == null ? '—' : formatMoney(value));
-
-function dedupeById(...lists) {
-  const seen = new Map();
-  lists.flat().forEach((ticket) => {
-    if (ticket && !seen.has(ticket.id)) seen.set(ticket.id, ticket);
-  });
-  return [...seen.values()];
-}
-
-function rowAmount(ticket) {
-  const outstanding = Number(ticket.amountOutstanding ?? 0);
-  return outstanding > 0 ? outstanding : Number(ticket.amountPayable ?? 0);
-}
 
 function Bone({ className }) {
   return <span aria-hidden="true" className={cn('block rounded-md bg-surface-muted motion-safe:animate-pulse', className)} />;
@@ -110,19 +97,7 @@ export function AccountFinancePage({ user, showToast }) {
   const actionFilter = searchParams.get('action') ?? searchParams.get('stage') ?? '';
   const { catalog } = useStageCatalog();
 
-  const scopedQuery = useQuery({
-    queryKey: queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list({}).then((r) => r.tickets ?? []),
-  });
-  const closedPaidQuery = useQuery({
-    queryKey: queryKeys.ticketListBySalesStage('CLOSED_PAID'),
-    queryFn: () => api.tickets.list({ salesStage: 'CLOSED_PAID' }).then((r) => r.tickets ?? []),
-  });
-
-  useEffect(() => {
-    const error = scopedQuery.error || closedPaidQuery.error;
-    if (error) showToast?.('error', error.message || 'โหลดข้อมูลไม่สำเร็จ');
-  }, [scopedQuery.error, closedPaidQuery.error, showToast]);
+  const { scopedQuery, closedPaidQuery } = useAccountTickets(showToast);
 
   // The same query (key + fetch) as useHrData's, so one cache entry serves the dashboard and this header,
   // and FinanceDealPage's invalidation of it keeps คงค้างรวม fresh.

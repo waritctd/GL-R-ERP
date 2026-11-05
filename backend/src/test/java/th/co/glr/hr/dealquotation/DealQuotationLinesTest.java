@@ -31,13 +31,12 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 60x60 cm. No.BS66R13GP");
     }
 
-    // ── owner ruling 2026-09-12, verbatim: "normalize it in the database so its the same in
-    // unit. make the size cm and the thickness mm" ──────────────────────────────────────────────
+    // ── Size is shown in cm and thickness in mm ──────────────────────────────────────────────────
     //
     // Storage stays millimetres; sizeLine does the ONE presentation conversion, from the
     // CATALOGUE's own width_mm/height_mm (unambiguous, never inferred) -- never from the rep's
-    // free-text sizeText, which the branch's own commit history shows mixes cm and mm typed sizes
-    // in the very same column (see the regression test below).
+    // free-text sizeText, which mixes cm and mm typed sizes in the very same column (see the
+    // regression test below).
 
     @Test
     void sizeLine_catalogueDimensions_printedInCentimetres_thicknessInMillimetres() {
@@ -64,17 +63,13 @@ class DealQuotationLinesTest {
     }
 
     /**
-     * THE regression this task exists to fix, pinned exactly as specified: a catalogue tile whose
-     * stored dimensions are 200 x 300 MILLIMETRES must print "20 cm x 30 cm", NOT "200 cm x 300
-     * cm" -- the bug the previous ("owner feedback pass 3") version of this method had, because it
-     * built the face size by splitting the REP'S TYPED "200x300" and unit-suffixing both halves
-     * "cm" unconditionally, silently assuming the rep meant centimetres when the catalogue's own
+     * A catalogue tile whose stored dimensions are 200 x 300 MILLIMETRES must print "20 cm x 30
+     * cm", NOT "200 cm x 300 cm". Splitting the REP'S TYPED "200x300" and unit-suffixing both
+     * halves "cm" unconditionally would silently assume centimetres when the catalogue's own
      * geometry says this tile is actually 200mm x 300mm (20cm x 30cm).
      *
-     * <p>Mutation-checked: reverting {@link DealQuotationLines#sizeLine} to build the face size
-     * from {@code sizeText} again (splitting "200x300" on "x" and printing "200 cm x 300 cm")
-     * turns this test red; restoring the catalogue-dimensions-first version turns it green again
-     * -- verified by hand during implementation (see the PR body for the before/after run).
+     * <p>Mutation-check record: reverting {@link DealQuotationLines#sizeLine} to build the face
+     * size from {@code sizeText} again (splitting "200x300" on "x") must turn this test red.
      */
     @Test
     void sizeLine_REGRESSION_catalogue200x300mm_prints20cmX30cm_notTheRepsTypedCentimetres() {
@@ -86,19 +81,18 @@ class DealQuotationLinesTest {
             .doesNotContain("200 cm").doesNotContain("300 cm");
     }
 
-    // ── REFINEMENT (prod QT-2026-0034-1, quotation_id=32, 2026-09-15): a rep who retypes ขนาด to a
-    // genuinely DIFFERENT size on a row that still carries a catalogue link must see THEIR size,
-    // not the linked catalogue's -- the catalogue-first rule above was only ever meant to catch
-    // the SAME size typed in an unreliable unit (the 200x300mm regression). ────────────────────
+    // ── A rep who retypes ขนาด to a genuinely DIFFERENT size on a row that still carries a
+    // catalogue link must see THEIR size, not the linked catalogue's -- the catalogue-first rule
+    // above only exists to catch the SAME size typed in an unreliable unit (the 200x300mm case). ──
 
-    /** The exact prod bug: catalogue is 600x600mm, rep retyped "30x60" (a genuinely different
-     * tile) -- must print the rep's typed size, not "60 cm x 60 cm".
+    /** Catalogue is 600x600mm, rep retyped "30x60" (a genuinely different tile) -- must print
+     * the rep's typed size, not "60 cm x 60 cm".
      *
-     * <p>F2 fix (2026-09-16 review): "30x60" carries no unit token, so this now prints in the
-     * catalogue's OWN cm format ("30 cm x 60 cm") rather than the ambiguous verbatim "30x60" the
-     * old FALLBACK printed -- see {@link DealQuotationLines#sizeLine}'s Javadoc "F2" note. It is
-     * still emphatically NOT the catalogue's "60 cm x 60 cm": the typed pair, read as centimetres
-     * (the field's own label), not the catalogue's dims. */
+     * <p>"30x60" carries no unit token, so it prints in the catalogue's OWN cm format
+     * ("30 cm x 60 cm") rather than the ambiguous verbatim "30x60" -- see
+     * {@link DealQuotationLines#sizeLine}'s Javadoc "F2" note. It is still NOT the catalogue's
+     * "60 cm x 60 cm": the typed pair, read as centimetres (the field's own label), not the
+     * catalogue's dims. */
     @Test
     void sizeLine_typedSizeDiffersFromCatalogue_30x60_printsTypedText_notTheCatalogue600x600() {
         assertThat(DealQuotationLines.sizeLine("30x60", new BigDecimal("20"),
@@ -107,8 +101,8 @@ class DealQuotationLinesTest {
             .doesNotContain("60 cm x 60 cm");
     }
 
-    /** The second prod line: "3x60" against the same 600x600mm catalogue row. F2 fix: unit-less,
-     * so it now prints as cm, same as the "30x60" case above. */
+    /** "3x60" against the same 600x600mm catalogue row: unit-less, so it prints as cm, same as
+     * the "30x60" case above. */
     @Test
     void sizeLine_typedSizeDiffersFromCatalogue_3x60_printsTypedText_notTheCatalogue600x600() {
         assertThat(DealQuotationLines.sizeLine("3x60", new BigDecimal("20"),
@@ -169,9 +163,9 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** The EN variant of the exact prod bug: typed "30x60" against a 600x600mm catalogue row must
-     * print the rep's text, not the catalogue's centimetre conversion. F2 fix: unit-less, so this
-     * now prints in cm ("30 cm x 60 cm") rather than the ambiguous verbatim "30x60". */
+    /** The EN variant: typed "30x60" against a 600x600mm catalogue row must print the rep's
+     * text, not the catalogue's centimetre conversion. Unit-less, so it prints in cm
+     * ("30 cm x 60 cm") rather than the ambiguous verbatim "30x60". */
     @Test
     void english_sizeLine_typedSizeDiffersFromCatalogue_printsTypedText() {
         assertThat(DealQuotationLines.sizeLine(EN, "30x60", new BigDecimal("20"),
@@ -180,11 +174,10 @@ class DealQuotationLinesTest {
             .doesNotContain("60 cm x 60 cm");
     }
 
-    // ── F2 (2026-09-16 review): a size typed WITHOUT a unit must never read as millimetres ───────
-    // Production bug: tile with แผ่น/กล่อง = 26, ขายแผ่นไม่เต็มกล่อง ticked, rep typed "14.8x14.8"
-    // into the field labelled "ขนาด (ซม.)" -- printed "ขนาด 14.8x14.8 x 7 mm", reading as 14.8
-    // MILLIMETRES. These are the exact wrong-way-round mutation-check fixtures for that fix:
-    // reverting sizeLine to print the typed text verbatim again turns every one of these red.
+    // ── A size typed WITHOUT a unit must never read as millimetres ───────────────────────────────
+    // A rep typed "14.8x14.8" into the field labelled "ขนาด (ซม.)" and the document printed
+    // "ขนาด 14.8x14.8 x 7 mm", reading as 14.8 MILLIMETRES. Mutation-check record: reverting
+    // sizeLine to print the typed text verbatim again must turn every one of these red.
 
     /** The exact production example: no catalogue link at all, typed "14.8x14.8" with no unit. */
     @Test
@@ -204,8 +197,8 @@ class DealQuotationLinesTest {
     }
 
     /** Same typed size, but the row DOES carry a catalogue link whose face size differs -- the
-     * "typed text wins over the catalogue" REFINEMENT rule still applies; F2 only changes HOW the
-     * winning typed text is formatted (cm, not verbatim) when it carries no unit. */
+     * "typed text wins over the catalogue" rule still applies; only HOW the winning typed text
+     * is formatted changes (cm, not verbatim) when it carries no unit. */
     @Test
     void sizeLine_F2_unitlessTypedSize_catalogueLinkedButDiffers_printsTypedTextInCentimetres() {
         assertThat(DealQuotationLines.sizeLine("14.8x14.8", new BigDecimal("7"),
@@ -214,9 +207,9 @@ class DealQuotationLinesTest {
             .doesNotContain("26 cm x 26 cm").doesNotContain("14.8 mm");
     }
 
-    /** An EXPLICIT unit is untouched by F2 -- "14.8x14.8mm" says what it means and keeps printing
-     * verbatim, exactly as it did before this fix. Genuinely different behaviour from the unitless
-     * case directly above, on the identical numbers. */
+    /** An EXPLICIT unit is left alone -- "14.8x14.8mm" says what it means and keeps printing
+     * verbatim. Genuinely different behaviour from the unitless case directly above, on the
+     * identical numbers. */
     @Test
     void sizeLine_F2_explicitUnit_isUnaffected_staysVerbatim() {
         assertThat(DealQuotationLines.sizeLine("14.8x14.8mm", new BigDecimal("7"), null, null))
@@ -225,15 +218,15 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 14.8x14.8 ซม. x 7 mm (ขนาดโดยประมาณ)");
     }
 
-    /** An unparseable typed size is untouched by F2 -- printed verbatim, exactly as before. */
+    /** An unparseable typed size is printed verbatim. */
     @Test
     void sizeLine_F2_unparseable_isUnaffected_staysVerbatim() {
         assertThat(DealQuotationLines.sizeLine("รูปทรงพิเศษ", new BigDecimal("7"), null, null))
             .isEqualTo("ขนาด รูปทรงพิเศษ x 7 mm (ขนาดโดยประมาณ)");
     }
 
-    /** A typed size that MATCHES the catalogue (order/unit-ambiguous, as today) keeps printing the
-     * catalogue's own format exactly as before -- F2 only changes the two FALLBACK branches. */
+    /** A typed size that MATCHES the catalogue (order/unit-ambiguous) keeps printing the
+     * catalogue's own format; only the two FALLBACK branches print the typed pair in cm. */
     @Test
     void sizeLine_F2_unitlessTypedSize_matchesCatalogue_staysCatalogueFormat() {
         assertThat(DealQuotationLines.sizeLine("14.8x14.8", new BigDecimal("7"),
@@ -241,11 +234,10 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 14.8 cm x 14.8 cm x 7 mm (ขนาดโดยประมาณ)");
     }
 
-    // ── SHARED GRAMMAR vector table (owner complaint re-reported 2026-09-16, "แก้ขนาด/รหัสสินค้าเอง
-    // แต่ PDF ยังใช้ค่าเดิม") -- this table's inputs and expected {width, height, unit} results are
-    // ALSO asserted, verbatim, in frontend/src/features/quotations/quotationMeta.test.js's own
-    // "shared size grammar" describe block, against `parseSizeText`. The two must never drift apart
-    // again without both going red. ───────────────────────────────────────────────────────────────
+    // ── SHARED GRAMMAR vector table (a hand-edited ขนาด/รหัสสินค้า must reach the PDF) -- this
+    // table's inputs and expected {width, height, unit} results are ALSO asserted, verbatim, in
+    // frontend/src/features/quotations/quotationMeta.test.js's own "shared size grammar" describe
+    // block, against `parseSizeText`. The two must never drift apart without both going red. ──
 
     private static void assertParsed(String input, String width, String height,
                                      DealQuotationLines.SizeUnit unit) {
@@ -305,11 +297,11 @@ class DealQuotationLinesTest {
         assertUnparsed(null);
     }
 
-    // ── F2 (HIGH, 2026-09-16 review): Unicode whitespace normalisation. Java's `\s` is ASCII-only
-    // and `String.trim()` strips only <= U+0020; JS's `\s` is Unicode-aware. Both engines must now
-    // agree on every one of these -- see DealQuotationLines#normalize's own doc for which direction
-    // each vector used to fail on. The SAME vectors are pinned in quotationMeta.test.js's own "F2"
-    // describe block, against `parseSizeText` -- same inputs, same result, on both sides. ─────────
+    // ── Unicode whitespace normalisation. Java's `\s` is ASCII-only and `String.trim()` strips
+    // only <= U+0020; JS's `\s` is Unicode-aware. Both engines must agree on every one of these --
+    // see DealQuotationLines#normalize's own doc for which direction each vector fails in
+    // without it. The SAME vectors are pinned in quotationMeta.test.js's own "F2" describe block,
+    // against `parseSizeText` -- same inputs, same result, on both sides. ─────────────────────
     @Test
     void parseTwoDimensions_sharedGrammarVectors_unicodeWhitespaceNormalisation() {
         assertParsed("30 x 60", "30", "60", null); // NBSP
@@ -326,13 +318,11 @@ class DealQuotationLinesTest {
         assertParsed("30x60", "30", "60", null);
     }
 
-    // ── F1 (BLOCKER, 2026-09-16 review): catastrophic regex backtracking (ReDoS). Both timing
-    // vectors below must stay well under 50ms; a regression in either the grammar fix or the length
-    // guard alone would blow one of them up (the first is short enough to bypass the guard entirely
-    // and exercises the grammar fix in isolation; the second is the reviewer's own reported shape,
-    // which also exercises MAX_SIZE_TEXT_LENGTH). Measured on this exact (pre-fix) code: 253 ms /
-    // 5,026 ms at 128 / 248 chars (the reviewer's own run measured 367 ms / 12,238 ms); the fixed
-    // grammar/guard bring both down to ~0-1 ms. ─────────────────────────────────────────────────
+    // ── Catastrophic regex backtracking (ReDoS). Both timing vectors below must stay well under
+    // 50ms; a regression in either the grammar or the length guard alone would blow one of them up
+    // (the first is short enough to bypass the guard entirely and exercises the grammar in
+    // isolation; the second also exercises MAX_SIZE_TEXT_LENGTH). Without the fix they took
+    // 253 ms / 5,026 ms at 128 / 248 chars; with it both take ~0-1 ms. ─────────────────────────
     @Test
     void parseTwoDimensions_pathologicalWhitespace_underTheLengthGuard_doesNotCatastrophicallyBacktrack() {
         String attack = "30" + " ".repeat(18) + "x60" + " ".repeat(18) + "x1" + " ".repeat(18) + "!";
@@ -369,22 +359,21 @@ class DealQuotationLinesTest {
         assertUnparsed(genuineButLong);
     }
 
-    // ── The owner's exact 2026-09-16 bug: typed "30x60x1" against a linked 60x60cm catalogue tile
-    // must print the rep's typed text, not the catalogue's -- the old TWO_DIMENSIONS grammar had no
-    // third-dimension allowance, so this typed text failed to parse and sizeLine silently kept
-    // printing the catalogue's 60x60. ────────────────────────────────────────────────────────────
+    // ── Typed "30x60x1" against a linked 60x60cm catalogue tile must print the rep's typed text,
+    // not the catalogue's -- without a third-dimension allowance in the TWO_DIMENSIONS grammar the
+    // typed text fails to parse and sizeLine silently keeps printing the catalogue's 60x60. ─────
     @Test
     void sizeLine_typedSizeWithThirdDimension_differsFromCatalogue_printsTypedText_theExact20260916Bug() {
-        // F2 fix (2026-09-16 review): "30x60x1" carries no unit token on either of its first two
-        // numbers (the third, thickness, is ignored and never carries a unit either) -- so this
-        // now prints "30 cm x 60 cm" rather than the ambiguous verbatim "30x60x1".
+        // "30x60x1" carries no unit token on either of its first two numbers (the third,
+        // thickness, is ignored and never carries a unit either) -- so this prints "30 cm x 60 cm"
+        // rather than the ambiguous verbatim "30x60x1".
         assertThat(DealQuotationLines.sizeLine("30x60x1", new BigDecimal("9"),
             new BigDecimal("600"), new BigDecimal("600")))
             .isEqualTo("ขนาด 30 cm x 60 cm x 9 mm (ขนาดโดยประมาณ)")
             .doesNotContain("60 cm x 60 cm");
     }
 
-    // ── Explicit-unit-wins (2026-09-16 fix): an explicit unit token checks ONLY that reading, never
+    // ── Explicit-unit-wins: an explicit unit token checks ONLY that reading, never
     // falls back to also trying the other unit the way the unspecified-unit rule always has. ─────
     @Test
     void sizeLine_explicitMmUnit_differsFromCatalogueEvenThoughCmReadingWouldMatch() {
@@ -403,18 +392,19 @@ class DealQuotationLinesTest {
     }
 
     /**
-     * F5 (test quality, 2026-09-16 review) — the test above passes even with unit resolution
-     * DELETED from {@link DealQuotationLines#matchesCatalogFaceSize} (mutation-checked: forcing
-     * {@code typed.unit()} to {@code null} there leaves both of its assertions green), because
-     * neither of its two vectors ever lands on a DIFFERENT reading depending on whether the unit is
-     * honoured — both "600x600mm" and "300x600mm" happen to agree with the (wrong) "check both
-     * readings" answer too. This vector does not: catalogue 30cm x 60cm (300mm x 600mm), typed
-     * "60x30mm" — an explicit MM reading that matches NEITHER the catalogue's real mm figures
-     * (60,30 vs 300,600) NOR its cm figures directly (60,30 vs 30,60), but DOES match the catalogue's
-     * cm figures order-swapped (60==60, 30==30) if the explicit unit is ignored and both readings are
-     * checked regardless. Mutation-checked the same way: forcing {@code typed.unit()} to
-     * {@code null} turns this test red (it wrongly starts printing the catalogue's "30 cm x 60 cm");
-     * restoring the real unit resolution turns it green again — see the PR body for the run.
+     * The test above passes even with unit resolution DELETED from
+     * {@link DealQuotationLines#matchesCatalogFaceSize} (forcing {@code typed.unit()} to
+     * {@code null} there leaves both of its assertions green), because neither of its two
+     * vectors lands on a DIFFERENT reading depending on whether the unit is honoured — both
+     * "600x600mm" and "300x600mm" happen to agree with the (wrong) "check both readings" answer
+     * too. This vector does not: catalogue 30cm x 60cm (300mm x 600mm), typed "60x30mm" — an
+     * explicit MM reading that matches NEITHER the catalogue's real mm figures (60,30 vs 300,600)
+     * NOR its cm figures directly (60,30 vs 30,60), but DOES match the catalogue's cm figures
+     * order-swapped (60==60, 30==30) if the explicit unit is ignored and both readings are
+     * checked regardless.
+     *
+     * <p>Mutation-check record: forcing {@code typed.unit()} to {@code null} must turn this test
+     * red (it wrongly starts printing the catalogue's "30 cm x 60 cm").
      */
     @Test
     void sizeLine_explicitMmUnit_pinsUnitResolution_mutationDiscriminating() {
@@ -427,14 +417,12 @@ class DealQuotationLinesTest {
     // ── FALLBACK: no catalogue dimensions -- print the rep's typed text EXACTLY as typed ────────
 
     /**
-     * F2 fix (2026-09-16 review): a typed size with NO unit and NO catalogue to cross-check
-     * against now prints in centimetres -- {@code "200 cm x 300 cm"} -- matching the field's own
-     * label ("ขนาด (ซม.)"), rather than the old ambiguous verbatim "200x300". This is a deliberate
-     * narrowing of the older "no splitting, no unit-guessing" caution this test used to document:
-     * that caution was about NOT overriding a catalogue that says otherwise (the 200x300mm
-     * regression test above, where a catalogue link disambiguates and still wins) -- it was never
-     * meant to leave a genuinely unit-less, catalogue-less size printing as bare digits with no
-     * unit at all, which is its own production bug (F2: "ขนาด 14.8x14.8 x 7 mm" read as 14.8mm).
+     * A typed size with NO unit and NO catalogue to cross-check against prints in centimetres
+     * -- {@code "200 cm x 300 cm"} -- matching the field's own label ("ขนาด (ซม.)"), rather than
+     * the ambiguous verbatim "200x300". The "no splitting, no unit-guessing" caution is about NOT
+     * overriding a catalogue that says otherwise (the 200x300mm regression test above, where a
+     * catalogue link disambiguates and still wins); it does not mean leaving a unit-less,
+     * catalogue-less size as bare digits, which reads as millimetres ("ขนาด 14.8x14.8 x 7 mm").
      */
     @Test
     void sizeLine_noCatalogueDimensions_unitlessTypedText_printsInCentimetres() {
@@ -456,10 +444,10 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด รูปทรงอิสระ x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** F2 fix (2026-09-16 review): "60x120x5" DOES parse (the third number is the ignored
-     * thickness, per the shared grammar's own third-dimension allowance -- see
+    /** "60x120x5" DOES parse (the third number is the ignored thickness, per the shared
+     * grammar's own third-dimension allowance -- see
      * {@code parseTwoDimensions_sharedGrammarVectors_decimalCommaAndThirdDimensionAndTrailingText}),
-     * and carries no unit on either of its first two numbers -- so it now prints in centimetres,
+     * and carries no unit on either of its first two numbers -- so it prints in centimetres,
      * same as any other unit-less typed pair, rather than staying bare digits with no unit. */
     @Test
     void sizeLine_noCatalogueDimensions_thirdDimensionUnitless_printsInCentimetres() {
@@ -469,8 +457,8 @@ class DealQuotationLinesTest {
 
     /** Only ONE catalogue dimension present (e.g. a corrupt row) is treated the same as neither --
      * a half-known geometry is not enough to print a face size from, so this falls back too.
-     * F2 fix (2026-09-16 review): the fallback itself now prints an unparsed, unit-less pair in
-     * centimetres ("60 cm x 120 cm") rather than the ambiguous verbatim "60x120". */
+     * The fallback itself prints an unparsed, unit-less pair in centimetres ("60 cm x 120 cm")
+     * rather than the ambiguous verbatim "60x120". */
     @Test
     void sizeLine_onlyOneCatalogueDimension_fallsBackToTypedText() {
         assertThat(DealQuotationLines.sizeLine("60x120", new BigDecimal("9"),
@@ -561,7 +549,7 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น และปัดขึ้นเต็มกล่อง = 24 แผ่น = 2 กล่อง) (บรรจุ 12 แผ่น/กล่อง)");
     }
 
-    /** Review fix F2 (2026-09-16): same as {@link #calculationLine_noneWastage_omitsWastagePhrase}
+    /** Same as {@link #calculationLine_noneWastage_omitsWastagePhrase}
      * but with a STALE non-zero {@code wastageValue} left over from a previous PERCENT/PIECES mode
      * -- nothing clears it when the rep switches {@code wastageMode} to NONE. Byte-identical to the
      * null-value case, since {@code hasWastage} must be gated on the MODE, not merely a non-zero
@@ -584,19 +572,17 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(พื้นที่ 10 ตร.ม.ๆละ 2 แผ่น รวม 20 แผ่น + เผื่อ 10% = 22 แผ่น)");
     }
 
-    // ── owner feedback pass 3 (2026-09-11): zero wastage prints nothing, magnitudes get commas ──
+    // ── zero wastage prints nothing, magnitudes get commas ───────────────────────────────────
 
     /** "ตัด '+ เผื่อ 0%' ออกทั้งหมด" -- a ZERO percent wastage must print no wastage phrase at all,
      * not "+ เผื่อ 0%".
      *
-     * <p>Wording-scan fix 1 (2026-09-17): this fixture's box math (piecesFinal 20, piecesPerBox 4)
-     * happens to already be a whole number of boxes (20 / 4 = 5 exactly), so it now ALSO falls
-     * under fix 1's "box rounding was a no-op" rule -- the old docstring's "byte-identical to what
-     * a PERCENT line with real wastage would print around it" claim no longer holds in general (a
-     * real-wastage line with the SAME already-whole box numbers changes the same way). Updated to
-     * the new shape; {@link #calculationLine_zeroPiecesWastage_omitsTheWastagePhraseEntirely} right
-     * below deliberately keeps its own piecesPerBox=12 NOT dividing piecesFinal=100, so that test
-     * still pins the ORIGINAL rounding-phrase shape this docstring used to describe. */
+     * <p>This fixture's box math (piecesFinal 20, piecesPerBox 4) is already a whole number of
+     * boxes (20 / 4 = 5 exactly), so it also falls under the "box rounding was a no-op" rule (a
+     * real-wastage line with the SAME already-whole box numbers changes the same way).
+     * {@link #calculationLine_zeroPiecesWastage_omitsTheWastagePhraseEntirely} right below
+     * deliberately keeps its own piecesPerBox=12 NOT dividing piecesFinal=100, so that test
+     * still pins the rounding-phrase shape. */
     @Test
     void calculationLine_zeroPercentWastage_omitsTheWastagePhraseEntirely() {
         String line = recomputedLine(
@@ -618,7 +604,7 @@ class DealQuotationLinesTest {
         assertThat(line).doesNotContain("เผื่อ");
     }
 
-    /** "Format ตัวเลขในคำอธิบายขอ comma ด้วย" -- pinned against the owner's own export line
+    /** Numbers in the description get thousands commas -- pinned against a real export line
      * ("รวม 4917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5180 แผ่น" must read "4,917" / "5,180"), with a
      * >999 area and pieces-per-box thrown in so every magnitude in the line is checked. */
     @Test
@@ -632,11 +618,11 @@ class DealQuotationLinesTest {
                 + "(บรรจุ 1,000 แผ่น/กล่อง)");
     }
 
-    /** The owner's own example numbers (area 300, 4917 → 5180) from her report: "(พื้นที่ 300
-     * ตร.ม.ๆละ 16.39 แผ่น รวม 4917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5180 แผ่น)" — her quote is cut off
-     * right after "= 5180 แผ่น)" with no box-count tail shown, so this pins the same "และปัดขึ้นเต็มกล่อง"
-     * (piecesPerBox present, matching her line) with the tail the real method always appends
-     * alongside it, rather than guessing at a piecesPerBox value she did not report. */
+    /** A real example (area 300, 4917 → 5180): "(พื้นที่ 300
+     * ตร.ม.ๆละ 16.39 แผ่น รวม 4917 แผ่น + เผื่อ 5% และปัดขึ้นเต็มกล่อง = 5180 แผ่น)" — the original
+     * line has no box-count tail shown, so this pins the same "และปัดขึ้นเต็มกล่อง"
+     * (piecesPerBox present) with the tail the real method always appends alongside it, rather
+     * than guessing at a piecesPerBox value. */
     @Test
     void calculationLine_matchesTheOwnersOwnExportNumbers() {
         String line = recomputedLine(
@@ -648,10 +634,9 @@ class DealQuotationLinesTest {
                 + "(บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    // ── Wording-scan fix 1 (2026-09-17): a whole-box count must NOT be echoed back with the
-    // misleading "และปัดขึ้นเต็มกล่อง" ("rounded up") phrase when box rounding never rounded
-    // anything -- 21 real production items print this shape. Pinned here directly against
-    // #calculationLine (not only through #tilePrint) with the owner-approved wording verbatim. ──
+    // ── A whole-box count must NOT be echoed back with the misleading "และปัดขึ้นเต็มกล่อง"
+    // ("rounded up") phrase when box rounding never rounded anything. Pinned here directly
+    // against #calculationLine (not only through #tilePrint) with the approved wording. ────────
 
     /** No wastage, already whole boxes: {@code (จำนวน 20 แผ่น = 2 กล่อง) (บรรจุ 10 แผ่น/กล่อง)}. */
     @Test
@@ -692,8 +677,8 @@ class DealQuotationLinesTest {
     }
 
     /** Rounding that DID change the count keeps its rounding phrase and "= N แผ่น" echo -- the
-     * wrong-way-round twin of the three tests above, so this fix cannot be mistaken for "never print
-     * the rounding phrase again" -- and (owner ruling 2026-11-03) also states the box count. */
+     * wrong-way-round twin of the three tests above, so this cannot be mistaken for "never print
+     * the rounding phrase again" -- and also states the box count. */
     @Test
     void calculationLine_roundingThatChangedTheCount_isUnaffectedByFix1() {
         String line = recomputedLine(
@@ -731,7 +716,7 @@ class DealQuotationLinesTest {
     }
 
     /** PIECES quantity mode also gets commas on its own count when it exceeds 999.
-     * F1 fix (2026-09-16 review): no box, no wastage -- no trailing "=" echo any more. */
+     * No box, no wastage -- no trailing "=" echo. */
     @Test
     void calculationLine_piecesQuantityMode_largeCount_getsThousandsCommas() {
         String line = recomputedLine(
@@ -743,8 +728,7 @@ class DealQuotationLinesTest {
 
     @Test
     void descriptionLine_doesNotAppendCmWhenTheSizeTextAlreadyCarriesAUnit() {
-        // Review finding LOW-2: "600x1200 mm" printed as "ขนาด 600x1200 mm cm." on the
-        // null-thickness branch.
+        // "600x1200 mm" must not print as "ขนาด 600x1200 mm cm." on the null-thickness branch.
         assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "600x1200 mm", null))
             .isEqualTo("กระเบื้อง รุ่น Reverso Cement สี Grigio ขนาด 600x1200 mm");
         assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, null, "60x60", null))
@@ -752,12 +736,12 @@ class DealQuotationLinesTest {
     }
 
     /**
-     * F4 (LOW, 2026-09-16 review) — {@code SIZE_HAS_UNIT} used to only know {@code ซม}/{@code ซม.}/
-     * {@code มม}/{@code มม.}, not the middle-dot Thai forms {@code ซ.ม.}/{@code ม.ม.} that
-     * {@code TWO_DIMENSIONS}'s grammar already accepted, so a millimetre size typed with a dot
-     * (e.g. "30x60 ม.ม.") was read as having NO unit and got " cm." appended on top of it — a
-     * millimetre size printed as centimetres on a customer document. Fixed by sharing one
-     * {@code UNIT_ALTERNATION} constant between the two patterns so they cannot drift apart again.
+     * {@code SIZE_HAS_UNIT} must know the middle-dot Thai forms {@code ซ.ม.}/{@code ม.ม.} that
+     * {@code TWO_DIMENSIONS}'s grammar accepts, not only {@code ซม}/{@code ซม.}/{@code มม}/
+     * {@code มม.}; otherwise a millimetre size typed with a dot (e.g. "30x60 ม.ม.") is read as
+     * having NO unit and gets " cm." appended — a millimetre size printed as centimetres on a
+     * customer document. The two patterns share one {@code UNIT_ALTERNATION} constant so they
+     * cannot drift apart.
      */
     @Test
     void descriptionLine_recognisesTheMiddleDotThaiUnitForms_doesNotDoubleUpTheUnit() {
@@ -769,7 +753,7 @@ class DealQuotationLinesTest {
             .doesNotContain("cm.");
     }
 
-    // ── quotation v3 (owner feedback pass 3, 2026-09-11) ─────────────────────────────────────
+    // ── quotation v3 ─────────────────────────────────────────────────────────────────────────
 
     @Test
     void specialPriceLine_matchesTheOwnersPrintedSubLine() {
@@ -786,7 +770,7 @@ class DealQuotationLinesTest {
         assertThat(DealQuotationLines.specialPriceLine(BigDecimal.ZERO)).isNull();
     }
 
-    /** Pinned against the owner's QN6900704-2, verbatim — including the ZERO-PADDED Buddhist-era
+    /** Pinned against a real quotation (QN6900704-2), verbatim — including the ZERO-PADDED Buddhist-era
      * date ("31/07/2569"), where the v3 spec's own placeholder would have produced "31/7/2569". */
     @Test
     void adjustmentDescription_matchesTheOwnersPrintedDiscountLine() {
@@ -812,7 +796,7 @@ class DealQuotationLinesTest {
             .isEqualTo("ส่วนลดพิเศษ 2.5% สำหรับการสั่งซื้อภายใน 31/07/2569");
     }
 
-    // ── owner ruling 2026-09-13: the ENGLISH document's item lines ─────────────────────────────
+    // ── the ENGLISH document's item lines ──────────────────────────────────────────────────────
 
     private static final String EN = WastageCalculator.DOCUMENT_LANGUAGE_EN;
     private static final String TH = WastageCalculator.DOCUMENT_LANGUAGE_TH;
@@ -867,7 +851,7 @@ class DealQuotationLinesTest {
             piecesPerBox, boxes, sqmPerBox, storedQuantity, storedUnit, specialPriceSqm, roundToFullBox);
     }
 
-    /** The owner-approved preview, BIOARCH example, all three lines verbatim. */
+    /** The approved preview, BIOARCH example, all three lines verbatim. */
     @Test
     void english_ownerApprovedBioarchPreview_allThreeLinesVerbatim() {
         assertThat(DealQuotationLines.descriptionLine(EN, "BIOARCH", "BARGE GRIGIA", "ONDULATO", "APGBBK15",
@@ -903,16 +887,16 @@ class DealQuotationLinesTest {
         assertThat(recomputedLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             100, WastageCalculator.WASTAGE_MODE_PIECES, BigDecimal.ZERO, 108, 12))
             .isEqualTo("(Quantity 100 pcs, rounded up to full boxes = 108 pcs = 9 boxes) (12 pcs/box)");
-        // F1 fix (2026-09-16 review): no box, no wastage -- no trailing "=" echo any more.
+        // No box, no wastage -- no trailing "=" echo.
         assertThat(recomputedLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
             1500, WastageCalculator.WASTAGE_MODE_NONE, null, 1500, null))
             .isEqualTo("(Quantity 1,500 pcs)");
     }
 
-    /** Review fix F2 (2026-09-16): the English mirror of
+    /** The English mirror of
      * {@link #calculationLine_noneWastageWithStaleNonZeroValue_isUnaffected} -- a STALE non-zero
-     * wastageValue under wastageMode=NONE must not resurrect the allowance clause. F1 fix
-     * (2026-09-16 review): no box either, so no trailing "=" echo any more. */
+     * wastageValue under wastageMode=NONE must not resurrect the allowance clause. No box
+     * either, so no trailing "=" echo. */
     @Test
     void english_noneWastageWithStaleNonZeroValue_isUnaffected() {
         assertThat(recomputedLine(EN, WastageCalculator.QUANTITY_MODE_PIECES, null, null,
@@ -933,8 +917,8 @@ class DealQuotationLinesTest {
 
     @Test
     void english_sizeLine_fallbacksMirrorTheThaiOnes() {
-        // F2 fix (2026-09-16 review): "60x60" carries no unit and no catalogue link, so this now
-        // prints in centimetres, same as the Thai FALLBACK's own F2 fix.
+        // "60x60" carries no unit and no catalogue link, so this prints in centimetres, same as
+        // the Thai FALLBACK.
         assertThat(DealQuotationLines.sizeLine(EN, "60x60", new BigDecimal("10"), null, null))
             .isEqualTo("Size 60 cm x 60 cm x 10 mm (approx.)");
         assertThat(DealQuotationLines.sizeLine(EN, null, new BigDecimal("10"), null, null))
@@ -1063,7 +1047,7 @@ class DealQuotationLinesTest {
         }
     }
 
-    // ── owner decision 2026-09-13: the English per-sqm row ──────────────────────────────────────
+    // ── the English per-sqm row ─────────────────────────────────────────────────────────────────
 
     /** Her QN6900933's sub-lines, verbatim: trailing zeros dropped, the stated precision kept. */
     @Test
@@ -1095,11 +1079,11 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.6"), null, 3360,
             WastageCalculator.WASTAGE_MODE_NONE, null, 3360, 28, 120, new BigDecimal("0.6"),
             new BigDecimal("3360"), "SQM", new BigDecimal("64.00"));
-        // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- box rounding was a no-op, so
-        // the misleading "rounded up to full boxes" phrase and its pure "= 3,360 pcs" echo are both
-        // dropped; the box count (already stated by this branch's own "= 259/120 boxes" tail either
-        // way -- see #tilePrint_englishPerSqm_areaMode above, whose OWN box numbers genuinely did
-        // round and so is untouched) is all that remains.
+        // 3,360 / 28 = 120 exactly -- box rounding is a no-op, so the misleading "rounded up to
+        // full boxes" phrase and its pure "= 3,360 pcs" echo are both dropped; the box count
+        // (already stated by this branch's own "= 259/120 boxes" tail either way -- see
+        // #tilePrint_englishPerSqm_areaMode above, whose OWN box numbers genuinely round) is all
+        // that remains.
         assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes)");
         assertThat(p.subLine()).isEqualTo("(1 box = 28 pcs = 0.6 sqm)");
         assertThat(p.quantity()).isEqualByComparingTo("72.00");
@@ -1120,11 +1104,11 @@ class DealQuotationLinesTest {
             assertThat(p.quantity()).isEqualByComparingTo("3360");
             assertThat(p.unit()).isEqualTo("PCS");
             assertThat(p.subLine()).isNull();
-            // Wording-scan fix 1 (2026-09-17): 3,360 / 28 = 120 exactly -- see the matching comment
-            // on tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox above. This branch
+            // 3,360 / 28 = 120 exactly -- see the matching comment on
+            // tilePrint_englishPerSqm_piecesMode_QN6900933Row1_andSingularBox above. This branch
             // (the plain calculationLine path, not the per-sqm box-area one) has no "= N boxes" tail
-            // of its own before this fix, so the box count is genuinely NEW information here, not
-            // merely an echo dropped from an existing one.
+            // of its own, so the box count is genuinely NEW information here, not merely an echo
+            // dropped from an existing one.
             assertThat(p.calculationLine()).isEqualTo("(Quantity 3,360 pcs = 120 boxes) (28 pcs/box)");
         }
     }
@@ -1154,7 +1138,7 @@ class DealQuotationLinesTest {
         assertThat(p.subLine()).isNull();
     }
 
-    // ── Option B (owner decision, 2026-09-16): ตร.ม./กล่อง OPTIONAL for English per-sqm ─────────
+    // ── ตร.ม./กล่อง is OPTIONAL for English per-sqm ──────────────────────────────────────────────
 
     /** Blank box area, no แผ่น/กล่อง either: quantity = round2(piecesFinal × sqmPerPiece), the
      * ordinary English piece-based calculation line (no box wording at all since hasBox is false),
@@ -1165,11 +1149,11 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("10"), new BigDecimal("0.36"),
             new BigDecimal("2.78"), 28, WastageCalculator.WASTAGE_MODE_NONE, null, 28, null, null, null,
             new BigDecimal("28"), "SQM", new BigDecimal("64.00"));
-        // F1 fix (2026-09-16 review): the default branch used to echo "= N pcs" unconditionally,
-        // even with no box and no wastage, so AREA mode's own "...= 28 pcs" got printed twice --
-        // "(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs = 28 pcs)". Now the trailing echo is gated on
+        // The default branch must not echo "= N pcs" unconditionally: with no box and no wastage,
+        // AREA mode's own "...= 28 pcs" would print twice --
+        // "(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs = 28 pcs)". The trailing echo is gated on
         // hasBox || hasWastage, so AREA mode's own "= 28 pcs" (genuine area->pieces information)
-        // prints once, not twice.
+        // prints once.
         assertThat(p.calculationLine()).isEqualTo("(Area 10 sqm @ 2.78 pcs/sqm = 28 pcs)");
         assertThat(p.quantity()).isEqualByComparingTo("10.08"); // 28 × 0.36
         assertThat(p.unit()).isEqualTo("SQM");
@@ -1209,7 +1193,7 @@ class DealQuotationLinesTest {
         assertThat(p.subLine()).isNull();
     }
 
-    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+    // ── "sell loose pieces" ────────────────────────────────────────────────────────────────────
 
     /** The headline Thai example from the design: no wastage, so the intermediate "= N แผ่น"
      * clause is skipped entirely (it would just restate quantityPart's own 32) and the line goes
@@ -1222,11 +1206,11 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** Review fix F2 (2026-09-16): a STALE non-zero {@code wastageValue} under
-     * {@code wastageMode=NONE} used to make {@code hasWastage} read true here (it was gated on the
-     * value alone, not the mode), which printed the duplicate intermediate clause this method's own
-     * Javadoc says it exists to avoid: {@code (จำนวน 32 แผ่น = 32 แผ่น = 3 กล่อง + 2 แผ่น)} instead
-     * of the byte-identical-to-no-wastage line below. */
+    /** A STALE non-zero {@code wastageValue} under {@code wastageMode=NONE} must not make
+     * {@code hasWastage} read true here (it is gated on the mode, not the value alone); otherwise
+     * it prints the duplicate intermediate clause this method's own Javadoc says it exists to
+     * avoid: {@code (จำนวน 32 แผ่น = 32 แผ่น = 3 กล่อง + 2 แผ่น)} instead of the
+     * byte-identical-to-no-wastage line below. */
     @Test
     void calculationLine_thaiLoosePieces_noneModeWithStaleNonZeroValue_doesNotDuplicateIntermediateClause() {
         String line = recomputedLine(TH,
@@ -1258,9 +1242,8 @@ class DealQuotationLinesTest {
 
     /** full boxes = 0, no wastage: fewer pieces than one box prints NO trailing "=" clause at all
      * -- the box/loose split would just be "= 7 แผ่น", a pure echo of quantityPart's own count.
-     * F1 fix (2026-09-16 review): this used to print "(จำนวน 7 แผ่น = 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)",
-     * the exact production-bug shape ("(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)") this pass
-     * fixes. */
+     * It must not print "(จำนวน 7 แผ่น = 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)" (a duplicated count, as in
+     * "(จำนวน 15 แผ่น = 15 แผ่น) (บรรจุ 26 แผ่น/กล่อง)"). */
     @Test
     void calculationLine_thaiLoosePieces_fullBoxesIsZero_printsPiecesOnlyNoBoxWord() {
         String line = recomputedLine(TH,
@@ -1291,8 +1274,8 @@ class DealQuotationLinesTest {
 
     /** No box data at all: roundToFullBox=false has nothing to change — byte-identical to the
      * no-box default line (no "และปัดขึ้นเต็มกล่อง" wording either way, since hasBox is false).
-     * F1 fix (2026-09-16 review): this line used to read "(จำนวน 32 แผ่น = 32 แผ่น)" -- a pure echo
-     * of quantityPart's own count, with no box and no wastage to justify restating it. */
+     * It must not read "(จำนวน 32 แผ่น = 32 แผ่น)" -- a pure echo of quantityPart's own count,
+     * with no box and no wastage to justify restating it. */
     @Test
     void calculationLine_roundToFullBoxFalse_noPiecesPerBox_isUnaffected() {
         String withFalse = recomputedLine(TH,
@@ -1314,7 +1297,7 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(Quantity 32 pcs = 3 boxes + 2 pcs) (10 pcs/box)");
     }
 
-    /** Review fix F2 (2026-09-16): the English mirror of
+    /** The English mirror of
      * {@link #calculationLine_thaiLoosePieces_noneModeWithStaleNonZeroValue_doesNotDuplicateIntermediateClause}. */
     @Test
     void calculationLine_englishLoosePieces_noneModeWithStaleNonZeroValue_doesNotDuplicateIntermediateClause() {
@@ -1341,10 +1324,9 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(Quantity 30 pcs = 3 boxes) (10 pcs/box)");
     }
 
-    /** F1 fix (2026-09-16 review): the English mirror of {@link
-     * #calculationLine_thaiLoosePieces_fullBoxesIsZero_printsPiecesOnlyNoBoxWord} -- this used to
-     * print "(Quantity 7 pcs = 7 pcs) (10 pcs/box)", the English shape of the same production
-     * duplicate bug. */
+    /** The English mirror of {@link
+     * #calculationLine_thaiLoosePieces_fullBoxesIsZero_printsPiecesOnlyNoBoxWord} -- it must not
+     * print "(Quantity 7 pcs = 7 pcs) (10 pcs/box)", the English shape of the same duplicate. */
     @Test
     void calculationLine_englishLoosePieces_fullBoxesIsZero_printsPcsOnlyNoBoxWord() {
         String line = recomputedLine(EN,
@@ -1367,12 +1349,11 @@ class DealQuotationLinesTest {
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null,
             10, 10, false))
             .isEqualTo("(Quantity 10 pcs = 1 box) (10 pcs/box)");
-        // 0 full boxes, exactly 1 loose piece, no wastage: F1 fix -- no trailing "=" clause at
-        // all (it would just echo "1 pcs"/"1 pc", the same count quantityPart already states).
-        // Wording-scan fix 7 (2026-09-17): quantityPart itself now pluralizes ("Quantity 1 pc",
-        // not "1 pcs") through the shared plural() helper -- this test's own piecesBeforeWastage=1
-        // makes it exactly the "exactly one" case the fix targets, so the pinned string changes
-        // from "(Quantity 1 pcs)" to "(Quantity 1 pc)".
+        // 0 full boxes, exactly 1 loose piece, no wastage: no trailing "=" clause at all (it
+        // would just echo "1 pcs"/"1 pc", the same count quantityPart already states).
+        // quantityPart itself pluralizes ("Quantity 1 pc", not "1 pcs") through the shared
+        // plural() helper -- this test's own piecesBeforeWastage=1 is exactly the "exactly one"
+        // case, so the pinned string is "(Quantity 1 pc)".
         assertThat(recomputedLine(EN,
             WastageCalculator.QUANTITY_MODE_PIECES, null, null, 1, WastageCalculator.WASTAGE_MODE_NONE, null,
             1, 10, false))
@@ -1387,10 +1368,10 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(Quantity 100 pcs + 15 pcs allowance = 115 pcs = 9 boxes + 7 pcs) (12 pcs/box)");
     }
 
-    /** F1 fix (2026-09-16 review): the English default branch used to always echo "= N pcs"
-     * regardless of hasBox/hasWastage, printing "(Quantity 32 pcs = 32 pcs)" here -- a pure echo,
-     * the exact English-side duplicate the production bug report also names ("(Quantity 3,360 pcs
-     * = 3,360 pcs)"). Now gated the same way as the Thai branch: {@code hasBox || hasWastage}. */
+    /** The English default branch must not always echo "= N pcs" regardless of
+     * hasBox/hasWastage ("(Quantity 32 pcs = 32 pcs)" here, or "(Quantity 3,360 pcs
+     * = 3,360 pcs)") -- a pure echo. Gated the same way as the Thai branch:
+     * {@code hasBox || hasWastage}. */
     @Test
     void calculationLine_englishRoundToFullBoxFalse_noPiecesPerBox_isUnaffected() {
         String withFalse = recomputedLine(EN,
@@ -1402,9 +1383,9 @@ class DealQuotationLinesTest {
         assertThat(withFalse).isEqualTo(withTrue).isEqualTo("(Quantity 32 pcs)");
     }
 
-    // ── F1 (2026-09-16 review) — wrong-way-round: the duplicate must NEVER appear ───────────────
-    // These are the mutation-check fixtures for the F1 fix: reintroducing the unconditional
-    // trailing "= N" clause (either branch) must turn these red. Written as an explicit
+    // ── wrong-way-round: the duplicate must NEVER appear ─────────────────────────────────────────
+    // Mutation-check record: reintroducing the unconditional trailing "= N" clause (either
+    // branch) must turn these red. Written as an explicit
     // doesNotContain, independent in STYLE from the exact-equality assertions above, so a future
     // change to the surrounding wording (which would need the exact-match tests updated anyway)
     // still has an assertion that specifically targets the duplicate shape.

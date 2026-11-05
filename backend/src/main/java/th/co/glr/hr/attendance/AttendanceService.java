@@ -20,7 +20,6 @@ import th.co.glr.hr.attendance.daily.AttendanceDailyFilter;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
 import th.co.glr.hr.attendance.daily.AttendanceEmployeeOption;
 import th.co.glr.hr.attendance.daily.AttendanceWfhRosterResult;
-import th.co.glr.hr.attendance.daily.EmployeeDay;
 import th.co.glr.hr.attendance.daily.UnmappedBadge;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;

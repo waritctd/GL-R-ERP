@@ -2,19 +2,15 @@ import { render, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { QuotationDocumentView } from './QuotationDocumentView.jsx';
 
-// F2 (Opus final-pass review, Quotation v2): ITEM_GRID used to end in `mobile:grid-cols-1`, so at
-// 390px `.table-head` stacked into six orphan labels (รายละเอียด/จำนวน/ราคา.../ส่วนลด/สุทธิ/
-// เป็นเงิน with no values under them) and every body value rendered unlabelled underneath. Fixed
-// by switching to the repo's `reflow-cards` card-reflow treatment (see OvertimePanel.jsx's
-// OVERTIME_TABLE_GRID for the same pattern): `.table-head` is hidden below 720px (styles.css
-// ~L1330) and each `.data-row` cell carries its own `data-label`, printed via CSS `::before`.
+// ITEM_GRID must not end in `mobile:grid-cols-1`: at 390px `.table-head` stacked into six orphan
+// labels with every body value unlabelled underneath. It uses the repo's `reflow-cards` treatment
+// (see OvertimePanel.jsx's OVERTIME_TABLE_GRID): `.table-head` is hidden below 720px and each
+// `.data-row` cell carries its own `data-label`, printed via CSS `::before`.
 //
-// jsdom never evaluates styles.css (vitest.config.js sets `css: false`), so the label/value
-// pairing this test can prove is in the MARKUP -- each value cell carries the `data-label`
-// attribute CSS keys off -- matching the convention `OvertimePage.test.jsx` already uses for the
-// same CSS-only reflow mechanism. The matchMedia stub is included anyway (repo convention for
-// "mobile width" assertions, e.g. TicketListPage.test.jsx's stubMobile) so this test still means
-// what it says if the component ever grows a JS-side mobile branch.
+// jsdom never evaluates styles.css (vitest.config.js sets `css: false`), so the label/value pairing
+// provable here is in the MARKUP (the `data-label` attribute CSS keys off), as in
+// `OvertimePage.test.jsx`. The matchMedia stub is the repo convention for "mobile width" assertions
+// (e.g. TicketListPage.test.jsx's stubMobile).
 
 const realMatchMedia = window.matchMedia;
 
@@ -100,10 +96,7 @@ describe('QuotationDocumentView -- mobile card reflow (F2)', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Owner feedback pass 1, 2026-09-10 — F1 (one ตำแหน่งติดตั้ง heading per RUN) and F2 (ผู้สั่งซื้อ
-// in the signature block).
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── ONE ตำแหน่งติดตั้ง heading per RUN, and ผู้สั่งซื้อ in the signature block ──
 
 function docItem(seq, locationLabel, descriptionLine) {
   return {
@@ -151,8 +144,8 @@ describe('QuotationDocumentView -- ยืนราคา (V178, owner ruling 202
   });
 });
 
-// Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16) — mirrors
-// DealQuotationRenderAdapter#depositLine's own "0% is ไม่รับมัดจำ, not a phantom deposit" fix.
+// "ไม่รับมัดจำ": mirrors DealQuotationRenderAdapter#depositLine's "0% is ไม่รับมัดจำ, not a phantom
+// deposit" rule.
 describe('QuotationDocumentView -- มัดจำ / ไม่รับมัดจำ (V181, owner ruling 2026-09-16)', () => {
   function fieldText(container, label) {
     const span = Array.from(container.querySelectorAll('span'))
@@ -185,9 +178,9 @@ describe('QuotationDocumentView -- มัดจำ / ไม่รับมัด
       .toBe('บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า');
   });
 
-  // LEGACY (pre-V181): a zero-deposit row saved before this feature has no fullPaymentTerm --
-  // this summary must keep reading the SAME remainderMode-based text the printed document does
-  // (DealQuotationRenderAdapter#depositLine's own legacy fallback), never a blank.
+  // LEGACY: a zero-deposit row saved before fullPaymentTerm existed must keep reading the SAME
+  // remainderMode-based text the printed document does (DealQuotationRenderAdapter#depositLine's
+  // legacy fallback), never a blank.
   it('a legacy zero-deposit row (no fullPaymentTerm) falls back to the remainderMode-based text', () => {
     const { container: credit } = render(<QuotationDocumentView quotation={docQuotation({
       depositPercent: 0, remainderMode: 'CREDIT', creditDays: 45, fullPaymentTerm: null,
@@ -202,20 +195,19 @@ describe('QuotationDocumentView -- มัดจำ / ไม่รับมัด
 });
 
 describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10)', () => {
-  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe either bug
-  // pinned here — both were measured in a real browser and can only be RE-measured in one. This is
-  // a TEXT guard on the class-string decisions, so a later edit cannot quietly drop them.
+  // WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout, so it cannot observe either bug
+  // pinned here; both were measured in a real browser and can only be re-measured in one. This is a
+  // TEXT guard on the class-string decisions, so a later edit cannot quietly drop them.
   //
   //   1. Every NUMERIC column carries a FIXED floor, so the grid can never shrink a baht figure
-  //      below its own text. Measured: เป็นเงิน was cut at every table width under 850px AND on
-  //      desktop at 1041–1150px where the sidebar returns.
+  //      below its own text (เป็นเงิน was cut at every table width under 850px AND on desktop at
+  //      1041-1150px where the sidebar returns).
   //   2. The floors are FIXED lengths, never `min-content`. The head row and each data row are
   //      SEPARATE grid containers, so `min-content` sizes each row from ITS OWN numbers and
-  //      right-aligned currency then staggers row to row (measured at up to 23px of drift before
-  //      this was corrected). Fixed floors give every row the identical track list.
-  //   3. รายละเอียด keeps `minmax(0, …)` and stays the FIRST track — it wraps, so it is the one
+  //      right-aligned currency staggers row to row (up to 23px of drift measured).
+  //   3. รายละเอียด keeps `minmax(0, …)` and stays the FIRST track: it wraps, so it is the one
   //      column that should absorb the squeeze.
-  //   4. `tablet:min-w-0` releases `.reflow-cards`'s shared 900px floor for 721–1040px, which is
+  //   4. `tablet:min-w-0` releases `.reflow-cards`'s shared 900px floor for 721-1040px, which is
   //      safe only because of (1).
   function gridClasses(el, what) {
     expect(el, `no ${what} to read the grid classes from`).toBeTruthy();
@@ -245,18 +237,17 @@ describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10
       const fixed = classes.match(/minmax\(\d+(?:\.\d+)?rem,/g) ?? [];
       expect(fixed, `${what}: each numeric column needs its own fixed floor`).toHaveLength(5);
 
-      // The WHOLE track list, pinned literally — counting floors is not enough. Shrinking all
-      // five to `minmax(1rem, …)`, or permuting them so เป็นเงิน gets ส่วนลด's 3.5rem, keeps the
-      // counts above intact and the suite green while silently clipping เป็นเงิน again by 27px
-      // and 49px respectively (both measured in a browser at 721px, with no overflow and no
-      // scrollbar to show for it). The magnitudes ARE the fix, so the magnitudes are the guard.
+      // The WHOLE track list, pinned literally; counting floors is not enough. Shrinking all five to
+      // `minmax(1rem, …)`, or permuting them so เป็นเงิน gets ส่วนลด's 3.5rem, keeps the counts above
+      // intact while silently clipping เป็นเงิน again by 27px and 49px (measured at 721px, with no
+      // overflow or scrollbar). The magnitudes ARE the fix, so they are the guard.
       //
       // The five values are the measured min-content of each column's widest formattable value at
       // the app's 16px root, rounded up: 999,999 แผ่น 90px · ฿999,999.99 88px · 99.99% 54px ·
-      // ฿999,999.99 88px · ฿999,999,999.99 123px — except เป็นเงิน, sized for the FALLBACK font
-      // (130.5px) rather than Sarabun, see the source comment. Re-measure before changing any, and
-      // keep รายละเอียด's `minmax(0,3fr)` FIRST — a floored first column would stop the
-      // description wrapping and put the squeeze straight back on the money.
+      // ฿999,999.99 88px · ฿999,999,999.99 123px, except เป็นเงิน, sized for the FALLBACK font
+      // (130.5px) rather than Sarabun (see the source comment). Re-measure before changing any, and
+      // keep รายละเอียด's `minmax(0,3fr)` FIRST: a floored first column would stop the description
+      // wrapping and put the squeeze back on the money.
       expect(classes).toContain(
         'grid-cols-[minmax(0,3fr)_minmax(5.75rem,0.8fr)_minmax(5.75rem,0.9fr)'
         + '_minmax(3.5rem,0.6fr)_minmax(5.75rem,0.9fr)_minmax(8.25rem,1fr)]',
@@ -328,9 +319,8 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
     expect(signatures.getByText('คุณวิชัย มั่นคง')).not.toBeNull();
   });
 
-  /** F2-reversal regression guard: this fixture's contactName ('ณัฐพงศ์ ศรีวิไล') must NEVER
-   * appear in the signature slot any more, even though it is present on the quotation -- the
-   * slot no longer auto-fills from it at all. */
+  /** The fixture's contactName ('ณัฐพงศ์ ศรีวิไล') must NEVER appear in the signature slot, even
+   * though it is present on the quotation: the slot does not auto-fill from it. */
   it('never falls back to the contact name any more, even when one is recorded', () => {
     const { getByText } = render(<QuotationDocumentView quotation={docQuotation()} />);
     const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
@@ -347,10 +337,9 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
     expect(container.textContent).toContain('-');
   });
 
-  // Owner, 2026-10-06: the EDITOR's field for this name is now labelled ผู้ติดต่อ, "but the pdf
-  // still render as ผู้สั่งซื้อ". This view is the document as the customer receives it, so it is
-  // on the PDF's side of that line — its heading must not follow the editor's. Wrong-way-round:
-  // the new word is asserted ABSENT, so a tidy-minded "make the two agree" edit goes red here.
+  // The EDITOR's field for this name is labelled ผู้ติดต่อ but the PDF still renders ผู้สั่งซื้อ. This
+  // view is the document as the customer receives it, so its heading must not follow the editor's.
+  // Wrong-way-round: the new word is asserted ABSENT, so a "make the two agree" edit goes red.
   it('still heads the slot ผู้สั่งซื้อ — the editor\'s ผู้ติดต่อ label never reaches the document', () => {
     const { getByText } = render(
       <QuotationDocumentView quotation={docQuotation({ orderedByName: 'คุณวิชัย มั่นคง' })} />,
@@ -374,7 +363,7 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
   });
 });
 
-// ── Quotation v3 / v3b rows and the English form (owner feedback pass 3, 2026-09-11) ────────────
+// ── Quotation v3 / v3b rows and the English form ──
 describe('QuotationDocumentView — PLAIN / ADJUSTMENT rows, like the printed form', () => {
   const v3 = {
     ...quotation,
@@ -430,11 +419,10 @@ describe('QuotationDocumentView — PLAIN / ADJUSTMENT rows, like the printed fo
     expect(tileRow.querySelector('div')).toBeNull();
   });
 
-  // Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06): on a MIXED document each tile
-  // row was priced in its own mode, and its ส่วนลด cell says so — exactly what
-  // DealQuotationRenderAdapter#discountLabel prints, so the page and the PDF agree row by row.
-  // Wrong-way-round built in: read by the DOCUMENT's mode ("MIXED" is none of the three) every
-  // one of these rows would fall through to the percent rule and the two พิเศษ rows would say Net.
+  // Mixed price modes: on a MIXED document each tile row was priced in its own mode and its ส่วนลด
+  // cell says so, exactly what DealQuotationRenderAdapter#discountLabel prints, so page and PDF
+  // agree row by row. Wrong-way-round built in: read by the DOCUMENT's mode ("MIXED" is none of the
+  // three) every row would fall through to the percent rule and the two พิเศษ rows would say Net.
   it('a MIXED document labels each tile row by ITS mode: 20%, พิเศษ, พิเศษ, Net — and prints the sub-line on the ราคาพิเศษ row only', () => {
     const tile = (id, seq, extra) => ({
       id, seq, lineType: 'TILE', descriptionLine: `Row ${seq}`, sizeLine: '60x120', calculationLine: '(calc)',
@@ -483,8 +471,8 @@ describe('QuotationDocumentView — the English (USD) document', () => {
     expect(container.textContent).not.toContain('฿');
   });
 
-  // Review fix (Opus, 2026-09-13): mock mode returns quantity null for an English per-sqm row and
-  // the fallback used to print the PIECE count under "SQM" ("3,360 SQM") — a plausible-looking lie.
+  // Mock mode returns quantity null for an English per-sqm row; the fallback must not print the
+  // PIECE count under "SQM" ("3,360 SQM"), a plausible-looking lie.
   it('an English per-sqm row with no server quantity prints "-", never its piece count as SQM', () => {
     const perSqm = {
       ...en, priceMode: 'SPECIAL_SQM',
@@ -529,9 +517,9 @@ describe('QuotationDocumentView — the header lines the document prints (owner,
     contactName: 'ธนพล ศรีวัฒนกุล', contactPhone: '081-234-5678', contactEmail: 'thanaphon@example.co.th',
   };
 
-  // Owner, 2026-10-13: the phone and e-mail on the printed customer line are the ผู้ติดต่อ ones
-  // typed on the quotation, or nothing — the customer master's phone and the registry contact's
-  // phone/e-mail are not printed, so this panel does not show them as printed either.
+  // The phone and e-mail on the printed customer line are the ผู้ติดต่อ ones typed on the quotation,
+  // or nothing; the customer master's phone and the registry contact's phone/e-mail are not printed,
+  // so this panel does not show them as printed either.
   it('shows every filled field — but not the master phone/e-mail, which the paper no longer prints', () => {
     const { getByTestId, queryByTestId } = render(<QuotationDocumentView quotation={filled} />);
     expect(getByTestId('doc-address').textContent).toContain('201 ซอยสุขุมวิท 63');
@@ -567,11 +555,9 @@ describe('QuotationDocumentView — the header lines the document prints (owner,
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-only name override. This
-// preview must show exactly what DealQuotationRenderAdapter actually prints, so these tests mirror
-// DealQuotationRenderAdapterV3Test's own cases one-to-one rather than inventing new ones.
-// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── ผู้พิมพ์/พนักงานขาย print-only name override. This preview must show exactly what
+// DealQuotationRenderAdapter prints, so these tests mirror DealQuotationRenderAdapterV3Test's cases
+// one-to-one. ──
 describe('QuotationDocumentView — V179 ผู้พิมพ์/พนักงานขาย display override', () => {
   it('with no override, shows the real createdByName/salesRepName+phone (today\'s behaviour)', () => {
     const { container } = render(<QuotationDocumentView quotation={docQuotation({
@@ -582,7 +568,7 @@ describe('QuotationDocumentView — V179 ผู้พิมพ์/พนัก�
     expect(container.textContent).toContain('T.081-000-0000');
   });
 
-  // The owner's own example: "ผู้พิมพ์ อยากให้แสดงเป็นจินตนา ส่วนพนักงานขายอยากให้แสดงเป็น ชนิดา".
+  // Example: "ผู้พิมพ์ อยากให้แสดงเป็นจินตนา ส่วนพนักงานขายอยากให้แสดงเป็น ชนิดา".
   it('with both overrides set, shows the DISPLAY names+phone, not the real ones, in both the summary card and the signature block', () => {
     const { container } = render(<QuotationDocumentView quotation={docQuotation({
       createdByName: 'แอดมิน', salesRepName: 'เซลล์จริง', salesRepPhone: '081-111-1111',
@@ -620,11 +606,10 @@ describe('QuotationDocumentView — V179 ผู้พิมพ์/พนัก�
   });
 });
 
-// Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". The printed document
-// drops its "Project : …" line (DealQuotationRenderAdapter hands the renderer no project name).
-// This screen is the INTERNAL view of the same document: the approver still needs to know which
-// project they are approving, so the name stays — with the fact that it will not print said in
-// words beside it, so screen and paper are never silently different.
+// The printed document drops its "Project : …" line (DealQuotationRenderAdapter hands the renderer
+// no project name). This screen is the INTERNAL view: the approver still needs to know which project
+// they are approving, so the name stays, with the fact that it will not print said in words beside
+// it, so screen and paper are never silently different.
 describe('QuotationDocumentView — ไม่แสดงชื่อโครงการ (sales feedback #5, 2026-10-06)', () => {
   it('an ordinary document names its project with no note', () => {
     const { getByText, queryByText } = render(

@@ -17,19 +17,19 @@ import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
 /**
- * Leave -&gt; payroll unpaid-day deduction (2026-07-23): shared weekday-counting math used both to
+ * Leave -&gt; payroll unpaid-day deduction: shared weekday-counting math used both to
  * attribute a leave request's unpaid days to the payroll month(s) it falls in ({@link
  * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}) and to work out how many already-deducted
  * days a cancelled leave owes back when it is cancelled after payroll has processed ({@link
  * LeaveService#cancel}).
  *
- * <p><b>Schedule/holiday-aware working-day counting (2026-08-03):</b> "is this date a working day"
- * used to be a single hardcoded Mon-Fri check ({@link #isWorkingDay(LocalDate)}), which was wrong in
- * two directions the class's own javadoc used to flag as known gaps: it treated every Saturday as a
+ * <p><b>Schedule/holiday-aware working-day counting:</b> "is this date a working day" must not be
+ * a single hardcoded Mon-Fri check ({@link #isWorkingDay(LocalDate)}), which is wrong in
+ * two directions: it treats every Saturday as a
  * non-working day even for six-day departments (คลังสินค้า/แม่บ้าน, V115/V117/V121's {@code OPS_6D}),
- * understating their unpaid-day counts; and it had no holiday calendar, so a public holiday inside a
- * leave range counted as a working day, over-counting (and over-deducting) leave across it. Every
- * method below that decides "does this date count" now takes a {@code Predicate<LocalDate>
+ * understating their unpaid-day counts; and it has no holiday calendar, so a public holiday inside a
+ * leave range counts as a working day, over-counting (and over-deducting) leave across it. Every
+ * method below that decides "does this date count" takes a {@code Predicate<LocalDate>
  * isWorkingDay} built by the caller via {@link #workingDayPredicate} -- combining the employee's
  * resolved {@code WorkSchedule} (V115's {@code TieredWorkScheduleResolver}: EMPLOYEE > DEPARTMENT >
  * DIVISION > company default, effective-dated) with {@code hr.holiday} (V115's
@@ -49,24 +49,24 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
  * per-day flag, so chronological consumption is the only ordering they can represent, and it matches
  * the natural reading of "day N onward went unpaid".
  *
- * <p><b>Sub-day leave (2026-07-25):</b> {@link #unpaidWorkingDaysByMonth} now takes/returns
+ * <p><b>Sub-day leave:</b> {@link #unpaidWorkingDaysByMonth} takes/returns
  * {@link BigDecimal} instead of {@code int}, so a fractional sub-day request (e.g. a half-day,
- * {@code 0.50}) can be attributed precisely instead of being floored to a whole day. A SINGLE-day
- * timed request (still the only shape {@code chk_leave_time_single_day} allowed before V166) is
+ * {@code 0.50}) is attributed precisely instead of being floored to a whole day. A SINGLE-day
+ * timed request (the only shape {@code chk_leave_time_single_day} allowed before V166) is
  * handled directly by the single-date branch below: the whole {@code totalDays - paidDays} remainder
  * lands in that one day's month, with no rank/weekday logic needed since there is only one day it
- * could ever land in. The multi-day branch below this point (fixed 2026-09-25, see that method's own
- * javadoc) now consumes a fractional {@code paidDays} balance day-by-day instead of flooring it to a
- * whole number of paid days up front -- a boundary day where the paid balance runs out mid-day can
- * therefore split into a paid portion and an unpaid portion, rather than the whole day being counted
- * as unpaid. It does NOT gain fraction-awareness for a multi-day TIMED request (V166, 2026-09-10,
+ * could ever land in. The multi-day branch below (see that method's own
+ * javadoc) consumes a fractional {@code paidDays} balance day-by-day instead of flooring it to a
+ * whole number of paid days up front -- a boundary day where the paid balance runs out mid-day
+ * therefore splits into a paid portion and an unpaid portion, rather than the whole day being counted
+ * as unpaid. It does NOT gain fraction-awareness for a multi-day TIMED request (V166,
  * relaxed {@code chk_leave_time_single_day}) -- that is a separate, additive set of methods further
  * down this class (see the "Partial-day span" section header), whose {@code
- * unpaidByMonthFromFractions} already used running-balance consumption and is unaffected by this fix.
+ * unpaidByMonthFromFractions} uses running-balance consumption.
  *
- * <p><b>§5.4 MATERNITY calendar-day counting (V119, 2026-08-02):</b> every method below has a
- * {@link LeaveDayCountBasis}-aware overload alongside its original no-basis signature, which is
- * UNCHANGED and simply delegates to the new overload with {@code WORKING_DAYS}. See {@link
+ * <p><b>§5.4 MATERNITY calendar-day counting (V119):</b> every method below has a
+ * {@link LeaveDayCountBasis}-aware overload alongside its original no-basis signature, which
+ * simply delegates to the new overload with {@code WORKING_DAYS}. See {@link
  * LeaveDayCountBasis} for the announcement text this implements and {@link LeaveService#submit}/
  * {@link LeaveService#computeTotalDays} for where the basis is selected.
  */
@@ -81,7 +81,7 @@ final class LeaveDayMath {
 
     /**
      * Builds the schedule/holiday-aware {@code isWorkingDay} predicate every basis-aware method
-     * below takes (2026-08-03). A date counts as a working day when it is NOT in {@code holidays}
+     * below takes. A date counts as a working day when it is NOT in {@code holidays}
      * AND the employee's {@code WorkSchedule}, resolved for that specific date via {@code
      * scheduleResolver}, has it as a workday -- i.e. holiday beats schedule (a holiday is never a
      * working day regardless of a six-day schedule), mirroring {@code AttendanceDailyService}'s own
@@ -120,8 +120,8 @@ final class LeaveDayMath {
 
     /**
      * Legacy/test convenience overload: Mon-Fri only, no holiday calendar -- the hardcoded
-     * assumption this class used before it became schedule/holiday-aware (2026-08-03). Every
-     * production call site now goes through the 3-arg overload above with a real predicate (see
+     * assumption that is not schedule/holiday-aware. Every
+     * production call site goes through the 3-arg overload above with a real predicate (see
      * {@link LeaveRepository#workingDayPredicate}); this overload survives only because
      * {@code LeaveDayMathTest} pins the pure Mon-Fri math directly, with no schedule/holiday fixture
      * to build.
@@ -151,14 +151,14 @@ final class LeaveDayMath {
      *
      * <p>Multi-day range (always whole-day -- sub-day leave can never span more than one date): each
      * counted working day is worth {@code 1.00}, and {@code paidDays} is consumed against those days as
-     * a RUNNING FRACTIONAL BALANCE (2026-09-25 fix), not floored to a whole number of days up front --
+     * a RUNNING FRACTIONAL BALANCE, not floored to a whole number of days up front --
      * so a boundary day where the balance runs out mid-day is split between that day's month bucket
      * (the unpaid remainder) and the paid portion consumed, rather than the whole day landing as
      * unpaid. This mirrors {@link #unpaidByMonthFromFractions}'s balance-consumption approach, just
-     * over a flat {@code 1.00}-per-day ledger instead of a fractional per-day ledger. (Before this fix,
-     * {@code paidDays} was floored via {@code setScale(0, DOWN)} before ranking days against it, which
-     * silently discarded a fractional paid remainder -- e.g. 1.50 paid days over a 2-working-day leave
-     * used to yield 1.00 unpaid instead of the correct 0.50.)
+     * over a flat {@code 1.00}-per-day ledger instead of a fractional per-day ledger. (Flooring
+     * {@code paidDays} via {@code setScale(0, DOWN)} before ranking days against it would
+     * silently discard a fractional paid remainder -- e.g. 1.50 paid days over a 2-working-day leave
+     * would yield 1.00 unpaid instead of the correct 0.50.)
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
             LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays) {
@@ -178,13 +178,13 @@ final class LeaveDayMath {
     }
 
     /**
-     * Schedule/holiday-aware canonical implementation (2026-08-03). {@link
+     * Schedule/holiday-aware canonical implementation. {@link
      * LeaveDayCountBasis#WORKING_DAYS} ranks a date only when {@code isWorkingDay} (see {@link
      * #workingDayPredicate}) says it counts for THIS employee on THIS date -- a Saturday counts for
      * a six-day-schedule employee and not for a five-day one on the identical calendar date, and a
      * seeded {@code hr.holiday} row removes a date from counting for everyone regardless of
-     * schedule. {@link LeaveDayCountBasis#CALENDAR_DAYS} (MATERNITY) is UNCHANGED by this overload
-     * -- it ranks every day exactly as before, never consulting {@code isWorkingDay} at all (see
+     * schedule. {@link LeaveDayCountBasis#CALENDAR_DAYS} (MATERNITY) ranks every day,
+     * never consulting {@code isWorkingDay} at all (see
      * that enum's javadoc for why this must stay true).
      */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
@@ -220,9 +220,9 @@ final class LeaveDayMath {
     }
 
     /**
-     * The hardcoded Mon-Fri assumption this class carried before it became schedule/holiday-aware
-     * (2026-08-03). Kept only as the default predicate for the legacy overloads above (and for
-     * {@code LeaveDayMathTest}'s pure-math coverage) -- every production call site now builds a
+     * The hardcoded Mon-Fri assumption, not schedule/holiday-aware.
+     * Kept only as the default predicate for the legacy overloads above (and for
+     * {@code LeaveDayMathTest}'s pure-math coverage) -- every production call site builds a
      * real predicate via {@link #workingDayPredicate} instead. Do not add a new production call
      * site against this method; it does not know about six-day schedules or {@code hr.holiday}.
      */
@@ -255,11 +255,10 @@ final class LeaveDayMath {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // V118 cross-year quota fix (2026-08-02): a request's days may now need to be attributed to more
+    // Cross-year quota (V118): a request's days may need to be attributed to more
     // than one calendar year (§5.4 MATERNITY, up to 98 working days -- see LeaveQuotaYearSplit). The
-    // methods below EXTEND this class's existing chronological weekday-counting logic to work per
-    // year instead of writing a second, divergent day-counting rule -- the Mon-Fri working-day
-    // assumption above is untouched.
+    // methods below EXTEND this class's chronological weekday-counting logic to work per
+    // year instead of introducing a second, divergent day-counting rule.
     // ─────────────────────────────────────────────────────────────────────
 
     /**
@@ -269,9 +268,9 @@ final class LeaveDayMath {
      * working day, bucketed by {@code cursor.getYear()} -- mirrors {@link #unpaidWorkingDaysByMonth}'s
      * multi-day branch's DAY-RANKING/bucketing walk (same cursor, same {@code basis.counts} test), NOT
      * its paid-consumption: this method has no {@code paidDays} parameter and emits a flat {@code 1.00}
-     * per counted day regardless of how much of the request is paid, so the 2026-09-25 fix that made
-     * {@code unpaidWorkingDaysByMonth} consume a fractional paid balance (rather than flooring it) has
-     * no analogue here -- there is no paid/unpaid split to get right in a total-days-by-year count. The
+     * per counted day regardless of how much of the request is paid, so the fractional paid balance
+     * {@code unpaidWorkingDaysByMonth} consumes has no analogue here -- there is no paid/unpaid
+     * split to get right in a total-days-by-year count. The
      * returned
      * map's key order is guaranteed ascending (years are only ever appended in the order the cursor
      * walks through them), so a caller may safely read the first entry as the request's earliest
@@ -292,7 +291,7 @@ final class LeaveDayMath {
     }
 
     /**
-     * Schedule/holiday-aware canonical implementation (2026-08-03) -- see {@link
+     * Schedule/holiday-aware canonical implementation -- see {@link
      * #unpaidWorkingDaysByMonth(LocalDate, LocalDate, BigDecimal, BigDecimal, LeaveDayCountBasis, Predicate)}
      * for the identical {@code basis}/{@code isWorkingDay} interaction, just bucketed by year instead
      * of by month.
@@ -367,7 +366,7 @@ final class LeaveDayMath {
     }
 
     /**
-     * Schedule/holiday-aware canonical implementation (2026-08-03). The SAME basis AND the SAME
+     * Schedule/holiday-aware canonical implementation. The SAME basis AND the SAME
      * {@code isWorkingDay} predicate apply to every year in {@code perYear} -- a leave TYPE's
      * counting basis (and an employee's resolved schedule/holiday awareness) does not change from
      * one calendar year to the next, only the request's date range does.
@@ -389,24 +388,23 @@ final class LeaveDayMath {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Partial-day span (V166, owner ruling 2026-09-10, FINAL after four supersessions): a TIMED
-    // request (start_time NOT NULL) may now cross more than one calendar day -- e.g. 13:00 day 1
-    // through 17:30 day 2. Every method above this point is UNCHANGED and stays the only path for a
+    // Partial-day span (V166): a TIMED
+    // request (start_time NOT NULL) may cross more than one calendar day -- e.g. 13:00 day 1
+    // through 17:30 day 2. Every method above this point stays the only path for a
     // whole-day request (no times) or a legacy single-day timed request routed through
     // #unpaidWorkingDaysByMonth's/#totalDaysByYear's own single-date branch -- neither of those call
     // sites is touched by this section. The methods below are a SEPARATE, ADDITIVE code path, reached
     // ONLY when a caller explicitly builds a {@link #spanDayFractions} ledger for a timed request;
-    // nothing above ever calls them, so no existing behaviour (including the deliberately-not-
-    // generalised whole-day floor(paidDays) rank algorithm in #unpaidWorkingDaysByMonth) changes for
-    // a single existing caller.
+    // nothing above ever calls them, so the deliberately-not-
+    // generalised whole-day floor(paidDays) rank algorithm in #unpaidWorkingDaysByMonth is unaffected.
     //
-    // The day-fraction rule (FINAL, owner 2026-09-10): an EARLIER draft of this method divided a
+    // The day-fraction rule: do NOT divide a
     // boundary segment's clock minutes by that day's own resolved WorkSchedule span (e.g. 540 minutes
-    // for the seeded 08:30-17:30 schedule). That is WRONG and was superseded -- it silently bakes the
+    // for the seeded 08:30-17:30 schedule). That silently bakes the
     // schedule's own lunch break into the denominator only for a segment that happens to cover the
     // whole day, so a boundary segment that does NOT overlap the break (13:30-17:30, the afternoon
-    // half) came out to 240/540 = 0.44 instead of the correct 0.50, breaking the symmetry between a
-    // morning half and an afternoon half. The FINAL rule instead fixes the denominator at 480 (8
+    // half) would come out to 240/540 = 0.44 instead of the correct 0.50, breaking the symmetry between a
+    // morning half and an afternoon half. The rule instead fixes the denominator at 480 (8
     // WORKED hours) and explicitly subtracts whatever part of [from,to) overlaps the company-wide
     // 12:30-13:30 lunch break:
     //
@@ -415,13 +413,13 @@ final class LeaveDayMath {
     //
     // This break window is LEAVE-ARITHMETIC ONLY -- {@link WorkSchedule} has no break concept at all
     // (see its javadoc) and this must never leak into attendance, which has none either. Worked
-    // examples (from the owner ruling): morning 08:30-12:30 = 240/480 = 0.50; afternoon 13:30-17:30 =
-    // 240/480 = 0.50 (symmetric with the morning, which the schedule-span draft above broke); a full
-    // 08:30-17:30 day = (540 clock - 60 break) / 480 = 480/480 = 1.00 EXACTLY; 11:00-14:00 = (180
-    // clock - 60 break) / 480 = 120/480 = 0.25. This REPLACES the old hours/8 divisor (no break
-    // subtraction, gave 0.5625 for 13:00-17:30) for a SINGLE-day timed request too -- see {@link
-    // LeaveService#computeTotalDays}'s Javadoc for the call-site wiring; 13:00-17:30 now correctly
-    // gives (270 clock - 30 break overlap)/480 = 240/480 = 0.50.
+    // examples: morning 08:30-12:30 = 240/480 = 0.50; afternoon 13:30-17:30 =
+    // 240/480 = 0.50 (symmetric with the morning, which a schedule-span denominator would break); a
+    // full 08:30-17:30 day = (540 clock - 60 break) / 480 = 480/480 = 1.00 EXACTLY; 11:00-14:00 =
+    // (180 clock - 60 break) / 480 = 120/480 = 0.25. This applies to a SINGLE-day timed request too
+    // (a plain hours/8 divisor with no break subtraction would give 0.5625 for 13:00-17:30) -- see
+    // {@link LeaveService#computeTotalDays}'s Javadoc for the call-site wiring; 13:00-17:30 gives
+    // (270 clock - 30 break overlap)/480 = 240/480 = 0.50.
     // ─────────────────────────────────────────────────────────────────────
 
     /** The company-wide lunch break subtracted from a boundary segment's worked minutes (leave
@@ -601,7 +599,7 @@ final class LeaveDayMath {
         return combined;
     }
 
-    // ── Display formatting (leave-records report, 2026-09) ──────────────────────────────────
+    // ── Display formatting (leave-records report) ──────────────────────────────────
     //
     // A stored day count is a NUMERIC(5,2) whose fraction came from the SAME 480-worked-minutes-
     // per-day divisor every method above uses (see WORKED_MINUTES_PER_DAY), so 0.38 means "3
@@ -613,12 +611,11 @@ final class LeaveDayMath {
     // re-expresses that already-computed BigDecimal back into the unit it was computed from. Do
     // NOT change the divisor or rounding here independently of leaveFormatting.js -- the two must
     // stay in lock-step or the printed PDF and the portal screen would read different totals for
-    // the same stored value, which is exactly what the #914 quota-block reuse in
-    // LeaveReportRenderer is trying to avoid for the quota figures it also runs through this
-    // method.
+    // the same stored value, which is what LeaveReportRenderer's quota block avoids by running
+    // its quota figures through this method too.
     //
     // Units are the PDF's own abbreviated forms (ชม./น.), not leaveFormatting.js's full words
-    // (ชั่วโมง/นาที) -- the brief's own worked examples ("1 วัน 4 ชม. 30 น.") use the short form, and
+    // (ชั่วโมง/นาที) -- the worked examples ("1 วัน 4 ชม. 30 น.") use the short form, and
     // a printed page has no hover/wrap affordance a web table has, so the shorter unit reads better
     // on paper. The DAYS/HOURS/MINUTES shape (drop a zero-valued unit rather than print it) is
     // otherwise identical to the frontend.

@@ -102,9 +102,9 @@ public class DepositNoticeRepository {
 
     /**
      * The ONE pick of the quotation a ticket-level deposit notice bills, across both engines, so
-     * when it supplies the lines they and the percent come from the same row (owner rulings
-     * 2026-09-29 and 2026-10-23). The PRICING-REQUEST route ({@code OrderConfirmationService
-     * #createDepositNoticeFromQuotation}) already knows its quotation and does not call this.
+     * when it supplies the lines they and the percent come from the same row. The PRICING-REQUEST
+     * route ({@code OrderConfirmationService#createDepositNoticeFromQuotation}) already knows its
+     * quotation and does not call this.
      *
      * <p>Live rows: a legacy pricing-chain quotation ({@code origin IS NULL}, {@code
      * pricing_request_id IS NOT NULL}, the scope {@code CustomerQuotationRepository#findByTicket}
@@ -118,8 +118,7 @@ public class DepositNoticeRepository {
      * <p>A case needing no pre-lock data: a DEAL_DIRECT quotation stays revisable after its order
      * is confirmed ({@code DealQuotationService#requireRevisableStatus}), and once that revision
      * is APPROVED it governs the ticket-route deposit while the deal's ticket_item rows still hold
-     * the confirmed quotation's lines. Ploy 2026-10-27: revisions will lock after confirm
-     * (follow-up PR).
+     * the confirmed quotation's lines. (Revisions are planned to lock after confirm.)
      *
      * <p>Ranking: the latest quotation the customer ANSWERED wins: ACCEPTED on either engine, or
      * APPROVED on a DEAL_DIRECT quotation (its terminal state in practice). Only when
@@ -477,12 +476,12 @@ public class DepositNoticeRepository {
     }
 
     /**
-     * Owner rulings 2026-10-23: a DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
+     * A DEAL_DIRECT ส่วนลดพิเศษ row (ADJUSTMENT, qty -1) cannot be a
      * deposit line (the editor's PUT requires qty &gt;= 0), so its amount is spread over the goods
      * lines in proportion to their amount. "2 decimals for all": each share is HALF_UP to 2 dp and
      * each line's new net price is 2 dp, with no remainder pushed onto a last line. The notice
      * totals are the sum of its own stored 2 dp lines ({@code amount = net x qty}), so they can
-     * differ from the quotation's total by under qty x 0.005 baht per line; that is the ruled
+     * differ from the quotation's total by under qty x 0.005 baht per line; that is the intended
      * outcome, not a bug. A line keeps the quotation's own discount wording, and gains the folded
      * discount after it only when the fold lowered its price. A free line stays as it is.
      */

@@ -12,9 +12,8 @@ import th.co.glr.hr.dealquotation.WastageCalculator.Result;
 
 /**
  * Pins docs/sales/quotation-v2-plan.md's own worked reference figures (QN6900595-3, items 1/3/5) plus every
- * branch of the arithmetic — see {@link WastageCalculator}'s class Javadoc for the corrected
- * rounding rule (every fraction of a piece rounds UP, owner ruling 2026-10-12; it replaced the
- * 2026-09-15 HALF_UP reading).
+ * branch of the arithmetic — see {@link WastageCalculator}'s class Javadoc for the
+ * rounding rule (every fraction of a piece rounds UP, not HALF_UP).
  */
 class WastageCalculatorTest {
 
@@ -33,7 +32,7 @@ class WastageCalculatorTest {
 
         assertThat(r.piecesPerSqm()).isEqualByComparingTo("2.78");
         assertThat(r.piecesBeforeWastage()).isEqualTo(242);
-        // Owner ruling 2026-10-12: any fraction of a piece rounds UP. 242 × 1.10 = 266.20 → 267
+        // Any fraction of a piece rounds UP. 242 × 1.10 = 266.20 → 267
         // (HALF_UP gave 266); the box multiple lands on the same printed 268 either way.
         assertThat(r.piecesAfterWastage()).isEqualTo(267);
         assertThat(r.piecesFinal()).isEqualTo(268);
@@ -56,9 +55,9 @@ class WastageCalculatorTest {
     /**
      * Item1: the line that tells the two rounding rules apart. 569 × 1.39 = 790.91 → 791 under
      * either rule; 791 × 1.10 = 870.1 → 871 rounding up, which the box multiple lifts to 872.
-     * The 2026-09-15 reconciliation read the owner's printed 870 as HALF_UP evidence; on
-     * 2026-10-12 the owner ruled "ปัดขึ้นทุกกรณี" for documents from now on, knowing this
-     * document (and QN6900981-1 row 1, QN6900648 row 4) would no longer reproduce.
+     * The printed 870 on the owner's document is HALF_UP evidence, but the rule is
+     * "ปัดขึ้นทุกกรณี" for documents from now on, so this document (and QN6900981-1 row 1,
+     * QN6900648 row 4) deliberately does not reproduce.
      */
     @Test
     void item1_area569_piecesPerSqm1_39_wastage10pct_ppb2_roundsEveryFractionUp_872() {
@@ -194,9 +193,9 @@ class WastageCalculatorTest {
             new BigDecimal("123.456"), null));
 
         assertThat(r.netUnitPrice()).isEqualByComparingTo("123.46"); // rounded HALF_UP to 2dp
-        // R-D input scale (review fix, 2026-09-15): the LIST price is pre-rounded to 2dp
+        // R-D input scale: the LIST price is pre-rounded to 2dp
         // (123.456 -> 123.46) before the line amount is computed at all — sales.quotation_item.
-        // unit_price is NUMERIC(14,2) (V49), so a 3dp-or-finer typed price must be rounded before
+        // unit_price is NUMERIC(14,2), so a 3dp-or-finer typed price must be rounded before
         // it enters the money math, or the stored row could never reproduce its own amount. So
         // lineAmount here is round2(123.46 × 3) = 370.38, not round2(123.456 × 3) = 370.37 — none
         // of the nine owner documents this rounds against has a list price finer than 2dp, so
@@ -224,16 +223,13 @@ class WastageCalculatorTest {
         assertThat(grand).isEqualByComparingTo("160.51");
     }
 
-    // ── REMOVED (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง") ───────────────────────────────
-    // This class used to carry parseSqmPerPieceFromSize/detectUnit -- a cm-vs-mm GUESS from a
-    // free-text size string -- and nine tests here (readsWidthByHeightAsCentimetres,
-    // returnsNullWhenUnparseable, the six H4 "same tile, different notation" cases, and
-    // ignoresIncidentalLettersThatMerelyContainAUnitToken) pinned that guess's behaviour. Deleted
-    // along with the method: it got a REAL catalog product wrong ("200x300" read as centimetres --
-    // a 2m x 3m tile, 6.0 sqm/piece -- against the owner's own document for that product, 0.061
-    // sqm/piece; wrong by ~98x). The regression that guards against this heuristic ever coming
-    // back now lives on {@code DealQuotationService} instead, since resolution is now the
-    // service's job (catalog lookup), not this pure-arithmetic class's -- see
+    // ── No size-string parsing here ───────────────────────────────────────────────────────────
+    // This class must not GUESS a cm-vs-mm unit from a free-text size string: that got a REAL
+    // catalog product wrong ("200x300" read as centimetres -- a 2m x 3m tile, 6.0 sqm/piece --
+    // against the owner's own document for that product, 0.061 sqm/piece; wrong by ~98x).
+    // sqm/piece resolution is the service's job (catalog lookup), not this pure-arithmetic
+    // class's, so the regression guard against the heuristic lives on {@code DealQuotationService}
+    // -- see
     // {@code DealQuotationServiceSqmPerPieceTest#sqmPerPiece_200x300_isNeverSilentlyReadAsCentimetres}.
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -253,7 +249,7 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /** M4: {@code DealQuotationService#buildItem} added an {@code ArithmeticException} catch
+    /** {@code DealQuotationService#buildItem} catches {@code ArithmeticException}
      * (alongside {@code IllegalArgumentException}) precisely because {@code BigDecimal#
      * intValueExact} inside this class can throw it for an absurd-but-not-otherwise-invalid
      * input -- pinned here at the SOURCE. {@code areaSqm} itself is bounded at the DTO layer
@@ -293,7 +289,7 @@ class WastageCalculatorTest {
             .hasMessageContaining("ขนาดสินค้าไม่สมเหตุสมผล");
     }
 
-    // ── M4: wastageValue bounds are mode-dependent ────────────────────────────────────────────
+    // ── wastageValue bounds are mode-dependent ────────────────────────────────────────────
 
     @Test
     void wastageValuePercent_over100_rejected() {
@@ -322,11 +318,11 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // ── quotation v3 (owner feedback pass 3, 2026-09-11) — SPECIAL_SQM + ADJUSTMENT ──────────
+    // ── SPECIAL_SQM + ADJUSTMENT ──────────────────────────────────────────────────────────────
 
     /**
-     * THE pinned test for S1's ราคาพิเศษ formula. All FOUR of the owner's independent documents,
-     * to the satang. The v3 spec is explicit that a formula reproducing only SOME of these is
+     * THE pinned test for the ราคาพิเศษ formula. All FOUR of the owner's independent documents,
+     * to the satang. A formula reproducing only SOME of these is
      * wrong — the naive "strip VAT, then multiply by ตร.ม./แผ่น" reading gets #1 and #2 right and
      * both 0.72 cases wrong, so a two-case test would have passed it.
      */
@@ -397,7 +393,7 @@ class WastageCalculatorTest {
     }
 
     /**
-     * S3's ส่วนลดพิเศษ, pinned against the owner's own QN6900704-2: 3% of
+     * ส่วนลดพิเศษ, pinned against the owner's own QN6900704-2: 3% of
      * 149,767.20 + 96,012.60 + 528,269.76 + 499,224.00 = 1,273,273.56 is 38,198.21, exactly the
      * printed figure. (The unrounded product is 38,198.2068, so this also pins HALF_UP.)
      */
@@ -423,7 +419,7 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // ── owner decision 2026-09-13: English per-sqm quantity = boxes × supplier sqm/box ─────────
+    // ── English per-sqm quantity = boxes × supplier sqm/box ─────────
 
     /** Her QN6900933, all three rows, to the cent. */
     @Test
@@ -437,7 +433,7 @@ class WastageCalculatorTest {
     }
 
     /**
-     * Review fix (Opus, 2026-09-13): a sqm/box whose box quantity is NOT already a whole cent.
+     * A sqm/box whose box quantity is NOT already a whole cent.
      * Prod catalogue values go to 5dp; every QN6900933 figure happens to multiply out exactly, so
      * those fixtures cannot tell "round the qty, then price it" from "price the unrounded qty".
      * 120 × 0.59696 = 71.6352 → 71.64, and the amount the document prints is 71.64 × 64 = 4,584.96
@@ -465,7 +461,7 @@ class WastageCalculatorTest {
             .isInstanceOf(IllegalArgumentException.class);
     }
 
-    // ── Option B (owner decision, 2026-09-16): English per-sqm quantity with NO box area ─────────
+    // ── English per-sqm quantity with NO box area ─────────────────────────────────────────────
 
     @Test
     void sqmQuantityFromPieces_isRound2OfPiecesTimesSqmPerPiece() {
@@ -511,7 +507,7 @@ class WastageCalculatorTest {
         assertThat(WastageCalculator.isEnglishPerSqm("EN", null)).isFalse();
     }
 
-    // ── Owner-approved "sell loose pieces" (2026-09-16, V182) ─────────────────────────────────
+    // ── "Sell loose pieces" ─────────────────────────────────
 
     /** The 9-arg legacy {@code Input} constructor (every test above this section) defaults
      * {@code roundToFullBox} true — byte-for-byte the only behaviour that existed before this

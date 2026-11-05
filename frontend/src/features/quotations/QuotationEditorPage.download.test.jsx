@@ -8,13 +8,11 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// Owner re-report 2026-09-16: "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้" / "แก้ขนาด/รหัสสินค้าเอง
-// แต่ PDF ยังใช้ค่าเดิม" — the PDF/XLSX are rendered fresh from the DB on every download
-// (DealQuotationService), but the download button used to fetch them with NO save first, so an
-// edit sitting only in the editor's own state (or an autosave still on the wire) never reached the
-// document it downloaded. Fixtures copied from QuotationEditorPage.saveRaces.test.jsx (that file's
-// own header explains why copied rather than imported — it exports nothing) and trimmed to only
-// what these cases need.
+// The PDF/XLSX are rendered fresh from the DB on every download (DealQuotationService), so the
+// download must save first: an edit sitting only in the editor's own state (or an autosave still on
+// the wire) would never reach the document it downloads. Fixtures copied from
+// QuotationEditorPage.saveRaces.test.jsx (that file exports nothing) and trimmed to what these cases
+// need.
 vi.setConfig({ testTimeout: 15000 });
 
 vi.mock('../../api/index.js', async (importOriginal) => {
@@ -119,8 +117,7 @@ beforeEach(() => {
   });
 });
 
-// Owner 2026-10-12 ("combine the download into 1 dropdown"): the two download buttons are one
-// ดาวน์โหลด menu. Open it, then pick the format.
+// The two download buttons are one ดาวน์โหลด menu. Open it, then pick the format.
 async function pickDownload(format) {
   fireEvent.click(await screen.findByRole('button', { name: 'ดาวน์โหลด' }));
   fireEvent.click(await screen.findByRole('menuitem', { name: format }));
@@ -150,17 +147,12 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
       .toBeLessThan(api.dealQuotations.downloadPdf.mock.invocationCallOrder[0]);
   });
 
-  // D1 fix (Opus review 2026-09-16): the original version of this fix refused a download for ANY
-  // blocking validation error, even on a quotation the rep never touched -- an existing incomplete
-  // DRAFT (sent back for correction, or a row missing ความหนา, ~41% of the prod catalogue) has
-  // nothing this flush needs to save, so it must still download the stored document exactly as it
-  // could before this whole fix landed. Refusal is now gated on there being unsaved work the flush
-  // actually cannot save (dirty AND invalid) -- see the next test for that case.
-  // Owner-directed reversal of F2/V167 (2026-09-26): a missing ผู้สั่งซื้อ used to be exactly this
-  // kind of blocking validation error -- it no longer is (ผู้สั่งซื้อ is a single optional
-  // free-text field now), so these two D1/D1-dirty cases are reproduced with "no items" instead
-  // (QUOTATION_CHECK.ITEMS, still blocking) -- the SAME "clean vs dirty" distinction the fix is
-  // actually about, just via a check that is still blocking today.
+  // A download must not be refused for ANY blocking validation error: an existing incomplete DRAFT
+  // (sent back for correction, or a row missing ความหนา, ~41% of the prod catalogue) has nothing
+  // this flush needs to save, so it must still download the stored document. Refusal is gated on
+  // unsaved work the flush cannot save (dirty AND invalid); see the next test. A missing ผู้สั่งซื้อ
+  // is no longer blocking (a single optional free-text field), so these two cases use "no items"
+  // (QUOTATION_CHECK.ITEMS, still blocking) for the same clean-vs-dirty distinction.
   it('a CLEAN, untouched quotation with a blocking validation error (no items) still downloads the stored document -- nothing to flush (D1 fix)', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ items: [] }),
@@ -201,11 +193,9 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     expect(api.dealQuotations.update).not.toHaveBeenCalled();
   });
 
-  // D2 fix (Opus review 2026-09-16, proven with a probe asserting the toast count -- "expected 2
-  // to be 1"): updateMutation's own onError already toasts a save failure; handleDownload's catch
-  // used to re-toast the SAME message, stacking two identical red toasts for one failure. The
-  // original test here only asserted `toHaveBeenCalledWith`, which cannot see a duplicate -- it
-  // passes whether the toast fired once or twice, which is exactly how the bug shipped unnoticed.
+  // updateMutation's own onError already toasts a save failure, so handleDownload's catch must not
+  // re-toast the SAME message (two identical red toasts for one failure). `toHaveBeenCalledWith`
+  // cannot see a duplicate, so the count is asserted.
   it('a save failure during the flush shows the error EXACTLY ONCE and never downloads a stale PDF (D2 fix)', async () => {
     const err = Object.assign(new Error('ยอดรวมหลังหักส่วนลดพิเศษติดลบ'), { status: 400 });
     api.dealQuotations.update.mockRejectedValue(err);
@@ -255,15 +245,13 @@ describe('download flushes unsaved edits before rendering the document (2026-09-
     expect(api.dealQuotations.downloadXlsx).not.toHaveBeenCalled();
   });
 
-  // D4 fix (Opus review 2026-09-16): handleDownload used to read `dirty`/`hasValidationErrors`
-  // from the render closure captured at CLICK time, and stays suspended across several `await`s.
-  // Here the quotation is clean (not dirty) at the moment of the click, so the OLD code's frozen
-  // `dirty: false` would skip the save entirely -- and would also have just cancelled the fresh
-  // autosave debounce the edit below schedules, with nothing left to reschedule it, losing the
-  // edit until the next keystroke. `fireEvent.change` right after `fireEvent.click` (with no
-  // `await` in between) lands synchronously, before the microtask that resumes handleDownload past
-  // its first `await` ever gets a turn -- so this reliably reproduces "an edit lands while the
-  // flush is already suspended", regardless of how fast the contact-picker flush resolves.
+  // handleDownload must not read `dirty`/`hasValidationErrors` from the render closure captured at
+  // CLICK time: it stays suspended across several `await`s. Here the quotation is clean at the
+  // click, so a frozen `dirty: false` would skip the save and cancel the fresh autosave debounce the
+  // edit below schedules, losing the edit until the next keystroke. `fireEvent.change` right after
+  // `fireEvent.click` (no `await`) lands before handleDownload resumes past its first `await`,
+  // reproducing "an edit lands while the flush is already suspended" however fast the
+  // contact-picker flush resolves.
   it('an edit made DURING the flush (after the click, before it decided whether to save) is still saved -- no further typing needed (D4 fix)', async () => {
     renderEditor('/quotations/5');
     await screen.findByLabelText('หมายเหตุเพิ่มเติม'); // freshly loaded: clean, not dirty.

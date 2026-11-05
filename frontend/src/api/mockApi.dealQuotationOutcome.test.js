@@ -1,14 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// GLA-123 slice S3 — mock coverage for DealQuotationService#recordOutcome (R9, the customer
-// outcome on a PRICING_REQUEST-origin quotation) and the R8 guard (one finalized quotation per
-// deal, across BOTH คำขอราคา origins). NOT authz/permission evidence — see CLAUDE.md's "Mock API
-// contract": the mock's role gates approximate the Java service and are NOT authoritative. The
-// real-DB test matrix (every role, wrong-way-round, mutation-checked) lives in
-// backend/.../DealQuotationOutcomeIntegrationTest — this file only verifies the mock's OWN
-// plumbing (including its hand-kept-in-sync R8 check across the two separate mock arrays) stays
-// green for the same happy/unhappy paths a coding agent would drive under VITE_USE_MOCKS=true.
+// Mock coverage for DealQuotationService#recordOutcome (the customer outcome on a
+// PRICING_REQUEST-origin quotation) and the R8 guard (one finalized quotation per deal, across BOTH
+// คำขอราคา origins). NOT authz/permission evidence (CLAUDE.md "Mock API contract": the mock's role
+// gates approximate the Java service). The real-DB test matrix lives in
+// backend/.../DealQuotationOutcomeIntegrationTest; this file only verifies the mock's OWN plumbing
+// (including its hand-kept-in-sync R8 check across the two separate mock arrays) for the same
+// happy/unhappy paths a coding agent would drive under VITE_USE_MOCKS=true.
 
 function nextClientRequestId() {
   return crypto.randomUUID();
@@ -80,7 +79,7 @@ async function approvedDecisionOn(ticketId, sourceItemId, recipientType) {
   await api.auth.login({ role: 'import' });
   await api.pricingRequests.pickup(prId);
   const { items: quotes } = await api.pricingRequests.generateFactoryEmailDrafts(prId);
-  // CR-1 (B-R2): price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
+  // Price entry is locked until the factory is marked ติดต่อโรงงานแล้ว.
   for (const q of quotes) {
     await api.pricingRequests.markFactoryQuoteContacted(q.id, {
       contactedOn: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date()),
@@ -154,26 +153,16 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
     expect(pricingRequest.summary.status).toBe('QUOTATION_ACCEPTED');
   });
 
-  // MAJOR 6 fix (Opus review, 2026-09-23) proof: a genuine replay (SAME quotation, SAME
-  // clientRequestId, called twice) must return the ORIGINAL result without a second write —
-  // proven here by asserting the SECOND call's customerNote still reads the FIRST call's value
-  // even though the payload's own note differs, which only holds if the second call short-circuits
-  // into the replay branch rather than re-running the update. The mock's OLD bug was narrower than
-  // that: q.createdById === user.employeeId matched literally ANY row regardless of which ACTOR
-  // owned it (both sides null). The fix is justified by direct comparison: q.salesRepId ===
-  // user.id now scopes to the SAME login-account id space the legacy sibling's own
-  // q.issuedById === user.id replay check already uses correctly.
+  // A genuine replay (SAME quotation, SAME clientRequestId, called twice) must return the ORIGINAL
+  // result without a second write: the SECOND call's customerNote still reads the FIRST call's
+  // value even though the payload's own note differs, which only holds if the second call
+  // short-circuits into the replay branch. The replay check compares q.salesRepId === user.id, the
+  // same login-account id space the legacy sibling's q.issuedById === user.id check uses (a
+  // createdById/employeeId comparison matched ANY row when both sides were null).
   //
-  // CORRECTION (S3 round-3 review, NEW-3, 2026-09-23): this comment used to also claim a
-  // cross-quotation/cross-actor replay-scoping test was "attempted and DELETED" because reusing
-  // one clientRequestId across two DIFFERENT quotations by the same actor "legitimately
-  // replay-matches the FIRST usage on BOTH the mock and the real service" — that was true when
-  // written (04:52), but DealQuotationService#recordOutcome's own MINOR-2 fix (added later the
-  // same day, 06:08, see that method's comment) changed the real backend's behaviour: a replay
-  // that resolves to a DIFFERENT quotation than the one THIS call names is now a 409 CONFLICT
-  // ("clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น"), not a silent cross-quotation replay. The
-  // mock did not mirror that fix until this same round-3 pass — see the cross-quotation test
-  // below, which is the scenario this comment used to say could not exist.
+  // Reusing one clientRequestId across two DIFFERENT quotations by the same actor is a 409
+  // CONFLICT on the real service (DealQuotationService#recordOutcome, "clientRequestId
+  // ถูกใช้ไปแล้วกับใบเสนอราคาอื่น"), not a silent replay; see the cross-quotation test below.
   it('a genuine replay (same quotation, same clientRequestId) returns the original result, not a second write', async () => {
     const { ticketId, sourceItemId } = await freshTicket();
     const { quotationId } = await issuedNewOriginQuotation(ticketId, sourceItemId, 'DESIGNER');
@@ -191,11 +180,9 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
     expect(replayed.docStatus).toBe('ACCEPTED');
   });
 
-  // S3 round-3 review fix (NEW-3, 2026-09-23) — mirrors DealQuotationService#recordOutcome's own
-  // MINOR-2 guard: the SAME actor reusing a clientRequestId that already resolved to a DIFFERENT
-  // quotation is a 409 conflict, not a silent replay onto the wrong document. Before this fix the
-  // mock returned quotation A's DTO with no outcome recorded on quotation B, and no error to
-  // notice it by. Two SEPARATE decision chains on two SEPARATE tickets, both owned by the same
+  // Mirrors DealQuotationService#recordOutcome's guard: the SAME actor reusing a clientRequestId
+  // that already resolved to a DIFFERENT quotation is a 409 conflict, not a silent replay onto the
+  // wrong document. Two SEPARATE decision chains on two SEPARATE tickets, both owned by the same
   // seeded 'sales' demo account, so the same clientRequestId genuinely collides across quotations.
   it('a replay whose clientRequestId already resolved to a DIFFERENT quotation is refused with 409, and neither quotation is changed', async () => {
     const ticketA = await freshTicket();
@@ -259,7 +246,7 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
       projectId: project.id, contactId: contact.id,
       items: [{ brand: 'SCG', model: 'Direct Tile', qty: 10, currency: 'THB' }],
     });
-    // recipientType: required on a DEAL_DIRECT create since slice 2 (S2-B1) — incidental here.
+    // recipientType: required on a DEAL_DIRECT create — incidental here.
     const { quotation: draft } = await api.dealQuotations.create(ticket.summary.id, {
       recipientType: 'DESIGNER',
       items: [{
@@ -310,14 +297,11 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
     expect(quotation.docStatus).toBe('ISSUED');
   }, 20000);
 
-  // S3 round-5 review fix (NEW-D, 2026-09-23): the cross-quotation replay-mismatch 409 above
-  // (line ~193) exercises dealQuotations.recordOutcome only. recordCustomerQuotationOutcome
-  // (mockApi.js, ~13977-13986) got the IDENTICAL guard added in the same round-3 pass — mirroring
-  // CustomerQuotationService#recordOutcome's own MINOR-2 fix, cited in that method's comment at
-  // :587 — but never got its own test. Proven un-exercised: deleting the legacy guard entirely
-  // left this whole 619-test suite green, so nothing here caught its absence. Two separate
-  // decision chains on two separate tickets, both issued through the LEGACY engine and both owned
-  // by the same seeded 'sales' demo account, so the same clientRequestId genuinely collides.
+  // The cross-quotation replay-mismatch 409 above exercises dealQuotations.recordOutcome only.
+  // recordCustomerQuotationOutcome (mockApi.js) has the IDENTICAL guard, mirroring
+  // CustomerQuotationService#recordOutcome. Two separate decision chains on two separate tickets,
+  // both issued through the LEGACY engine and owned by the same seeded 'sales' demo account, so the
+  // same clientRequestId genuinely collides.
   it('legacy recordCustomerQuotationOutcome: a replay whose clientRequestId already resolved to a DIFFERENT quotation is refused with 409, and neither quotation is changed', async () => {
     const ticketA = await freshTicket();
     const { quotationId: legacyAId } = await issuedLegacyQuotation(
@@ -345,11 +329,10 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
 });
 
 describe('mockApi confirmOrder from a NEW-engine accepted quotation (GLA-123 slice S3, R9)', () => {
-  // confirmOrder itself needed NO change for this origin — it is driven entirely off
-  // pricingRequest.status === 'QUOTATION_ACCEPTED' (see mockApi.js's own confirmOrder, and
-  // OrderConfirmationService on the real backend), which recordOutcome above already sets
-  // identically regardless of which engine issued the quotation. This test is the plumbing proof
-  // for that: accept via the NEW engine, then confirm, and check the SAME ticket-level effects
+  // confirmOrder needs no change for this origin: it is driven off pricingRequest.status ===
+  // 'QUOTATION_ACCEPTED' (see mockApi.js's confirmOrder and OrderConfirmationService), which
+  // recordOutcome sets identically regardless of which engine issued the quotation. This test is the
+  // plumbing proof: accept via the NEW engine, then confirm, and check the SAME ticket-level effects
   // the legacy path's own OrderConfirmationService tests assert.
   it('confirmOrder succeeds once the NEW engine records ACCEPTED, and advances the deal', async () => {
     const { ticketId, sourceItemId } = await freshTicket();
@@ -367,10 +350,10 @@ describe('mockApi confirmOrder from a NEW-engine accepted quotation (GLA-123 sli
   }, 20000);
 });
 
-// Owner ruling 2026-10-27 (redo): the deal page's "เสนอใบราคา<party>" re-quotes a request whose
-// quotation the customer rejected or sent back for changes. DealQuotationService
-// #createFromPricingRequest allows that from QUOTATION_ISSUED, except when the request's latest
-// quotation was superseded by a newer one on the deal. Mock parity only.
+// The deal page's "เสนอใบราคา<party>" re-quotes a request whose quotation the customer rejected or
+// sent back for changes. DealQuotationService#createFromPricingRequest allows that from
+// QUOTATION_ISSUED, except when the request's latest quotation was superseded by a newer one on the
+// deal. Mock parity only.
 describe('mockApi dealQuotations.createFromPricingRequest after an outcome — the re-quote (mock parity)', () => {
   it.each(['REJECTED', 'REVISION_REQUESTED'])('after %s: a fresh DRAFT from the same request', async (outcome) => {
     const { ticketId, sourceItemId } = await freshTicket();
@@ -396,7 +379,7 @@ describe('mockApi dealQuotations.createFromPricingRequest after an outcome — t
   }, 20000);
 });
 
-// F8 (QA-13 parity): a customer-change revision supersedes the request but leaves its quotation ISSUED
+// A customer-change revision supersedes the request but leaves its quotation ISSUED
 // (DealQuotationService). Neither an outcome nor another revise may run on it.
 describe('mockApi dealQuotations on the ISSUED quotation of a SUPERSEDED pricing request (mock parity)', () => {
   it('recordOutcome and createRevision answer 409 "รอบแก้ไข", and the quotation stays ISSUED with no child', async () => {

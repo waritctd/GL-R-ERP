@@ -5,7 +5,7 @@ import { loginAs } from './helpers/auth.js';
 import { directQuotationBody, inDays } from './helpers/sales.js';
 
 /**
- * UAT walk — quote stage gates + versioning (owner rulings 2026-10-16/17, .design/quote-stage-gates).
+ * UAT walk — quote stage gates + versioning (.design/quote-stage-gates).
  * Every case drives the REAL UI in a real browser and asserts both what the screen shows and what
  * GET /api/tickets/{id} says. Screenshots land in E2E_SHOTS_DIR or the gitignored test-results-real/, one per numbered step.
  * Named write-* so a local run executes it (uat-* is testIgnored locally).
@@ -116,8 +116,8 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     return (await r.json()).quotation;
   }
 
-  // The stage badge carries the catalogue's absolute number. The route line no longer prints a
-  // position (W5-02: one numbering); it reads "เส้นทาง · <route> · N ขั้น", and N is the full-spine
+  // The stage badge carries the catalogue's absolute number. The route line prints no position;
+  // it reads "เส้นทาง · <route> · N ขั้น", and N is the full-spine
   // count until the per-deal route loads, so the badge is the stable assertion.
   const stageIs = (page, n) => expect(page.getByTestId('deal-stage-no')).toHaveText(String(n));
 

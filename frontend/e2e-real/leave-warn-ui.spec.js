@@ -3,17 +3,15 @@ import { loginAs } from './helpers/auth.js';
 import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// V164 UI coverage: the leave-request COMPOSER and the approver REVIEW QUEUE both learned to
-// render a non-blocking §5 WARN_UNPAID_* verdict (LeaveRuleCode.enforcement() ==
-// WARN_UNPAID_ALL/WARN_UNPAID_EXCESS) -- 10 of the 17 LeaveRuleCode gates stopped auto-rejecting
-// and instead let the request through as SUBMITTED, carrying ruleWarnings/unpaidByRuleDays. 7
-// gates still BLOCK outright. Backend behaviour is covered by integration tests elsewhere (a
-// sibling branch is closing the remaining gaps); THIS file is deliberately UI-only: what a real
-// browser renders for a warning vs a block, nothing about the rule engine itself.
+// UI coverage: the leave-request COMPOSER and the approver REVIEW QUEUE render a non-blocking §5
+// WARN_UNPAID_* verdict (LeaveRuleCode.enforcement() == WARN_UNPAID_ALL/WARN_UNPAID_EXCESS) --
+// 10 of the 17 LeaveRuleCode gates do not auto-reject and instead let the request through as
+// SUBMITTED, carrying ruleWarnings/unpaidByRuleDays. 7 gates still BLOCK outright. Backend
+// behaviour is covered by integration tests elsewhere; THIS file is deliberately UI-only: what a
+// real browser renders for a warning vs a block, nothing about the rule engine itself.
 //
 // `write-leave-review.spec.js` in this same directory is API-driven and never opens
-// LeaveRequestPage.jsx or ReviewQueueTab.jsx at all -- this file is genuinely new ground, not a
-// duplicate of it.
+// LeaveRequestPage.jsx or ReviewQueueTab.jsx at all, so this file does not duplicate it.
 //
 // HOW A WARNING IS RAISED: PERSONAL (ลากิจ) requires 1 day of advance notice, VACATION (ลาพักร้อน)
 // requires 3 -- see V116__leave_type_rule_columns.sql. A same-day PERSONAL request on a weekday
@@ -23,8 +21,8 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 // min-service, once-per-employment), so ADVANCE_NOTICE is the ONE gate this persona can trip via a
 // simple same-day submission with no other state to engineer.
 //
-// HOW A BLOCK IS RAISED (the contrast case): CONTIGUOUS_LEAVE_PAIR (still BLOCK, V164 owner
-// ruling -- "stops leave-stringing, which docking pay does not achieve") pairs VACATION and
+// HOW A BLOCK IS RAISED (the contrast case): CONTIGUOUS_LEAVE_PAIR (a BLOCK because it "stops
+// leave-stringing, which docking pay does not achieve") pairs VACATION and
 // PERSONAL (LeaveService.CONTIGUOUS_LEAVE_PAIR). Seeding a SUBMITTED VACATION on day D and then
 // submitting PERSONAL on day D+1 (both real working days, zero gap between them) trips it via the
 // real backend, without touching hire_date, probation, or any other employee-record state.
@@ -82,12 +80,10 @@ function addOneDay(iso) {
  * notice 0 days, so PERSONAL's 1-day requirement is violated and the rule fires. But the period
  * must ALSO contain at least one working day: `LeaveService` refuses one that does not, with
  * `400 ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน`. Those two demands conflict on a Sat/Sun, which is
- * why cases 1, 3 and 6 failed every weekend (first seen 2026-09-12, a Saturday -- and the suite
- * had never run on a weekend before, so it went unnoticed).
+ * why cases 1, 3 and 6 would fail every weekend without it.
  *
  * Using this as the END date satisfies both: the period still starts today, and it now reaches a
- * working day. On a WEEKDAY this returns today, so the period stays today..today and behaviour is
- * byte-for-byte what it was. On a Sat/Sun it returns the coming Monday, giving today..Monday --
+ * working day. On a WEEKDAY this returns today, so the period stays today..today. On a Sat/Sun it returns the coming Monday, giving today..Monday --
  * which still counts exactly ONE working day, because totalDays counts working days only. Every
  * downstream "1 วัน" assertion therefore holds unchanged on either kind of day.
  *
@@ -114,7 +110,7 @@ function weekendInBangkok() {
  * A one-working-day request that is short of its type's advance notice, so ADVANCE_NOTICE fires.
  *
  * Notice counts the employee's WORKING days after today up to the leave's first working day
- * (LeaveService, owner ruling 2026-10-29). On a weekday a PERSONAL request starting today has 0
+ * (LeaveService). On a weekday a PERSONAL request starting today has 0
  * days -- under PERSONAL's 1. On a Sat/Sun there is no such PERSONAL request: the earliest working
  * day is Monday, and Monday itself already counts as 1 day of notice. So on a weekend this uses
  * VACATION (3 days' notice) on that Monday instead: 1 < 3, the same warning and pay consequence.

@@ -1,23 +1,18 @@
-// Shared item-editor fields for the ticket/deal item forms — TicketCreateModal.jsx (create) and
-// TicketDetailPage.jsx (edit-items mode). Extracted (fix/ticket-edit-items-required-markers) after
-// a UAT report that reopening a deal to edit its items dropped the red required asterisks the
-// create modal shows, and left leaving a required field blank to fail only with a backend 400
-// (TicketItemRequest's @NotBlank on brand/model/size). Both surfaces must derive their required
-// markers, labels, catalog-autocomplete UI and catalog-pick/hand-edit rules from ONE place so they
-// can never drift apart again the way create and edit had (ชื่อยี่ห้อ vs ยี่ห้อ / โรงงาน, a
-// separate โรงงาน input on edit only, no asterisks on edit at all).
+// Shared item-editor fields for the ticket/deal item forms: TicketCreateModal.jsx (create) and
+// TicketDetailPage.jsx (edit-items mode). Both surfaces derive their required markers, labels,
+// catalog-autocomplete UI and catalog-pick/hand-edit rules from this ONE place so they cannot
+// drift apart (e.g. 'ชื่อยี่ห้อ' vs 'ยี่ห้อ / โรงงาน', missing asterisks on edit, a blank required
+// field failing only with a backend 400 on TicketItemRequest's @NotBlank).
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api/index.js';
 import { fieldErrorId } from '../../components/common/FormField.jsx';
 import { resolveTileSqmPerPiece, sizeTextFromCatalog } from '../quotations/QuotationItemRow.jsx';
 
 // ── required fields ─────────────────────────────────────────────────────────
-// สี and เนื้อผิว are deliberately NOT here. The live catalog fills `color` on 21% of active rows
-// and `surface` on 22% (both only for factories CDE/LEA/Panaria, plus Bode for surface), so
-// requiring them forced a rep to invent a value on ~4 of every 5 catalog picks. They are optional
-// on both sides now — `sales.ticket_item.color`/`.texture` were already nullable, and
-// TicketItemRequest's @NotBlank on the two was removed to match. ยี่ห้อ/รุ่น/ขนาด stay required:
-// the factory name, collection and size_raw are present on ~100% of rows.
+// สี and เนื้อผิว are deliberately NOT here: the live catalog fills `color` on 21% of active rows
+// and `surface` on 22%, so requiring them forced a rep to invent a value on ~4 of every 5 catalog
+// picks. They are optional (`sales.ticket_item.color`/`.texture` are nullable). ยี่ห้อ/รุ่น/ขนาด
+// stay required: factory name, collection and size_raw are present on ~100% of rows.
 export const REQUIRED_ITEM_FIELD_LABELS = {
   brand: 'ยี่ห้อ / โรงงาน',
   model: 'ชื่อรุ่น / Collection',
@@ -29,11 +24,9 @@ export function isRequiredItemField(field) {
 }
 
 /**
- * Blank-field errors for the descriptive item fields, keyed by field name — 'กรุณากรอก<label>' for
- * every required field that is blank (after trim). Pure: takes an item row, returns a plain object.
- * Used by TicketCreateModal's zod superRefine (wrapped into ctx.addIssue calls, one per key) AND by
- * TicketDetailPage's pre-submit row validation directly. Messages are byte-identical to what the
- * create modal has always shown — this is a lift of that logic, not a rewrite.
+ * Blank-field errors for the descriptive item fields, keyed by field name: 'กรุณากรอก<label>' for
+ * every required field that is blank (after trim). Pure. Used by TicketCreateModal's zod
+ * superRefine (one ctx.addIssue per key) AND by TicketDetailPage's pre-submit row validation.
  */
 export function requiredItemFieldErrors(item) {
   const errors = {};
@@ -45,15 +38,13 @@ export function requiredItemFieldErrors(item) {
   return errors;
 }
 
-// Canonical label/placeholder/hint per descriptive field — the create modal's own wording, now the
-// single source both surfaces render from (this is what fixes the 'ชื่อยี่ห้อ' vs 'ยี่ห้อ / โรงงาน'
-// drift: edit used to hand-roll its own shorter labels).
+// Canonical label/placeholder/hint per descriptive field: the single source both surfaces render from.
 export const ITEM_FIELD_META = {
   brand: { label: 'ยี่ห้อ / โรงงาน', placeholder: 'เช่น Panaria, LEA, Bode' },
   model: { label: 'ชื่อรุ่น / Collection', placeholder: 'เช่น Stone Villa, Eco stone' },
   color: { label: 'สี', placeholder: 'เช่น ขาว, เทา, ครีม', hint: '(ไม่บังคับ)' },
   texture: { label: 'เนื้อผิว', placeholder: 'เช่น MATT, GLOSSY, ด้าน', hint: '(ไม่บังคับ)' },
-  // QA-28 (owner ruling 2026-10-29, extends 2026-09-14): size is centimetres everywhere; existing rows are not rewritten.
+  // Size is centimetres everywhere; existing rows are not rewritten.
   size: { label: 'ขนาด (ซม.)', placeholder: 'เช่น 60x120' },
 };
 
@@ -82,13 +73,13 @@ const DESCRIPTIVE_ITEM_FIELDS = ['brand', 'model', 'color', 'texture', 'size', '
 
 /**
  * Pure per-field row update for a hand-edit to one of the descriptive item fields. Folds in two
- * rules that used to live inline in TicketCreateModal's updateItem only:
+ * rules:
  *   1. ยี่ห้อ and โรงงาน are one input — editing brand sets factory to the same value (the brand a
  *      rep means IS the factory: Padana, Vives, LEA, Bode…).
  *   2. A hand-edit to any descriptive field clears whatever catalog link was previously picked —
  *      source/catalogPriceId/catalogProductCode/catalogPrice/catalogCurrency/catalogPriceUnit/
- *      catalogGrade all reset. Some of those are UI-only fields TicketDetailPage's edit-items rows
- *      never carried before; nulling them there is harmless — the payload sent to
+ *      catalogGrade all reset. Some are UI-only fields the edit-items rows never carried; nulling
+ *      them is harmless — the payload sent to
  *      api.tickets.editItems only ever reads catalogPriceId/catalogProductCode off the row (see its
  *      own items.map), so this never changes what ships to the backend for an untouched row.
  * Called with a non-descriptive field (qty, qtySqm, unitBasis, proposedPrice, …) it just assigns —
@@ -110,29 +101,22 @@ export function applyDescriptiveFieldEdit(item, field, value) {
 }
 
 /**
- * Pure row mapping for picking a catalog search result — the body of TicketCreateModal's
- * applyCatalogItem, lifted so TicketDetailPage's edit-items brand/model catalog pickers fill a row
- * exactly the way create does.
+ * Pure row mapping for picking a catalog search result (the body of TicketCreateModal's
+ * applyCatalogItem), shared so TicketDetailPage's edit-items pickers fill a row the way create does.
  */
 export function applyCatalogPick(item, cat) {
-  // ยี่ห้อ = the factory name, unconditionally. The previous rule read the catalog's `grade` as the
-  // brand, on the reasoning that ProductPriceDto has no "brand" column of its own. The live catalog
-  // disproves it: `grade` holds only 'A01'/'A02', and only for factory Padana (9,076 of 22,455
-  // active rows) — a quality code. So that rule wrote "A01" into ยี่ห้อ for Padana and left it blank
-  // for the other 60%, which is the "doesn't autofill everything" report from UAT. The factory names
-  // in this catalog — Padana, Vives, Equipe, REFIN, CDE, LEA, Panaria, Bode, CITY — are exactly what
-  // a rep calls the brand; this form's own ยี่ห้อ placeholder cites "Panaria", which is a factory
-  // row. ยี่ห้อ and โรงงาน are therefore one field, and no text a rep left in it survives a pick:
-  // whatever is in that box when the dropdown opens is the search query, not an independent brand
-  // entry.
+  // ยี่ห้อ = the factory name, unconditionally. The catalog's `grade` is a quality code
+  // ('A01'/'A02', only for factory Padana) and not a brand; factory names (Padana, Vives, Equipe,
+  // REFIN, CDE, LEA, Panaria, Bode, CITY) are what a rep calls the brand. ยี่ห้อ and โรงงาน are
+  // therefore one field, and no text left in it survives a pick: whatever is in that box when the
+  // dropdown opens is the search query, not an independent brand entry.
   const factory = cat.factoryName || cat.factory || cat.brand || '';
 
-  // Owner ruling 2026-09-12 ("แก้ด้วย — ใช้ catalog เหมือนกัน"): resolved the same way the quotation
-  // item editor resolves it — see resolveTileSqmPerPiece's own Javadoc-style comment for the order
-  // (catalog's own sqm_per_piece; never for a per_linear_m row). The ~350 active catalog rows with
-  // no sqm_per_piece of their own (all of factory Bode, plus LEA's trim pieces) resolve to `null`
-  // here — nothing is guessed from the free-text size any more, so the แผ่น↔ตร.ม. toggle simply
-  // leaves both quantities editable for those rows.
+  // Resolved the same way the quotation item editor resolves it (see resolveTileSqmPerPiece's
+  // comment): the catalog's own sqm_per_piece, never for a per_linear_m row. The ~350 active
+  // rows with no sqm_per_piece (all of factory Bode, plus LEA's trim pieces) resolve to `null`:
+  // nothing is guessed from the free-text size, so the แผ่น↔ตร.ม. toggle leaves both quantities
+  // editable for those rows.
   const sqmPerPiece = resolveTileSqmPerPiece(cat);
   const newQtySqm = item.qty && sqmPerPiece ? (Number(item.qty) * sqmPerPiece).toFixed(3) : '';
 
@@ -141,11 +125,11 @@ export function applyCatalogPick(item, cat) {
     brand: factory,
     factory,
     model: cat.collection || cat.productName || cat.productCode || '',
-    // Blank stays blank — สี and เนื้อผิว are absent for ~79% of the catalog and are optional now.
+    // Blank stays blank — สี and เนื้อผิว are absent for ~79% of the catalog and are optional.
     // Never substitute a product code or factory name for a colour the catalog lacks.
     color: cat.color || '',
     texture: cat.surface || '',
-    // QA-28: cm text via the quotation editor's derivation, not the raw mixed-unit catalogue string.
+    // cm text via the quotation editor's derivation, not the raw mixed-unit catalogue string.
     size: sizeTextFromCatalog(cat),
     sqmPerPiece,
     qtySqm: newQtySqm,
@@ -154,7 +138,7 @@ export function applyCatalogPick(item, cat) {
     catalogPrice: cat.price ?? null,
     catalogCurrency: cat.currency ?? null,
     catalogGrade: cat.grade ?? null,
-    // Persisted (V110) — the catalog identity picked here, so a later step (e.g.
+    // Persisted: the catalog identity picked here, so a later step (e.g.
     // PricingRequestCreateModal) can seed its own catalog link without a re-search.
     catalogPriceId: cat.priceId ?? null,
     catalogProductCode: cat.productCode ?? '',
@@ -163,27 +147,23 @@ export function applyCatalogPick(item, cat) {
 }
 
 // ── catalog search debounce ──────────────────────────────────────────────────
-// Module-level timer shared by every caller (create modal, edit page) — matches the single
-// `_catalogTimer` TicketCreateModal.jsx always had. Only one item editor is ever open/focused at a
-// time in practice, so a shared debounce timer costs nothing.
+// Module-level timer shared by every caller (create modal, edit page). Only one item editor is
+// ever open/focused at a time, so a shared debounce timer costs nothing.
 let _catalogTimer = null;
 function debouncedCatalogSearch(q, cb) {
   clearTimeout(_catalogTimer);
   _catalogTimer = setTimeout(() => cb(q), 280);
 }
 
-// Monotonic request sequence for searchCatalog below — a slower EARLIER request resolving after a
-// faster LATER one would otherwise overwrite fresher dropdown results with stale ones (real risk:
-// the catalog endpoint has no ordering guarantee, and two keystrokes close together can each clear
-// the debounce timer but still both eventually fire their own fetch if the browser had already
-// started the first one before the second keystroke's clearTimeout ran).
+// Monotonic request sequence for searchCatalog below: a slower EARLIER request resolving after a
+// faster LATER one would otherwise overwrite fresher dropdown results with stale ones (the
+// catalog endpoint has no ordering guarantee).
 let _catalogSearchSeq = 0;
 
 /**
- * The actual catalog fetch, debounced — separated from any row mutation so callers can trigger a
- * search (on focus, or on a real keystroke) without that alone counting as an edit to the row. See
- * applyDescriptiveFieldEdit's callers in both surfaces: typing goes through a path that also calls
- * this; merely focusing/re-focusing a field must not.
+ * The actual catalog fetch, debounced, separated from any row mutation so callers can search (on
+ * focus or a keystroke) without that counting as an edit to the row. Typing goes through a path
+ * that also calls this; merely focusing a field must not.
  */
 export function searchCatalog(query, onResults) {
   const seq = ++_catalogSearchSeq;
@@ -221,9 +201,8 @@ export function ItemFieldLabel({ label, required, hint }) {
 /**
  * Label + control + error wrapper for the item editor, matching CatalogAutocompleteField's own
  * markup exactly so every cell of the two-column grid has an identical label row, gap and error
- * slot. That identity is the alignment fix: the editor previously mixed bare <label> fields with
- * hand-built <div> ones and read-only <div> boxes styled `px-2.5 py-[7px]` next to 40px-tall inputs,
- * so adjacent cells sat at visibly different heights and baselines.
+ * slot (mixed bare <label>, hand-built <div> and read-only boxes put adjacent cells at different
+ * heights and baselines).
  *
  * `content-start` keeps the control at its natural height instead of stretching it to the tallest
  * cell in the row — the row-stretch behaviour FormField.jsx documents as the app-wide field stagger.
@@ -246,8 +225,7 @@ export function ItemField({ id, label, hint, required, error, children }) {
 
 /**
  * One catalog-search row of the summary dropdown. Shared by the ยี่ห้อ/โรงงาน and รุ่น fields so a
- * result reads identically whichever box the rep is typing in — and now identically whichever
- * SURFACE (create modal or ticket-detail edit) the rep is on.
+ * result reads identically in either box and on either surface (create modal or ticket-detail edit).
  */
 export function CatalogOption({ cat }) {
   return (
@@ -268,18 +246,15 @@ export function CatalogOption({ cat }) {
 }
 
 /**
- * Text input with the catalog autocomplete attached. Extracted (originally within
- * TicketCreateModal.jsx) because ยี่ห้อ/โรงงาน and รุ่น carried two byte-identical copies of the
- * dropdown markup, which is how the two drifted apart in the first place — a fix applied to one
- * silently missed the other. Sharing it across create AND edit closes the same class of drift
- * between surfaces instead of just within one.
+ * Text input with the catalog autocomplete attached. Shared by ยี่ห้อ/โรงงาน and รุ่น, and by
+ * create AND edit, so a fix to the dropdown markup cannot silently miss one copy.
  */
 export function CatalogAutocompleteField({
   id, label, hint, required, value, placeholder, onInput, onFocusSearch,
   onBlur, expanded, results, onPick, error, inputRef,
 }) {
   const errorId = error ? fieldErrorId(id) : undefined;
-  // QA-39: combobox/listbox keyboard pattern of SearchableCombobox (Arrow wrap, Enter picks).
+  // combobox/listbox keyboard pattern of SearchableCombobox (Arrow wrap, Enter picks).
   const [active, setActive] = useState(-1);
   const listRef = useRef(null);
   useEffect(() => { setActive(-1); }, [results]);

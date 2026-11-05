@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// B1/B3 regression guard (Opus review, 2026-07-31): both bugs were pure CSS -- a stray
+// B1/B3 regression guard: both bugs were pure CSS -- a stray
 // `max-width: 1500px` breakpoint that stacked the detail panel below the table (`position: static`)
 // instead of beside it, and a `(min-width: 721px) and (max-width: 1040px)` card-reflow that turned
 // the payroll table into 2-column cards in a band where it already fits as a real table. Neither is
@@ -54,7 +54,7 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
   });
 
   it('switches the detail panel to its overlay presentation at exactly the 1366px floor, not 1040px', () => {
-    // Phase A: 1366px gets the persistent side panel with a 310px panel floor; 1280px still stays
+    // 1366px gets the persistent side panel with a 310px panel floor; 1280px still stays
     // overlay because the table's measured 714px minimum cannot fit beside a panel there.
     const overlayBlocks = extractMediaBlocks(stylesCss, '@media (max-width: 1365px)');
     expect(overlayBlocks).toHaveLength(1);
@@ -102,8 +102,7 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
   });
 });
 
-// Defect 2 regression guard (Opus review, 2026-07-31): the detail panel's side-by-side track was
-// Phase A narrows the side-panel floor to 310px so the persistent panel can fit at 1366px without
+// Defect 2 regression guard: the side-panel floor is 310px so the persistent panel can fit at 1366px without
 // stealing the table's money-column floor. The two money-field grids stay on a Tailwind v4
 // `@container` query so they collapse to 1 column whenever the PANEL itself is narrow, rather than
 // staying pinned to 2 columns at every width. None of this is reachable from a jsdom render (jsdom
@@ -171,7 +170,7 @@ describe('payroll detail panel container-query grids (Defect 2 regression guard)
   });
 });
 
-// Item 2 regression guard (2026-07-31): the footer grand-total money cell (e.g. "฿1,021,720.56")
+// Item 2 regression guard: the footer grand-total money cell (e.g. "฿1,021,720.56")
 // measured ~127px wide in this app's monospace tabular-nums font, wider than the 120px money-column
 // floor every row shares -- `scrollWidth` (127) exceeded `clientWidth` (120) with the excess painted
 // into the inter-column gap. Not reachable from a jsdom render (no layout engine), so this pins the
@@ -200,31 +199,18 @@ describe('payroll totals-footer money cell sizing (Item 2 regression guard)', ()
   });
 });
 
-// Item 4a regression guard (2026-07-31): --shadow-focus-ring composited to 1.18:1 on white (WCAG
+// Item 4a regression guard: --shadow-focus-ring composited to 1.18:1 on white (WCAG
 // 1.4.11/2.4.11 need >=3:1). Not reachable from jsdom (no rendering engine to composite box-shadow
 // colors against a real background), so this pins the declaration down textually.
 //
-// The token USED to be declared TWICE (index.css's `@theme static` and styles.css's `:root`), and
-// this guard originally asserted the good value in both -- either one left stale would keep the
-// cascade serving the old value. The base-layer move deleted styles.css's `:root` token block
-// (every one of its 29 tokens was byte-identical to `@theme static`, and being in `@layer legacy`
-// it was the copy the cascade actually served), so there is now exactly ONE declaration site.
-//
-// The second assertion therefore inverts: styles.css must never DECLARE this token again.
-// Re-introducing the duplicate is the original hazard, not a fix for it -- a re-declared copy in
-// `@layer legacy` would silently outrank `@theme static` all over again.
-//
-// styles.css USED to still consume the token via `var(--shadow-focus-ring)` (2 call sites:
-// `.info-tip-trigger:focus-visible`, then `.collapsible-header-button:focus-visible`), and this
-// guard originally asserted that too, as a "declared-and-actually-used" sanity check. Both call
-// sites have since been ported to Tailwind arbitrary-value utilities on their components
-// (InfoTip.jsx's `focus-visible:[box-shadow:var(--shadow-focus-ring)]`, then
-// CollapsibleSection.jsx's `focus-visible:shadow-[var(--shadow-focus-ring)]`, Group C primitives
-// port) -- expected under this repo's Tailwind-first migration, not a regression, so styles.css
-// now has zero consuming references and the "still consumes it" half moved to index.css's own
-// `@layer base` instead, which has three permanent, non-migrating consumers of its own (the
-// `input:focus`/`select:focus`/`textarea:focus` rule and the `:focus`/`:focus-visible` fallback
-// pair for the generic interactive-element `:where(...)` selector, all just above this block).
+// The token is declared in ONE place (index.css's `@theme static`). The second assertion
+// therefore inverts: styles.css must never DECLARE it again, since a re-declared copy in
+// `@layer legacy` would silently outrank `@theme static`. styles.css has zero consuming
+// references (its call sites were ported to Tailwind utilities on InfoTip.jsx and
+// CollapsibleSection.jsx); the "still consumed" check lives on index.css's `@layer base`, which has
+// three permanent consumers (the `input:focus`/`select:focus`/`textarea:focus` rule and the
+// `:focus`/`:focus-visible` fallback pair for the generic interactive-element `:where(...)`
+// selector, all just above this block).
 describe('focus-ring contrast token (Item 4a regression guard)', () => {
   it('uses the solid --color-indigo-ring token, not the old low-contrast rgba alpha', () => {
     expect(indexCss).toContain('--shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);');
@@ -242,7 +228,7 @@ describe('focus-ring contrast token (Item 4a regression guard)', () => {
   });
 });
 
-// Item 4b regression guard (2026-07-31): `variant="icon" size="sm"` resolves to a 36x36
+// Item 4b regression guard: `variant="icon" size="sm"` resolves to a 36x36
 // compound-variant box in Button.jsx -- too small for the detail panel's primary dismiss control.
 // Fixed at the payroll call site only (via `cn`'s twMerge override), not in the shared compound
 // variant, since that variant is also used by DataTable's pagination arrows and TicketListPage's
@@ -261,15 +247,13 @@ describe('payroll detail panel close button touch target (Item 4b regression gua
   });
 });
 
-// Item 4c regression guard (2026-07-31): the InfoTip trigger's visible badge is a deliberate 16px
+// Item 4c regression guard: the InfoTip trigger's visible badge is a deliberate 16px
 // circle (there are ~11 of these in the payroll detail panel; a 44px glyph on every field label
 // would be visual noise), so the touch-target fix has to grow the CLICKABLE area via an invisible
 // hit-slop rather than the visible badge itself.
 describe('InfoTip trigger hit-slop (Item 4c regression guard)', () => {
-  // Group B primitives port: `.info-tip-trigger`/`.info-tip-trigger::before` were retired from
-  // styles.css in favor of Tailwind utilities on InfoTip.jsx itself, so the regression guard now
-  // pins the same intent (16x16 visible badge, 44x44 invisible hit-slop) against the component
-  // source instead of the retired stylesheet text.
+  // `.info-tip-trigger`/`::before` live as Tailwind utilities on InfoTip.jsx itself, so this pins
+  // the same intent (16x16 visible badge, 44x44 invisible hit-slop) against the component source.
   const infoTipJsx = fs.readFileSync(path.resolve(__dirname, '../../components/common/InfoTip.jsx'), 'utf8');
 
   it('keeps the visible badge small (16x16 = w-4 h-4)', () => {
@@ -283,7 +267,7 @@ describe('InfoTip trigger hit-slop (Item 4c regression guard)', () => {
   });
 });
 
-// Phase B (2026-07-31): PRODUCT.md now says phone payroll is fully editable. jsdom cannot prove
+// Phone payroll is fully editable (PRODUCT.md). jsdom cannot prove
 // phone layout or touch-target pixels, so this guards the Tailwind call-site utilities and the
 // source-level mobile Process contract directly.
 describe('payroll phone editability and touch targets (Phase B regression guard)', () => {

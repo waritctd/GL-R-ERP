@@ -39,8 +39,8 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  *   <li><b>The fact gate</b> ({@code TicketService.requireStageFactsHold}): a MANUAL
  *       {@code updateStage} into {@code ORDER_RECEIVED}, {@code DEPOSIT_RECEIVED},
  *       {@code DELIVERED} or {@code CLOSED_PAID} is refused unless the fact behind that stage is
- *       already recorded. Before this, {@code updateStage} validated stage membership only, so
- *       {@code LEAD_APPROACH -> CLOSED_PAID} succeeded in one call for the price of a note.
+ *       already recorded. Validating stage membership alone would let
+ *       {@code LEAD_APPROACH -> CLOSED_PAID} succeed in one call for the price of a note.
  *   <li><b>The stock floor</b> ({@code TicketService.stockCoverageStageReached}): a stock-coverage
  *       declaration is refused below {@code ORDER_RECEIVED}, because it is uncorroborated (there
  *       is no inventory system) yet full coverage reroutes the deal past the whole import journey.
@@ -106,9 +106,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     // ═══ Part A — the refusals: these are the evidence ═══════════════════════
 
     /**
-     * The headline. S1 to S20 in a single call used to cost a note, a follow-up date and one logged
-     * activity — nothing about the deal's state was consulted, and no stage is terminal, so the
-     * reverse worked identically.
+     * The headline. S1 to S20 in a single call must not cost merely a note, a follow-up date and
+     * one logged activity — the deal's facts must be consulted, and no stage is terminal, so the
+     * reverse needs the same care.
      *
      * <p>The note is supplied on purpose: a refusal that only happened <em>without</em> one would
      * be {@code DealStage.requiresJustification} doing the work, not the fact gate. The follow-up
@@ -129,7 +129,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
-    // ═══ The quote stages (owner ruling 2026-10-16) ═══════════════════════════
+    // ═══ The quote stages ═══════════════════════════
     //
     // ขั้น 4/5/8 claim "this party has been quoted". The fact behind them is a quotation on the
     // deal addressed to that party, so the gate is the same shape as the four above: a MANUAL
@@ -138,7 +138,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     // through this gate (proved by autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue
     // for the operational four, and by theQuoteStagesStillArriveAutomatically below for these).
     //
-    // Before this gate, ขั้น 3 -> "เลื่อนไป: 4. เสนอราคาผู้ออกแบบ" was one click, so a rep could
+    // Without this gate, ขั้น 3 -> "เลื่อนไป: 4. เสนอราคาผู้ออกแบบ" would be one click, so a rep could
     // claim the designer had been quoted with no price approved and no document in existence.
 
     @Test
@@ -186,7 +186,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
      * The gate reads the RECIPIENT, not merely "this deal has a quotation". Without this test an
      * implementation that counted rows on the ticket would pass every refusal above and still let a
      * rep claim the designer was quoted on the strength of the owner's document — which is the
-     * precise distinction V143 split {@link DealStage#QUOTE_OWNER} out of
+     * precise distinction {@link DealStage#QUOTE_OWNER} is split out of
      * {@link DealStage#QUOTE_DESIGN_SIDE} to make expressible.
      */
     @Test
@@ -349,7 +349,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
      * Every fulfilment state that is not {@code FULLY_DELIVERED}, including the one that reads
      * closest to "delivered" and is not: {@code GOODS_RECEIVED} means the goods reached GLR's own
      * warehouse (S17) and the customer has received nothing — the same distinction
-     * {@code deliveryGateComplete} was tightened to make for the close gate.
+     * {@code deliveryGateComplete} makes for the close gate.
      */
     @Test
     void delivered_onADealThatIsNotFullyDelivered_isRefused_andTheDealDoesNotMove() {
@@ -518,17 +518,16 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     // ═══ The owner's routes must all still be walkable ═══════════════════════
     //
     // Cases A-D are the four in DealStage's own Javadoc; G (delivered, then paid) is the ordering
-    // covered by the automatic walk below. E (per-line partial stock coverage) is separate work
-    // and is exercised only as far as the mixed declaration below reaches; F is out of scope by
+    // covered by the automatic walk below. E (per-line partial stock coverage) is exercised only
+    // as far as the mixed declaration below reaches; F is out of scope by
     // owner ruling. None of these routes touches a gated stage without its fact, which is the
     // whole point of gating on the fact rather than on the previous stage.
 
     /**
      * Case C — a contractor arrives with a BOQ and a spec, so the deal opens straight at S8.
      *
-     * <p>Reaches S8 by QUOTING THE BUYER rather than by a manual {@code updateStage} (owner ruling
-     * 2026-10-16). The route is unchanged and still skips S1–S7; what changed is the mechanism
-     * that enters it, which is now the document rather than a click. Written this way deliberately
+     * <p>Reaches S8 by QUOTING THE BUYER rather than by a manual {@code updateStage}. The route
+     * skips S1–S7; the mechanism that enters it is the document rather than a click. Written this way deliberately
      * rather than reaching past the gate with {@code readyToAdvanceFrom}: the point of the test is
      * that the owner's route is still walkable through the real service, and a helper that writes
      * the stage straight into Postgres would prove nothing about that.
@@ -572,7 +571,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
 
         // The front half of case A, with each stage arriving the way the business produces it: the
-        // three quote stages from quoting that party (owner ruling 2026-10-16), the rest by hand.
+        // three quote stages from quoting that party, the rest by hand.
         // S4 BEFORE S3 is case A's own order — the designer is quoted off the spec, then the spec
         // is signed off — and QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the one routine backward pair,
         // still a manual hop needing no note.
@@ -670,7 +669,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
-        // V184: completeDelivery's gate (canWriteDelivery) transferred to {ceo, owning-rep} only --
+        // completeDelivery's gate (canWriteDelivery) is {ceo, owning-rep} only --
         // ownerRep, not importActor. See DeliveryAuthzIntegrationTest for the authz pin itself.
         ticketService.completeDelivery(ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), ownerRep);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
@@ -704,7 +703,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             tickets.updateSalesStage(ticketId, stage);
 
             // Only the two roles that CAN declare (owning rep + CEO) reach the stage floor's 409;
-            // import is no longer a declarer at all (owner decision 2026-09-28) and is refused with a
+            // import is not a declarer at all and is refused with a
             // 403 before the floor — see StockDeclarationAuthzIntegrationTest.
             for (UserPrincipal actor : List.of(ownerRep, ceo)) {
                 assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), actor))
@@ -722,8 +721,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * …and above the floor nothing changed: the same declaration is accepted and still routes the
-     * deal exactly as before (owner ruling — the floor adds a precondition, it does not change what
+     * …and above the floor the same declaration is accepted and routes the
+     * deal normally (the floor adds a precondition, it does not change what
      * happens above it).
      */
     @Test
@@ -742,7 +741,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * Walk 4 (owner ruling 2026-10-29): RESERVE_STOCK is not advertised at any stage, but the
+     * RESERVE_STOCK is not advertised at any stage, but the
      * {@code reserveStock} endpoint keeps its stage floor (fixtures and old clients still call it):
      * refused below ORDER_RECEIVED, accepted at it.
      */
@@ -769,7 +768,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /**
-     * A deal parked at {@code stage} with the tracking fields the B1 forward-advance gate demands
+     * A deal parked at {@code stage} with the tracking fields the forward-advance gate demands
      * (a next follow-up date and one activity logged after the last stage change), so that a test
      * asserting the FACT gate fails on the fact gate and nothing else.
      */

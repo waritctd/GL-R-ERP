@@ -91,25 +91,21 @@ public class NotificationRepository {
      * {@code NULLIF(BTRIM(...), '')} below, same as a true SQL NULL). Returns empty only when there
      * is no employee with that id.
      *
-     * <p>The address used to be the gate here too (this method returned empty whenever it was
-     * missing, under the old name {@code findEmployeeEmail}). That is deliberately no longer the
-     * contract: {@code app.mail.override-to} must be able to rescue an addressless employee by
-     * redirecting the notification to a test inbox, and only {@link NotificationEmailService} - the
-     * sole owner of that config - knows whether an override is configured. Gating on the address
-     * here would make the override unreachable for exactly the employees it exists to rescue, so
-     * that decision now lives entirely in {@link NotificationEmailService#send}; this method's job is
-     * only to say whether the employee exists. {@code name} on its own may still be {@code null} (no
-     * first name on file); callers already fall back to a generic greeting for that.
+     * <p>The address is deliberately NOT the gate here: {@code app.mail.override-to} must be able to
+     * rescue an addressless employee by redirecting the notification to a test inbox, and only
+     * {@link NotificationEmailService} - the sole owner of that config - knows whether an override
+     * is configured. Gating on the address here would make the override unreachable for exactly the
+     * employees it exists to rescue, so that decision lives entirely in {@link
+     * NotificationEmailService#send}; this method's job is only to say whether the employee exists.
+     * {@code name} on its own may still be {@code null} (no first name on file); callers already
+     * fall back to a generic greeting for that.
      *
-     * <p><b>{@code name} is first name only</b> (owner ruling, mail-copy wording fix): was {@code
-     * CONCAT_WS(' ', first_name_th, last_name_th)} (full name) until this change. Confirmed by
-     * tracing every reader of {@link EmailRecipient#name()} before narrowing it -- it flows through
-     * {@code NotificationService#notify}/{@code #sendEmailAfterCommit} into {@code
-     * NotificationEmailService#send(..., recipientName, ...)}, and inside that class {@code
-     * recipientName} is used ONLY to build the {@code textBody}/{@code htmlBody} greeting line
-     * ("เรียน คุณ&lt;name&gt;,"); nothing else in this codebase reads {@link EmailRecipient#name()}. A
-     * Thai greeting addresses someone by first name after "คุณ" (a title, not "Mr./Ms." -- "คุณสมชาย",
-     * not "คุณสมชาย ใจดี"), so the full name read as stiff/translated rather than natural Thai.
+     * <p><b>{@code name} is first name only.</b> {@link EmailRecipient#name()} flows through {@code
+     * NotificationService#notify}/{@code #sendEmailAfterCommit} into {@code
+     * NotificationEmailService#send(..., recipientName, ...)}, where {@code recipientName} is used
+     * ONLY to build the {@code textBody}/{@code htmlBody} greeting line ("เรียน คุณ&lt;name&gt;,");
+     * nothing else reads it. A Thai greeting addresses someone by first name after "คุณ" (a title,
+     * not "Mr./Ms." -- "คุณสมชาย", not "คุณสมชาย ใจดี"), so the full name reads as stiff/translated.
      */
     public Optional<EmailRecipient> findEmployeeRecipient(long employeeId) {
         try {
@@ -144,7 +140,7 @@ public class NotificationRepository {
         Map.entry("PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"),
         Map.entry("FACTORY_EMAIL_READY", "ร่างอีเมลโรงงานพร้อมตรวจ"),
         Map.entry("FACTORY_EMAIL_SENT", "ส่งคำขอโรงงานแล้ว"),
-        // CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" replaces the send step; the lead-time change flow is new.
+        // "ติดต่อโรงงานแล้ว" replaces the send step.
         Map.entry("FACTORY_CONTACTED", "ติดต่อโรงงานแล้ว"),
         Map.entry("LEAD_TIME_CHANGE_REQUESTED", "ขอเปลี่ยนระยะเวลานำเข้า รอฝ่ายขายอนุมัติ"),
         Map.entry("LEAD_TIME_CHANGE_APPROVED", "อนุมัติการเปลี่ยนระยะเวลานำเข้าแล้ว"),
@@ -163,7 +159,7 @@ public class NotificationRepository {
         Map.entry("PRICING_DECISION_RETURNED", "CEO ตีกลับให้แก้ไขต้นทุน"),
         Map.entry("CUSTOMER_QUOTATION_ISSUED", "ออกใบเสนอราคาลูกค้าแล้ว"),
         Map.entry("CUSTOMER_QUOTATION_CANCELLED", "ใบเสนอราคาลูกค้าถูกยกเลิก"),
-        // Step 5: Customer Decision and Commercial Revisions.
+        // Customer decision and commercial revisions.
         Map.entry("CUSTOMER_QUOTATION_ACCEPTED", "ลูกค้ายอมรับใบเสนอราคาแล้ว"),
         Map.entry("CUSTOMER_QUOTATION_REJECTED", "ลูกค้าปฏิเสธใบเสนอราคา"),
         Map.entry("CUSTOMER_QUOTATION_REVISION_REQUESTED", "ลูกค้าขอแก้ไขใบเสนอราคา"),
@@ -172,43 +168,39 @@ public class NotificationRepository {
         Map.entry("DISCOUNT_APPROVAL_REQUESTED", "รอ CEO อนุมัติส่วนลด"),
         Map.entry("DISCOUNT_APPROVED", "CEO อนุมัติส่วนลดแล้ว"),
         Map.entry("DISCOUNT_REJECTED", "CEO ปฏิเสธส่วนลด"),
-        // Step 6: Deposit, Payment, and Order Confirmation.
+        // Deposit, payment, and order confirmation.
         Map.entry("ORDER_CONFIRMED", "ลูกค้ายืนยันคำสั่งซื้อแล้ว"),
         Map.entry("DEPOSIT_NOTICE_DRAFTED_FROM_QUOTATION", "สร้างร่างใบแจ้งยอดเงินรับมัดจำแล้ว"),
-        // GLA-32 (2026-09-19): DepositNoticeService.issue notifies the account role — this is the
-        // first notify* call to use TicketEventKind.DEPOSIT_NOTICE_ISSUED as a notification `type`
-        // (the constant already existed for the ticket-history event log entry the same method
-        // writes via tickets.addEvent, an unrelated table/concern that shares only the string).
+        // DepositNoticeService.issue notifies the account role. TicketEventKind.DEPOSIT_NOTICE_ISSUED
+        // is also used for the ticket-history event log entry (tickets.addEvent) -- an unrelated
+        // table that shares only the string.
         Map.entry("DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งมัดจำแล้ว — รอยืนยันรับชำระ"),
         // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without
         // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
         // routine pipeline noise; the whole point of this notification is that it is not.
         Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง"),
         // profile/ProfileRequestService#create — the HR-facing submit notification only.
-        // ProfileRequestService emitted zero notifications before #860. #860 also added
-        // PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED entries here for the employee-facing
-        // approve/reject notification, but that notification no longer reads this map: it regressed
-        // through notifyEmployeeOfProfileRequest -> notifyEmployeeAt -> SalesNotificationMailRouter,
-        // which redirects AC/PCIM-division employees to a shared mailbox instead of their own
-        // address (correct for the sales domain this router exists for; wrong for a personal HR
-        // notice). ProfileRequestService#update now calls NotificationService#notify directly with
-        // its own title constants, so those two entries were deleted rather than left as a stale,
-        // unread mirror -- see ProfileRequestService's constructor Javadoc for the full story.
+        // The employee-facing approve/reject notification does NOT read this map: routing it through
+        // notifyEmployeeOfProfileRequest -> notifyEmployeeAt -> SalesNotificationMailRouter would
+        // redirect AC/PCIM-division employees to a shared mailbox instead of their own address
+        // (correct for the sales domain; wrong for a personal HR notice). ProfileRequestService#update
+        // calls NotificationService#notify directly with its own title constants -- see its
+        // constructor Javadoc.
         Map.entry("PROFILE_REQUEST_SUBMITTED", "มีคำขอแก้ไขข้อมูลพนักงานรออนุมัติ"),
-        // payroll/declaration/TaxAllowanceDeclarationService — ล.ย.01 reaches HR's queue
-        // (2026-08-31). The employee-facing APPROVED/REJECTED/EXPIRED events for this same feature
+        // payroll/declaration/TaxAllowanceDeclarationService — ล.ย.01 reaches HR's queue.
+        // The employee-facing APPROVED/REJECTED/EXPIRED events for this same feature
         // do NOT go through this map: they carry an explicit title straight into
         // NotificationService#notify, the same call shape leave/overtime/welfare/attendance-
         // correction use, not the ticket-scoped fan-out this map serves.
         Map.entry("TAX_ALLOWANCE_SUBMITTED", "มีแบบ ล.ย.01 รอ HR ตรวจสอบ"),
-        // Quotation v2 (direct deal quotation, V165) -- see TicketEventKind's DEAL_QUOTATION_*
+        // Direct deal quotation (V165) -- see TicketEventKind's DEAL_QUOTATION_*
         // constants for why these are notification `type`s only, not ticket_event kinds.
         Map.entry("DEAL_QUOTATION_SUBMITTED", "ใบเสนอราคารออนุมัติ"),
         Map.entry("DEAL_QUOTATION_APPROVED", "ใบเสนอราคาได้รับอนุมัติแล้ว"),
         Map.entry("DEAL_QUOTATION_REJECTED", "ใบเสนอราคาไม่ได้รับอนุมัติ"),
-        // Owner request (2026-09-16) -- see TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED.
+        // See TicketEventKind.DEAL_QUOTATION_REVISION_SUBMITTED.
         Map.entry("DEAL_QUOTATION_REVISION_SUBMITTED", "ใบเสนอราคาฉบับแก้ไขรออนุมัติ"),
-        // P1 hand-off notifications (see TicketEventKind): who must act next on each pipeline hand-off.
+        // Hand-off notifications (see TicketEventKind): who must act next on each pipeline hand-off.
         Map.entry("IMPORT_REQUEST_ISSUED", "ใบขอซื้อ (IR) ใหม่ — รอสั่งซื้อกับโรงงาน"),
         Map.entry("IMPORT_REQUEST_REVISED", "ใบขอซื้อ (IR) ฉบับแก้ไข — กรุณาตรวจสอบ"),
         Map.entry("DEPOSIT_PAYMENT_CONFIRMED", "ฝ่ายบัญชียืนยันรับเงินมัดจำแล้ว"),
@@ -218,7 +210,7 @@ public class NotificationRepository {
         Map.entry("REMAINING_INVOICE_ISSUED", "ออกใบแจ้งหนี้ (ยอดคงเหลือ) แล้ว — รอยืนยันรับชำระ"),
         Map.entry("CLOSE_READY_FOR_CEO", "ดีลพร้อมปิด — รอ CEO ตรวจสอบ"),
         Map.entry("ORDER_CONFIRMED_NO_DEPOSIT", "ยืนยันคำสั่งซื้อแล้ว — ดีลนี้ไม่เก็บมัดจำ"),
-        // P2 notifications (see TicketEventKind).
+        // Payment and deal-lifecycle notifications (see TicketEventKind).
         Map.entry("PAYMENT_RECEIVED", "ฝ่ายบัญชีรับชำระเงินเพิ่มแล้ว"),
         Map.entry("PAYMENT_FULLY_PAID", "ลูกค้าชำระเงินครบแล้ว"),
         Map.entry("DEAL_CLOSED", "ดีลปิดเรียบร้อยแล้ว"),
@@ -323,16 +315,16 @@ public class NotificationRepository {
      * event, not just their supervisor.
      *
      * <p>The {@code hr.division} join is a {@code LEFT JOIN} so a {@code ceo} match with no
-     * division is not silently dropped -- the predicate no longer reads {@code d} at all.
-     * This does not change {@code import}/{@code sales}/{@code sales_manager}: each of those
+     * division is not silently dropped -- the predicate does not read {@code d} at all.
+     * {@code import}/{@code sales}/{@code sales_manager} are unaffected: each of those
      * predicates tests {@code d.source_code}, which is SQL {@code NULL} (never true) when {@code
-     * d} fails to match, exactly as an absent INNER JOIN row would have excluded that employee --
-     * confirmed by inspection, not just assumed. {@code hr.position} is likewise a {@code LEFT
+     * d} fails to match, exactly as an absent INNER JOIN row would have excluded that employee.
+     * {@code hr.position} is likewise a {@code LEFT
      * JOIN}: only {@code sales_manager} reads it, and an employee with a null {@code position_id}
      * must stay reachable by the other, position-agnostic branches.
      *
      * <p>An unrecognised role resolves to nobody and inserts (and mails) nothing -- a silent
-     * no-op, as it always has been -- so a typo'd role name notifies no one rather than everyone.
+     * no-op -- so a typo'd role name notifies no one rather than everyone.
      */
     public void notifyByRole(String role, long ticketId, String type, String message) {
         notifyByRoleInternal(role, type, message, "/tickets/" + ticketId);
@@ -348,7 +340,7 @@ public class NotificationRepository {
     }
 
     /**
-     * General HR-fan-out entry point, generalized from {@link #notifyHrOfProfileRequest} (2026-08-31)
+     * General HR-fan-out entry point, generalized from {@link #notifyHrOfProfileRequest}
      * so a second HR-queue feature (ล.ย.01 submissions, which link to {@code /tax-allowance-review}
      * rather than {@code /requests}) does not need a second copy of the {@code "hr"} division
      * predicate. Both callers now share exactly one {@code notifyByRoleInternal("hr", ...)} path —
@@ -368,13 +360,12 @@ public class NotificationRepository {
         String divisionFilter = switch (role) {
             case "import" -> "d.source_code ILIKE 'PCIM%'";
             // Mirrors DivisionAccessPolicy#roleFor's hr branch ("hr".equals(divisionCode(employee))),
-            // NOT a naive `d.source_code ILIKE 'HR%'` -- that was tried once already and found wrong
-            // in two ways (EmployeeRepository#findHrEmployeeIds's S-3 review finding): it is a prefix
+            // NOT a naive `d.source_code ILIKE 'HR%'`, which is wrong in two ways: it is a prefix
             // match where roleFor requires an EXACT "hr", and it has no fallback to the name_th
-            // prefix for the real rows where source_code is NULL. Reused verbatim from the two
-            // already-reviewed SQL mirrors of this same branch, PendingApproverSql
-            // #SINGLE_ACTIVE_HR_NAME_SQL and EmployeeRepository#findHrEmployeeIds, aliases adjusted
-            // to this method's own `d`/`p` joins. The NOT LIKE '%กรรมการ%' guard reproduces roleFor's
+            // prefix for the real rows where source_code is NULL. Same predicate as the other SQL
+            // mirrors of this branch, PendingApproverSql#SINGLE_ACTIVE_HR_NAME_SQL and
+            // EmployeeRepository#findHrEmployeeIds, with aliases adjusted to this method's own
+            // `d`/`p` joins. The NOT LIKE '%กรรมการ%' guard reproduces roleFor's
             // precedence: isExecutive is checked BEFORE "hr".equals(code), so an HR-division employee
             // who is also an executive resolves to "ceo" in Java and must not be notified here too.
             case "hr" -> """
@@ -382,12 +373,9 @@ public class NotificationRepository {
                 AND regexp_replace(COALESCE(p.name_th, ''), '\\s+', '', 'g') NOT LIKE '%กรรมการ%'
                 """;
             case "ceo"    -> CeoApproverRule.SQL_PREDICATE;
-            // GLA-32 (2026-09-19): notifyByRole("account", ...) was previously a NO-OP in both
-            // channels -- this switch had no "account" arm at all, so the early `return` below
-            // fired before the INSERT or salesMailer.emailForRole were ever reached (see
-            // SalesNotificationMailRoutingIntegrationTest#anAccountRoleFanOutIsANoOpInBothChannelsToday,
-            // now updated to pin the fixed behaviour instead). Added to give DepositNoticeService.issue
-            // a real "account" recipient. Mirrors DivisionAccessPolicy#roleFor's account branch
+            // Gives DepositNoticeService.issue a real "account" recipient (a role with no arm here
+            // would hit the early `return` below and notify nobody in either channel). Mirrors
+            // DivisionAccessPolicy#roleFor's account branch
             // ("ac".equals(divisionCode(employee))) exactly, same shape as the "hr" case just above:
             // an EXACT match against source_code (falling back to the name_th prefix), not a naive
             // `ILIKE 'AC%'`, plus the same NOT LIKE '%กรรมการ%' guard so an AC-division employee who

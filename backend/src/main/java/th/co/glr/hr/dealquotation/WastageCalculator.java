@@ -5,23 +5,19 @@ import java.math.RoundingMode;
 import java.util.List;
 
 /**
- * Quotation v2 (direct deal quotation, V165) — the pure arithmetic core. See
+ * Quotation v2 (direct deal quotation) — the pure arithmetic core. See
  * docs/sales/quotation-v2-plan.md's "Arithmetic" section for the spec this implements verbatim, including
  * its own worked reference figures (QN6900595-3 items 1/3/5 — pinned by
  * {@code WastageCalculatorTest}).
  *
- * <p><b>History of the piece-rounding rule.</b> On 2026-09-15 (quotation arithmetic reconciliation)
- * pieces were read as rounding HALF_UP, not CEILING, both for the AREA-mode piece count (R-B) and for
- * PERCENT wastage (R-C); a line amount is a single rounding of the unrounded product, not a rounding
- * of an already-rounded net price (R-D). <b>On 2026-10-12 the owner ruled "ปัดขึ้นทุกกรณี" for every
- * document issued from now on: every fraction of a PIECE rounds UP</b> (the AREA area × pieces/ตร.ม.
- * step, PERCENT wastage, and the PIECES wastage value). R-B and R-C are therefore superseded; R-D is
- * untouched. The owner made the ruling knowing three rows that were evidence for HALF_UP no longer
- * reproduce: QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27, printed 3,882, now 3,883 → 3,884),
- * QN6900648 row 4 (511 × 1.39 = 710.29, printed 710, now 711 → 712) and QN6900595-3 item 1
- * (791 × 1.10 = 870.1, printed 870, now 871 → 872). {@code piecesPerSqm} still rounds to 2 decimals
- * to nearest, box rounding still rounds up, and money still rounds to 2 decimal places HALF_UP.
- * The superseded 2026-09-15 evidence is kept in docs/sales/quotation-v2-plan.md.
+ * <p><b>Piece-rounding rule.</b> The owner's rule is "ปัดขึ้นทุกกรณี": <b>every fraction of a
+ * PIECE rounds UP</b> (the AREA area × pieces/ตร.ม. step, PERCENT wastage, and the PIECES
+ * wastage value). Reading them as HALF_UP (an earlier rule) is wrong; it would not reproduce the
+ * rows below, which now round up: QN6900981-1 row 1 (2,793 × 1.39 = 3,882.27, an older print shows
+ * 3,882, now 3,883 → 3,884), QN6900648 row 4 (511 × 1.39 = 710.29, printed 710, now 711 → 712) and
+ * QN6900595-3 item 1 (791 × 1.10 = 870.1, printed 870, now 871 → 872). {@code piecesPerSqm} still
+ * rounds to 2 decimals to nearest, box rounding still rounds up, and money still rounds to 2 decimal
+ * places HALF_UP. The superseded HALF_UP evidence is kept in docs/sales/quotation-v2-plan.md.
  *
  * <p><b>R-D (single-rounding line amount)</b> is proven by QN6900971-4 (D1) rows 5.3-5.7: list
  * × qty × (1−pct/100) rounded once gives 35,799.63/16,502.43/11,445.23, matching the
@@ -43,7 +39,7 @@ public final class WastageCalculator {
     public static final String WASTAGE_MODE_PIECES = "PIECES";
     public static final String WASTAGE_MODE_NONE = "NONE";
 
-    // ── Quotation v3 (owner feedback pass 3, 2026-09-11) ──────────────────────────────────────
+    // ── Quotation v3 ──────────────────────────────────────
     /** A real tile: catalog link, wastage, ตร.ม./แผ่น, แผ่น/กล่อง, auto-composed description. */
     public static final String LINE_TYPE_TILE = "TILE";
     /** Description + quantity + unit + unit price, and none of the tile machinery — freight,
@@ -61,8 +57,8 @@ public final class WastageCalculator {
     public static final String PRICE_MODE_DIRECT_NET = "DIRECT_NET";
     /**
      * A document with NO single price mode: each TILE row carries its own — one of the three above
-     * — in {@code sales.quotation_item.price_mode} (V192.5). Sales feedback #14 / owner 2026-10-06:
-     * "อยากให้เลือกการคิดราคาแต่ละข้อไม่เหมือนกันได้ เช่น บางข้อราคาพิเศษต่อตรม บางข้อลด% ตามสเต็ป".
+     * — in {@code sales.quotation_item.price_mode} (V192.5), e.g. some rows ราคาพิเศษต่อตรม,
+     * some rows ลด% ตามสเต็ป.
      *
      * <p>It is a property of the DOCUMENT, never of a row: a row is always priced, stored and
      * printed in exactly one of NET / SPECIAL_SQM / DIRECT_NET, by the very code a single-mode
@@ -96,8 +92,8 @@ public final class WastageCalculator {
             || PRICE_MODE_DIRECT_NET.equals(priceMode);
     }
 
-    // ── Quotation v3b (owner, 2026-09-11 overnight) — the ENGLISH document ────────────────────
-    /** The Thai document, form F-SM-002 (03). The default, and the ONLY behaviour before V169. */
+    // ── Quotation v3b — the ENGLISH document ────────────────────
+    /** The Thai document, form F-SM-002 (03). The default. */
     public static final String DOCUMENT_LANGUAGE_TH = "TH";
     /** The English document, form F-SM-008 (01): USD, no VAT row, English labels and remarks. */
     public static final String DOCUMENT_LANGUAGE_EN = "EN";
@@ -105,29 +101,28 @@ public final class WastageCalculator {
     public static final String CURRENCY_THB = "THB";
     public static final String CURRENCY_USD = "USD";
 
-    // ── Owner feedback, กำหนดยืนยันราคา (2026-09-14) — remark 7's second variant ───────────────
-    /** The rep types a whole number of days, counted from the document's own date. Today's
-     * behaviour and the default (every pre-V178 row stores {@code validity_mode = 'DAYS'}). */
+    // ── กำหนดยืนยันราคา — remark 7's second variant ───────────────
+    /** The rep types a whole number of days, counted from the document's own date. The
+     * default (every pre-V178 row stores {@code validity_mode = 'DAYS'}). */
     public static final String VALIDITY_MODE_DAYS = "DAYS";
     /** The rep types a specific calendar date ("ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่
      * .../.../....") instead of a day count — for when a promotion or a factory allocation needs
      * an exact deadline rather than "N days from now". */
     public static final String VALIDITY_MODE_DATE = "DATE";
 
-    // ── Item 4 (V181, "ไม่รับมัดจำ", 2026-09-16) — the three 100%-payment-term codes ─────────────
+    // ── V181, "ไม่รับมัดจำ" — the three 100%-payment-term codes ─────────────
     // Only ever apply on a document whose deposit_percent = 0 ("ไม่รับมัดจำ" ticked); see
-    // DealQuotationService#resolveFullPaymentTerm. Deposit 0% stopped being expressible any other
-    // way (the editor's percent chips/custom input now reject 0), so a zero-deposit document names
+    // DealQuotationService#resolveFullPaymentTerm. Deposit 0% is not expressible any other
+    // way (the editor's percent chips/custom input reject 0), so a zero-deposit document names
     // ONE of these instead of leaving the reader to infer why no deposit is asked. No credit-days
-    // option exists in no-deposit mode (owner ruling, 2026-09-16) — only these three fixed terms.
+    // option exists in no-deposit mode — only these three fixed terms.
     /** "บริษัทขอรับเงินค่าสินค้า 100% ก่อนส่งมอบสินค้า" */
     public static final String FULL_PAYMENT_TERM_BEFORE_DELIVERY = "BEFORE_DELIVERY";
     /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้า" */
     public static final String FULL_PAYMENT_TERM_ON_DELIVERY = "ON_DELIVERY";
-    /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า" — owner correction
-     * 2026-09-16: "เมื่อ..." first, THEN "หรือก่อน...", the reverse order of the other two terms'
-     * own "ก่อน...หรือเมื่อ..." phrasing; code renamed BEFORE_OR_ON_DELIVERY -> ON_OR_BEFORE_DELIVERY
-     * to match. */
+    /** "บริษัทขอรับเงินค่าสินค้า 100% เมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า" — "เมื่อ..." first,
+     * THEN "หรือก่อน...", the reverse order of the other two terms'
+     * own "ก่อน...หรือเมื่อ..." phrasing, hence the code name ON_OR_BEFORE_DELIVERY. */
     public static final String FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY = "ON_OR_BEFORE_DELIVERY";
 
     /**
@@ -142,8 +137,8 @@ public final class WastageCalculator {
     /**
      * The VAT rate a document of this language carries: 7% for TH, ZERO for EN.
      *
-     * <p>⚠️ <b>This is the ASSUMPTION, not a discovered rule</b>, and it is flagged as such in the
-     * PR body and in V169's own header: VAT follows the LANGUAGE, with no separate switch, because
+     * <p>⚠️ <b>This is an ASSUMPTION, not a discovered rule</b>, flagged as such in V169's own
+     * header: VAT follows the LANGUAGE, with no separate switch, because
      * none of the owner's samples shows an English document WITH VAT or a Thai one WITHOUT. If the
      * fourth combination is ever needed it is a new column, not a reinterpretation of this one.
      *
@@ -180,9 +175,8 @@ public final class WastageCalculator {
         Integer piecesPerBox,
         BigDecimal unitPrice,
         BigDecimal discountPct,
-        // Owner-approved (2026-09-16, "sell loose pieces"): true (the default) is today's ONLY
-        // behaviour, byte-for-byte — piecesFinal always rounds UP to the next piecesPerBox
-        // multiple. false lets a TILE row sell pieces that do not make a full box: piecesFinal
+        // "Sell loose pieces": true (the default) means piecesFinal always rounds UP to the next
+        // piecesPerBox multiple. false lets a TILE row sell pieces that do not make a full box: piecesFinal
         // stays piecesAfterWastage, unrounded, and Result#boxes/#loosePieces split it into full
         // boxes plus a remainder instead of forcing it to the next box. Meaningless (never read)
         // when piecesPerBox is null/<=0 — there is no box multiple to round to or split by either
@@ -264,7 +258,7 @@ public final class WastageCalculator {
                 boxes = piecesFinal / ppb;
                 loosePieces = 0;
             } else {
-                // Owner-approved "sell loose pieces": piecesFinal is NOT rounded up — the rep is
+                // "Sell loose pieces": piecesFinal is NOT rounded up — the rep is
                 // selling exactly piecesAfter, split into full boxes plus whatever does not make
                 // one more. lineAmount below is unaffected either way: it always derives from
                 // THIS piecesFinal, whichever branch set it.
@@ -276,17 +270,17 @@ public final class WastageCalculator {
 
         BigDecimal discountPct = in.discountPct() == null ? BigDecimal.ZERO : in.discountPct();
         BigDecimal discountFactor = BigDecimal.ONE.subtract(discountPct.divide(HUNDRED, 10, RoundingMode.HALF_UP));
-        // R-D input scale (review fix, 2026-09-15): pre-round the LIST price to 2dp before any
+        // R-D input scale: pre-round the LIST price to 2dp before any
         // multiplication. sales.quotation_item.unit_price is NUMERIC(14,2) (V49) and
         // DealQuotationService persists input.unitPrice() through money2() — a 3dp-or-finer typed
         // list price would otherwise be stored at 2dp while this method kept computing from the
         // unrounded value, so the stored row could never reproduce the amount printed for it (a
-        // GET → recompute round-trip would disagree with what was saved). None of the nine owner
+        // GET → recompute round-trip would disagree with what was saved). None of the owner's
         // documents discriminates this — every list price in them is already 2dp — so pinning it
-        // here is a forward-looking correctness fix, not a change any printed figure depends on.
+        // here is forward-looking correctness, not something any printed figure depends on.
         BigDecimal listPrice = round2(in.unitPrice());
         BigDecimal netUnitPrice = round2(listPrice.multiply(discountFactor));
-        // R-D (quotation arithmetic reconciliation, 2026-09-15): the line amount is
+        // R-D: the line amount is
         // round2(list × piecesFinal × (1 − pct/100)) — a SINGLE rounding at the end — not
         // round2(netUnitPrice × piecesFinal), which double-rounds through the already-rounded
         // 2dp net unit price and drifts by a satang on rows where piecesFinal is even (D1's
@@ -303,15 +297,15 @@ public final class WastageCalculator {
     /**
      * {@code round(1 / sqmPerPiece, 2, HALF_UP)} — the plan's own formula, verbatim.
      *
-     * <p>PUBLIC since quotation v3: this 2dp reciprocal is no longer only a printed figure, it is
+     * <p>PUBLIC: this 2dp reciprocal is not only a printed figure, it is
      * a DIVISOR in {@link #netPerPieceFromSpecialSqm}'s money math. Every caller that needs
      * ตร.ม./แผ่น must come through here rather than re-deriving it, or the two roundings drift
-     * apart and only some of the owner's documents reproduce — the exact failure the v3 spec warns
-     * about. {@code DealQuotationService#toItemDto} and {@code DealQuotationRepository#mapItem}
-     * both used to compute their own {@code ONE.divide(sqmPerPiece, 2, HALF_UP)}, which is
-     * single-rounding where this is double (round to 10dp, then to 2dp); the two disagree only on
-     * a knife-edge value, but "only on a knife edge" is precisely the kind of divergence that
-     * makes a printed sub-line contradict the price beside it. Both now call this.
+     * apart and only some of the owner's documents reproduce. A caller computing its own
+     * {@code ONE.divide(sqmPerPiece, 2, HALF_UP)} would be single-rounding where this is double
+     * (round to 10dp, then to 2dp); the two disagree only on a knife-edge value, but "only on a
+     * knife edge" is precisely the kind of divergence that makes a printed sub-line contradict the
+     * price beside it. {@code DealQuotationService#toItemDto} and {@code
+     * DealQuotationRepository#mapItem} both call this.
      */
     public static BigDecimal piecesPerSqm(BigDecimal sqmPerPiece) {
         return round2(BigDecimal.ONE.divide(sqmPerPiece, 10, RoundingMode.HALF_UP));
@@ -319,7 +313,7 @@ public final class WastageCalculator {
 
     /**
      * {@code SPECIAL_SQM} — the per-piece NET price from a ราคาพิเศษ quoted in บาท per ตร.ม.
-     * INCLUDING VAT. Owner feedback pass 3 (2026-09-11).
+     * INCLUDING VAT.
      *
      * <p><b>The rounding ORDER is the whole point.</b> The naive reading — strip VAT, then multiply
      * by ตร.ม./แผ่น — is WRONG. Her documents round the pieces-per-ตร.ม. reciprocal to 2dp FIRST
@@ -333,7 +327,7 @@ public final class WastageCalculator {
      *
      * <p>Verified to the satang against all four samples — pinned by {@code WastageCalculatorTest}:
      * <table>
-     *   <caption>owner documents, 2026-09-11</caption>
+     *   <caption>owner documents</caption>
      *   <tr><th>document</th><th>ราคาพิเศษ</th><th>ตร.ม./แผ่น</th><th>pcs/ตร.ม.</th><th>คงเหลือ</th></tr>
      *   <tr><td>QN6900704-2 #1</td><td>1,350</td><td>0.36</td><td>2.78</td><td>453.84</td></tr>
      *   <tr><td>QN6900704-2 #2</td><td>1,400</td><td>0.36</td><td>2.78</td><td>470.65</td></tr>
@@ -350,7 +344,7 @@ public final class WastageCalculator {
      * is already stated three times across the codebase ({@code DealQuotationService},
      * {@code QuotationRenderer}, here) and here is where the money math lives.
      *
-     * <p><b>Correction to the v3 spec, recorded rather than silently reinterpreted:</b> the spec
+     * <p><b>Note on the v3 spec:</b> the spec
      * states that the naive reading "reproduces only two of the four samples". It reproduces
      * NONE of them — 454.21/471.03/1211.21/531.59 against her printed
      * 453.84/470.65/1210.25/531.16. The spec's CONCLUSION (naive is wrong, this order is right)
@@ -363,9 +357,9 @@ public final class WastageCalculator {
 
     /**
      * A per-แผ่น price, before VAT, from a price quoted in บาท per ตร.ม. INCLUDING VAT — for ANY
-     * of a Thai tile row's price boxes. Sales feedback #1 (2026-10-06, "แก้เป็น ตร.ม. รวม VAT
-     * ทุกแบบ"): ราคาตั้ง in every price mode, and ราคาสุทธิ in DIRECT_NET, are now typed per ตร.ม.
-     * including VAT exactly as ราคาพิเศษ always was, and converted here.
+     * of a Thai tile row's price boxes ("แก้เป็น ตร.ม. รวม VAT ทุกแบบ"): ราคาตั้ง in every price
+     * mode, and ราคาสุทธิ in DIRECT_NET, are typed per ตร.ม. including VAT exactly as ราคาพิเศษ is,
+     * and converted here.
      *
      * <p><b>This is {@link #netPerPieceFromSpecialSqm}'s rule, not a second one</b> — both are the
      * same private computation, deliberately. The rounding order that method's Javadoc spends its
@@ -402,7 +396,7 @@ public final class WastageCalculator {
     }
 
     /**
-     * The ส่วนลดพิเศษ figure: {@code round2(base × pct / 100)}. Owner feedback pass 3 — her
+     * The ส่วนลดพิเศษ figure: {@code round2(base × pct / 100)}. The owner's
      * QN6900704-2 proves the printed 38,198.21 is 3% of the four preceding line amounts
      * (149,767.20 + 96,012.60 + 528,269.76 + 499,224.00 = 1,273,273.56).
      *
@@ -418,7 +412,7 @@ public final class WastageCalculator {
         return round2(b.multiply(pct).divide(HUNDRED, 10, RoundingMode.HALF_UP));
     }
 
-    // M4: wastageValue bounds are MODE-dependent (a flat piece count can legitimately be in the
+    // wastageValue bounds are MODE-dependent (a flat piece count can legitimately be in the
     // thousands; a percentage over 100 is almost certainly a typo), so this can only be enforced
     // here, not as a single static @DecimalMax on the request DTO.
     private static final BigDecimal MAX_WASTAGE_PERCENT = HUNDRED;
@@ -453,12 +447,11 @@ public final class WastageCalculator {
         throw new IllegalArgumentException("wastageMode must be PERCENT, PIECES or NONE, got: " + wastageMode);
     }
 
-    /** H4 sanity bound: catches the class of unit mistake H4 itself was ({@code sqmPerPiece}
-     * resolved 100x off) whatever produced the value — a bad catalog row, a typed override, or a
-     * future bug in whatever resolves it (see {@code DealQuotationService#resolveSqmPerPiece} —
-     * the catalog-geometry fallback that replaced this class's own deleted free-text-size guess,
-     * owner ruling 2026-09-12 "2) ไม่มีค่อยคำนวนเอง") — rather than only fixing today's known
-     * cause. */
+    /** Sanity bound: catches a unit mistake ({@code sqmPerPiece} resolved 100x off) whatever
+     * produced the value — a bad catalog row, a typed override, or a future bug in whatever
+     * resolves it (see {@code DealQuotationService#resolveSqmPerPiece} — the catalog-geometry
+     * fallback; the unit is never guessed from free-text size) — rather than only guarding a
+     * known cause. */
     private static void requireReasonableSqmPerPiece(BigDecimal sqmPerPiece) {
         if (sqmPerPiece.compareTo(MIN_SQM_PER_PIECE) < 0 || sqmPerPiece.compareTo(MAX_SQM_PER_PIECE) > 0) {
             throw new IllegalArgumentException(UNREASONABLE_SIZE_MESSAGE);
@@ -466,7 +459,7 @@ public final class WastageCalculator {
     }
 
     /**
-     * Owner decision 2026-09-13 ("Option A") — an ENGLISH quotation priced per square metre. True
+     * An ENGLISH quotation priced per square metre. True
      * exactly for {@code SPECIAL_SQM} on an {@code EN} document; the Thai {@code SPECIAL_SQM}
      * (a VAT-inclusive baht/ตร.ม. price turned into a per-piece net by
      * {@link #netPerPieceFromSpecialSqm}) is untouched by everything this flag switches on.
@@ -482,7 +475,7 @@ public final class WastageCalculator {
 
     /**
      * The English per-sqm printed quantity: {@code round2(boxes × sqmPerBox)} — the supplier's
-     * stated box area times the box count {@link #calculate} already rounded up to. Her QN6900933:
+     * stated box area times the box count {@link #calculate} already rounded up to. The owner's QN6900933:
      * 120 × 0.6 = 72.00, 30 × 0.6 = 18.00, 114 × 0.495 = 56.43. There is deliberately no fallback
      * to pieces × sqm/piece: that reproduces neither 72.00 (71.64) nor the owner's rule.
      *
@@ -500,7 +493,7 @@ public final class WastageCalculator {
     }
 
     /**
-     * Owner decision 2026-09-16 ("Option B") — the English per-sqm printed quantity when the row
+     * The English per-sqm printed quantity when the row
      * carries no supplier box area (ตร.ม./กล่อง blank): {@code round2(piecesFinal × sqmPerPiece)},
      * applied to the FINAL piece count — post-wastage, and post box-rounding when a แผ่น/กล่อง IS
      * present without a box area (a normal full-box round, or the exact wastage-adjusted count when
@@ -508,8 +501,7 @@ public final class WastageCalculator {
      * the 2dp {@link #piecesPerSqm} reciprocal, so this is a SINGLE rounding rather than a double
      * one.
      *
-     * <p><b>Correction (2026-09-16 review) to this Javadoc's previous claim.</b> This is NOT "the
-     * same area basis the Thai SPECIAL_SQM mode uses" — Thai SPECIAL_SQM never derives a printed sqm
+     * <p><b>Not the same area basis as the Thai SPECIAL_SQM mode</b> — Thai SPECIAL_SQM never derives a printed sqm
      * quantity from pieces at all (its {@link DealQuotationLines#tilePrint} branch prints the stored
      * PIECE count; only its net-price-per-piece derivation, {@link
      * #netPerPieceFromSpecialSqm}, touches an sqm/piece figure, and it does so by DIVIDING by the
@@ -556,22 +548,20 @@ public final class WastageCalculator {
         return round2(s.add(v));
     }
 
-    // ── REMOVED (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง") ───────────────────────────────
-    // parseSqmPerPieceFromSize/detectUnit/Unit used to live here: a fallback that guessed cm-vs-mm
-    // from a free-text size string by an explicit unit token, else magnitude (either dimension
-    // over 300 read as millimetres). It got a REAL catalog product wrong — "200x300" is not > 300
-    // on either side, so it read as CENTIMETRES (a 2m x 3m tile, 6.0 sqm/piece) when the owner's
-    // own document for that product is 0.061 sqm/piece (16.39 pcs/sqm): wrong by ~98x, the same
-    // class of "100x off" unit mistake this class's own header already warned about once (H4).
-    // The owner's decision was explicit: do not infer a unit from the free-text size AT ALL —
-    // read the CATALOGUE instead (its width_mm/height_mm are unambiguous millimetres), and only
-    // compute from those when the catalogue has no sqm_per_piece of its own. See
-    // {@code DealQuotationService#resolveSqmPerPiece} for the replacement resolution order, and
+    // ── No unit guessing from free-text size ───────────────────────────────
+    // Never infer cm-vs-mm from a free-text size string (by explicit unit token, else magnitude
+    // such as "either dimension over 300 is millimetres"). It gets a REAL catalog product wrong —
+    // "200x300" is not > 300 on either side, so it would read as CENTIMETRES (a 2m x 3m tile,
+    // 6.0 sqm/piece) when the owner's own document for that product is 0.061 sqm/piece
+    // (16.39 pcs/sqm): wrong by ~98x, the "100x off" unit mistake the sanity bound above guards
+    // against. Read the CATALOGUE instead (its width_mm/height_mm are unambiguous millimetres), and
+    // only compute from those when the catalogue has no sqm_per_piece of its own. See
+    // {@code DealQuotationService#resolveSqmPerPiece} for the resolution order, and
     // {@code WastageCalculatorTest#sqmPerPiece_regressionCannotBeReadAsCentimetresBy200x300Again}
     // for the regression this guards.
     // ─────────────────────────────────────────────────────────────────────────────────────────
 
-    /** Any fraction of a piece rounds up (owner ruling 2026-10-12) — see the class Javadoc.
+    /** Any fraction of a piece rounds up — see the class Javadoc.
      * Box-multiple rounding ({@link #ceilToMultiple}) also rounds up. */
     private static int ceilToInt(BigDecimal value) {
         return value.setScale(0, RoundingMode.CEILING).intValueExact();

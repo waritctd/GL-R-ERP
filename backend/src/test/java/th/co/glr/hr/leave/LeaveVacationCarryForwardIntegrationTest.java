@@ -19,7 +19,7 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * §5.3.5 VACATION carry-forward (V127, 2026-08-03): real-Postgres coverage of {@code
+ * §5.3.5 VACATION carry-forward: real-Postgres coverage of {@code
  * hr.leave_carryover} and {@link LeaveService#ensureCarryoverGrant}. The lazy memoization
  * (SELECT-then-INSERT-if-absent, keyed by a real calendar clock crossing a real year boundary) and
  * the non-accumulation CHECK constraint ({@code chk_lc_carried_days_bounded_by_own_quota}) are
@@ -38,8 +38,8 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * requires 3 days' advance notice; a 2025-dated request submitted under a 2026 "today" would 400 on
  * notice, not on anything this class is testing).
  *
- * <p>Leave requires approval (2026-08-05): every rule-passing submission below now lands SUBMITTED,
- * not APPROVED (see {@link LeaveService#submit}'s owner-ruling comment) -- but this class's own
+ * <p>Leave requires approval: every rule-passing submission below lands SUBMITTED,
+ * not APPROVED (see {@link LeaveService#submit}'s comment) -- but this class's own
  * quota/carry-forward arithmetic (paidDays/unpaidDays split, {@link
  * LeaveService#ensureCarryoverGrant}'s "used" figure) is computed from {@code ACTIVE_QUOTA_STATUSES}
  * ({@code SUBMITTED} + {@code APPROVED}), not {@code APPROVED} alone, so none of it is affected: a
@@ -259,7 +259,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
 
     @Test
     void aProRatedFirstYearVacationQuotaCarriesForwardItsOwnLeftoverNotTheFlatSix() {
-        // Design decision: a pro-rated first year (V120) DOES carry forward -- §5.3.5 states "ปีใด"
+        // A pro-rated first year DOES carry forward -- §5.3.5 states "ปีใด"
         // ("whatever year") with no stated exception for a first, pro-rated year, and it carries the
         // unused portion of THAT year's own pro-rated entitlement, not the flat 6.00. Hired
         // 2025-07-01: by 2025-12-31 (year-end), completed service is 5 whole months (ChronoUnit
@@ -399,7 +399,7 @@ class LeaveVacationCarryForwardIntegrationTest extends AbstractPostgresIntegrati
             employeeId, true, LocalDate.now(), false, null, false);
     }
 
-    // Hired 2015-01-01: comfortably clears VACATION's min_service_months floor (0, post-V120) and
+    // Hired 2015-01-01: comfortably clears VACATION's min_service_months floor (0) and
     // sits well outside proratedFirstYear's window for every earned_year used in this class except
     // the dedicated pro-ration test, which uses the 2-arg overload with an explicit hire date.
     private long insertEmployee(String code) {

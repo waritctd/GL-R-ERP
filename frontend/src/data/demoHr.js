@@ -1,22 +1,8 @@
 // Demo seed data for HR self-service requests (leave / overtime / special money /
-// profile-change requests) and notifications — state-matrix coverage for local
-// VITE_USE_MOCKS=true development (see chore/mock-demo-seed-state-matrix).
-//
-// These used to live as two competing sources: a handful of rows returned by
-// createDemoDatabase() itself, PLUS a set of `if (db.X.length === 0) {...}`-style
-// blocks in mockApi.js. For leaveRequests/overtimeRequests those blocks were dead
-// code (createDemoDatabase() already returned a non-empty array — see that file's
-// git history). specialMoneyRequests was the exception (review fix, 2026-08-02):
-// createDemoDatabase() never returned it, so that block was LIVE and was the sole
-// source of the 5 special-money rows it seeded. This module is now the single
-// source for all three; the 5 special-money rows below are those same rows,
-// preserved verbatim.
-//
-// Field shapes here are taken from the handlers that actually read them
-// (create/approve/reject/cancel in mockApi.js), not the old demoData.js rows —
-// the old rows were missing fields (attachmentId, systemNote, reviewerNote,
-// createdAt/updatedAt, the two-stage OT approval fields) that a real UI panel
-// would otherwise render as `undefined`.
+// profile-change requests) and notifications: state-matrix coverage for local
+// VITE_USE_MOCKS=true development. This module is the single source for the leave,
+// overtime and special-money rows. Field shapes follow the handlers that read them
+// (create/approve/reject/cancel in mockApi.js), so a panel never renders `undefined`.
 
 function iso(year, month, day) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -49,10 +35,7 @@ export function buildDemoLeaveRequests(employees) {
     reviewerNote: null,
     cancelledAt: null,
     // Present-and-null, not absent: create() always writes these six, and leaveRequestTable.jsx's
-    // expanded row reads all of them (sub-day window, paid/unpaid split, §5.2 purpose, emergency
-    // flag). Same reasoning as the module header's note about the pre-2026-08 rows that omitted
-    // fields a real panel then rendered as `undefined` — an absent key and a null one are the same
-    // pixel today only by luck of each call site's own fallback.
+    // expanded row reads all of them (sub-day window, paid/unpaid split, §5.2 purpose, emergency flag).
     startTime: null,
     endTime: null,
     paidDays: null,
@@ -174,22 +157,13 @@ export function buildDemoLeaveRequests(employees) {
       ...hrReviewer, reviewedAt: at(-44), cancelledAt: at(-40),
     }),
 
-    // ── TEAM COVERAGE (2026-08-11) ───────────────────────────────────────────
-    // The 12 rows above are a STATUS matrix: one row per reachable status, spread thin across
-    // divisions so no two land under the same manager. That is the right shape for "does the UI
-    // render every state", and the wrong shape for the two surfaces a manager actually uses —
-    // /leave's "ลูกทีม" and "รอพิจารณา" tabs. Measured before this block: the WHL ผู้จัดการฝ่าย
-    // (employees[5], the persona with the largest team at seven reports) had exactly TWO rows in
-    // "ลูกทีม", both from the same person, and ONE row in the review queue; the SAL ผู้จัดการฝ่าย
-    // (employees[0]) had two rows and NOTHING pending, which — since sales_manager is not in
-    // ROLE_PERMISSIONS.canReviewLeave and that tab is otherwise gated on having at least one
-    // actionable row — meant the review tab did not render for them AT ALL.
-    //
-    // A queue with one row cannot show what a queue is for: no scanning, no urgency ordering, no
-    // pagination, no mix of "decide this" and "already approved, could still void it". These rows
-    // fill both managers' teams to that bar. They are DEMO DEPTH, not new states — every status,
-    // field and edge below already appears above; what changes is that they now appear under one
-    // manager at once.
+    // ── TEAM COVERAGE ───────────────────────────────────────────────────────
+    // The rows above are a STATUS matrix spread thin across divisions. A manager's surfaces
+    // (/leave's "ลูกทีม" and "รอพิจารณา" tabs) need depth: a queue with one row cannot show
+    // scanning, urgency ordering, pagination, or the mix of "decide this" and "already approved,
+    // could still void it". Without these rows the SAL manager had nothing pending, so the review
+    // tab did not render for them at all (sales_manager is not in ROLE_PERMISSIONS.canReviewLeave).
+    // They are DEMO DEPTH, not new states.
     //
     // Quotas stay coherent per employee/type/year (PERSONAL 7, SICK 30, VACATION 6): leaveBalance()
     // derives the live figures from these rows, so an over-quota seed would render a manager's team
@@ -223,18 +197,12 @@ export function buildDemoLeaveRequests(employees) {
       quotaRemainingBefore: 7, quotaRemainingAfter: 6.56,
       requestedById: employees[4].id, requestedByName: employees[4].nameTh, requestedAt: at(-2),
     }),
-    // The two sub-day rows below (2026-08-31) exist because id 15 above was, until now, the ONLY
-    // fractional day count in the whole seed — and it used to read cleanly in every format, back
-    // when it was a flat 0.5 ("4 ชั่วโมง", "6.5"). V166's break window ended that: 13:00-17:00
-    // straddles 12:30-13:30 by 30 minutes, so it is now 0.44 — awkward on purpose. A leave surface driven only by it looks
-    // fine while the awkward cases are the ones users actually reported: quota remainders carry the
-    // fraction into the DAY column too, which is where "0.38 วัน · เหลือ 6.37 วัน" came from.
-    //
-    // Both are ordinary sub-day requests a real employee could file, not inflated fixtures: their
-    // totalDays is exactly what LeaveService#computeTotalDays stores for those clock times
-    // (minutes / (8 * 60), HALF_UP to 2dp), and quotaRemainingAfter is exactly before - total.
-    // They sit on employees[8], the demo employee the quick-login "พนักงาน" button lands on, so
-    // the case is visible on first load rather than hidden behind a role switch.
+    // The two sub-day rows below exist because id 15 above is the only fractional day count in the
+    // seed. The break window makes 13:00-17:00 = 0.44, awkward on purpose: quota remainders carry
+    // the fraction into the DAY column too ("0.38 วัน · เหลือ 6.37 วัน"). Both are ordinary
+    // requests: totalDays is exactly what LeaveService#computeTotalDays stores (minutes / (8 * 60),
+    // HALF_UP to 2dp) and quotaRemainingAfter is before - total. They sit on employees[8], the
+    // quick-login "พนักงาน" persona, so the case is visible on first load.
     row({
       // Three flat hours — THE reported row. Renders "3 ชั่วโมง · เหลือ 6 วัน 5 ชั่วโมง".
       id: 28, employeeId: employees[8].id, leaveTypeCode: 'PERSONAL',
@@ -267,9 +235,9 @@ export function buildDemoLeaveRequests(employees) {
       requestedById: employees[25].id, requestedByName: employees[25].nameTh, requestedAt: at(-6),
     }),
     row({
-      // APPROVED and still in the future — the state a manager may VOID but not decide. This is
+      // APPROVED and still in the future: the state a manager may VOID but not decide. This is
       // the row that makes the approve/reject-vs-cancel split visible in the review queue
-      // (leaveSurfaceTabs.js's canManagerCancelRequest is APPROVED-only as of 2026-08-11).
+      // (leaveSurfaceTabs.js's canManagerCancelRequest is APPROVED-only).
       id: 17, employeeId: employees[1].id, leaveTypeCode: 'VACATION',
       startDate: iso(2026, 8, 24), endDate: iso(2026, 8, 25), totalDays: 2, quotaYear: 2026,
       reason: 'งานมงคลสมรสของญาติที่ต่างจังหวัด', status: 'APPROVED',
@@ -663,28 +631,21 @@ export function buildDemoSpecialMoneyRequests(employees) {
       managerApprovedBy: employees[0].id, managerApprovedAt: now,
       reviewedById: employees[0].id, reviewedAt: now,
     }),
-    // GLA-46: ONE legacy on-behalf row -- requestedById !== employeeId, the exact shape
-    // submit-on-behalf used to produce before the 2026-08-10 confidentiality ruling removed it
-    // (SpecialMoneyService.resolveTargetEmployee is now unconditionally self-only). Every other
-    // row above is self-filed (requestedById === employeeId), so without this one
-    // mockApi.specialMoneyScope.test.js could only prove the `requestedById` disjunct was DELETED
-    // from cancel()/addAttachment() by reading the code, never by exercising it -- see that file's
-    // header. Mirrors the Java IT's parkAsLegacyOnBehalfRow (SpecialMoneyScopeIntegrationTest's
-    // aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheRow): employeeId is employees[9] (id 10,
-    // WHL, reports to the same warehouse manager as employees[8]/id 9, but NOT employees[8]
-    // itself, which every other test in that file already owns), requestedById is
-    // employees[5].id (id 6, the warehouse ผู้จัดการฝ่าย, warehouse.manager@glr.co.th) -- a manager
-    // who could legitimately have filed for an in-division report under the old rule. Nothing
-    // back-fills requested_by_id, so a database can hold rows exactly like this (production held
-    // none as of 2026-09-19 -- 2 welfare rows in total, both self-filed). employees[9] has no other seed row above, so no frequency-cap
-    // collision is possible.
+    // One legacy on-behalf row: requestedById !== employeeId, the shape submit-on-behalf produced
+    // before it was removed (SpecialMoneyService.resolveTargetEmployee is now self-only). Every
+    // other row is self-filed, so without this one mockApi.specialMoneyScope.test.js could only
+    // prove the `requestedById` disjunct was deleted from cancel()/addAttachment() by reading the
+    // code. Mirrors the Java IT's parkAsLegacyOnBehalfRow: employeeId is employees[9] (id 10, WHL,
+    // same manager as employees[8] but not employees[8] itself), requestedById is employees[5].id
+    // (id 6, the warehouse ผู้จัดการฝ่าย). Nothing back-fills requested_by_id, so a database can
+    // hold such rows. employees[9] has no other seed row, so no frequency-cap collision is possible.
     row({
       id: 13, employeeId: employees[9].id, requestType: 'AID_FUNERAL',
       eventDate: '2026-07-01', quantity: 1,
       requestedAmount: 5000, payrollBucket: 'AID',
       reason: 'เงินช่วยเหลืองานศพบิดา', status: 'SUBMITTED',
-      // Dated before the ruling: Java has refused on-behalf submission since 2026-08-10, so a
-      // real row of this shape can only carry an earlier requested_at.
+      // Dated before the on-behalf ruling: Java now refuses on-behalf submission, so a real row of
+      // this shape can only carry an earlier requested_at.
       requestedById: employees[5].id, requestedAt: '2026-07-02T09:00:00.000Z',
     }),
   ];
@@ -721,11 +682,8 @@ export function buildDemoNotifications() {
     { id: 3, userId: 7, ticketId: 4, ticketCode: 'PR-2026-0004', type: 'SUBMITTED', message: 'Ticket PR-2026-0004 รอการรับเรื่อง', read: false, createdAt: '2026-06-18T07:30:00Z' },
     { id: 4, userId: 7, ticketId: 3, ticketCode: 'PR-2026-0003', type: 'PICKED_UP', message: 'Ticket PR-2026-0003 ถูกมอบหมายให้คุณแล้ว', read: true, createdAt: '2026-06-18T08:30:00Z' },
     { id: 5, userId: 8, ticketId: 4, ticketCode: 'PR-2026-0004', type: 'PRICING_DECISION_APPROVED', message: 'คำขอราคา PCR-2026-0008 ได้รับการอนุมัติราคาขายแล้ว', read: false, createdAt: '2026-07-20T11:00:00Z' },
-    // D6 fix (review pass): was 'QT-2026-0010' — only QT-2026-0001..0008 ever get created
-    // (demoData.js's 7 legacy inline ticket.quotation rows + demoSales.js's own quotationSeq,
-    // which tops out at 8 on ticket 18). Ticket 5's real ISSUED quotation is QT-2026-0002 —
-    // see demoSales.js's PR10 (ticketId: 5), whose second makeQuotation() call is the ISSUED
-    // revision of the REJECTED/SUPERSEDED q10Old.
+    // Ticket 5's real ISSUED quotation is QT-2026-0002 (demoSales.js's PR10, ticketId: 5): only
+    // QT-2026-0001..0008 ever get created.
     { id: 6, userId: 6, ticketId: 5, ticketCode: 'PR-2026-0005', type: 'CUSTOMER_QUOTATION_ISSUED', message: 'ใบเสนอราคา QT-2026-0002 ถูกออกแล้ว', read: true, createdAt: '2026-07-21T09:00:00Z' },
     { id: 7, userId: 7, ticketId: 7, ticketCode: 'PR-2026-0007', type: 'ORDER_CONFIRMED', message: 'ลูกค้ายืนยันคำสั่งซื้อของดีล PR-2026-0007 แล้ว', read: false, createdAt: '2026-07-25T13:00:00Z' },
     { id: 8, userId: 12, ticketId: 16, ticketCode: 'PR-2026-0016', type: 'PRICING_REQUEST_SUBMITTED', message: 'คำขอราคาของคุณถูกส่งเข้าคิวฝ่ายนำเข้าแล้ว', read: false, createdAt: '2026-07-28T10:00:00Z' },
@@ -737,18 +695,10 @@ export function buildDemoNotifications() {
 // mock's own create/approve/reject/cancel handlers (mockApi.js), so a seeded row
 // carries exactly the fields those handlers write.
 //
-// WHY THIS BUILDER EXISTS. `db.attendanceCorrectionRequests` was seeded `|| []`
-// — an empty array, for every persona. So /attendance's correction section
-// rendered its empty state for HR, CEO, the division manager and the employee
-// alike, and nothing about that surface could be judged: not the table, not the
-// status badges, not the review affordances, not how the columns behave when a
-// reason is long. A UI sweep over it was measuring an empty state and reporting
-// "clean". This is the state matrix the enums actually allow.
-//
-// The full grid is AttendanceCorrectionStatus (SUBMITTED / APPROVED / REJECTED /
-// CANCELLED) x AttendanceCorrectionType (CHECK_IN / CHECK_OUT / BOTH), read from
-// the Java enums, not invented. Rows are spread across employees so each persona
-// has something to look at:
+// Without seed rows every persona saw the empty state, so nothing about this surface could be
+// judged. The full grid is AttendanceCorrectionStatus (SUBMITTED / APPROVED / REJECTED /
+// CANCELLED) x AttendanceCorrectionType (CHECK_IN / CHECK_OUT / BOTH), read from the Java enums.
+// Rows are spread across employees so each persona has something to look at:
 //   employees[8]  the plain employee quick-login  — his own history, all 4 statuses
 //   employees[5]  the WHL division manager        — a report's row plus one of his own
 //   employees[20] HR                              — sees everything; no rows of her own

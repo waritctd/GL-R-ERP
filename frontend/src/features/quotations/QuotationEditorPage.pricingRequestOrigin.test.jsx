@@ -8,10 +8,9 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// GLA-123 slice S1 (Phase 3, coordinator follow-up 2026-09-20) — the origin === 'PRICING_REQUEST'
-// UI: the "ราคาจาก CEO" badge / "เปลี่ยนจากราคา CEO" marker per line, the header price-mode-changed
-// marker, the "สร้างจากคำขอราคา" link, extra-row actions hidden, and the submit button disabled.
-// Same mounting pattern as QuotationEditorPage.displayNames.test.jsx, scoped to just this feature.
+// The origin === 'PRICING_REQUEST' UI: the "ราคาจาก CEO" badge / "เปลี่ยนจากราคา CEO" marker per
+// line, the header price-mode-changed marker, the "สร้างจากคำขอราคา" link, extra-row actions hidden,
+// and the submit button. Same mounting pattern as QuotationEditorPage.displayNames.test.jsx.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -38,12 +37,10 @@ const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', 
 const CUSTOMER = { id: 5, name: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', taxId: '0105551234567', address: null, branch: 'สำนักงานใหญ่', phone: '02-000-0000' };
 const CONTACTS = [{ id: 6, customerId: 5, firstName: 'ณัฐพงศ์', lastName: 'ศรีวิไล', phone: '086-222-3333', email: 'nattapong@fashionisland.co.th' }];
 
-/** A plain TILE item as a DEAL_DIRECT row would carry it — NO ceo* fields (every one of them
- * null, exactly as DealQuotationRepository#mapItemColumns reads them for an unlinked row). Used
- * as the base for BOTH the DEAL_DIRECT fixture and (via `linkedNetTileItem`) the linked one, so a
- * test cannot accidentally leave a stray ceo* field on a DEAL_DIRECT row the way a single shared
- * builder with CEO fields baked into its defaults did (caught by this file's own DEAL_DIRECT
- * "unaffected" test on first write — see the PR body). */
+/** A plain TILE item as a DEAL_DIRECT row would carry it: NO ceo* fields (all null, as
+ * DealQuotationRepository#mapItemColumns reads them for an unlinked row). Base for BOTH the
+ * DEAL_DIRECT fixture and (via `linkedNetTileItem`) the linked one, so a DEAL_DIRECT row cannot pick
+ * up a stray ceo* field from a shared builder with CEO defaults. */
 function netTileItem(overrides = {}) {
   return {
     id: 101, seq: 1, lineType: 'TILE', locationLabel: null, catalogPriceId: null, productCode: null,
@@ -55,7 +52,7 @@ function netTileItem(overrides = {}) {
     netUnitPrice: 74.7, lineAmount: 4257.9, descriptionLine: 'Trilogy Ash', sizeLine: '60x60', calculationLine: '(calc)',
     quantity: 57, unit: 'แผ่น', specialPriceSqm: null, adjustmentPct: null, adjustmentDeadline: null,
     specialPriceLine: null, adjustmentAmount: null, sqmPerBox: null, roundToFullBox: true,
-    // ── GLA-123 CEO-comparison fields — null for every DEAL_DIRECT/unlinked row ─────────────
+    // ── CEO-comparison fields: null for every DEAL_DIRECT/unlinked row ──
     priceChangedFromCeo: false,
     ceoListUnitPrice: null, ceoDiscountPct: null, ceoSpecialPriceSqm: null, ceoDirectNetPrice: null,
     ceoNetUnitPrice: null,
@@ -88,7 +85,7 @@ function draft(overrides = {}) {
     printedByDisplayId: null, printedByDisplayName: null, printedByDisplayNameEn: null,
     salesRepDisplayId: null, salesRepDisplayName: null, salesRepDisplayNameEn: null, salesRepDisplayPhone: null,
     createdAt: '2026-09-20T02:00:00Z', updatedAt: '2026-09-20T02:00:00Z',
-    // ── GLA-123 origin fields ──────────────────────────────────────────────────────────────
+    // ── origin fields ──
     origin: 'DEAL_DIRECT', pricingRequestId: null, pricingRequestCode: null,
     priceModeChangedFromCeo: false, ceoPriceMode: null,
     ...overrides,
@@ -117,12 +114,12 @@ function renderEditor(path, user = salesUser) {
   );
 }
 
-// GLA-123 slice S2 — the two roles who may approve.
+// The two roles who may approve.
 const salesManagerUser = { id: 7, name: 'คุณผึ้ง ผู้จัดการฝ่ายขาย', role: 'sales_manager', employeeId: 7 };
 const ceoUser = { id: 8, name: 'คุณราม ผู้บริหาร', role: 'ceo', employeeId: 8 };
 
-/** A PRICING_REQUEST-origin quotation already PENDING_APPROVAL — the S2 approval tests' shared
- * starting point. */
+/** A PRICING_REQUEST-origin quotation already PENDING_APPROVAL: the approval tests' shared starting
+ * point. */
 function pendingApprovalQuotation(overrides = {}) {
   return pricingRequestDraft({
     docStatus: 'PENDING_APPROVAL', submittedAt: '2026-09-20T03:00:00Z',
@@ -143,12 +140,10 @@ beforeEach(() => {
   api.customers.search.mockResolvedValue({ customers: [CUSTOMER] });
   api.customers.contacts.mockResolvedValue({ contacts: CONTACTS });
   api.dealQuotations.displayNameOptions.mockResolvedValue({ items: [] });
-  // Test-hygiene fix (found running the M5 tests below): editing a row schedules the
-  // auto-calc-preview debounce (QuotationEditorPage's own updateItem effect), which fires AFTER
-  // the test that triggered it has already completed and moved on. Without a resolved value here
-  // that timer's `.then()` throws on `undefined`, an unhandled rejection vitest reports as a
-  // process-level error even though every assertion in every test still passes — exactly what
-  // happened before this line existed. Mirrors QuotationEditorPage.test.jsx's own default mock.
+  // Editing a row schedules the auto-calc-preview debounce (QuotationEditorPage's updateItem effect),
+  // which fires AFTER the test has completed. Without a resolved value here that timer's `.then()`
+  // throws on `undefined`, an unhandled rejection vitest reports as a process-level error even though
+  // every assertion passes. Mirrors QuotationEditorPage.test.jsx's default mock.
   api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
 });
 
@@ -196,12 +191,10 @@ describe('QuotationEditorPage — GLA-123 slice S1 origin=PRICING_REQUEST', () =
     expect(screen.getByText('ราคาสุทธิ CEO: ฿74.70')).toBeTruthy();
   });
 
-  // MINOR fix (Opus review, 2026-09-20): every test above happens to keep the document's CURRENT
-  // priceMode equal to the CEO's ORIGINAL ceoPriceMode, which can never exercise the bug — the
-  // marker used to format against the CURRENT mode, not the CEO's original one. This is the one
-  // scenario that tells them apart: the rep switched the document to NET, but the CEO's own
-  // decision was SPECIAL_SQM, so the marker must still read ceoSpecialPriceSqm (ราคาพิเศษ CEO),
-  // not fall through to the NET-shaped "ราคา CEO: ... ส่วนลด ...%" text.
+  // The other tests keep the document's CURRENT priceMode equal to the CEO's ORIGINAL ceoPriceMode,
+  // which cannot catch a marker formatted against the CURRENT mode. Here the rep switched the
+  // document to NET but the CEO decided SPECIAL_SQM, so the marker must still read ceoSpecialPriceSqm
+  // (ราคาพิเศษ CEO), not the NET-shaped "ราคา CEO: ... ส่วนลด ...%" text.
   it('mode mismatch: CURRENT priceMode=NET but ceoPriceMode=SPECIAL_SQM still formats against SPECIAL_SQM', async () => {
     const item = linkedNetTileItem({
       priceChangedFromCeo: true, unitPrice: 999, discountPct: 5,
@@ -253,9 +246,8 @@ describe('QuotationEditorPage — GLA-123 slice S1 origin=PRICING_REQUEST', () =
     expect(screen.queryByRole('button', { name: /เพิ่มส่วนลดพิเศษ/ })).toBeNull();
   });
 
-  // GLA-123 slice S2: submit is now LIVE for this origin — the S1-era disabled placeholder
-  // ("ส่งอนุมัติจะเปิดใช้ในขั้นถัดไป") is GONE; canSubmitDealQuotation is origin-agnostic, so the
-  // SAME ordinary submit button DEAL_DIRECT always had now serves this origin too.
+  // Submit is live for this origin: canSubmitDealQuotation is origin-agnostic, so the SAME ordinary
+  // submit button DEAL_DIRECT has serves this origin too.
   it('submit is now a normal, enabled ส่งขออนุมัติ button that calls the real endpoint', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
     api.dealQuotations.submit.mockResolvedValue({ quotation: pricingRequestDraft({ docStatus: 'PENDING_APPROVAL' }) });
@@ -287,12 +279,11 @@ describe('QuotationEditorPage — GLA-123 slice S1 origin=PRICING_REQUEST', () =
   });
 });
 
-// M5 fix (Opus review, 2026-09-20): before this fix, ONLY the item's `id` was adopted from a
-// save response (QuotationEditorPage#applySavedQuotation, née #adoptServerIds) — every other
-// server-computed field, including this exact marker, stayed at whatever the INITIAL load left
-// it at until a full page reload re-ran the seeding effect. A rep who edited a linked line's
-// price then saved would keep seeing the OLD (unchanged) badge even though the save just made it
-// CEO-changed server-side, and reverting + saving again would leave the amber marker stuck.
+// Only the item's `id` used to be adopted from a save response (QuotationEditorPage#applySavedQuotation);
+// every other server-computed field, including this marker, stayed at the INITIAL load's value until
+// a full reload. A rep who edited a linked line's price then saved would keep seeing the OLD badge
+// even though the save made it CEO-changed server-side, and reverting + saving would leave the amber
+// marker stuck.
 describe('QuotationEditorPage — GLA-123 M5 fix: per-line CEO marker refreshes after save, no reload', () => {
   it('edit -> save -> the marker flips to "changed" from the SAVE response, without a reload', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: pricingRequestDraft() });
@@ -310,9 +301,9 @@ describe('QuotationEditorPage — GLA-123 M5 fix: per-line CEO marker refreshes 
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
-    // The marker below comes from the SAVE RESPONSE's own priceChangedFromCeo/ceo* fields — this
-    // test never re-renders from a fresh api.dealQuotations.get, so a pass here is only possible
-    // if the save response was actually merged into local state.
+    // The marker below comes from the SAVE RESPONSE's own priceChangedFromCeo/ceo* fields; this test
+    // never re-renders from a fresh api.dealQuotations.get, so it passes only if the save response
+    // was merged into local state.
     await waitFor(() => expect(screen.getByText('เปลี่ยนจากราคา CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
     expect(screen.getByText('ราคา CEO: ฿83.00 · ส่วนลด 10%')).toBeTruthy();
     expect(screen.queryByText('ราคาจาก CEO')).toBeNull();
@@ -348,16 +339,14 @@ describe('QuotationEditorPage — GLA-123 M5 fix: per-line CEO marker refreshes 
   });
 });
 
-// Coordinator follow-up (2026-09-20): a rep opened a PRICING_REQUEST quotation, changed ส่วนลด
-// from 10 to 25, and the line kept showing "✓ ราคาจาก CEO" -- the badge for an UNCHANGED price --
-// right next to a number they had just changed. Root cause: the row had validation errors (the
-// demo item lacked ความหนา/แผ่น/ตร.ม./แผ่น/กล่อง), which blocks the 2s autosave debounce
-// (QuotationEditorPage gates it on `!hasValidationErrors`), and `priceChangedFromCeo` only ever
-// comes from the server -- so the marker was frozen at "unchanged" for as long as the row stayed
-// invalid. Fixed by ORing the server flag with `isTilePriceChangedFromCeoLocally` (quotationMeta.js),
-// a client-side mirror of DealQuotationRepository#priceChangedFromCeo evaluated against the row's
-// CURRENT (unsaved) values -- these tests pin that the marker now updates on every keystroke, with
-// NO save ever required or triggered.
+// A rep changed ส่วนลด from 10 to 25 and the line kept showing "✓ ราคาจาก CEO" (the UNCHANGED badge)
+// next to a number they had just changed. The row had validation errors (the demo item lacked
+// ความหนา/แผ่น/ตร.ม./แผ่น/กล่อง), which blocks the 2s autosave debounce (gated on
+// `!hasValidationErrors`), and `priceChangedFromCeo` only comes from the server, so the marker froze at
+// "unchanged" while the row stayed invalid. The server flag is ORed with
+// `isTilePriceChangedFromCeoLocally` (quotationMeta.js), a client-side mirror of
+// DealQuotationRepository#priceChangedFromCeo over the row's CURRENT (unsaved) values; these tests pin
+// that the marker updates on every keystroke with NO save.
 describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before any save lands', () => {
   it('amber marker appears the instant ส่วนลด changes on a row with validation errors (autosave blocked), and clears on revert -- update is never called', async () => {
     // thicknessMm: null reproduces the coordinator's exact repro (missing ความหนา) and blocks
@@ -390,13 +379,11 @@ describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before
     api.dealQuotations.get.mockResolvedValue({
       quotation: pricingRequestDraft({ items: [linkedNetTileItem({ discountPct: 25 })] }),
     });
-    // Retyping 10 makes discountPct === ceoDiscountPct (10), so
-    // isTilePriceChangedFromCeoLocally alone would now read `false` for this row -- exactly the
-    // shape a rep undoing their own edit produces. The mocked save response nonetheless echoes
-    // priceChangedFromCeo: true (e.g. the document's price_mode itself differs from the CEO's on
-    // the server, a fact this row's local fields alone cannot see). The server flag must win:
-    // ORing it with the local computation can only ADD amber markers the local check would have
-    // missed, never let a local "looks fine now" hide one the server still asserts.
+    // Retyping 10 makes discountPct === ceoDiscountPct, so the local check alone would read `false`
+    // (a rep undoing their own edit). The mocked save response still echoes priceChangedFromCeo: true
+    // (e.g. the document's price_mode differs from the CEO's on the server, which local fields cannot
+    // see). The server flag must win: ORing can only ADD amber markers, never let a local "looks fine
+    // now" hide one the server still asserts.
     api.dealQuotations.update.mockResolvedValue({
       quotation: pricingRequestDraft({
         items: [linkedNetTileItem({ discountPct: 10, priceChangedFromCeo: true })],
@@ -418,8 +405,8 @@ describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before
     await waitFor(() => expect(screen.getByText('ราคาจาก CEO')).toBeTruthy());
     expect(screen.queryByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeNull();
 
-    // The Thai editor's own name for DIRECT_NET since sales feedback #1 (2026-10-06); the CEO's
-    // screen, and the "CEO เลือก: …" marker quoting it below, keep the CEO's per-แผ่น wording.
+    // The Thai editor's name for DIRECT_NET; the CEO's screen and the "CEO เลือก: …" marker quoting
+    // it below keep the CEO's per-แผ่น wording.
     fireEvent.click(screen.getByRole('button', { name: 'ราคาสุทธิ บาท/ตร.ม.' }));
     await waitFor(() => expect(screen.getByText('เปลี่ยนวิธีกรอกราคาจาก CEO — ต้องให้ CEO อนุมัติ')).toBeTruthy());
     expect(screen.getByText(/CEO เลือก: ราคาตั้ง/)).toBeTruthy();
@@ -431,10 +418,9 @@ describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before
   });
 });
 
-// GLA-123 slice S2, REWORKED (owner reversed the dual-approval design, 2026-09-20): ONE approval —
-// by sales_manager OR ceo — issues the document, unless the quotation no longer matches the CEO's
-// decision, in which case only the ceo may act. A DEAL_DIRECT quotation's own single-shot
-// approve/reject (QuotationEditorPage.test.jsx) is untouched by every change here.
+// ONE approval, by sales_manager OR ceo, issues the document, unless the quotation no longer matches
+// the CEO's decision, in which case only the ceo may act. A DEAL_DIRECT quotation's own single-shot
+// approve/reject (QuotationEditorPage.test.jsx) is untouched.
 describe('QuotationEditorPage — GLA-123 slice S2 approval (reworked)', () => {
   it('sales_manager sees a plain อนุมัติ button on an UNCHANGED quotation', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: pendingApprovalQuotation() });

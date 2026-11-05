@@ -1,40 +1,30 @@
 // "Is it even your turn" wrapper around the per-role next-action resolvers
 // (salesActions.nextSalesAction / importActions.nextImportAction /
-// accountActions.nextAccountAction) — ticket-detail IA rebuild Phase 1 (see
-// docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md,
-// "Work-state banner" / "Action bar (sticky)").
+// accountActions.nextAccountAction); see
+// docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md, "Work-state
+// banner" / "Action bar (sticky)".
 //
-// FIX 1 (P2, clutter-follow-up review round 2): this used to gate on the
-// deal's CURRENT stage BEFORE ever calling a resolver — a deal sitting in a
-// stage gated to a role other than the viewer read as "not your turn" even
-// when that viewer's own resolver had a real action pending. That was wrong
-// for every AUTO stage (SALES_STAGES' `auto: true` entries): an auto stage's
-// `gate` names the role whose action CAUSED entry into it, not the role whose
-// action is pending NOW — so the role about to act is always looking at the
-// stage BEFORE the one their own action would produce. Two real examples
-// (verified against TicketService.java):
-//   - Account needs to confirm the deposit (nextAccountAction ->
-//     confirmDeposit) while the deal still sits at ORDER_RECEIVED (gate:
-//     'sales' — TicketService.java:1029 only advances to DEPOSIT_RECEIVED
-//     once account confirms). The old gate-first check showed account
-//     "รอฝ่ายขาย" and hid their own pending action.
-//   - Import needs to issue the IR (nextImportAction -> issueImportRequest)
-//     while the deal still sits at DEPOSIT_RECEIVED (gate: 'account' —
-//     TicketService.java:702 only advances to PROCUREMENT once import issues
-//     the IR). Same false "รอฝ่ายบัญชี" negative.
+// The matching resolver is asked FIRST, unconditionally, never gated on the deal's CURRENT stage:
+// an AUTO stage's `gate` (SALES_STAGES' `auto: true` entries) names the role whose action CAUSED
+// entry into it, not the role whose action is pending NOW, so the role about to act is always
+// looking at the stage BEFORE the one their own action would produce. Two real examples (verified
+// against TicketService.java):
+//   - Account needs to confirm the deposit (nextAccountAction -> confirmDeposit) while the deal
+//     still sits at ORDER_RECEIVED (gate: 'sales'; TicketService.java:1029 only advances to
+//     DEPOSIT_RECEIVED once account confirms).
+//   - Import needs to issue the IR (nextImportAction -> issueImportRequest) while the deal still
+//     sits at DEPOSIT_RECEIVED (gate: 'account'; TicketService.java:702 only advances to
+//     PROCUREMENT once import issues the IR).
 //
-// The fix: ask the matching resolver FIRST, unconditionally. There is deliberately NO "whose turn
-// is it" fallback any more: when the resolver has nothing pending the module returns no action and
-// the header says nothing (GLA-156 — the "รอ<ฝ่าย>" bar looked expandable, did nothing and named
-// no next step, and on auto stages it named the wrong department).
+// There is deliberately NO "whose turn is it" fallback: when the resolver has nothing pending the
+// module returns no action and the header says nothing (a "รอ<ฝ่าย>" bar looked expandable, did
+// nothing, named no next step, and on auto stages named the wrong department).
 //
-// Presentation only, same convention as salesViewScope.js / accountActions.js
-// / importActions.js: this NEVER claims an action the server would reject,
-// and never hides one the server would allow. canEditStage / canAdvance /
-// canLost / canHold / canDormant / canResume in DealStagePanel.jsx (backed by
-// the real `GET /{id}/actions`) remain the sole authority on what is
-// actually clickable; this module only decides which ONE action (if any)
-// leads the sticky bar.
+// Presentation only, same convention as salesViewScope.js / accountActions.js / importActions.js:
+// this NEVER claims an action the server would reject, and never hides one the server would allow.
+// canEditStage / canAdvance / canLost / canHold / canDormant / canResume in DealStagePanel.jsx
+// (backed by the real `GET /{id}/actions`) remain the sole authority on what is actually
+// clickable; this module only decides which ONE action (if any) leads the sticky bar.
 
 import { canApproveDealQuotationNow } from '../quotations/quotationMeta.js';
 import {
@@ -43,7 +33,7 @@ import {
 import { nextImportAction } from './importActions.js';
 import { nextAccountAction } from './accountActions.js';
 
-/** The approver-side twin of salesActions' AWAIT_DIRECT_APPROVAL bucket (slice 2). */
+/** The approver-side twin of salesActions' AWAIT_DIRECT_APPROVAL bucket. */
 const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
 
 /**
@@ -55,27 +45,25 @@ const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  * nextImportAction (see their own doc comments for the expected shape —
  * the ticket's own scoped list, e.g. `api.pricingRequests.listForTicket`).
  *
- * Returns `{ action }` — whatever the matching resolver returned for sales/
- * import/account viewers, `null` for every other role and for any deal that is
- * not ACTIVE. There is deliberately no "waiting on <department>" fallback: the
- * "รอฝ่ายขาย" banner looked expandable, did nothing and named no next step
- * (GLA-156), so it was removed rather than fixed.
+ * Returns `{ action }` — whatever the matching resolver returned for sales/import/account viewers,
+ * `null` for every other role and for any deal that is not ACTIVE. There is deliberately no
+ * "waiting on <department>" fallback (see the header).
  *
- * Slice 2 adds exactly two things, both keyed on a live direct quotation
- * (TicketSummaryDto.liveDirectQuotation) and both naming a concrete next step:
+ * Two things are keyed on a live direct quotation (TicketSummaryDto.liveDirectQuotation) and both
+ * name a concrete next step:
  * - sales_manager / ceo on a PENDING_APPROVAL one get their own action
  *   "อนุมัติใบเสนอราคา" -> /quotations/:id;
  * - the rep on that same state gets no button but `bannerText` — "รอ ผจก.ขาย/CEO
- *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who
- *   decides it (unlike the retired department-only banner above). Absent otherwise.
- * The same two apply to a PRICING_REQUEST-origin quotation awaiting approval (owner ruling
- * 2026-10-27), read from `quotationByRequest` (see nextSalesAction).
+ *   อนุมัติใบเสนอราคา {number}" — a waiting line that names the document and who decides it.
+ *   Absent otherwise.
+ * The same two apply to a PRICING_REQUEST-origin quotation awaiting approval, read from
+ * `quotationByRequest` (see nextSalesAction).
  */
 export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
-  // Slice 2 (SLICE-2-FLOW-A.md §E): a quotation waiting for approval is the approvers' move.
+  // A quotation waiting for approval is the approvers' move.
   // sales_manager/ceo — exactly canApproveDealQuotation's audience — get their own action to the
   // quotation, where the real (server-gated) อนุมัติ button is. They get NOTHING new for a
   // DRAFT/APPROVED one: submitting and confirming the order are the rep's.
@@ -111,7 +99,7 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     };
   }
 
-  // Owner ruling 2026-10-27: the เสนอราคา<party> primary comes with a line naming the sent quotation.
+  // The เสนอราคา<party> primary comes with a line naming the sent quotation.
   if (action?.key === SALES_ACTION.QUOTE_NEXT_PARTY) return { action, bannerText: quoteNextPartyBanner(action) };
 
   if (action) return { action };
@@ -131,9 +119,9 @@ function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties }) {
 
 /**
  * ADDITIONAL (secondary) actions beside the sticky primary, for the header's ⋯ menu. Sales only.
- * - Owner ruling 2026-10-27 ("always in ⋯"): บันทึกผลใบเสนอราคา for a sent designer/owner quotation
- *   whose outcome is still open (salesActions.outcomeSecondaryAction), whatever the primary is.
- * - PR A: at the owner / buyer quote stages the client may want a revision or be happy with the
+ * - บันทึกผลใบเสนอราคา for a sent designer/owner quotation whose outcome is still open
+ *   (salesActions.outcomeSecondaryAction), whatever the primary is.
+ * - At the owner / buyer quote stages the client may want a revision or be happy with the
  *   original, so แก้ใบเสนอราคา is offered alongside — never instead of — the primary. `reviseTarget`
  *   is resolved by the caller through quotationMeta.canReviseDealQuotation (owner + status live
  *   there). Skipped when revise is already the primary (approved direct quotation past draft).

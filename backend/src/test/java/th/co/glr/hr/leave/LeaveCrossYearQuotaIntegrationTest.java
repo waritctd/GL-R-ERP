@@ -22,12 +22,12 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import static org.mockito.Mockito.mock;
 
 /**
- * V118 cross-year quota fix (2026-08-02): real-Postgres coverage of {@link
+ * Cross-year leave quota: real-Postgres coverage of {@link
  * hr.leave_request_quota_year}, {@link LeaveService#submit}'s per-year attribution, and the two
  * downstream paths that read a request's paid/unpaid split by calendar month -- {@link
  * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth} (feeds the payroll base/30 deduction) and
  * {@link LeaveService#cancel}'s cancel-after-close reversal. Mockito cannot reach any of this: the
- * V118 schema, real calendar math (LeaveDayMath.countWorkingDays), and the SQL itself are exactly
+ * schema, real calendar math (LeaveDayMath.countWorkingDays), and the SQL itself are exactly
  * what is under test.
  *
  * <p><b>Money note:</b> quota attribution drives the paid/unpaid split, which drives the base/30
@@ -124,19 +124,15 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aNinetyEightDayMaternityRequestStartingOnFirstOctoberIsFileableAndSplitsAcrossTheYearBoundary() {
-        // THE case the owner asked for by name: pre-V118, LeaveService#validateDateRange rejected
-        // any cross-year request outright (400) because a 98-day MATERNITY request routinely crosses
-        // into the next year. It must now be APPROVED.
+        // A cross-year request must not be rejected (LeaveService#validateDateRange must not 400
+        // it): a 98-day MATERNITY request routinely crosses into the next year. It must be APPROVED.
         //
-        // §5.4 MATERNITY calendar-day counting (V119): Thu 2026-10-01 .. Wed 2027-01-06 is exactly 98
+        // §5.4 MATERNITY calendar-day counting: Thu 2026-10-01 .. Wed 2027-01-06 is exactly 98
         // CALENDAR days (verified independently of LeaveDayMath: 31 Oct + 30 Nov + 31 Dec = 92 days in
-        // 2026, then 6 in 2027 = 98 total) -- INCLUDING every weekend inside the range, per §5.4. This
-        // replaces the branch's original working-day-counted fixture (2026-11-01 .. 2027-03-17, which
-        // was exactly 98 WORKING days -- 137 calendar days -- under the pre-V119 assumption that
-        // MATERNITY counted like every other type; V119 makes that assumption wrong for MATERNITY
-        // specifically, so the fixture and its numbers are recomputed here on a calendar-day basis).
+        // 2026, then 6 in 2027 = 98 total) -- INCLUDING every weekend inside the range, per §5.4.
+        // MATERNITY counts calendar days, not working days like every other type.
         //
-        // MATERNITY's paid_days_cap (45) applies PER YEAR under V118's design (see LeaveQuotaYearSplit's
+        // MATERNITY's paid_days_cap (45) applies PER YEAR (see LeaveQuotaYearSplit's
         // Javadoc) -- both years start with a fresh 45-day allowance, now bounding CALENDAR days:
         //   2026: 92 requested calendar days, cap 45 -> 45 paid, 47 unpaid.
         //   2027: 6 requested calendar days, cap 45 -> all 6 paid, 0 unpaid.
@@ -172,10 +168,10 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aCrossYearMaternityRequestsUnpaidCalendarDaysAttributeToTheCorrectMonthIncludingWeekends() {
-        // §5.4 MATERNITY calendar-day counting (V119), composed with V118's per-year attribution AND
+        // §5.4 MATERNITY calendar-day counting, composed with the per-year attribution AND
         // the payroll deduction path (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth). Reuses
         // the exact fixture above (98 calendar days, 2026-10-01 .. 2027-01-06, 47 unpaid in 2026 / 0
-        // in 2027) to prove the DECISION documented on LeaveService#recordPayrollCorrectionIfNeeded
+        // in 2027) to prove the rule documented on LeaveService#recordPayrollCorrectionIfNeeded
         // and LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth: the payroll base/30 deduction
         // uses the SAME calendar-day basis as the quota split, so weekend days inside the unpaid
         // portion ARE deducted, not silently dropped.
@@ -189,7 +185,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
             employee(employeeId));
         assertThat(result.unpaidDays()).isEqualByComparingTo("47.00");
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered
         // to APPROVED requests -- drive the request there before checking payroll's per-month view.
         leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
 
@@ -210,7 +206,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void crossYearUnpaidDaysAttributeToTheCorrectCalendarMonthNotTheNaiveWholeRequestRank() {
-        // The scenario that would break under the OLD (pre-fix) aggregate-paidDays/totalDays call
+        // The scenario that would break under an aggregate-paidDays/totalDays call
         // into LeaveDayMath#unpaidWorkingDaysByMonth: year 2026 exhausts its 6-day VACATION quota
         // mid-range (an unpaid TAIL near year-end), year 2027 is fully paid from its own fresh start.
         //
@@ -234,7 +230,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(result.paidDays()).isEqualByComparingTo("9.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("3.00");
 
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
+        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered
         // to APPROVED requests -- drive the request there before checking payroll's month attribution.
         leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-12-01")))
@@ -255,7 +251,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "VACATION", "2026-12-21", "2027-01-05"),
             employee(employeeId));
         assertThat(approved.unpaidDays()).isEqualByComparingTo("3.00");
-        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (fired from
+        // Leave requires approval: #recordPayrollCorrectionIfNeeded (fired from
         // #cancel below) only fires for a request that is APPROVED at cancel time.
         leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
 
@@ -280,7 +276,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void cancellingACrossYearMaternityLeaveAfterNovemberPayrollIsProcessedRefundsCalendarDaysIncludingWeekends() {
-        // §5.4 MATERNITY calendar-day counting (V119), through the cancel-after-close reversal
+        // §5.4 MATERNITY calendar-day counting, through the cancel-after-close reversal
         // (LeaveService#recordPayrollCorrectionIfNeeded). Same fixture as
         // aCrossYearMaternityRequestsUnpaidCalendarDaysAttributeToTheCorrectMonthIncludingWeekends
         // above (98 calendar days, 2026-10-01 .. 2027-01-06, 47 unpaid days in 2026: 16 in November,
@@ -292,7 +288,7 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
             submitRequest(employeeId, "MATERNITY", "2026-10-01", "2027-01-06"),
             employee(employeeId));
         assertThat(approved.unpaidDays()).isEqualByComparingTo("47.00");
-        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (fired from
+        // Leave requires approval: #recordPayrollCorrectionIfNeeded (fired from
         // #cancel below) only fires for a request that is APPROVED at cancel time.
         leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
 
@@ -395,11 +391,10 @@ class LeaveCrossYearQuotaIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     /**
-     * §5.3.5 VACATION carry-forward (V127) interaction: every fixture in this class is hired 2015,
+     * §5.3.5 VACATION carry-forward interaction: every fixture in this class is hired 2015,
      * so an otherwise-untouched 2025 (fully elapsed by this class's fixed 2026-07-01 clock) reads as
-     * "0 of 6 used" and legitimately carries 6.00 into 2026 -- correct new behaviour, but not what
-     * THIS class's pre-existing 2026/2027 cross-year assertions (written before carry-forward
-     * existed) are about. Seeded directly as a legacy-style row (mirrors
+     * "0 of 6 used" and legitimately carries 6.00 into 2026 -- correct behaviour, but not what
+     * THIS class's 2026/2027 cross-year assertions are about. Seeded directly as a legacy-style row (mirrors
      * backfillSqlReproducesTheParentRowsFiguresExactlyForALegacySingleYearRow's own direct-insert
      * pattern below) marking 2025's VACATION quota fully used, so {@code
      * LeaveService#ensureCarryoverGrant} computes a real, correct ZERO carry-in for 2025 -> 2026,

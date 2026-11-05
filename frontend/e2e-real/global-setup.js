@@ -183,9 +183,9 @@ async function remoteSetup() {
     //
     // Note what is deliberately NOT asserted: that the body is JSON. Spring Security's
     // HttpStatusEntryPoint answers an unauthenticated /api/auth/me with a bare 401 — zero bytes,
-    // no content-type header at all — and that is the healthy case, confirmed against live UAT
-    // (2026-08-15). An earlier version of this check required JSON and rejected a perfectly good
-    // environment on its first run. "Not JSON" and "not the application" are different claims.
+    // no content-type header at all — and that is the healthy case, confirmed against live UAT.
+    // Requiring JSON would reject a perfectly good environment. "Not JSON" and "not the
+    // application" are different claims.
     const contentType = me.headers()['content-type'] ?? '';
     if (contentType.includes('text/html')) {
       throw new Error(

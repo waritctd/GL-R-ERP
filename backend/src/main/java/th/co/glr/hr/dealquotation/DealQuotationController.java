@@ -65,11 +65,10 @@ public class DealQuotationController {
             .body(Map.of("quotation", quotations.create(ticketId, request, user)));
     }
 
-    /** GLA-123 slice S1 — "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin
-     * quotation prefilled from an APPROVED-FOR-QUOTATION pricing request's CEO-approved decision,
-     * on this SAME engine (not a new one — see {@link DealQuotationService
-     * #createFromPricingRequest}'s own Javadoc). No request body: everything comes from the
-     * pricing request and its decision.
+    /** "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin quotation prefilled from an
+     * APPROVED-FOR-QUOTATION pricing request's CEO-approved decision, on this SAME engine (not a
+     * new one — see {@link DealQuotationService#createFromPricingRequest}'s own Javadoc). No
+     * request body: everything comes from the pricing request and its decision.
      *
      * <p>Deliberately NOT {@code POST /pricing-requests/{id}/quotations} — that exact path is
      * already {@code CustomerQuotationController#create} (the legacy path this feature sits
@@ -90,12 +89,11 @@ public class DealQuotationController {
         return Map.of("items", quotations.listForTicket(ticketId, user));
     }
 
-    /** M1 fix (Opus review, 2026-09-20) — read-only, no create side effect (unlike {@code
-     * POST .../deal-quotations} above, which mints or idempotently replays one). Lets
-     * {@code PricingRequestDetailPage}'s "ใบเสนอราคาลูกค้า" panel show a NEW-engine quotation's
-     * number/status/link. {@code quotation: null} (200, not 404) when this PR has none yet — "no
-     * quotation" is the normal, expected state for most of a pricing request's lifetime, not an
-     * error. */
+    /** Read-only, no create side effect (unlike {@code POST .../deal-quotations} above, which
+     * mints or idempotently replays one). Lets {@code PricingRequestDetailPage}'s
+     * "ใบเสนอราคาลูกค้า" panel show a NEW-engine quotation's number/status/link. {@code quotation:
+     * null} (200, not 404) when this PR has none yet — "no quotation" is the normal, expected
+     * state for most of a pricing request's lifetime, not an error. */
     @GetMapping("/pricing-requests/{pricingRequestId}/deal-quotations")
     Map<String, DealQuotationDto> findForPricingRequest(@PathVariable long pricingRequestId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -104,11 +102,11 @@ public class DealQuotationController {
         return body;
     }
 
-    /** {@code needsRework=true} (owner feedback F5, 2026-09-10) narrows to the "แก้" bucket —
-     * DRAFT rows sent back with a reason or revisions in progress — server-side, composed with
-     * {@code status} (AND); see {@code DealQuotationRepository#search}. Every origin since slice 1
-     * (legacy rows tagged {@code LEGACY}, {@code readOnly}); optional {@code origin} ∈
-     * {@code DEAL_DIRECT | PRICING_REQUEST | LEGACY} narrows to one (anything else 400). */
+    /** {@code needsRework=true} narrows to the "แก้" bucket — DRAFT rows sent back with a reason or
+     * revisions in progress — server-side, composed with {@code status} (AND); see {@code
+     * DealQuotationRepository#search}. Covers every origin (legacy rows tagged {@code LEGACY},
+     * {@code readOnly}); optional {@code origin} ∈ {@code DEAL_DIRECT | PRICING_REQUEST | LEGACY}
+     * narrows to one (anything else 400). */
     @GetMapping("/deal-quotations")
     Map<String, List<DealQuotationDto>> search(@RequestParam(required = false) List<String> status,
                                                @RequestParam(required = false, defaultValue = "false") boolean needsRework,
@@ -119,19 +117,18 @@ public class DealQuotationController {
     }
 
     /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,
-     * needsRework, cancelled, approved}} ({@code approved} = APPROVED/ISSUED/SENT/ACCEPTED) — so the list page's tabs carry counts without a second
-     * full fetch (owner feedback F5). Same scope rules, and the same optional {@code origin}
-     * filter, as {@link #search}. */
+     * needsRework, cancelled, approved}} ({@code approved} = APPROVED/ISSUED/SENT/ACCEPTED) — so
+     * the list page's tabs carry counts without a second full fetch. Same scope rules, and the
+     * same optional {@code origin} filter, as {@link #search}. */
     @GetMapping("/deal-quotations/counts")
     DealQuotationCountsDto counts(@RequestParam(required = false) String origin, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return quotations.counts(origin, user);
     }
 
-    /** V179 (owner feedback #4, 2026-09-14) — the option list for the ผู้พิมพ์/พนักงานขาย
-     * print-name selectors on the quotation editor. See
-     * {@link DealQuotationService#findQuotationDisplayNameOptions} for who is listed and who may
-     * call this. */
+    /** V179 — the option list for the ผู้พิมพ์/พนักงานขาย print-name selectors on the quotation
+     * editor. See {@link DealQuotationService#findQuotationDisplayNameOptions} for who is listed
+     * and who may call this. */
     @GetMapping("/deal-quotations/display-name-options")
     Map<String, List<CommissionRepOptionDto>> displayNameOptions(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -154,7 +151,7 @@ public class DealQuotationController {
 
     @PostMapping("/deal-quotations/calculate-line")
     Map<String, DealQuotationItemDto> calculateLine(@Valid @RequestBody ItemInput input,
-                                                    // Owner decision 2026-09-13 (B): optional; blank = TH.
+                                                    // Optional; blank = TH.
                                                     @RequestParam(name = "documentLanguage", required = false)
                                                     String documentLanguage,
                                                     HttpSession session) {
@@ -189,18 +186,18 @@ public class DealQuotationController {
         return Map.of("quotation", quotations.createRevision(id, user));
     }
 
-    /** GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) — clone an APPROVED direct-deal quotation
-     * into a new, independent DRAFT. Named {@code reorders}, sibling to {@code revisions} above,
-     * for the SAME reason that route is plural: one source may be cloned any number of times. */
+    /** "สร้างจากใบเดิม" / สั่งเหมือนเดิม — clone an APPROVED direct-deal quotation into a new,
+     * independent DRAFT. Named {@code reorders}, sibling to {@code revisions} above, for the SAME
+     * reason that route is plural: one source may be cloned any number of times. */
     @PostMapping("/deal-quotations/{id}/reorders")
     Map<String, DealQuotationDto> createReorder(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("quotation", quotations.createReorder(id, user));
     }
 
-    /** GLA-123 slice S3 (R9) — records what the customer said about an ISSUED PRICING_REQUEST-origin
-     * quotation. Refused (409) for a DEAL_DIRECT row — see {@code DealQuotationService#recordOutcome}'s
-     * own Javadoc (R10, direct quotations never join this pipeline). */
+    /** Records what the customer said about an ISSUED PRICING_REQUEST-origin quotation. Refused
+     * (409) for a DEAL_DIRECT row — see {@code DealQuotationService#recordOutcome}'s own Javadoc
+     * (direct quotations never join this pipeline). */
     @PostMapping("/deal-quotations/{id}/outcome")
     Map<String, DealQuotationDto> recordOutcome(@PathVariable long id,
                                                 @Valid @RequestBody RecordOutcomeRequest request,
@@ -209,16 +206,15 @@ public class DealQuotationController {
         return Map.of("quotation", quotations.recordOutcome(id, request, user));
     }
 
-    /** "ยืนยันคำสั่งซื้อ" on a direct quotation (GLA-136, renamed by quotation ↔ deal linking slice 1,
-     * IA §7, 2026-09-30): moves the APPROVED direct quotation's deal to ORDER_RECEIVED with the
-     * quotation's lines. No request body. Idempotent. See
-     * {@code DealQuotationService#confirmOrderFromDirectQuotation}. Not {@code /outcome}: R10 stands —
-     * a direct quotation still has no customer-outcome concept; this is the rep's own decision that
-     * the customer ordered.
+    /** "ยืนยันคำสั่งซื้อ" on a direct quotation: moves the APPROVED direct quotation's deal to
+     * ORDER_RECEIVED with the quotation's lines. No request body. Idempotent. See
+     * {@code DealQuotationService#confirmOrderFromDirectQuotation}. Not {@code /outcome}: a direct
+     * quotation has no customer-outcome concept; this is the rep's own decision that the customer
+     * ordered.
      *
-     * <p>{@code …/promote-to-deal} is the GLA-136 name, kept as an ALIAS of this same handler for ONE
-     * release so a frontend bundle still calling it keeps working; remove it once the frontend calls
-     * {@code …/confirm-order}. */
+     * <p>{@code …/promote-to-deal} is the former name, kept as an ALIAS of this same handler for
+     * ONE release so a frontend bundle still calling it keeps working; remove it once the frontend
+     * calls {@code …/confirm-order}. */
     @PostMapping({"/deal-quotations/{id}/confirm-order", "/deal-quotations/{id}/promote-to-deal"})
     Map<String, PromoteToDealResultDto> confirmOrder(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -233,10 +229,9 @@ public class DealQuotationController {
         return Map.of("quotation", quotations.cancel(id, request != null ? request : new CancelRequest(null), user));
     }
 
-    /** M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
-     * dropped. No request body other than which decision item to restore — everything else is
-     * rebuilt server-side from the same approved decision {@code createFromPricingRequest} itself
-     * reads from. */
+    /** "คืนรายการ": re-adds a CEO-linked line a prior save dropped. No request body other than
+     * which decision item to restore — everything else is rebuilt server-side from the same
+     * approved decision {@code createFromPricingRequest} itself reads from. */
     @PostMapping("/deal-quotations/{id}/items/{pricingDecisionItemId}/restore")
     Map<String, DealQuotationDto> restoreRemovedItem(@PathVariable long id,
                                                        @PathVariable long pricingDecisionItemId,
@@ -273,7 +268,7 @@ public class DealQuotationController {
             .body(bytes);
     }
 
-    // ── GLA-75: one picture per item (V170). Writes are DRAFT-only and gated exactly like
+    // One picture per item (V170). Writes are DRAFT-only and gated exactly like
     // PUT /deal-quotations/{id}; the read is gated like GET /deal-quotations/{id}. See
     // DealQuotationService#uploadItemPicture for the rule. Writes answer {quotation: ...} so the
     // client re-reads hasPicture/picturePlacement/pictureUrl from one response.
@@ -316,7 +311,7 @@ public class DealQuotationController {
             .body(image.image());
     }
 
-    /** Keeps a quotation number ({@code QT-2026-0042-1}, or a legacy pre-2026-09-11 bare
+    /** Keeps a quotation number ({@code QT-2026-0042-1}, or a legacy bare
      * {@code QT-2026-0042}, or a later revision's {@code QT-2026-0042-2}) safe as a bare
      * Content-Disposition filename token: anything outside a conservative filesystem-safe set
      * becomes {@code _}, and a wiped-out result falls back to a generic name rather than emitting

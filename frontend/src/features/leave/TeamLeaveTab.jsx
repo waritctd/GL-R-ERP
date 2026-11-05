@@ -1,30 +1,21 @@
 import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
-import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
-import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
-import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
-import { Icon } from '../../components/common/Icon.jsx';
 // FilterField (#638) for the employee select this tab passes into LeaveFilterBar as a child --
 // see that component's own comment on why a hand-rolled `<label>` here is the bug, not a shortcut.
 import { FilterField, Panel } from '../../components/common/Layout.jsx';
 import { StatePanel } from '../../components/common/StatePanel.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { downloadBlob } from '../../utils/download.js';
-import { addDaysIso, leaveStatusLabel as statusInfo } from '../../utils/format.js';
+import { addDaysIso } from '../../utils/format.js';
 import { LeaveFilterBar } from './LeaveFilterBar.jsx';
 import { LeaveReportDownload } from './LeaveReportDownload.jsx';
 import {
-  formatDateRange, formatDays, todayIso,
+  formatDays, todayIso,
 } from './leaveFormatting.js';
-import {
-  buildLeaveRequestColumns, LEAVE_REQUEST_TABLE_GRID, leaveRequestRowKey,
-  PendingApproverNote, renderLeaveRequestExpanded,
-} from './leaveRequestTable.jsx';
+import { LeaveRequestsSection } from './leaveRequestTable.jsx';
+import { summarizeLeaveRequests, useCancelLeave, useLeaveFilters } from './useLeaveTabState.jsx';
 import { TeamQuotaSummary } from './TeamQuotaSummary.jsx';
 import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
@@ -49,236 +40,7 @@ const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 // the byte). Both tabs already shared their row rendering via leaveRequestTable.jsx; this closes
 // the remaining duplication so a change lands on both surfaces at once.
 
-function isPermissionError(error) {
-  return error?.status === 403;
-}
-
-// Ported verbatim from MyLeaveTab.jsx -- see that file's own comment on the three named
-// deep-link entry points this retry link is one of.
-function retryLeaveRequestHref(request) {
-  const params = new URLSearchParams({
-    type: request.leaveTypeCode,
-    start: request.startDate,
-    end: request.endDate,
-  });
-  return `/leave/new?${params.toString()}`;
-}
-
-/**
- * The team's request table -- ported from MyLeaveTab.jsx's `OwnRequestsSection`, with
- * team-appropriate copy (there is no "your first leave request" teaching moment here;
- * this is a browsing surface, not the actor's own submission funnel). The cancel/retry
- * action gate (`isOwn`) is UNCHANGED: a row here only gets action buttons when it is the
- * viewing actor's own request, exactly as it silently already behaved for other people's
- * rows on the pre-fix "ของฉัน" tab -- moving the code did not change who may act on what.
- */
-function TeamRequestsSection({
-  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user, showToast,
-}) {
-  const navigate = useNavigate();
-  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null);
-  async function downloadAttachment(request) {
-    setDownloadingAttachmentId(request.id);
-    try {
-      const blob = await api.leave.downloadAttachment(request.attachmentId);
-      downloadBlob(blob, `leave-attachment-${request.id}`, 'pdf');
-    } catch (error) {
-      showToast('error', error.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
-    } finally {
-      setDownloadingAttachmentId(null);
-    }
-  }
-  const loading = requestsQuery.isPending;
-  const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
-  const hasError = requestsQuery.isError && !denied;
-  // Review fix (2026-08): hr/ceo see every active employee here (api.leave.employees()
-  // returns the whole company for VIEW_ALL_ROLES -- ROLE_PERMISSIONS.canViewAllLeave mirrors
-  // it), so the "...ที่รายงานตรงต่อคุณ" ("...who report directly to you") clause is false for
-  // them. A real division manager keeps the original copy unchanged.
-  const canViewAllLeave = hasPermission(user?.role, 'canViewAllLeave');
-
-  const columns = useMemo(() => buildLeaveRequestColumns({
-    expandedId,
-    onToggleExpand,
-    // Approver-side surface: drop the "waiting on ผู้จัดการ (คุณนา)" note where it names the
-    // viewer. On a division manager's own team history that is most pending rows; for hr/ceo,
-    // whose rows route to other people's managers, the note still renders and still means
-    // something. See PendingApproverNote's own comment.
-    viewer: user,
-    renderActions: (request) => {
-      const isOwn = Number(request.employeeId) === Number(user.employeeId);
-      const canCancel = isOwn && request.status === 'SUBMITTED';
-      const canRetry = isOwn && ['AUTO_REJECTED', 'REJECTED'].includes(request.status);
-      if (!canCancel && !canRetry) return null;
-      return (
-        <span className="flex items-center gap-1">
-          {canRetry ? (
-            <Button
-              type="button"
-              variant="icon"
-              title="ยื่นคำขอใหม่"
-              aria-label="ยื่นคำขอใหม่"
-              onClick={() => navigate(retryLeaveRequestHref(request))}
-            >
-              <Icon name="refresh" size={14} />
-            </Button>
-          ) : null}
-          {canCancel ? (
-            <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" onClick={() => onCancel(request.id)}>
-              <Icon name="ban" size={14} />
-            </Button>
-          ) : null}
-        </span>
-      );
-    },
-    // `user`, not `user.employeeId`: the whole object is now read (as `viewer`, which also
-    // inspects `role`), so narrowing the dep to one field would keep a stale viewer after a
-    // role change.
-  }), [expandedId, onToggleExpand, onCancel, user, navigate]);
-
-  function mobileCard(request) {
-    const status = statusInfo(request.status);
-    const isOwn = Number(request.employeeId) === Number(user.employeeId);
-    const canCancel = isOwn && request.status === 'SUBMITTED';
-    const canRetry = isOwn && ['AUTO_REJECTED', 'REJECTED'].includes(request.status);
-    const expanded = expandedId === request.id;
-    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status column
-    // (which THIS tab's own desktop table already renders via buildLeaveRequestColumns) and as
-    // MyLeaveTab/ReviewQueueTab's mobile cards -- owner ruling, V164 follow-up. Without it this was
-    // the ONE leave-row surface left where a manager scanning their team on a phone saw no unpaid
-    // signal at all, while the same rows on their desktop did. Reads `unpaidDays`, not
-    // unpaidByRuleDays: a §5 WARN gate's unpaidByRuleDays is always a SUBSET of it, and what a
-    // reader needs here is how many days go unpaid, not which rule caused it.
-    const hasUnpaidDays = Number(request.unpaidDays || 0) > 0;
-    return (
-      <>
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          {/* Wraps, never truncates — see ReviewQueueTab.jsx's own comment: `truncate` cut the
-              Buddhist-era year off the end date at 390px, which reads as a complete date. */}
-          <strong className="min-w-0 text-sm font-extrabold text-text">
-            {formatDateRange(request.startDate, request.endDate)}
-          </strong>
-          <span className="flex shrink-0 items-start gap-1.5">
-            {/* Stacked vertically, never inline (owner ruling, V164 follow-up) -- two badges
-                sharing one line in a narrow column is what forces truncation; stacking removes the
-                problem at every width with no breakpoint variant needed. */}
-            <span className="flex flex-col items-start gap-1">
-              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-              {hasUnpaidDays ? (
-                <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
-              ) : null}
-            </span>
-            <Button
-              type="button"
-              variant="icon"
-              aria-expanded={expanded}
-              aria-controls={expandedRowRegionId(request.id)}
-              title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
-              aria-label={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
-              onClick={() => onToggleExpand(request.id)}
-            >
-              <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-            </Button>
-          </span>
-        </div>
-        <PendingApproverNote request={request} viewer={user} />
-        <span className="min-w-0 truncate text-xs text-text-muted">
-          {request.employeeName || request.employeeCode} · {request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
-        </span>
-        <span className="min-w-0 truncate text-xs text-text-muted">{request.reason}</span>
-        {canRetry ? (
-          <Button
-            type="button"
-            variant="secondary"
-            className="mt-1 min-h-11"
-            onClick={() => navigate(retryLeaveRequestHref(request))}
-          >
-            <Icon name="refresh" size={14} />
-            ยื่นคำขอใหม่
-          </Button>
-        ) : null}
-        {canCancel ? (
-          <Button type="button" variant="secondary" className="mt-1 min-h-11" onClick={() => onCancel(request.id)}>
-            <Icon name="ban" size={14} />
-            ยกเลิกคำขอ
-          </Button>
-        ) : null}
-      </>
-    );
-  }
-
-  if (!loading && denied) {
-    return (
-      <StatePanel
-        state="denied"
-        description={requestsQuery.error?.message || 'ไม่มีสิทธิ์เข้าถึงรายการนี้'}
-      />
-    );
-  }
-
-  if (!loading && !hasError && rows.length === 0) {
-    return hasCustomFilters ? (
-      <StatePanel
-        state="filtered"
-        action={<Button type="button" variant="secondary" onClick={onClearFilters}>ล้างตัวกรอง</Button>}
-      />
-    ) : (
-      <StatePanel
-        state="empty"
-        title={canViewAllLeave ? 'ยังไม่มีคำขอลาของพนักงาน' : 'ยังไม่มีคำขอลาของทีม'}
-        description={canViewAllLeave
-          ? 'คำขอลาของพนักงานทุกคนจะแสดงที่นี่เมื่อมีการยื่น'
-          : 'คำขอลาของคุณและลูกทีมที่รายงานตรงต่อคุณจะแสดงที่นี่เมื่อมีการยื่น'}
-      />
-    );
-  }
-
-  return (
-    <DataTable
-      columns={columns}
-      rows={rows}
-      getRowKey={leaveRequestRowKey}
-      gridClassName={LEAVE_REQUEST_TABLE_GRID}
-      // Drops the inner card's chrome, since this table is wrapped in a titled `<Panel flush>`
-      // below. No scroll override -- #650 fixed that in Panel's default. See MyLeaveTab.jsx's
-      // own comment on this prop.
-      panelClassName="rounded-none border-0"
-      loading={loading}
-      error={hasError}
-      onRetry={() => requestsQuery.refetch()}
-      mobileCard={mobileCard}
-      renderExpanded={(request) => {
-        if (expandedId !== request.id) return null;
-        return (
-          <>
-            {renderLeaveRequestExpanded(request)}
-            {request.attachmentId ? (
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2">
-                <span className="inline-flex min-w-0 items-center gap-2 text-sm text-text">
-                  <Icon name="fileText" size={16} className="text-icon-muted" />
-                  <span className="min-w-0 truncate">{request.attachmentFileName || 'เอกสารแนบ'}</span>
-                </span>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={downloadingAttachmentId === request.id}
-                  onClick={() => downloadAttachment(request)}
-                >
-                  <Icon name="fileText" size={14} />
-                  {downloadingAttachmentId === request.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
-                </Button>
-              </div>
-            ) : null}
-          </>
-        );
-      }}
-      showPagination
-    />
-  );
-}
-
 export function TeamLeaveTab({ user, showToast }) {
-  const queryClient = useQueryClient();
   // Empty dates by default -- same change and same reasoning as MyLeaveTab.jsx's own
   // `initialFilters` (see its comment): `to: todayIso()` made future team leave unreachable, and
   // `from: monthStartIso()` emptied the tab on the 1st of each month. hrApi.js's `withQuery` drops
@@ -289,14 +51,13 @@ export function TeamLeaveTab({ user, showToast }) {
     employeeId: '',
     status: '',
   };
-  const [filters, setFilters] = useState(initialFilters);
-  const [appliedFilters, setAppliedFilters] = useState(initialFilters);
-  const [confirmState, setConfirmState] = useState(null);
+  const {
+    filters, appliedFilters, hasCustomFilters, updateFilter, clearFilters, submitFilters,
+  } = useLeaveFilters(initialFilters);
+  const { requestCancel, cancelDialog } = useCancelLeave(showToast);
   const [expandedId, setExpandedId] = useState(null);
 
-  // Review fix (2026-08): see TeamRequestsSection's own comment on why this is role-aware --
-  // same predicate, computed again here (this component has its own `user` in scope) for the
-  // Panel title below, which lives outside TeamRequestsSection.
+  // hr/ceo see every active employee here (canViewAllLeave), so titles and copy drop the "direct reports" wording.
   const canViewAllLeave = hasPermission(user?.role, 'canViewAllLeave');
 
   // Shares its cache key with LeaveSurfacePage.jsx's own `teamSignalQuery` (both read
@@ -331,7 +92,6 @@ export function TeamLeaveTab({ user, showToast }) {
   });
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const refreshing = requestsQuery.isFetching && !requestsQuery.isPending;
-  const hasCustomFilters = JSON.stringify(appliedFilters) !== JSON.stringify(initialFilters);
 
   // Own forward window, independent of the filter above -- see UpcomingLeaveList.jsx's own doc
   // comment for why this is a second query rather than a `.filter()` over `requests` (defect D1).
@@ -351,60 +111,15 @@ export function TeamLeaveTab({ user, showToast }) {
   // chosen for what THIS tab is for -- a manager scanning their team, not an employee tracking
   // their own quota, so the fourth slot counts PEOPLE away rather than a personal quota balance.
   const totals = useMemo(() => {
-    const submitted = requests.filter((request) => request.status === 'SUBMITTED').length;
-    const approved = requests.filter((request) => request.status === 'APPROVED');
-    const approvedDays = approved.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
+    const { submitted, approved, approvedDays } = summarizeLeaveRequests(requests);
     // Distinct employees with any non-cancelled/non-rejected leave in the visible range.
     const peopleAway = new Set(
       requests
         .filter((request) => ['SUBMITTED', 'APPROVED'].includes(request.status))
         .map((request) => request.employeeId),
     ).size;
-    return { submitted, approved: approved.length, approvedDays, peopleAway };
+    return { submitted, approved, approvedDays, peopleAway };
   }, [requests]);
-
-  function invalidateLeave() {
-    return queryClient.invalidateQueries({ queryKey: ['leave'] });
-  }
-
-  function invalidatePayrollUpstream() {
-    return queryClient.invalidateQueries({ queryKey: ['payroll'] });
-  }
-
-  function updateFilter(field, value) {
-    setFilters((current) => ({ ...current, [field]: value }));
-  }
-
-  function clearFilters() {
-    setFilters(initialFilters);
-    setAppliedFilters(initialFilters);
-  }
-
-  function submitFilters(event) {
-    event.preventDefault();
-    setAppliedFilters(filters);
-  }
-
-  const cancelMutation = useMutation({
-    mutationFn: ({ id, reviewerNote }) => api.leave.cancel(id, { reviewerNote: reviewerNote?.trim() || null }).then((response) => response.request),
-    onSuccess: () => {
-      showToast('success', 'ยกเลิกคำขอลาแล้ว');
-      setConfirmState(null);
-      invalidateLeave();
-      invalidatePayrollUpstream();
-    },
-    onError: (error) => showToast('error', error.message || 'ยกเลิกวันลาไม่สำเร็จ'),
-  });
-
-  const saving = cancelMutation.isPending;
-
-  function requestCancel(id) {
-    setConfirmState({ kind: 'cancel', id });
-  }
-
-  function doCancel(id, reviewerNote) {
-    cancelMutation.mutate({ id, reviewerNote });
-  }
 
   return (
     <>
@@ -459,7 +174,7 @@ export function TeamLeaveTab({ user, showToast }) {
       </LeaveFilterBar>
 
       <Panel title={canViewAllLeave ? 'ประวัติการลาพนักงานทั้งหมด' : 'ประวัติการลาของทีม'} flush>
-        <TeamRequestsSection
+        <LeaveRequestsSection
           requestsQuery={requestsQuery}
           rows={requests}
           hasCustomFilters={hasCustomFilters}
@@ -469,22 +184,23 @@ export function TeamLeaveTab({ user, showToast }) {
           onCancel={requestCancel}
           user={user}
           showToast={showToast}
+          // Approver-side surface: drop the "waiting on ผู้จัดการ (คุณนา)" note where it names the viewer.
+          viewer={user}
+          summaryPrefix={(request) => `${request.employeeName || request.employeeCode} · `}
+          // hr/ceo see every active employee here, so "...ที่รายงานตรงต่อคุณ" would be false for them.
+          emptyState={(
+            <StatePanel
+              state="empty"
+              title={canViewAllLeave ? 'ยังไม่มีคำขอลาของพนักงาน' : 'ยังไม่มีคำขอลาของทีม'}
+              description={canViewAllLeave
+                ? 'คำขอลาของพนักงานทุกคนจะแสดงที่นี่เมื่อมีการยื่น'
+                : 'คำขอลาของคุณและลูกทีมที่รายงานตรงต่อคุณจะแสดงที่นี่เมื่อมีการยื่น'}
+            />
+          )}
         />
       </Panel>
 
-      <ConfirmDialog
-        open={confirmState?.kind === 'cancel'}
-        title="ยกเลิกคำขอลา"
-        message='ยืนยันการยกเลิกคำขอลานี้? สถานะจะเปลี่ยนเป็น "ยกเลิกแล้ว" ถาวร'
-        confirmLabel="ยกเลิกคำขอ"
-        tone="danger"
-        busy={saving}
-        requireReason
-        optionalReason
-        reasonLabel="หมายเหตุการยกเลิก (ถ้ามี)"
-        onConfirm={(reason) => doCancel(confirmState.id, reason)}
-        onCancel={() => setConfirmState(null)}
-      />
+      {cancelDialog}
     </>
   );
 }

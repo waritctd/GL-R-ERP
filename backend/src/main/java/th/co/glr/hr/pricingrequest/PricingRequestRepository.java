@@ -73,8 +73,8 @@ public class PricingRequestRepository {
         this.factoryQuotes = new FactoryQuoteRepository(jdbc);
     }
 
-    /** Serializes every mutating operation Step 6 (order confirmation) performs against a given
-     * pricing request, against each other and against every earlier step's own advisory locks on
+    /** Serializes every mutating operation order confirmation performs against a given
+     * pricing request, against each other and against the other advisory locks on
      * the same key. Mirrors {@code CustomerQuotationRepository.lockPricingRequest} exactly. */
     public void lockPricingRequest(long pricingRequestId) {
         jdbc.query("SELECT pg_advisory_xact_lock(:id)", Map.of("id", pricingRequestId), (rs, rowNum) -> 0);
@@ -120,7 +120,7 @@ public class PricingRequestRepository {
                 .addValue("targetCurrency", targetCurrency)
                 .addValue("note", request.note())
                 .addValue("clientRequestId", request.clientRequestId())
-                // GLA-125 header terms — see PricingRequestRequests.CreatePricingRequestRequest's
+                // Header terms — see PricingRequestRequests.CreatePricingRequestRequest's
                 // own Javadoc.
                 .addValue("paymentTermMode", request.paymentTermMode())
                 .addValue("creditDays", request.creditDays())
@@ -130,7 +130,7 @@ public class PricingRequestRepository {
                 .addValue("deptCode", request.deptCode())
                 .addValue("unitCode", request.unitCode())
                 // Mirrors sales.quotation.omit_contact_honorific's own NOT NULL DEFAULT FALSE —
-                // a null input (the pre-GLA-125 compat constructor's default) reads as false.
+                // a null input (the compat constructor's default) reads as false.
                 .addValue("omitContactHonorific", request.omitContactHonorific() != null && request.omitContactHonorific()),
             (rs, rowNum) -> rs.getLong("pricing_request_id"));
         if (ids.isEmpty()) {
@@ -196,14 +196,14 @@ public class PricingRequestRepository {
                 .addValue("originCountry", item.originCountry())
                 .addValue("leadTimeMinDays", item.leadTimeMinDays())
                 .addValue("leadTimeMaxDays", item.leadTimeMaxDays())
-                // GLA-125: whatever PricingRequestService#resolveItem already normalized this to
+                // Whatever PricingRequestService#resolveItem already normalized this to
                 // (null unless originCountry = "อื่นๆ") — this repository does no normalization
                 // itself, matching every other derived/validated item field on this same batch.
                 .addValue("originCountryOther", item.originCountryOther())
                 // Slice 1 stock-line scaffolding (V194): persisted exactly as sent; no validation
                 // or routing here (persistence only, per this class's header Javadoc).
                 .addValue("stockSource", item.stockSource())
-                // CR-1 (GLA-167): terms Sales fixes on the line; already normalized by the service.
+                // Terms Sales fixes on the line; already normalized by the service.
                 .addValue("requestedCurrency", item.requestedCurrency())
                 .addValue("requestedPriceUnitBasis", item.requestedPriceUnitBasis());
         }
@@ -297,7 +297,7 @@ public class PricingRequestRepository {
 
     /**
      * Cancels a pricing request as part of {@code PricingRequestService#cancelOpenForTicket}'s
-     * dead-deal cascade (review remediation COMMIT 5) — the one place a status transition must
+     * dead-deal cascade — the one place a status transition must
      * bypass {@link PricingRequestStatus#canTransition}, since a deal reaching a terminal
      * lifecycle state must be able to cancel a pricing request from ANY open status, including the
      * two past the cancel cutoff — {@code QUOTATION_ISSUED} and {@code QUOTATION_ACCEPTED} — which
@@ -306,10 +306,6 @@ public class PricingRequestRepository {
      * a deal marked lost after a quotation went out must still close its pricing request. Do not
      * call this from anywhere else; every other caller must use {@link #transition} so the state
      * machine stays authoritative.
-     *
-     * <p>Before the cancel cutoff (owner ruling 2026-08-13) this Javadoc cited READY_FOR_CEO_REVIEW
-     * as its example. That status is now cancellable by a live user action, so it no longer
-     * illustrates a bypass of anything.
      *
      * <p>Same compare-and-set shape as {@link #transition}, deliberately narrowed to only the
      * columns a cancellation actually touches (no {@code assignImportId}/{@code submitted_at}/
@@ -378,7 +374,7 @@ public class PricingRequestRepository {
                 .addValue("customerTargetPrice", request.customerTargetPrice())
                 .addValue("targetCurrency", normalizeCurrency(request.targetCurrency()))
                 .addValue("note", request.note())
-                // GLA-125 header terms — a FULL REPLACEMENT like every other editable field on
+                // Header terms — a FULL REPLACEMENT like every other editable field on
                 // this UPDATE (this method's own class-level Javadoc: "full replacement... no more
                 // COALESCE"), not a sparse patch.
                 .addValue("paymentTermMode", request.paymentTermMode())
@@ -396,10 +392,10 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Review remediation (COMMIT 5, P2 finding 2): the next {@code revision_no} used to be
-     * computed via a bare {@code SELECT COALESCE(MAX(revision_no),0)+1} with no lock, so two
+     * The next {@code revision_no} is computed under a lock: a bare
+     * {@code SELECT COALESCE(MAX(revision_no),0)+1} would let two
      * concurrent customer-change-revision calls racing the same chain (different
-     * {@code clientRequestId}s — not a retry of the same one) could both read the same MAX before
+     * {@code clientRequestId}s — not a retry of the same one) both read the same MAX before
      * either INSERT committed. Mirrors {@code FactoryQuoteRepository.createRevision}'s
      * {@code pg_advisory_xact_lock(rootId)} pattern exactly: held for the remainder of this
      * (transactional) call, so a second racing caller blocks here until the first commits, then
@@ -451,7 +447,7 @@ public class PricingRequestRepository {
                 .addValue("revisionNo", nextRevision)
                 .addValue("revisionReason", request.revisionReason())
                 .addValue("clientRequestId", request.clientRequestId())
-                // GLA-125: the revision's header terms come from WHATEVER the caller sent in
+                // The revision's header terms come from WHATEVER the caller sent in
                 // `request` (PricingRequestCreateModal.jsx's mode="revision" seeds these from the
                 // CURRENT parent request, same as every other header field on a revision), never
                 // copied server-side from `parent` directly — matching how every other header
@@ -488,15 +484,14 @@ public class PricingRequestRepository {
     /**
      * Supersedes a pricing request in favour of a customer-change revision.
      *
-     * <p><strong>Reissue-through-CEO-chain (2026-08-13): this used to bypass the state machine
-     * entirely.</strong> The previous implementation was a raw {@code jdbc.update} guarded by
-     * {@code status <> 'SUPERSEDED' AND status <> 'CANCELLED'} — a NEGATIVE guard that never
-     * consulted {@link PricingRequestStatus#ALLOWED}, so it happily superseded a request from any
-     * status the map did not declare, including {@code QUOTATION_ACCEPTED} (declared terminal).
-     * Sales could therefore rewrite the pricing behind a quotation the customer had already
-     * accepted, silently, with no CEO involvement and no transition check.
+     * <p><strong>This goes through the state machine.</strong> A NEGATIVE guard such as
+     * {@code status <> 'SUPERSEDED' AND status <> 'CANCELLED'} would never consult
+     * {@link PricingRequestStatus#ALLOWED}, and would supersede a request from any
+     * status the map did not declare, including {@code QUOTATION_ACCEPTED} (declared terminal),
+     * letting Sales silently rewrite the pricing behind a quotation the customer had already
+     * accepted, with no CEO involvement and no transition check.
      *
-     * <p>It now takes the caller's {@code expected} status and asserts {@code expected ->
+     * <p>So it takes the caller's {@code expected} status and asserts {@code expected ->
      * SUPERSEDED} against {@link PricingRequestStatus#canTransition} first — the same invariant
      * guard, with the same {@link IllegalStateException} semantics and for the same reason, as
      * {@link #transition} (see that method's Javadoc: an illegal edge is a programming error at
@@ -504,14 +499,12 @@ public class PricingRequestRepository {
      * {@code canTransition} itself and 409 before ever getting here, so reaching this throw means
      * a caller skipped that check.
      *
-     * <p>The compare-and-set semantics the caller depends on are preserved and, in fact,
-     * tightened: {@code WHERE status = :expected} replaces the old negative guard, so a
-     * concurrent writer that moved the row between the service's read and this update now yields
+     * <p>It is a compare-and-set: {@code WHERE status = :expected}, so a
+     * concurrent writer that moved the row between the service's read and this update yields
      * rowcount 0 (which {@code PricingRequestService#createCustomerChangeRevision} turns into a
-     * 409) instead of silently superseding from a status the caller never saw. The
-     * {@code superseded_at}/{@code superseded_by_pricing_request_id} writes are unchanged.
+     * 409) instead of silently superseding from a status the caller never saw.
      *
-     * @return rowcount (0 or 1); 0 means the lost-update race, exactly as before.
+     * @return rowcount (0 or 1); 0 means the lost-update race.
      */
     public int supersedeForCustomerRevision(long id, String expected, long supersededByPricingRequestId) {
         if (!PricingRequestStatus.canTransition(expected, PricingRequestStatus.SUPERSEDED)) {
@@ -664,7 +657,7 @@ public class PricingRequestRepository {
 
     /**
      * Resolves a {@code price_catalog.factories} master row's canonical name by id — the picker
-     * (B6/GLA-135) sends a factoryId, and this is what {@code PricingRequestService#setItemFactory}
+     * sends a factoryId, and this is what {@code PricingRequestService#setItemFactory}
      * uses to validate it and recover the exact name to persist. {@code Optional.empty()} when the
      * id does not exist; the service turns that into a 404 rather than trusting an arbitrary id.
      */
@@ -692,18 +685,18 @@ public class PricingRequestRepository {
      * and raises the precise 4xx; a 0 here after those checks passed is a lost race, and its caller
      * turns it into the same 409 {@link #transition} uses.
      *
-     * <p><b>B6 (GLA-135) fix:</b> {@code factoryId} is now written to {@code resolved_factory_id} —
+     * <p>{@code factoryId} is written to {@code resolved_factory_id} —
      * the column downstream readers ({@code FactoryQuoteService#groupByFactory} /
-     * {@code factoryConfigs.findByName(factoryName)}) actually key their factory-email + CEO
-     * landed-cost lookup on. Before this fix only the free-text {@code factory} column was written,
-     * so a typed name that did not exactly match a master row left {@code resolved_factory_id} NULL
-     * and dead-ended those lookups. {@code factory} is still written too — with the CALLER-RESOLVED
+     * {@code factoryConfigs.findByName(factoryName)}) key their factory-email + CEO
+     * landed-cost lookup on. Writing only the free-text {@code factory} column would leave
+     * {@code resolved_factory_id} NULL for a typed name that does not exactly match a master row
+     * and dead-end those lookups. {@code factory} is written too — with the CALLER-RESOLVED
      * canonical master name (see {@code findFactoryNameById} above), not raw user input, so every
-     * existing reader of the free-text column keeps working unchanged.
+     * reader of the free-text column keeps working.
      *
      * <p>{@code resolved_factory_name} stays deliberately NOT written. That column is the
      * price-catalog PRODUCT snapshot ({@link #snapshotCatalogSelections}) — a manually-picked
-     * factory (even now that it is master-row-resolved) is not a catalog product resolution; every
+     * factory (even though it is master-row-resolved) is not a catalog product resolution; every
      * downstream reader already falls back to {@code factory} via
      * {@code firstText(resolvedFactoryName, factory)}.
      */
@@ -727,7 +720,7 @@ public class PricingRequestRepository {
      * True if {@code factoryName} already has a CURRENT {@code sales.factory_quote} on this
      * pricing request whose status has moved past {@code DRAFT} — i.e. an RFQ that a human has
      * already sent (REQUESTED) or that has progressed further (a factory has answered, etc.).
-     * Used by {@code PricingRequestService#setItemFactory} (BLOCKER 1b, review remediation) to
+     * Used by {@code PricingRequestService#setItemFactory} to
      * refuse filling a blank line onto a factory whose current quote can no longer safely absorb
      * it — routed through {@link #factoryQuotes} rather than new SQL here, same one-way-dependency
      * shape {@link #cancelOpenChildrenForDeadRequest} already uses to reach {@code
@@ -870,13 +863,12 @@ public class PricingRequestRepository {
      * and the quotation half is deliberately NOT shared with the revision path.
      *
      * <p>{@code sales.pricing_costing}'s predicate spans all three open statuses on purpose.
-     * {@code DRAFT}/{@code CALCULATED} are the historical pair (Import used to build a costing
-     * draft); V141 moved costing to the CEO and {@link PricingCostingRepository} now inserts rows
-     * born directly at {@code SUBMITTED}, which is therefore the ONLY status a costing created
-     * today will ever be found in. Matching only the historical two — as this cascade did before
-     * the cancel-cutoff change — made the costing half a complete no-op against current data,
-     * invisible precisely because the rows it was meant to catch never appear in the old statuses.
-     * The two legacy statuses are kept in the list for rows predating V141.
+     * {@code DRAFT}/{@code CALCULATED} are the historical pair (Import built a costing
+     * draft); since V141 costing belongs to the CEO and {@link PricingCostingRepository} inserts
+     * rows born directly at {@code SUBMITTED}, which is therefore the ONLY status a newly created
+     * costing is found in. Matching only the historical two would make the costing half a complete
+     * no-op against current data, invisible precisely because the rows it is meant to catch never
+     * appear in the old statuses. The two legacy statuses stay in the list for rows predating V141.
      */
     public void cancelOpenChildrenForDeadRequest(long pricingRequestId, String reason, long actorId) {
         factoryQuotes.cancelOpenForPricingRequest(pricingRequestId, reason, actorId);
@@ -935,11 +927,10 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Step 5 (V75, design correction 1 — "the cascade gap"): {@link #cancelOpenStep2Children}
-     * predates {@code sales.pricing_decision}/{@code sales.quotation} (Steps 3/4) and has zero
-     * knowledge of either, so a customer-change (cost-affecting) revision superseding its parent
-     * pricing request left a DRAFT/APPROVED decision and any non-terminal quotation silently
-     * stale — still readable via {@code PricingDecisionService.salesView}/{@code get} and
+     * The pricing-decision/quotation cascade: {@link #cancelOpenStep2Children}
+     * has no knowledge of {@code sales.pricing_decision}/{@code sales.quotation}, so without this
+     * a DRAFT/APPROVED decision and any non-terminal quotation would be left silently
+     * stale when the request dies — still readable via {@code PricingDecisionService.salesView}/{@code get} and
      * {@code CustomerQuotationService.get} as if they were current.
      *
      * <p><strong>Callers: {@code PricingRequestService#cancel} and {@code #cancelOpenForTicket}
@@ -947,14 +938,12 @@ public class PricingRequestRepository {
      * {@link #cancelOpenChildrenForDeadRequest}. ({@code createCustomerChangeRevision} calls the
      * decision half, {@link #supersedeOpenPricingDecision}, on its own: the reissue-through-CEO
      * chain deliberately leaves the parent's ISSUED quotation live until the REPLACEMENT is
-     * issued. This Javadoc claimed the exact opposite — "never from plain cancel()" — until the
-     * cancel-cutoff change; it had been wrong since the reissue chain split the two halves.)
+     * issued.)
      *
      * <p><strong>{@code DRAFT} is in the quotation predicate deliberately, and it is the entry
      * that closes a real hole.</strong> A quotation may be created (as DRAFT) only while the
-     * pricing request sits at APPROVED_FOR_QUOTATION, which the cancel cutoff now admits — so from
-     * this change onward a cancelled request can own a DRAFT quotation, where previously it could
-     * not. Leaving one behind would be worse than untidy: {@code CustomerQuotationService#issue}
+     * pricing request sits at APPROVED_FOR_QUOTATION, which the cancel cutoff admits — so a
+     * cancelled request can own a DRAFT quotation. Leaving one behind would be worse than untidy: {@code CustomerQuotationService#issue}
      * gates on the QUOTATION's {@code doc_status}, and only moves the pricing request when it is
      * still APPROVED_FOR_QUOTATION — an {@code if}, not an assertion. A DRAFT quotation orphaned
      * on a CANCELLED request would therefore still ISSUE cleanly, silently skipping the pricing
@@ -978,7 +967,7 @@ public class PricingRequestRepository {
     }
 
     /**
-     * QA-13 fallback: the customer-change revision {@code childId} died (cancelled), so its parent's
+     * Fallback: the customer-change revision {@code childId} died (cancelled), so its parent's
      * still-ISSUED quotation becomes the live offer again. Compare-and-set: only a parent that is
      * SUPERSEDED by exactly this child and still owns an ISSUED quotation is revived. Returns the
      * parent id, or empty when nothing matched.
@@ -1007,9 +996,8 @@ public class PricingRequestRepository {
     }
 
     /**
-     * The pricing-decision half of {@link #supersedeOpenPricingDecisionAndQuotation}, split out by
-     * the reissue-through-CEO-chain change (owner ruling 2026-08-13) so a customer-change revision
-     * can supersede the internal decision WITHOUT touching the customer-facing quotation.
+     * The pricing-decision half of {@link #supersedeOpenPricingDecisionAndQuotation}, split out
+     * so a customer-change revision can supersede the internal decision WITHOUT touching the customer-facing quotation.
      *
      * <p>The two halves genuinely differ in when they should fire.
      * {@code PricingRequestService#cancel} kills the deal outright, so both the decision and the
@@ -1030,22 +1018,19 @@ public class PricingRequestRepository {
     }
 
     /**
-     * MINOR fix (Opus review, 2026-09-20), GLA-123 slice S1 — a PRICING_REQUEST-origin (the NEW,
-     * {@code th.co.glr.hr.dealquotation} engine) DRAFT quotation orphaned by a customer-change
+     * A PRICING_REQUEST-origin ({@code th.co.glr.hr.dealquotation} engine) DRAFT quotation orphaned by a customer-change
      * revision, mirroring {@link #supersedeOpenPricingDecisionAndQuotation}'s own "DRAFT is in the
      * predicate deliberately, and it closes a real hole" reasoning — but scoped MUCH narrower than
      * that method, and NOT the same call: {@code createCustomerChangeRevision} deliberately never
-     * calls {@code supersedeOpenPricingDecisionAndQuotation} itself, because the owner's
-     * reissue-through-CEO-chain ruling keeps an ALREADY-ISSUED legacy (origin IS NULL) quotation
+     * calls {@code supersedeOpenPricingDecisionAndQuotation} itself, because the
+     * reissue-through-CEO-chain rule keeps an ALREADY-ISSUED legacy (origin IS NULL) quotation
      * live until the replacement is issued (see that method's own Javadoc and this call's own
-     * comment in {@code PricingRequestService#createCustomerChangeRevision}). That ruling is about
-     * an issued, customer-facing document — it has no bearing on this origin, which in S1 can
-     * NEVER reach ISSUED (S1 refused submit for this origin outright; since S2 only {@code createReorder}
-     * is still refused, via {@code DealQuotationService#requireReorderAllowedForOrigin}),
-     * so DRAFT is the ONLY state to ever clean up here, and there is no "stays live until the
+     * comment in {@code PricingRequestService#createCustomerChangeRevision}). That rule is about
+     * an issued, customer-facing document — it has no bearing on a DRAFT of this origin, so only
+     * DRAFT is retired here, and there is no "stays live until the
      * replacement issues" concept to preserve for it. Without this, a DRAFT quotation on this
-     * engine would be left attached to a now-SUPERSEDED parent forever — nothing else in S1 ever
-     * retires it (there is no S2 issue-time supersede for this origin yet). {@code origin =
+     * engine would be left attached to a now-SUPERSEDED parent forever — nothing else
+     * retires it. {@code origin =
      * 'PRICING_REQUEST'} in the predicate is what keeps this from ever touching the legacy
      * quotation the paragraph above is protecting.
      */
@@ -1060,9 +1045,9 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Step 6 (V76): the order-confirmation bridge's own idempotency/state check — read under the
-     * same {@link #lockPricingRequest} hold as the guarded update below, exactly like every prior
-     * step's create/issue/outcome replay check (e.g. {@code CustomerQuotationRepository
+     * The order-confirmation bridge's own idempotency/state check — read under the
+     * same {@link #lockPricingRequest} hold as the guarded update below, exactly like the other
+     * create/issue/outcome replay checks (e.g. {@code CustomerQuotationRepository
      * .findIdByIssueClientRequestId}).
      */
     public record OrderConfirmationState(boolean confirmed, String clientRequestId) {}
@@ -1079,7 +1064,7 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Compare-and-set: only succeeds from {@code QUOTATION_ACCEPTED} (Step 5's terminal status —
+     * Compare-and-set: only succeeds from {@code QUOTATION_ACCEPTED} (the terminal status —
      * intentionally NOT routed through {@link #transition}/{@link PricingRequestStatus#ALLOWED},
      * since {@code status} itself does not change here; only the order-confirmation columns do)
      * and only once ({@code order_confirmed_at IS NULL}). Rowcount 0 means either "not
@@ -1118,11 +1103,11 @@ public class PricingRequestRepository {
             (rs, rowNum) -> rs.getLong("item_id"));
     }
 
-    // --- Pricing Request attachments (V69, review remediation COMMIT 4) ---
+    // --- Pricing Request attachments (V69) ---
     //
     // Sales-level supporting attachments on the Pricing Request itself — distinct from
     // FactoryQuoteRepository's raw supplier-quote attachments. A dedicated table (not a reuse of
-    // hr.file_attachment's generic domain/owner_id shape) per the approved remediation plan: this
+    // hr.file_attachment's generic domain/owner_id shape): this
     // is fully owned by sales.pricing_request and needs its own include_in_factory_email column,
     // which would otherwise leak a pricing-request-specific concern onto a table shared with
     // unrelated domains (e.g. hr.leave_request attachments).
@@ -1201,12 +1186,8 @@ public class PricingRequestRepository {
      * (which never exposes a local disk path). {@code filePath}/{@code mimeType} are unused by the
      * current caller and kept only because they cost nothing to carry alongside {@code fileName}.
      *
-     * <p><b>The caller changed (review remediation, HIGH 4).</b> This used to serve {@code
-     * FactoryQuoteService.attemptSend} — the automatic dispatch worker, deleted along with the
-     * outbox path (factory RFQ email is manual-only now) — resolved fresh at actual-send time so a
-     * late {@code include_in_factory_email} toggle was honoured up to the moment the worker really
-     * called the mail provider. There is no send-time resolution left to do: the sole caller today
-     * is {@code FactoryQuoteService.emailBody}, at DRAFT-GENERATION time, which lists these file
+     * <p>Factory RFQ email is manual-only, so there is no send-time resolution to do: the sole
+     * caller is {@code FactoryQuoteService.emailBody}, at DRAFT-GENERATION time, which lists these file
      * names in the generated draft text so the human copying it into their own mail client knows
      * what to physically attach — a toggle flipped after a draft already exists is reflected only
      * the next time a draft is (re)generated for that factory, not retroactively.
@@ -1290,7 +1271,7 @@ public class PricingRequestRepository {
             rs.getTimestamp("created_at").toInstant(),
             rs.getTimestamp("updated_at").toInstant(),
             instant(rs, "order_confirmed_at"),
-            // GLA-125 header terms. SUMMARY_SELECT is `pr.*`, so these columns are always present
+            // Header terms. SUMMARY_SELECT is `pr.*`, so these columns are always present
             // in the ResultSet -- no SELECT-list change needed here, only the Java read.
             rs.getString("payment_term_mode"),
             nullableInt(rs, "credit_days"),
@@ -1414,7 +1395,7 @@ public class PricingRequestRepository {
     }
 
     /**
-     * Second review pass, finding N5 (2026-09-19): whether {@code employeeId} may be stored as a
+     * Whether {@code employeeId} may be stored as a
      * {@code printedByDisplayId}/{@code salesRepDisplayId} on this pricing request's header terms.
      * Delegates to {@link th.co.glr.hr.commission.QuotationDisplayNameEligibility}, the SAME
      * predicate direct-deal's {@code DealQuotationRepository#isEligibleQuotationDisplayName}

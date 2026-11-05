@@ -49,7 +49,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     // Wednesday 2026-07-01 09:00 Asia/Bangkok -- matches every other leave integration test's fixed
-    // clock. SICK's advance_notice_days is 0 (unaffected by this migration), so no date below needs
+    // clock. SICK's advance_notice_days is 0, so no date below needs
     // to clear an advance-notice window; every date is chosen only to land on a specific side of the
     // 3-working-day filing window or a specific calendar month.
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
@@ -100,7 +100,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(first.status()).isEqualTo("SUBMITTED");
         assertThat(second.status()).isEqualTo("SUBMITTED");
         assertThat(third.status()).isEqualTo("SUBMITTED");
-        // V164 (owner-approved change, 2026-09-09): SICK_NO_CERT_TOLERANCE_EXHAUSTED is now
+        // SICK_NO_CERT_TOLERANCE_EXHAUSTED is
         // WARN_UNPAID_ALL, not BLOCK -- the 4th request still submits, wholly unpaid by rule.
         assertThat(fourth.status()).isEqualTo("SUBMITTED");
         assertThat(fourth.systemNoteCode()).isNull();
@@ -129,8 +129,8 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(juneSecond.status()).isEqualTo("SUBMITTED");
         assertThat(juneThird.status()).isEqualTo("SUBMITTED");
 
-        // A fourth certificate-less occasion, still in June, would warn unpaid (V164, owner-approved
-        // change, 2026-09-09 -- same boundary as the test above) -- proving June's own count is
+        // A fourth certificate-less occasion, still in June, would warn unpaid
+        // (same boundary as the test above) -- proving June's own count is
         // genuinely exhausted, not that this employee has some unlimited allowance.
         LeaveRequestDto juneFourth = leaveService.submit(sickRequest(employeeId, "2026-06-25"), employee(employeeId));
         assertThat(juneFourth.status()).isEqualTo("SUBMITTED");
@@ -202,8 +202,8 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
     void aSickRequestWithACertificateFiledOutsideTheWorkingDayWindowWarnsUnpaid() {
         // Start Mon 2026-06-01 (a full month before FIXED_NOW): addWorkingDays(Mon, 3) =
         // Thu 2026-06-04 -- "today" (2026-07-01) is long past that deadline -> LATE, even though a
-        // real certificate is attached. V164 (owner-approved change, 2026-09-09):
-        // SICK_CERTIFICATE_WINDOW is now WARN_UNPAID_ALL, not BLOCK -- still submits, wholly unpaid.
+        // real certificate is attached.
+        // SICK_CERTIFICATE_WINDOW is WARN_UNPAID_ALL, not BLOCK -- still submits, wholly unpaid.
         long employeeId = insertEmployee("SICK-WIN-LATE-001");
         stubFileStorage();
 
@@ -264,7 +264,7 @@ class LeaveSickCertificateIntegrationTest extends AbstractPostgresIntegrationTes
 
     /**
      * Stubs {@code FileStorageService.storeInDatabase} to return a fixed {@code StoredContent} for
-     * ANY owner id / file -- V134 storage-durability fix: {@code LeaveService#submit} now stores
+     * ANY owner id / file -- {@code LeaveService#submit} stores
      * leave attachments to the database, not disk, so this stubs the DB-backed method {@code
      * submit} actually calls.
      */

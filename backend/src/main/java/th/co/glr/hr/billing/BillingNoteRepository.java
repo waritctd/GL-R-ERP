@@ -17,18 +17,15 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 /**
- * Persistence for {@code sales.billing_note}/{@code sales.billing_note_line} (V189, GLA-99 step
- * 3). Mirrors {@link th.co.glr.hr.deposit.RemainingInvoiceRepository}'s own DRAFT/ISSUED/SUPERSEDED
+ * Persistence for {@code sales.billing_note}/{@code sales.billing_note_line} (V189). Mirrors
+ * {@link th.co.glr.hr.deposit.RemainingInvoiceRepository}'s own DRAFT/ISSUED/SUPERSEDED
  * compare-and-set write shape, plus a fourth (CANCELLED) and fifth (SETTLED, reached either
  * automatically — {@link #reconcileSettlementForCustomer} — or explicitly via {@link
- * #markSettled}, owner ruling C1) terminal state and the per-line {@code note_status}
- * denormalization V189's own header comment explains —
- * see that migration for why a Postgres partial index cannot enforce "no double billing" without
- * it. Live-uniqueness (B1) is per REVISION CHAIN, not {@code (customer_id, type)} — {@link
- * #findLiveDraftForRevision} is the one query that still enforces a live-uniqueness rule; {@code
- * findLiveIssued}/{@code findLiveDraft} (customer+type scoped) were REMOVED, not merely unused, per
- * B1's own instruction ("issue() must find its predecessor via the chain, never via
- * findLiveIssued(customer, type)").
+ * #markSettled}) terminal state and the per-line {@code note_status} denormalization V189's own
+ * header comment explains — see that migration for why a Postgres partial index cannot enforce
+ * "no double billing" without it. Live-uniqueness is per REVISION CHAIN, not {@code (customer_id,
+ * type)} — {@link #findLiveDraftForRevision} is the one query that enforces a live-uniqueness
+ * rule; issue() must find its predecessor via the chain, never by customer+type.
  */
 @Repository
 public class BillingNoteRepository {
@@ -52,7 +49,7 @@ public class BillingNoteRepository {
         """;
 
     /** Reads every note for this customer — self-healing first: any ISSUED note whose every
-     * referenced source document is now fully paid flips to {@code SETTLED} (B2) before the SELECT
+     * referenced source document is now fully paid flips to {@code SETTLED} before the SELECT
      * runs, so a caller never observes a stale ISSUED status this same read could have corrected.
      * See {@link #reconcileSettlementForCustomer} for the mechanism and why it lives here rather
      * than behind a payment-recording hook. */
@@ -112,7 +109,7 @@ public class BillingNoteRepository {
     /** Every currently-live claim (note_status DRAFT or ISSUED) across this customer's own billing
      * notes, keyed {@code sourceType + ":" + sourceId} — ONE query for {@link
      * BillingNoteService#candidates} to check every candidate row against, instead of one {@link
-     * #findLiveClaim} call per row (review nit, GLA-99 step 3 round 1). */
+     * #findLiveClaim} call per row. */
     public Map<String, ClaimedBy> findLiveClaimsForCustomer(long customerId) {
         List<Map.Entry<String, ClaimedBy>> rows = jdbc.query("""
             SELECT l.source_type, l.source_id, bn.id AS note_id, bn.doc_number
@@ -130,15 +127,14 @@ public class BillingNoteRepository {
         return byKey;
     }
 
-    // ── Settlement (owner ruling C1, 2026-09-20 — REPLACES this migration's original B2 rule) ──
+    // ── Settlement ──
 
-    /** The outstanding-amount expression for a REMAINING_INVOICE source, shared (de-duplicated,
-     * review nit round 2) between {@link #SETTLING_NOTE_IDS_SQL} and {@link
+    /** The outstanding-amount expression for a REMAINING_INVOICE source, shared between {@link #SETTLING_NOTE_IDS_SQL} and {@link
      * #candidatesForCustomer}'s own query — both must compute the SAME figure the SAME way, or a
      * document could settle under one definition while still showing as a candidate under the
      * other. Expects a {@code ri} alias in scope. See {@link #candidatesForCustomer}'s own Javadoc
-     * for the documented BALANCE/ADJUSTMENT-per-TICKET approximation this inherits (S8, round 2:
-     * settlement must ALSO restrict {@code ri} to {@code status = 'ISSUED'} — done by the caller's
+     * for the documented BALANCE/ADJUSTMENT-per-TICKET approximation this inherits
+     * (settlement must ALSO restrict {@code ri} to {@code status = 'ISSUED'} — done by the caller's
      * own JOIN/subquery condition, not baked into this fragment, since {@code
      * candidatesForCustomer} already filters it in its FROM clause). */
     private static final String REMAINING_INVOICE_OUTSTANDING_EXPR = """
@@ -158,16 +154,16 @@ public class BillingNoteRepository {
         ), 0)""";
 
     /**
-     * ISSUED -&gt; SETTLED for every note in scope that qualifies under C1, releasing (note_status
+     * ISSUED -&gt; SETTLED for every note in scope that qualifies (see below), releasing (note_status
      * -&gt; RELEASED) exactly the notes that settle — the SAME transition {@link #cancel}'s own
      * release already performs, just reached automatically instead of by a caller action.
      *
-     * <p><b>Where the recompute lives, and why (honest-and-cheap over clever):</b> this runs
+     * <p><b>Where the recompute lives, and why:</b> this runs
      * lazily on every read that can observe a note's own status ({@link #findByCustomer}, {@link
      * #findById}, {@link #candidatesForCustomer}) rather than from a hook wired into {@code
      * TicketService#recordPayment}/{@code #confirmDepositPaid}/{@code #confirmFinalPayment}. A
      * payment-recording hook would need {@code TicketService} — already one of this codebase's
-     * largest, most business-critical classes, entirely unaware of this feature today — to learn
+     * largest, most business-critical classes, entirely unaware of this feature — to learn
      * about billing notes, AND would need to stay correct across every current and future payment
      * code path that lands a receipt row, which is exactly the kind of coupling that silently rots
      * (a new payment path added later and simply never wired to the hook). Recompute-on-read has
@@ -176,24 +172,21 @@ public class BillingNoteRepository {
      * cheap — always filtered to {@code status = 'ISSUED'} first, so a DRAFT/CANCELLED/SUPERSEDED/
      * already-SETTLED read costs one indexed no-op lookup, not a scan.
      *
-     * <p><b>C1 (owner ruling, 2026-09-20) — replaces the original "MANUAL lines never block
-     * settlement" rule with a NARROWER one:</b> a note settles automatically ONLY when it has AT
-     * LEAST ONE non-MANUAL line AND every non-MANUAL line's source is currently fully paid. An
-     * all-MANUAL note (the ค่าขนส่ง case) can never satisfy "at least one non-MANUAL line", so it
-     * never auto-settles — it stays ISSUED until a human calls {@link #markSettled}. The ORIGINAL
-     * rule (still visible in this class's git history) let an all-MANUAL note settle on its very
-     * next read after being issued purely because {@code bool_and} over an empty-of-non-MANUAL-
-     * lines condition is vacuously true; that was the bug C1 exists to close, caught before this
-     * migration ever shipped to any database.
+     * <p><b>Settlement rule:</b> a note settles automatically ONLY when it has AT LEAST ONE
+     * non-MANUAL line AND every non-MANUAL line's source is currently fully paid. An all-MANUAL
+     * note (the ค่าขนส่ง case) can never satisfy "at least one non-MANUAL line", so it never
+     * auto-settles — it stays ISSUED until a human calls {@link #markSettled}. (Without the
+     * "at least one" requirement, {@code bool_and} over an empty-of-non-MANUAL-lines condition is
+     * vacuously true and an all-MANUAL note would settle on its very next read.)
      *
-     * <p><b>S3 (round 2) — a MISSING source row must NOT count as paid.</b> {@code
+     * <p><b>A MISSING source row must NOT count as paid.</b> {@code
      * billing_note_line} carries no FK to {@code remaining_invoice}/{@code deposit_notice} BY
      * DESIGN (V189's own header comment), so a scalar subquery that simply reads the source's own
      * outstanding figure returns SQL NULL when the row is gone — and {@code COALESCE(NULL, 0) <= 0}
      * is TRUE, silently treating "I could not find this document" as "this document is paid",
      * settling the note AND releasing its still-genuinely-unpaid sibling lines (a real double-
      * billing path). This query instead LEFT JOINs the source explicitly and requires the join to
-     * have MATCHED (and requires {@code status = 'ISSUED'}, S8) before it will ever treat a
+     * have MATCHED (and requires {@code status = 'ISSUED'}) before it will ever treat a
      * non-MANUAL line as eligible — a missing or non-ISSUED source makes the {@code bool_and} below
      * false, so the WHOLE note stays ISSUED and unsettled rather than silently releasing anything.
      */
@@ -216,17 +209,16 @@ public class BillingNoteRepository {
         return settle(ids);
     }
 
-    /** Every ISSUED note, within {@code %1$s}'s own scope, that satisfies C1 — see {@link
-     * #reconcileSettlementForCustomer}'s own Javadoc for the exact rule and the S3/S8 fixes this
-     * query embeds (LEFT JOIN + {@code status = 'ISSUED'} rather than a NULL-hiding scalar
+    /** Every ISSUED note, within {@code %1$s}'s own scope, that satisfies the settlement rule — see
+     * {@link #reconcileSettlementForCustomer}'s own Javadoc for the exact rule this query embeds
+     * (LEFT JOIN + {@code status = 'ISSUED'} rather than a NULL-hiding scalar
      * subquery, plus the {@code bool_or} requiring at least one non-MANUAL line). {@code %2$s}/
      * {@code %3$s} are the shared outstanding-amount expressions — substituted via {@link
      * String#format}, deliberately NOT via {@code """ + EXPR + """} text-block concatenation:
      * adjacent text-block literals strip TRAILING whitespace per line and LEADING whitespace by a
      * common-indentation calculation, either of which can silently eat the separator between
-     * "THEN" and the expression's own first token — exactly the "syntax error at or near
-     * 'THENri'" this class shipped with once, caught by the very first test run against a real
-     * Postgres. {@code String.format} substitutes the placeholder verbatim, with no such risk. */
+     * "THEN" and the expression's own first token (a "syntax error at or near 'THENri'").
+     * {@code String.format} substitutes the placeholder verbatim, with no such risk. */
     private static final String SETTLING_NOTE_IDS_SQL = """
         SELECT bnl.billing_note_id AS id
           FROM sales.billing_note bn
@@ -258,9 +250,9 @@ public class BillingNoteRepository {
         """;
 
     /** Package-private (not private) so {@code BillingNoteServiceIntegrationTest} can exercise the
-     * exact guarded statement directly — a deterministic, CAS-style reproduction of the B2f race
-     * (round 2: "settle() writes outside a transaction with no status guard, so a concurrent cancel
-     * makes a plain GET return 500") without spinning up real threads. A genuine multi-threaded
+     * exact guarded statement directly — a deterministic, CAS-style reproduction of the race
+     * (an unguarded settle() let a concurrent cancel make a plain GET return 500) without
+     * spinning up real threads. A genuine multi-threaded
      * test here would be close to vacuous anyway: Postgres serializes the two writers on the SAME
      * row under read-committed (the second UPDATE blocks on the first's row lock, then re-evaluates
      * its WHERE clause against the just-committed row), so the interleaving this method must
@@ -269,13 +261,13 @@ public class BillingNoteRepository {
      * {@link BillingNoteService#cancel} reproduces, no timing/threading flakiness involved.
      *
      * <p>ONE statement (a chained writable CTE — the exact shape PostgreSQL's own docs use for
-     * "DELETE ... RETURNING, then INSERT ... FROM that"), not the original TWO separate {@code
-     * jdbc.update} calls with no status guard on the first: that shape let a concurrent {@link
+     * "DELETE ... RETURNING, then INSERT ... FROM that"), not two separate {@code
+     * jdbc.update} calls with no status guard on the first: that shape lets a concurrent {@link
      * #cancel} land between "reconcile decided this note is settleable" and this method's own
      * UPDATE, stomping {@code CANCELLED -> SETTLED} and leaving {@code cancel_reason}/{@code
      * cancelled_by_id}/{@code cancelled_at} all non-null on a SETTLED row — violating {@code
      * chk_billing_note_cancel_fields} at write time and turning the very next plain GET into an
-     * unhandled 500 (the bug's own observed symptom). The {@code WHERE ... AND status = 'ISSUED'}
+     * unhandled 500. The {@code WHERE ... AND status = 'ISSUED'}
      * guard on the FIRST (inner) UPDATE, combined with Postgres re-evaluating that WHERE clause
      * against the latest COMMITTED row once a concurrently-locked row's writer finishes, makes the
      * whole statement a clean no-op — for BOTH the status flip and the line release, atomically,
@@ -301,11 +293,11 @@ public class BillingNoteRepository {
         return releasedFor.stream().distinct().toList();
     }
 
-    /** C1's own explicit settlement path (a human marking an all-MANUAL note paid) — the ONLY
+    /** The explicit settlement path (a human marking an all-MANUAL note paid) — the ONLY
      * caller-triggered transition into SETTLED, and the ONLY one that records who/when ({@code
      * settled_by_id}/{@code settled_by_name}/{@code settled_at}; the automatic path above
      * deliberately leaves all three NULL, see {@link #reconcileSettlementForCustomer}'s own
-     * Javadoc). Same guarded chained-CTE shape as {@link #settle} and for the IDENTICAL B2f reason
+     * Javadoc). Same guarded chained-CTE shape as {@link #settle} and for the IDENTICAL reason
      * — a concurrent cancel must never be stomped here either. Returns the note's own id, non-empty
      * only if the guarded UPDATE actually matched (i.e. the note was ISSUED at the moment this
      * ran); {@link BillingNoteService#markSettled} maps empty to a 409. */
@@ -328,7 +320,7 @@ public class BillingNoteRepository {
 
     /**
      * Every ISSUED remaining invoice / deposit notice across this customer's deals, with its
-     * VAT-inclusive OUTSTANDING amount already computed (GLA-107 answer 2: doc total minus
+     * VAT-inclusive OUTSTANDING amount already computed (doc total minus
      * payments recorded against it) — the raw candidate pool {@link BillingNoteService#candidates}
      * filters (outstanding &gt; 0, not already claimed by a live note) and annotates.
      *
@@ -338,9 +330,8 @@ public class BillingNoteRepository {
      * remaining invoice directly. This sums every BALANCE/ADJUSTMENT receipt on the SAME ticket
      * instead, which is exact under the invariant V188 enforces (at most one ISSUED remaining
      * invoice per ticket at a time) but would double-count across a ticket's full history of
-     * superseded remaining invoices if that invariant ever changes. Building the real per-document
-     * ledger link is GLA-107 answer 2's own "separate follow-up" (the remaining invoice's
-     * multi-deduction change), explicitly out of scope for this step — see the implementation plan.
+     * superseded remaining invoices if that invariant ever changes. A real per-document ledger link
+     * (the remaining invoice's multi-deduction change) is a separate follow-up.
      *
      * <p>The deposit-notice half has no such gap: {@code deposit_notice_id} is a real column on
      * {@code payment_receipt}, so its outstanding figure is exact.
@@ -367,7 +358,7 @@ public class BillingNoteRepository {
         """;
 
     public List<CandidateRow> candidatesForCustomer(long customerId) {
-        // Self-healing first (B2/C1) — a document a just-SETTLED note released must be visible as
+        // Self-healing first — a document a just-SETTLED note released must be visible as
         // a candidate again in the SAME read that observes the settlement, not one read later.
         reconcileSettlementForCustomer(customerId);
         // String.format placeholders, not text-block concatenation — see SETTLING_NOTE_IDS_SQL's
@@ -443,7 +434,7 @@ public class BillingNoteRepository {
 
     // ── Writes ────────────────────────────────────────────────────────────────────────────────
 
-    /** {@code revisionOfId} (B1) is the ISSUED note being corrected — {@code null} for a brand-new
+    /** {@code revisionOfId} is the ISSUED note being corrected — {@code null} for a brand-new
      * draft starting its own chain. See {@link BillingNoteDocumentDto#revisionOfId}'s own Javadoc. */
     public long insertDraft(long customerId, String type, Long revisionOfId, LocalDate billDate,
             String paymentDueNote, String note, String customerName, String customerTaxId,
@@ -586,9 +577,9 @@ public class BillingNoteRepository {
      * its in-progress correction DRAFT is deleted before being issued, so the predecessor keeps
      * claiming its own sources exactly as it did before the correction was ever started.
      *
-     * <p><b>S4 (Opus review, GLA-99 step 3 round 2):</b> guarded on the predecessor STILL being
-     * {@code ISSUED} at the moment this runs — {@link BillingNoteService#cancel} allows cancelling
-     * a note while a correction draft on it is still open (no guard against that today, by design),
+     * <p>Guarded on the predecessor STILL being {@code ISSUED} at the moment this runs — {@link
+     * BillingNoteService#cancel} allows cancelling a note while a correction draft on it is still
+     * open (no guard against that, by design),
      * so a caller deleting an abandoned correction on an ALREADY-CANCELLED predecessor must not
      * blindly restore that predecessor's lines to a live claim: doing so would permanently lock the
      * referenced source documents from ever being billed again by anything, since a CANCELLED note

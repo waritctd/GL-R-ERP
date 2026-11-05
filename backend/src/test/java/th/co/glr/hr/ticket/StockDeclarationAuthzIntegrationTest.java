@@ -34,10 +34,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Owner decision 2026-09-28 — <b>"Sales declares; the CEO may correct/override; Import is
- * excluded."</b> S18 (จัดตารางส่งมอบ / stock coverage) belongs to Sales, the same direction V184 took
- * delivery recording (S19). This SUPERSEDES the 2026-08-13 "Sales declares, Import can correct"
- * ruling this suite was originally written for — import no longer declares OR corrects stock
+ * Rule: <b>"Sales declares; the CEO may correct/override; Import is
+ * excluded."</b> S18 (จัดตารางส่งมอบ / stock coverage) belongs to Sales, the same direction taken for
+ * delivery recording (S19). Import neither declares nor corrects stock
  * coverage; only the owning sales rep declares, with the CEO as oversight/override.
  *
  * <p>Real-DB enforcement coverage for {@link TicketService#reserveStock}'s gate, which is the
@@ -51,8 +50,8 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * one re-reads {@code sales.ticket_item.qty_from_stock} (plus the deal's fulfilment status, stage
  * and event log) straight out of Postgres afterwards to prove nothing moved. "The owner can
  * declare their own deal" is necessary but is not the evidence. {@code importRole_isRefused_...} is
- * the case the 2026-09-28 narrowing exists for: import used to be able to correct here and now must
- * not, re-read from Postgres to prove its number never landed.
+ * the case the narrowing exists for: import must not be able to correct here, re-read from
+ * Postgres to prove its number never landed.
  *
  * <p>Why {@code qty_from_stock} is worth this much care: it is the sole input to the owning rep's
  * own STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived} =
@@ -65,12 +64,10 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  * {@code roleThatCanNeverDeclare_isRefusedBeforeTheTicketIsRead} (403-not-404, and import is now in
  * that set), and the per-row {@code canDeclareStockCoverage} by
  * {@code salesRepWhoDoesNotOwnTheDeal_...} / {@code importRole_isRefused_...} /
- * {@code refusedDeclaration_...}. Reverting {@code canDeclareStockCoverage} to the pre-change
+ * {@code refusedDeclaration_...}. Reverting {@code canDeclareStockCoverage} to a
  * {@code FULFILMENT_ROLES}-based gate turns {@code importRole_isRefused_andTheRowIsUnmoved} red
  * (import would be granted again) while the owner/CEO grants stay green — that opposition is what
- * proves the suite exercises the NARROWING and not merely the refusals. (Historical: the original
- * 2026-08-13 widening's own three-mutation record — per-row check, coarse filter, and a revert to
- * {@code FULFILMENT_ROLES} — is in this file's git history at the commit before the S18 change.)
+ * proves the suite exercises the NARROWING and not merely the refusals.
  * This class's integration tests run against real Postgres in CI (Testcontainers /
  * {@code TEST_DB_URL}); they were not run on the authoring machine, which had neither.
  *
@@ -149,7 +146,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     /**
      * Neither ownership nor a fulfilment role. {@code sales_manager} is in this list deliberately:
-     * {@code requireDealOwnership} grants it elsewhere, but the ruling is "Sales declares", and
+     * {@code requireDealOwnership} grants it elsewhere, but the rule is "Sales declares", and
      * this write lands in the OWNING rep's STOCK_BONUS input — so oversight is refused here, and
      * that exclusion is pinned rather than left to be re-litigated by a future reader.
      */
@@ -179,8 +176,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         long neverCreated = 9_999_999L;
         assertThat(tickets.findById(neverCreated)).isEmpty();
 
-        // import joined this set on 2026-09-28: it left STOCK_DECLARATION_ROLES entirely, so it is
-        // now refused at the coarse pre-filter (403) before the ticket is read, exactly like the
+        // import is in this set: it is not in STOCK_DECLARATION_ROLES at all, so it is
+        // refused at the coarse pre-filter (403) before the ticket is read, exactly like the
         // roles that could never declare.
         for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser, importUser)) {
             assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), stranger))
@@ -226,8 +223,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     /**
-     * The case the 2026-09-28 narrowing exists for: import used to be able to correct a rep's figure
-     * after the fact, and now must not. Driven AFTER a legitimate owner declaration, so the assertion
+     * The case the narrowing exists for: import must not be able to correct a rep's figure
+     * after the fact. Driven AFTER a legitimate owner declaration, so the assertion
      * is that import's number did not overwrite the owner's — a stronger check than "still zero",
      * which a no-op would also satisfy — and re-read straight from Postgres.
      */
@@ -259,16 +256,14 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     /**
-     * The routing half of the ruling: "auto-routing behaviour stays identical, whoever declares."
+     * The routing half of the rule: "auto-routing behaviour stays identical, whoever declares."
      * Two deals in the same starting state, full coverage declared on one by the owner and on the
      * other by the CEO — both must land on exactly the same fulfilment status and sales stage.
-     * (Was owner-vs-import before the 2026-09-28 narrowing removed import from this gate.)
      *
-     * <p>Both start at {@code ORDER_RECEIVED}. They used to start at {@code LEAD_APPROACH}, and
-     * this Javadoc used to record the residual risk that came with it: {@code autoAdvanceStage} has
-     * no stage precondition, so a full-coverage declaration jumped the deal straight to
+     * <p>Both start at {@code ORDER_RECEIVED}, not {@code LEAD_APPROACH}: {@code autoAdvanceStage}
+     * has no stage precondition, so a full-coverage declaration would jump the deal straight to
      * {@code DELIVERY_SCHEDULING} from wherever it was — including an untouched lead — which also
-     * blocked {@code ISSUE_IMPORT_REQUEST}. That risk is now closed by {@code reserveStock}'s stage
+     * blocked {@code ISSUE_IMPORT_REQUEST}. That risk is closed by {@code reserveStock}'s stage
      * floor (see {@code TicketService.stockCoverageStageReached} and
      * {@code StageFactGateIntegrationTest}); the ROUTING above the floor is deliberately unchanged,
      * which is what this test still pins.
@@ -300,7 +295,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
      *
      * <p>Stock share 40/100 = 0.4 on ฿500,000 received -> ฿200,000 of stock receipts. The
      * commission record is forced to APPROVED directly because that repository method filters on
-     * {@code status = 'APPROVED'} (tightened 2026-08-02); driving the manager+CEO approval chain
+     * {@code status = 'APPROVED'}; driving the manager+CEO approval chain
      * would test CommissionService, which this class does not touch.
      */
     @Test

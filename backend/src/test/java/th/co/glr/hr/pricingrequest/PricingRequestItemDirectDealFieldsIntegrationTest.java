@@ -42,16 +42,16 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * V185 (direct-deal-form parity, Phase 1 of the sales-flow redesign): proves, against real
+ * Direct-deal-form parity on pricing-request items: proves, against real
  * Postgres and through the real {@link PricingRequestService}, that:
  * <ul>
  *   <li>create/update persist every new tile field on {@code sales.pricing_request_item};</li>
- *   <li>a missing required field (owner ruling: model/color/texture/size/thicknessMm/sqmPerPiece/
+ *   <li>a missing required field (model/color/texture/size/thicknessMm/sqmPerPiece/
  *       piecesPerBox/quantity) is rejected with 400, both on create and on update;</li>
  *   <li>{@code requestedQty}/{@code requestedQtySqm}/{@code requestedUnit}/
  *       {@code requestedUnitBasis} are correctly DERIVED via {@link WastageCalculator}, including
  *       wastage and full-box rounding — never the client-sent value;</li>
- *   <li>a legacy row (no new-form columns at all, as if written before this migration) still reads
+ *   <li>a legacy row (no new-form columns at all, as if written before they existed) still reads
  *       back cleanly with every new field null.</li>
  * </ul>
  */
@@ -154,9 +154,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
     @Test
     void createDraft_derivesRequestedQtyFromAreaMode() {
         // AREA mode: areaSqm=3.5, sqmPerPiece=0.36 -> piecesPerSqm = round2(1/0.36) = 2.78,
-        // pieces = ceil(3.5 * 2.78) = ceil(9.73) = 10, no wastage (owner ruling 2026-10-12: every
-        // fraction of a piece rounds up). piecesPerBox is required
-        // (owner ruling) even here, so this uses piecesPerBox=10 -- an EXACT multiple of the
+        // pieces = ceil(3.5 * 2.78) = ceil(9.73) = 10, no wastage (every fraction of a piece
+        // rounds up). piecesPerBox is required
+        // even here, so this uses piecesPerBox=10 -- an EXACT multiple of the
         // derived 10 pieces, so full-box rounding (the default) is a no-op and does not obscure
         // what this test actually exercises (the AREA -> pieces conversion).
         PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
@@ -170,7 +170,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(item.boxes()).isEqualTo(1);
     }
 
-    // ── GLA-125 item 1: ประเทศต้นทาง required ───────────────────────────────────────────────
+    // ── ประเทศต้นทาง required ───────────────────────────────────────────────
 
     @Test
     void createDraft_rejectsItemMissingOriginCountry() {
@@ -182,7 +182,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             });
     }
 
-    // ── GLA-125 item 2: อื่นๆ requires the typed name ───────────────────────────────────────
+    // ── อื่นๆ requires the typed name ───────────────────────────────────────
 
     @Test
     void createDraft_rejectsOtherOriginCountryMissingTypedName() {
@@ -220,8 +220,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(item.originCountryOther()).isNull();
     }
 
-    // ── ระยะเวลานำเข้า: NOT required on a pricing request (owner ruling 2026-10-18 — import gives
-    //    the time; the PCR form no longer shows the field); min <= max still holds when both are sent ──
+    // ── ระยะเวลานำเข้า: NOT required on a pricing request (import gives
+    //    the time; the PCR form does not show the field); min <= max still holds when both are sent ──
 
     @Test
     void createDraft_acceptsItemWithoutLeadTime_importSuppliesItLater() {
@@ -257,7 +257,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             });
     }
 
-    // ── GLA-125 item 4: header terms ────────────────────────────────────────────────────────
+    // ── header terms ────────────────────────────────────────────────────────
 
     @Test
     void createDraft_persistsEveryHeaderTermField() {
@@ -307,11 +307,11 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ── GLA-125, second review pass, finding N5: printedByDisplayId/salesRepDisplayId were never
-    // validated at all before create/updateDraft/createCustomerChangeRevision wrote them straight
-    // to sales.pricing_request. An unknown employee id used to reach the FK constraint and 500;
-    // an active-but-ineligible employee (any id at all, sales division or not, holding no
-    // can_create_quotation grant) was silently accepted. Both are now rejected with a clean 400 by
+    // ── printedByDisplayId/salesRepDisplayId are validated before create/updateDraft/
+    // createCustomerChangeRevision write them to sales.pricing_request. An unknown employee id
+    // (would otherwise hit the FK constraint and 500) and an active-but-ineligible employee
+    // (any id at all, sales division or not, holding no
+    // can_create_quotation grant) are both rejected with a clean 400 by
     // PricingRequestService#requireEligibleDisplayEmployeeId, which reuses the exact predicate
     // DealQuotationService already enforces for the identically-named fields on a direct-deal
     // quotation (th.co.glr.hr.commission.QuotationDisplayNameEligibility) -- proved here through
@@ -394,9 +394,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
         // ...and the revision explicitly sends its OWN header terms -- this must reach the new
         // row exactly as sent, not be left null (silently "inherited" as null from the parent)
-        // and not be dropped by withResolvedItems' reconstruction (the same bug class as Opus
-        // review finding #1, one level up: see PricingRequestService#withResolvedItems' own
-        // comment on why every overload now passes these through explicitly).
+        // and not be dropped by withResolvedItems' reconstruction (see
+        // PricingRequestService#withResolvedItems' own comment on why every overload passes
+        // these through explicitly).
         PricingRequestDetailDto revision = pricingRequestService.createCustomerChangeRevision(parentId,
             new CustomerChangeRevisionRequest(
                 "ลูกค้าขอเปลี่ยนเงื่อนไข", java.util.UUID.randomUUID().toString(), PricingRequestRecipient.BUYER,
@@ -418,8 +418,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     @Test
     void createDraft_aTinyAreaRoundsUpToOnePiece() {
-        // 0.3 m2 at 0.72 m2/piece (piecesPerSqm 1.39) = 0.417 rounds UP to 1 piece (owner ruling
-        // 2026-10-12, "ปัดขึ้นทุกกรณี"): any positive area is at least 1 piece, so the line is accepted
+        // 0.3 m2 at 0.72 m2/piece (piecesPerSqm 1.39) = 0.417 rounds UP to 1 piece
+        // ("ปัดขึ้นทุกกรณี"): any positive area is at least 1 piece, so the line is accepted
         // and V59's chk_pricing_request_item_qty (requested_qty > 0) is never reached.
         PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b
@@ -430,7 +430,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(onlyItem(detail).requestedQty()).isEqualByComparingTo("1");
     }
 
-    // ── required-field validation (owner ruling 1) ──────────────────────────────────────────
+    // ── required-field validation ──────────────────────────────────────────
 
     @Test
     void createDraft_rejectsItemMissingRequiredFields() {
@@ -472,7 +472,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ── legacy rows (ruling 4): pre-V185 items still read fine ─────────────────────────────
+    // ── legacy rows: items written before the new-form columns still read fine ─────────────────────────────
 
     @Test
     void findItems_legacyRowWithNoNewFields_readsWithEveryNewFieldNull() {
@@ -510,16 +510,15 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(legacy.requestedUnit()).isEqualTo("แผ่น");
     }
 
-    // ── factory/variantId round-trip (Opus review finding #1, 2026-09-18) ─────────────────
+    // ── factory/variantId round-trip ─────────────────
     //
-    // The MODAL bug (PricingRequestCreateModal.jsx's pricingRequestItemInputFromRow never sent
-    // `factory`/`variantId`) cannot be exercised from a pure-backend test -- there is no frontend
-    // here. What CAN be pinned at this layer is the other half of the contract the frontend fix
-    // depends on: that PricingRequestService/-Repository actually PRESERVE these two fields
-    // end-to-end through create -> Import gap-fill -> customer-change revision, GIVEN that the
-    // caller sends them (which the frontend now does). If a future change reintroduces a NULL
-    // here -- e.g. resolveItem dropping the field again, or replaceItems' INSERT missing a column
-    // -- this test catches it even though the regression that prompted it lived in the frontend.
+    // The frontend half (PricingRequestCreateModal.jsx's pricingRequestItemInputFromRow must send
+    // `factory`/`variantId`) cannot be exercised from a pure-backend test. What CAN be pinned at
+    // this layer is the other half of the contract: that PricingRequestService/-Repository
+    // actually PRESERVE these two fields end-to-end through create -> Import gap-fill ->
+    // customer-change revision, GIVEN that the caller sends them. If a change reintroduces a
+    // NULL here -- e.g. resolveItem dropping the field, or replaceItems' INSERT missing a column
+    // -- this test catches it.
 
     @Test
     void createCustomerChangeRevision_preservesImportAssignedFactoryAndVariantId() {
@@ -543,7 +542,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(beforeFactory.factory()).isNull();
         assertThat(beforeFactory.variantId()).isEqualTo(4242L);
 
-        // B6 (GLA-135): setItemFactory now takes a factoryId resolved against a real
+        // setItemFactory takes a factoryId resolved against a real
         // price_catalog.factories master row, not a free-typed name — insert one directly (this
         // test's own ticket/catalog fixture above uses "V185 Test Factory", a different name, so a
         // fresh master row keeps this test's own Thai-text round-trip intent).
@@ -636,7 +635,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             null, "THB", "V185 test", java.util.UUID.randomUUID().toString(), items);
     }
 
-    /** Same as {@link #createRequest} but with every GLA-125 header-term field set explicitly. */
+    /** Same as {@link #createRequest} but with every header-term field set explicitly. */
     private CreatePricingRequestRequest createRequestWithHeaderTerms(List<PricingRequestItemRequest> items,
             String paymentTermMode, Integer creditDays, Integer validityDays, Long printedByDisplayId,
             Long salesRepDisplayId, String deptCode, String unitCode, Boolean omitContactHonorific) {
@@ -648,14 +647,13 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
     }
 
     /** An active employee IN THE SALES DIVISION, for the header-term display-id fields
-     * (printedByDisplayId/salesRepDisplayId) — as of the second review pass (finding N5,
-     * 2026-09-19) a valid FK alone is no longer enough, since
-     * PricingRequestService#requireEligibleDisplayEmployeeId now enforces the same eligible-union
-     * check direct-deal's DealQuotationService already does (see
+     * (printedByDisplayId/salesRepDisplayId) — a valid FK alone is not enough, since
+     * PricingRequestService#requireEligibleDisplayEmployeeId enforces the same eligible-union
+     * check direct-deal's DealQuotationService does (see
      * th.co.glr.hr.commission.QuotationDisplayNameEligibility). Uses "SA" (the real
-     * DivisionAccessPolicy.SALES_DIVISION_CODE, lower-cased by the eligibility predicate), NOT the
-     * "SALES" literal an older version of this helper used — see
-     * DealQuotationDisplayNameIntegrationTest's own comment on why "SALES" does not match. */
+     * DivisionAccessPolicy.SALES_DIVISION_CODE, lower-cased by the eligibility predicate), NOT
+     * "SALES" — see DealQuotationDisplayNameIntegrationTest's own comment on why "SALES" does
+     * not match. */
     private long createEmployee(String nameTh) {
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
@@ -675,7 +673,7 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             .quantityMode(WastageCalculator.QUANTITY_MODE_PIECES).piecesInput(10)
             .wastageMode(WastageCalculator.WASTAGE_MODE_NONE).piecesPerBox(4)
             .roundToFullBox(true)
-            // GLA-125: origin country and lead time are now unconditionally required too.
+            // Origin country and lead time are unconditionally required too.
             .originCountry("ไทย-สต็อก").leadTimeMinDays(3).leadTimeMaxDays(7);
         return customize.apply(builder).build();
     }
@@ -707,8 +705,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         private String originCountryOther;
 
         ItemBuilder productId(Long v) { this.productId = v; return this; }
-        // Opus review #1: neither has an editor input yet (variantId never has; the OLD form's
-        // dedicated โรงงาน field that wrote `factory` was removed 2026-09-18), but both must
+        // Neither has an editor input yet (variantId never has; the old form's
+        // dedicated โรงงาน field that wrote `factory` was removed), but both must
         // round-trip through create/update/revision instead of being silently nulled on every
         // save -- see PricingRequestCreateModal.jsx's pricingRequestItemInputFromRow.
         ItemBuilder variantId(Long v) { this.variantId = v; return this; }
