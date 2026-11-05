@@ -8,8 +8,8 @@ import { StatCard } from '../../components/common/StatCard.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { bangkokMonthStartIso, formatThaiDate, payrollStatusLabel } from '../../utils/format.js';
-import { divisions, findDivision } from '../../data/referenceData.js';
 import { ActionQueue } from './ActionQueue.jsx';
+import { buildHrDashboardStats, DivisionHeadcountPanel } from './hrHeadcount.jsx';
 
 /**
  * HR Overview — the HR-role landing (`/` when `user.role === 'hr'`).
@@ -98,55 +98,7 @@ export function HrOverview({ employees, dashboardSummary }) {
   const pendingTaxAllowance = (taxAllowanceRegisterQuery.data ?? [])
     .filter((item) => item.status === 'PENDING').length;
 
-  const stats = useMemo(() => {
-    const headcountByDivision = new Map(divisions.map((division) => [division.id, { division, count: 0 }]));
-    const extraDivisions = new Map();
-    let activeCount = 0;
-
-    employees.forEach((item) => {
-      if (item.active) activeCount += 1;
-      const knownDivision = findDivision(item.divisionId, item.divisionTh);
-      if (knownDivision && headcountByDivision.has(knownDivision.id)) {
-        headcountByDivision.get(knownDivision.id).count += 1;
-      } else {
-        const key = item.divisionId || item.divisionTh || 'unknown';
-        const current = extraDivisions.get(key) || {
-          division: { id: key, th: item.divisionTh || 'ไม่ระบุฝ่าย', en: item.divisionId || 'Unassigned' },
-          count: 0,
-        };
-        current.count += 1;
-        extraDivisions.set(key, current);
-      }
-    });
-
-    const fallbackDivisionRows = [...headcountByDivision.values(), ...extraDivisions.values()];
-    const summaryRows = dashboardSummary?.headcount?.byDivision?.map((item) => ({
-      division: {
-        id: item.divisionId ?? item.divisionCode ?? item.divisionName,
-        th: item.divisionName || 'ไม่ระบุฝ่าย',
-        en: item.divisionCode || '',
-      },
-      count: item.total ?? item.active ?? 0,
-    })) ?? [];
-    const divisionRows = summaryRows.length > 0 ? summaryRows : fallbackDivisionRows;
-    const pending = dashboardSummary?.pendingApprovals ?? {};
-    const attendance = dashboardSummary?.attendance ?? {};
-    const notifications = dashboardSummary?.notifications ?? {};
-
-    return {
-      totalCount: dashboardSummary?.headcount?.total ?? employees.length,
-      activeCount: dashboardSummary?.headcount?.active ?? activeCount,
-      pendingProfileRequests: pending.profileRequests ?? 0,
-      pendingOvertime: pending.overtime ?? 0,
-      pendingLeave: pending.leave ?? 0,
-      todayPresent: attendance.todayPresent ?? 0,
-      lateToday: attendance.lateToday ?? 0,
-      missingCheckout: attendance.missingCheckout ?? 0,
-      unreadNotifications: notifications.unread ?? 0,
-      divisionRows,
-      maxHeadcount: Math.max(...divisionRows.map((item) => item.count), 1),
-    };
-  }, [employees, dashboardSummary]);
+  const stats = useMemo(() => buildHrDashboardStats(employees, dashboardSummary), [employees, dashboardSummary]);
 
   // HR's only actionable queue item is profile requests — OT/leave are
   // monitoring-only (see file header) so they never appear as "needs action".
@@ -255,28 +207,7 @@ export function HrOverview({ employees, dashboardSummary }) {
         </Panel>
       </div>
 
-      <Panel
-        title="จำนวนพนักงานตามฝ่าย"
-        actions={<Button type="button" variant="text" onClick={() => navigate('/employees')}>ดูรายชื่อ</Button>}
-      >
-        <div className="grid gap-2.5">
-          {stats.divisionRows.map(({ division, count }) => {
-            const widthPct = Math.max(8, Math.round((count / stats.maxHeadcount) * 100));
-            return (
-              <div className="grid grid-cols-[minmax(160px,1fr)_2fr_34px] gap-3 items-center" key={division.id}>
-                <span>
-                  <strong>{division.th}</strong>
-                  <small>{division.en}</small>
-                </span>
-                <div className="h-[9px] bg-surface-subtle rounded-pill overflow-hidden">
-                  <i className="block h-full rounded-[inherit] bg-accent w-[var(--bar-width)]" style={{ '--bar-width': `${widthPct}%` }} />
-                </div>
-                <b>{count}</b>
-              </div>
-            );
-          })}
-        </div>
-      </Panel>
+      <DivisionHeadcountPanel divisionRows={stats.divisionRows} maxHeadcount={stats.maxHeadcount} />
     </PageStack>
   );
 }
