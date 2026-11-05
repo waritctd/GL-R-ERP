@@ -255,7 +255,7 @@ export function canDecideDealQuotation(user, quotation) {
  * DealQuotationService#requireCeoApprovalIfChanged's own comparison exactly (client-side echo for
  * UI wording ONLY; the server recomputes this itself and never trusts a flag from here). Always
  * `false` for a DEAL_DIRECT quotation, which has no CEO decision to compare against. */
-export function dealQuotationRequiresCeoApproval(quotation) {
+function dealQuotationRequiresCeoApproval(quotation) {
   if (!quotation || quotation.origin !== 'PRICING_REQUEST') return false;
   return Boolean(quotation.priceModeChangedFromCeo)
     || (quotation.items ?? []).some((item) => item.priceChangedFromCeo)
@@ -414,7 +414,7 @@ export function hasLivePricingRequest(pricingRequests, ticketId) {
 
 /** The live DEAL_DIRECT statuses — DealQuotationService's N6 predicate (slice 1's
  * DirectQuotationLocks) and TicketSummaryDto.liveDirectQuotation both key on exactly these. */
-export const LIVE_DIRECT_QUOTATION_STATUSES = Object.freeze(new Set(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']));
+const LIVE_DIRECT_QUOTATION_STATUSES = Object.freeze(new Set(['DRAFT', 'PENDING_APPROVAL', 'APPROVED']));
 
 export function isLiveDirectQuotation(live) {
   return Boolean(live) && LIVE_DIRECT_QUOTATION_STATUSES.has(live.docStatus);
@@ -422,7 +422,7 @@ export function isLiveDirectQuotation(live) {
 
 /** N6's reason, word for word the server's 409 (S2-B3) — the editor disables บันทึกร่าง with it
  * BEFORE the rep ever reaches that refusal (DESIGN.md §14: a disabled action says why). */
-export function liveDirectQuotationBlockMessage(live) {
+function liveDirectQuotationBlockMessage(live) {
   return `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
 }
 
@@ -652,7 +652,7 @@ export function dealQuotationRepOptions(rows) {
 /** The ยอดรวม (grand total) filter boundary (owner ask 2026-09-24): a row is "ต่ำกว่าหนึ่งล้าน"
  * when grandTotal < this, and "มากกว่าหนึ่งล้านบาท" when >= this. `>=` (not `>`) owns the exact
  * 1,000,000 boundary so no row is ever unclassifiable between the two buckets. */
-export const DEAL_QUOTATION_AMOUNT_THRESHOLD = 1000000;
+const DEAL_QUOTATION_AMOUNT_THRESHOLD = 1000000;
 
 /** The two ยอดรวม filter options offered to see-all roles (sales_manager/ceo), in display order.
  * `''` ("ทั้งหมด") is added by the caller as the leading option. */
@@ -2096,7 +2096,7 @@ const ITEM_FIELD_ID_PREFIX = {
 
 /** The DOM id of the FIRST missing field in a row's `errors` (validateQuotationItem /
  * validateAdjustment output), in the row's own left-to-right order — or null if none. */
-export function firstMissingItemFieldId(item, errors, index) {
+function firstMissingItemFieldId(item, errors, index) {
   const prefixes = ITEM_FIELD_ID_PREFIX[lineTypeOf(item)] ?? ITEM_FIELD_ID_PREFIX.TILE;
   const first = QUOTATION_ITEM_FIELD_ORDER.find((key) => errors?.[key] && prefixes[key]);
   return first ? `${prefixes[first]}-${index}` : null;

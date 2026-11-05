@@ -27,46 +27,37 @@
 import { isExcludedProvince } from './thaiProvinces.js';
 
 export const MEDICAL_ANNUAL_CAP = 3000;
-export const AID_FIXED_CAP = 5000;
-export const UNIFORM_ANNUAL_CAP = 1300;
-export const UNIFORM_ANNUAL_MAX_PIECES = 4;
-export const UNIFORM_ANNUAL_SHIRT_RATE = 300;
-export const UNIFORM_ANNUAL_TROUSER_RATE = 350;
+const AID_FIXED_CAP = 5000;
+const UNIFORM_ANNUAL_CAP = 1300;
+const UNIFORM_ANNUAL_MAX_PIECES = 4;
+const UNIFORM_ANNUAL_SHIRT_RATE = 300;
+const UNIFORM_ANNUAL_TROUSER_RATE = 350;
 
 // §2.1.3 pre-probation kit — seeded in V66__special_money_request_schema.sql:164-171
 // (hr.special_money_policy, same 2018-06-08 row set every other constant above cites). สายรัดหลัง
 // is conditional on the request's own `needsBackSupport` detail flag (evaluateUniformPreprobationKit
 // only adds it "กรณีของเดิมที่มีไม่เพียงพอ"), so it is broken out as its own rate/qty pair rather than
 // folded into a single fixed total.
-export const PREPROBATION_KIT_TSHIRT_RATE = 220;
-export const PREPROBATION_KIT_TSHIRT_QTY = 3;
-export const PREPROBATION_KIT_TROUSER_RATE = 300;
-export const PREPROBATION_KIT_TROUSER_QTY = 3;
-export const PREPROBATION_KIT_SHOES_RATE = 400;
-export const PREPROBATION_KIT_SHOES_QTY = 1;
-export const PREPROBATION_KIT_BELT_RATE = 700;
-export const PREPROBATION_KIT_BELT_QTY = 1;
-export const PREPROBATION_KIT_BASE_TOTAL = PREPROBATION_KIT_TSHIRT_RATE * PREPROBATION_KIT_TSHIRT_QTY
+const PREPROBATION_KIT_TSHIRT_RATE = 220;
+const PREPROBATION_KIT_TSHIRT_QTY = 3;
+const PREPROBATION_KIT_TROUSER_RATE = 300;
+const PREPROBATION_KIT_TROUSER_QTY = 3;
+const PREPROBATION_KIT_SHOES_RATE = 400;
+const PREPROBATION_KIT_SHOES_QTY = 1;
+const PREPROBATION_KIT_BELT_RATE = 700;
+const PREPROBATION_KIT_BELT_QTY = 1;
+const PREPROBATION_KIT_BASE_TOTAL = PREPROBATION_KIT_TSHIRT_RATE * PREPROBATION_KIT_TSHIRT_QTY
   + PREPROBATION_KIT_TROUSER_RATE * PREPROBATION_KIT_TROUSER_QTY
   + PREPROBATION_KIT_SHOES_RATE * PREPROBATION_KIT_SHOES_QTY;
-export const PREPROBATION_KIT_TOTAL_WITH_BELT = PREPROBATION_KIT_BASE_TOTAL
+const PREPROBATION_KIT_TOTAL_WITH_BELT = PREPROBATION_KIT_BASE_TOTAL
   + PREPROBATION_KIT_BELT_RATE * PREPROBATION_KIT_BELT_QTY;
 
-export const PER_DIEM_RATE_DRIVER = 400;
-export const PER_DIEM_RATE_LOADER = 200;
+const PER_DIEM_RATE_DRIVER = 400;
+const PER_DIEM_RATE_LOADER = 200;
 
 export const AID_TYPES = ['AID_WEDDING', 'AID_ORDINATION', 'AID_CHILDBIRTH', 'AID_FUNERAL'];
 export const UNIFORM_TYPES = ['UNIFORM_ANNUAL', 'UNIFORM_NEW_STAFF', 'UNIFORM_PREPROBATION_KIT'];
 export const ONCE_PER_LIFETIME_TYPES = ['AID_WEDDING', 'AID_ORDINATION'];
-
-/** Group label for the <optgroup> the type <select> renders. */
-export function typeCategory(requestType) {
-  if (requestType === 'TRAVEL_PER_DIEM' || requestType === 'TRAVEL_LODGING') return 'เดินทาง';
-  if (requestType === 'MEDICAL') return 'ค่ารักษาพยาบาล';
-  if (AID_TYPES.includes(requestType)) return 'เงินช่วยเหลือ';
-  if (UNIFORM_TYPES.includes(requestType)) return 'เครื่องแต่งกาย';
-  return 'อื่นๆ';
-}
 
 /** "คิดภาษี" / "ไม่คิดภาษี" chip, derived from the type's payrollBucket (GET /types). */
 export function taxChip(payrollBucket) {

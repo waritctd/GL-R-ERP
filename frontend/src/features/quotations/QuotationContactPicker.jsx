@@ -11,7 +11,7 @@ function contactEditsFrom(contact) {
   return { phone: contact?.phone ?? '', email: contact?.email ?? '' };
 }
 
-export function contactDisplayName(contact) {
+function contactDisplayName(contact) {
   if (!contact) return '';
   return `${contact.firstName ?? ''} ${contact.lastName ?? ''}`.trim();
 }

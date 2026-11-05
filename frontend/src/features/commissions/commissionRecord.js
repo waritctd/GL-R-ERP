@@ -34,7 +34,7 @@ export function kindLabel(kind) {
 // manager-set weightMultiplier fallback. When the frozen weight is present it is authoritative for
 // payroll (CommissionRepository#sumActiveWeightedActualReceived's COALESCE), so every figure on the
 // page uses `recordWeight`, never weightMultiplier directly.
-export const hasItemDerivedWeight = (record) => record?.effectiveWeightMultiplier !== null && record?.effectiveWeightMultiplier !== undefined;
+const hasItemDerivedWeight = (record) => record?.effectiveWeightMultiplier !== null && record?.effectiveWeightMultiplier !== undefined;
 
 export function recordWeight(record) {
   const value = Number(hasItemDerivedWeight(record) ? record.effectiveWeightMultiplier : record?.weightMultiplier);

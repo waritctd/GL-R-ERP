@@ -94,7 +94,7 @@ export const THAI_PROVINCES = [
 ].sort((a, b) => a.localeCompare(b, 'th'));
 
 // Copied verbatim from V66's INSERT INTO hr.special_money_excluded_province.
-export const EXCLUDED_PROVINCES = new Set([
+const EXCLUDED_PROVINCES = new Set([
   'สมุทรปราการ',
   'สมุทรสาคร',
   'นนทบุรี',

@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { cn } from '../../utils/cn.js';
 
-export const WEIGHT_OPTIONS = [1, 2, 3];
+const WEIGHT_OPTIONS = [1, 2, 3];
 
 /**
  * ×1 / ×2 / ×3 segmented control for a commission weight (WAI-ARIA radio group, automatic

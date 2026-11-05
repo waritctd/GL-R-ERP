@@ -167,7 +167,7 @@ export function applyCatalogPick(item, cat) {
 // `_catalogTimer` TicketCreateModal.jsx always had. Only one item editor is ever open/focused at a
 // time in practice, so a shared debounce timer costs nothing.
 let _catalogTimer = null;
-export function debouncedCatalogSearch(q, cb) {
+function debouncedCatalogSearch(q, cb) {
   clearTimeout(_catalogTimer);
   _catalogTimer = setTimeout(() => cb(q), 280);
 }

@@ -140,7 +140,7 @@ export const STAGE_ADVANCE_GATE_HINT =
   'ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการก่อนเลื่อนสถานะ';
 
 // Staleness window (V83): mirrors TicketRepository#isStale's 7-day interval.
-export const STALE_ACTIVITY_DAYS = 7;
+const STALE_ACTIVITY_DAYS = 7;
 
 /** Mirrors TicketRepository.enrichSummary's `stale` computation. */
 export function computeStale(lifecycle, activities) {

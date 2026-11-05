@@ -2,7 +2,7 @@
 // A bypass policy (CREDIT_CUSTOMER/WAIVED/NOT_REQUIRED) outranks the paymentStatus reads: TicketService#recordPayment
 // skips DEPOSIT_PAID entirely for those deals, so a paid-looking status there never means a deposit was paid.
 // The same triple is still independently written out in accountActions.js and mockApi.js (pre-existing).
-export const DEPOSIT_PAID_STATUSES = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'];
+const DEPOSIT_PAID_STATUSES = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'];
 
 export function depositBypassed(policy) {
   return ['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(policy);
