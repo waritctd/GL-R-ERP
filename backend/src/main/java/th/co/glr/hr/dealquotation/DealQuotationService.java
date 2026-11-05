@@ -463,9 +463,9 @@ public class DealQuotationService {
             customerSnap.name(), customerSnap.address(), customerSnap.taxId(), customerSnap.phone(),
             contact,
             ticket.projectName(), blankToNull(summary.deptCode()), blankToNull(summary.unitCode()),
-null, // offerDate: not carried from the PR; rep fills in on the draft, same as DEAL_DIRECT.
-null, // depositPercent: engine default (unset); rep chooses it.
-null, // remainderMode: resolved once a deposit percent is chosen.
+            null, // offerDate: not carried from the PR; rep fills in on the draft, same as DEAL_DIRECT.
+            null, // depositPercent: engine default (unset); rep chooses it.
+            null, // remainderMode: resolved once a deposit percent is chosen.
             creditDays, summary.validityDays(),
             WastageCalculator.VALIDITY_MODE_DAYS, null,
             blankToNull(summary.note()),
@@ -535,7 +535,7 @@ null, // remainderMode: resolved once a deposit percent is chosen.
             directNetPrice = di.directNetPrice();
         }
         return new ItemInput(
-null, // locationLabel: not on the pricing request; rep fills in on the draft.
+            null, // locationLabel: not on the pricing request; rep fills in on the draft.
             pri.catalogPriceId(), pri.productCode(), pri.brand(), pri.model(), pri.color(), pri.texture(),
             pri.size(), pri.thicknessMm(), pri.sqmPerPiece(), pri.quantityMode(), pri.areaSqm(),
             pri.piecesInput(), pri.wastageMode(), pri.wastageValue(), pri.piecesPerBox(),
@@ -1287,7 +1287,7 @@ null, // locationLabel: not on the pricing request; rep fills in on the draft.
         // land APPROVED. Same #lockTicket and "lock the ticket first" ordering as #createRevision/#createReorder, so no
         // deadlock (a transaction never holds a second ticket's lock).
         quotations.lockTicket(quotation.ticketId());
-requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm-order takes it too
+        requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm-order takes it too
         LocalDate approvalDate = LocalDate.now(BANGKOK);
         // A DATE-mode document WITH special pricing names its OWN validity_date (the rep's ภายในวันที่, verbatim; approval
         // never recomputes it); every other case (DAYS mode, or a stale DATE mode that lost its special pricing, which
@@ -1698,7 +1698,7 @@ requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm
         TicketSummaryDto locked = requireTicketSummary(ticketId);
 
         if (tickets.hasPromotionFromQuotationEvent(ticketId)) {
-return promotionResult(ticketId, quotationId); // idempotent replay: no writes
+            return promotionResult(ticketId, quotationId); // idempotent replay: no writes
         }
         DealQuotationDto fresh = requireQuotation(quotationId);
         if (!QuotationStatus.APPROVED.equals(fresh.docStatus())) {
@@ -1808,9 +1808,9 @@ return promotionResult(ticketId, quotationId); // idempotent replay: no writes
                 clip(item.catalogPriceId() == null ? null : factoryByPriceId.get(item.catalogPriceId()),
                     TICKET_ITEM_TEXT_MAX),
                 qty, qtySqm, "PIECE",
-null, null, // rawPrice/rawCurrency: not a costing input, see Javadoc
+                null, null, // rawPrice/rawCurrency: not a costing input, see Javadoc
                 clip(item.unit(), TICKET_ITEM_RAW_UNIT_MAX),
-null, // proposedPrice: see Javadoc
+                null, // proposedPrice: see Javadoc
                 "THB",
                 item.catalogPriceId(), null));
         }
@@ -1908,7 +1908,7 @@ null, // proposedPrice: see Javadoc
             requireEditAccessForQuotation(actor, source);
         }
         requireRevisableStatus(source);
-requireNoOpenRevision(source); // locks the ticket
+        requireNoOpenRevision(source); // locks the ticket
         // RE-CHECK the status AFTER the lock: a concurrent approve() (which supersedes siblings via the
         // one-approved-per-deal sweep) could have superseded THIS source between the first check and the lock, and the
         // lock only guarantees this call sees what committed before it. Same message as the check above.
