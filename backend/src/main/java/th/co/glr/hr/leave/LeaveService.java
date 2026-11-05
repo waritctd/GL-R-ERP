@@ -2500,21 +2500,18 @@ public class LeaveService {
             }
         }
 
-        // §5.3.2 department-coverage gate. Runs LAST of all -- after
-        // the wedding-cap/SICK-certificate/notice-and-emergency gates too:
-        // it is the most data-heavy check (reads every other active department member's
-        // schedule/leave) and, unlike every gate above (all still about
-        // THIS employee's own eligibility/timing), it is not about the requester at all -- it is the
-        // least "fundamental" reason in the ordering this Javadoc describes, and it applies to every
-        // leave type (type-agnostic), so it must not sit ahead of a type-specific rejection that would
-        // otherwise have fired first. See #departmentCoverageRuleOutcome's Javadoc for the owner's
-        // relaxation of the announcement's text, the department-size floor, and the schedule-awareness
-        // this depends on.
+        // §5.3.2 department-coverage gate. Runs LAST of all, after the wedding-cap/SICK-certificate/
+        // notice-and-emergency gates too: it is the most data-heavy check (reads every other active
+        // department member's schedule/leave) and, unlike every gate above (all about THIS
+        // employee's own eligibility/timing), it is not about the requester at all. It applies to
+        // every leave type, so it must not sit ahead of a type-specific rejection that would
+        // otherwise have fired first. See #departmentCoverageRuleOutcome's Javadoc for the
+        // relaxation of the announcement's text, the department-size floor, and the
+        // schedule-awareness this depends on.
         //
-        // Gated on `evaluateDepartmentCoverage` -- #submit always passes `true`, so this branch is
-        // reached for every real submission. QUICK-depth LeaveService#preview passes `false` instead,
-        // to skip this check's fan-out over every active department colleague's schedule/leave spans
-        // -- see #preview's Javadoc for why (debounced-as-the-user-types calls cannot afford it).
+        // Gated on `evaluateDepartmentCoverage`: #submit always passes `true`; QUICK-depth
+        // LeaveService#preview passes `false` to skip the fan-out over every active department
+        // colleague's schedule/leave spans (see #preview's Javadoc: debounced calls cannot afford it).
         LeaveRuleOutcome departmentCoverageOutcome = evaluateDepartmentCoverage
             ? departmentCoverageRuleOutcome(employeeId, startDate, endDate)
             : null;
@@ -2530,9 +2527,8 @@ public class LeaveService {
 
     /**
      * {@code actorEmployeeId} (the caller of {@link #submit}) is threaded through so {@link
-     * #notifyPendingApproval} can exclude the actor from the approver
-     * notification -- the same "nobody is ever notified about their own action" convention {@link
-     * #notifyCancelled} follows.
+     * #notifyPendingApproval} can exclude the actor from the approver notification -- the same
+     * "nobody is ever notified about their own action" convention {@link #notifyCancelled} follows.
      *
      * <p>{@link #submit} only ever passes {@link LeaveStatus#SUBMITTED} or {@link
      * LeaveStatus#AUTO_REJECTED} (see that method's own {@code status = systemNote == null ? ...}
@@ -2587,14 +2583,13 @@ public class LeaveService {
      * <p>{@code actorEmployeeId} (the caller of {@link #submit} -- the employee themselves, or an
      * HR/manager filing on a subordinate's behalf via {@link #resolveTargetEmployee}) is excluded
      * from the approver set via {@link LinkedHashSet#remove}, the same "nobody is ever notified
-     * about their own action" convention {@link #notifyCancelled} already established: a department
-     * manager filing leave for their own direct report IS that report's {@code managerEmployeeId},
-     * and would otherwise be told a request they themselves just filed is waiting for them. This can
-     * leave the approver set empty in that specific case (the filing manager is the only manager of
-     * record) -- accepted deliberately, not a gap: that manager already knows the request exists
-     * (they just created it) and can act on it without a notification telling them so. HR's
-     * broadcast-role visibility into every leave request (independent of this notification) remains
-     * the backstop if the filing manager never returns to it.
+     * about their own action" convention as {@link #notifyCancelled}: a department manager filing
+     * leave for their own direct report IS that report's {@code managerEmployeeId}, and would
+     * otherwise be told a request they themselves just filed is waiting for them. This can leave
+     * the approver set empty (the filing manager is the only manager of record) -- accepted, not a
+     * gap: that manager already knows the request exists and can act on it without a notification.
+     * HR's visibility into every leave request (independent of this notification) remains the
+     * backstop if the filing manager never returns to it.
      */
     private void notifyPendingApproval(LeaveRequestDto request, long actorEmployeeId) {
         String type = request.leaveTypeNameTh();
@@ -2614,12 +2609,11 @@ public class LeaveService {
             approvers.addAll(employeeRepository.findHrEmployeeIds());
         }
 
-        // sendEmail=false on both in-app notifications (2026-09): the per-recipient submit emails are
-        // replaced by ONE consolidated email carrying the ใบลา PDF to the shared HR inbox, CC'ing the
-        // requester and their manager (see #emailLeaveSubmission below). Leaving these true would
-        // double-mail the manager (once here, once via the CC) and mail the requester twice. The
-        // in-app rows themselves are unchanged -- the portal queue still shows the requester their
-        // submission and the approver their pending item.
+        // sendEmail=false on both in-app notifications: ONE consolidated email carrying the ใบลา PDF
+        // goes to the shared HR inbox, CC'ing the requester and their manager (see
+        // #emailLeaveSubmission below). Leaving these true would double-mail the manager (once here,
+        // once via the CC) and mail the requester twice. The in-app rows still show the requester
+        // their submission and the approver their pending item.
         notificationService.notify(
             request.employeeId(),
             "LEAVE_SUBMITTED",
@@ -2759,27 +2753,25 @@ public class LeaveService {
     }
 
     /**
-     * V164 (owner ruling, 2026-09-09): the approver must see a request's §5 WARN_UNPAID_* violation
-     * IN the {@code LEAVE_PENDING_APPROVAL} notification body itself, not only after opening the
-     * portal. {@link th.co.glr.hr.notification.NotificationEmailService#send} takes the body as ONE
-     * plain string and converts {@code \n} to {@code <br>} -- email and in-app notification share
-     * that same string, so this one string edit covers both surfaces. The block this method returns
-     * is therefore PLAIN TEXT, never HTML -- {@code NotificationEmailService} is shared by every
-     * notification type in the system, and adding a styled callout there is explicitly out of scope
-     * for this change.
+     * The approver must see a request's §5 WARN_UNPAID_* violation IN the {@code
+     * LEAVE_PENDING_APPROVAL} notification body itself, not only after opening the portal. {@link
+     * th.co.glr.hr.notification.NotificationEmailService#send} takes the body as ONE plain string
+     * and converts {@code \n} to {@code <br>} -- email and in-app notification share that same
+     * string, so this one string covers both surfaces. The block this method returns is therefore
+     * PLAIN TEXT, never HTML: {@code NotificationEmailService} is shared by every notification type
+     * in the system, so a styled callout does not belong there.
      *
      * <p>Returns {@code ""} (append nothing, byte-identical body) when {@code request.ruleWarnings()}
-     * is empty -- the ordinary case, unchanged from before V164.
+     * is empty -- the ordinary case.
      *
      * <p><b>Label line, deliberately omitted:</b> the frontend's {@code LeaveRulePanel.jsx} already
-     * carries a {@code RULE_META} table with one short Thai label per {@link LeaveRuleCode}. Rather
-     * than introduce a SECOND copy of that table here -- which nothing would keep in step with the
-     * frontend's if either changes (this codebase has already been bitten by exactly this class of
-     * unguarded duplication once -- see {@code mockApi.js}'s constant-drift history) -- each warning
-     * renders only its own {@code messageTh} (already a complete, rendered Thai sentence -- see
-     * {@link LeaveRuleMessages}), with no separate label line. If a short label is later wanted here
-     * too, duplicate {@code RULE_META} deliberately and explicitly, with a comment on BOTH copies
-     * pointing at the other and a test that fails if they diverge -- not silently.
+     * carries a {@code RULE_META} table with one short Thai label per {@link LeaveRuleCode}. A
+     * SECOND copy of that table here would have nothing keeping it in step with the frontend's (this
+     * codebase has been bitten by exactly this kind of unguarded duplication, see {@code
+     * mockApi.js}'s constant drift), so each warning renders only its own {@code messageTh}
+     * (already a complete, rendered Thai sentence -- see {@link LeaveRuleMessages}). If a short
+     * label is later wanted here too, duplicate {@code RULE_META} deliberately, with a comment on
+     * BOTH copies pointing at the other and a test that fails if they diverge.
      */
     private String ruleWarningsBlock(LeaveRequestDto request) {
         List<LeaveRuleWarningDto> warnings = request.ruleWarnings();
@@ -2798,22 +2790,20 @@ public class LeaveService {
     }
 
     /**
-     * Leave HR-submit gate (2026-08-03): fires FIRST, before the subordinate-access check below and
-     * before {@code submit}/{@code preview} do any further work (validateEmployee, rule evaluation,
-     * DB write) -- this is the very first thing {@code submit} calls after basic request validation.
+     * Leave HR-submit gate: fires FIRST, before the subordinate-access check below and before
+     * {@code submit}/{@code preview} do any further work (validateEmployee, rule evaluation, DB
+     * write) -- it is the very first thing {@code submit} calls after basic request validation.
      * Self-submission ({@code targetEmployeeId == actorEmployeeId}) by an hr/ceo actor is refused
      * outright, regardless of {@code requestedEmployeeId} being explicit or defaulted from the
      * actor's own id.
      *
      * <p>Deliberately role-gated on SELF only, not on role alone: an hr/ceo actor submitting for
-     * SOMEONE ELSE still falls through to the unchanged {@code canReviewEmployee} check below.
-     * Both hr and ceo now share the same blanket {@code REVIEW_ALL_ROLES} reach (ceo added
-     * 2026-09-01, CEO leave-approval reach) -- before that, ceo reached {@code canReviewEmployee}
-     * only via a manager-of-record relationship, the same fallback anyone outside
-     * {@code REVIEW_ALL_ROLES} still relies on. Filing a paper form on a report's behalf is a real,
-     * still-supported HR workflow; only filing for THEMSELVES is what the owner ruling blocks.
-     * The UI no longer offers it, though: RC-05 (Ploy 2026-10-30) closed the /leave/new composer to
-     * hr/ceo outright, so on-behalf filing is API-only.
+     * SOMEONE ELSE still falls through to the {@code canReviewEmployee} check below. Both hr and
+     * ceo share the blanket {@code REVIEW_ALL_ROLES} reach; anyone outside {@code
+     * REVIEW_ALL_ROLES} relies on a manager-of-record relationship instead. Filing a paper form on
+     * a report's behalf is a real, supported HR workflow; only filing for THEMSELVES is blocked.
+     * The UI does not offer it (the /leave/new composer is closed to hr/ceo), so on-behalf filing
+     * is API-only.
      */
     private long resolveTargetEmployee(Long requestedEmployeeId, UserPrincipal user) {
         long actorEmployeeId = requireEmployeeId(user);
@@ -2862,12 +2852,12 @@ public class LeaveService {
      * request for lacking a matching category, only catch a malformed/misspelled code from the
      * caller. Blank/null returns {@code null} (no purpose selected).
      *
-     * <p>DECISION: purpose is OPTIONAL, for every leave type including PERSONAL. Every request
-     * submitted before V125 has none, and §5.2 never states that choosing a purpose category is a
-     * precondition for filing ลากิจ -- only that the wedding sub-rule caps a request IF that is the
-     * stated purpose (see {@link #autoRejectNote}'s wedding-cap check). Making this required would
-     * retroactively block every existing submit flow that never asked for it; a caller that does not
-     * care about the wedding cap (or is filing SICK/VACATION/etc.) can simply omit it.
+     * <p>Purpose is OPTIONAL, for every leave type including PERSONAL. Requests that pre-date V125
+     * have none, and §5.2 never makes choosing a purpose category a precondition for filing ลากิจ --
+     * only the wedding sub-rule caps a request IF that is the stated purpose (see {@link
+     * #autoRejectNote}'s wedding-cap check). Making it required would block every existing submit
+     * flow that never asked for it; a caller that does not care about the wedding cap (or is filing
+     * SICK/VACATION/etc.) can simply omit it.
      */
     private String normalizePurposeCode(String value) {
         if (value == null || value.isBlank()) {
@@ -2881,12 +2871,10 @@ public class LeaveService {
     }
 
     /**
-     * V118 cross-year quota fix (2026-08-02): dropped the "start/end must fall in the same calendar
-     * year" rejection this method used to carry -- quota is now attributed per calendar year (see
-     * LeaveQuotaYearSplit), so a request spanning 31 Dec/1 Jan is no longer categorically unfileable.
-     * A 98-day MATERNITY request starting after roughly mid-September used to 400 here every time;
-     * that was the defect this migration fixes. Only the (unrelated) end-before-start ordering check
-     * remains.
+     * Only checks end-before-start ordering. There is deliberately no "same calendar year"
+     * requirement: quota is attributed per calendar year (see LeaveQuotaYearSplit, V118), so a
+     * request spanning 31 Dec/1 Jan (e.g. a 98-day MATERNITY request starting in late September)
+     * must remain fileable.
      */
     private void validateDateRange(LocalDate startDate, LocalDate endDate) {
         if (endDate.isBefore(startDate)) {
@@ -2903,27 +2891,24 @@ public class LeaveService {
     }
 
     /**
-     * Partial-day span (V166, widened from the original single-day-only sub-day feature,
-     * 2026-07-25): no times -&gt; the existing whole-day day count, per the leave type's {@link
-     * LeaveDayCountBasis} (V119: CALENDAR_DAYS for MATERNITY, WORKING_DAYS for every other type --
-     * unchanged). Times set -&gt; the plain sum of {@code spanFractions} (built by the caller via
-     * {@link LeaveDayMath#spanDayFractions}, which measures each boundary day against the FIXED
+     * Partial-day span (V166): no times -&gt; the whole-day day count, per the leave type's {@link
+     * LeaveDayCountBasis} (V119: CALENDAR_DAYS for MATERNITY, WORKING_DAYS for every other type).
+     * Times set -&gt; the plain sum of {@code spanFractions} (built by the caller via {@link
+     * LeaveDayMath#spanDayFractions}, which measures each boundary day against the FIXED
      * 480-worked-minute/12:30-13:30-break rule, never against that day's own resolved {@link
      * WorkSchedule} span -- see that method's Javadoc for the exact rule, the worked-example table,
-     * and why this REPLACES the old {@code hours/8} divisor even for a single-day timed request).
-     * {@code spanFractions} must be non-null whenever {@code startTime} is
-     * non-null -- every call site below builds it that way; this method only sums and range-checks it.
+     * and why this replaces an {@code hours/8} divisor even for a single-day timed request).
+     * {@code spanFractions} must be non-null whenever {@code startTime} is non-null -- every call
+     * site below builds it that way; this method only sums and range-checks it.
      *
-     * <p>{@code isWorkingDay} (2026-08-03): the schedule/holiday-aware predicate built once by the
-     * caller, only read by the whole-day WORKING_DAYS branch below (via {@link #workingDaysBetween})
-     * -- the CALENDAR_DAYS (MATERNITY) branch never touches it, and the timed branch reads it only
+     * <p>{@code isWorkingDay}: the schedule/holiday-aware predicate built once by the caller, only
+     * read by the whole-day WORKING_DAYS branch below (via {@link #workingDaysBetween}) -- the
+     * CALENDAR_DAYS (MATERNITY) branch never touches it, and the timed branch reads it only
      * indirectly, already baked into {@code spanFractions}.
      *
-     * <p>Phase A0b: takes {@code startDate}/{@code endDate}/{@code startTime}/{@code endTime}
-     * directly rather than a {@code SubmitLeaveRequest} (a pure parameter-extraction refactor, same
-     * body, same behaviour for every #submit call site below) so {@link #preview} can call it too,
-     * passing {@code null} for both times (and {@code spanFractions}) to take the same whole-day path
-     * a legacy no-times submission always took.
+     * <p>Takes {@code startDate}/{@code endDate}/{@code startTime}/{@code endTime} directly rather
+     * than a {@code SubmitLeaveRequest} so {@link #preview} can call it too, passing {@code null} for
+     * both times (and {@code spanFractions}) to take the whole-day path.
      */
     private BigDecimal computeTotalDays(
             Map<LocalDate, BigDecimal> spanFractions, LocalDate startDate, LocalDate endDate,
@@ -2942,8 +2927,7 @@ public class LeaveService {
     }
 
     /**
-     * Partial-day span (V166, widened from the original single-day-only sub-day feature,
-     * 2026-07-25): startTime/endTime are optional, but if either is set both must be, the RANGE
+     * Partial-day span (V166): startTime/endTime are optional, but if either is set both must be, the RANGE
      * (which may now span more than one calendar day) must contain at least one WORKING day, endTime
      * must fall after startTime on a single-day request, and each boundary day's time must fall
      * within THAT DAY'S OWN resolved {@link WorkSchedule} window -- mirrors V166's relaxed
@@ -2952,21 +2936,19 @@ public class LeaveService {
      * produce a payroll deduction for a non-working day) while the identical whole-day request is
      * rejected by workingDaysBetween.
      *
-     * <p>{@code startSchedule}/{@code endSchedule} (V166): resolved ONCE by the caller ({@link
+     * <p>{@code startSchedule}/{@code endSchedule}: resolved ONCE by the caller ({@link
      * #submit}/{@link #preview}) and passed in here, rather than this method re-resolving them --
      * both are {@code null} exactly when {@code startTime} is {@code null} (a whole-day request never
      * needs them); {@code endSchedule} equals {@code startSchedule} for a single-day request (both
-     * boundary checks read the SAME resolved schedule, matching pre-V166 behaviour exactly).
+     * boundary checks read the SAME resolved schedule).
      *
-     * <p>Schedule/holiday-aware working-day counting (2026-08-03): the "must be a working day" check
-     * now uses the schedule/holiday-aware {@code isWorkingDay} predicate (a warehouse employee's
-     * Saturday timed request is now valid), and applies ONLY to {@code WORKING_DAYS}-basis types --
-     * gated on {@code basis} so a CALENDAR_DAYS (MATERNITY) timed request is never rejected for
-     * landing on a non-working day, matching how CALENDAR_DAYS never filters days anywhere else in
-     * this class. Skipping this gate for CALENDAR_DAYS is a deliberate decision, not an oversight:
-     * without it, a timed MATERNITY request landing on a public holiday would go from "allowed"
-     * (today, holiday-blind) to "rejected" (this branch's holiday awareness applied everywhere) --
-     * exactly the "double-handling" MATERNITY must not receive, per LeaveDayCountBasis's javadoc.
+     * <p>The "must be a working day" check uses the schedule/holiday-aware {@code isWorkingDay}
+     * predicate (a warehouse employee's Saturday timed request is valid), and applies ONLY to
+     * {@code WORKING_DAYS}-basis types -- gated on {@code basis} so a CALENDAR_DAYS (MATERNITY)
+     * timed request is never rejected for landing on a non-working day, matching how CALENDAR_DAYS
+     * never filters days anywhere else in this class. Skipping this gate for CALENDAR_DAYS is
+     * deliberate: otherwise a timed MATERNITY request landing on a public holiday would be rejected
+     * -- exactly the "double-handling" MATERNITY must not receive, per LeaveDayCountBasis's javadoc.
      */
     private void validateSubDayTimes(
             SubmitLeaveRequest request, LeaveDayCountBasis basis, Predicate<LocalDate> isWorkingDay,
@@ -3019,10 +3001,9 @@ public class LeaveService {
     }
 
     /**
-     * One boundary day's time-bound check (V166): {@code time} must fall within {@code schedule}'s
-     * own {@code [workStart, workEnd]} window for {@code date} -- the schedule/holiday-aware
-     * replacement for the old hardcoded 08:30-17:30 bound, resolved per employee per date exactly as
-     * every other schedule-aware check in this class already is.
+     * One boundary day's time-bound check: {@code time} must fall within {@code schedule}'s own
+     * {@code [workStart, workEnd]} window for {@code date}, resolved per employee per date like
+     * every other schedule-aware check in this class (not a hardcoded 08:30-17:30 bound).
      */
     private void validateWithinSchedule(LocalTime time, WorkSchedule schedule, LocalDate date) {
         if (time.isBefore(schedule.workStart()) || time.isAfter(schedule.workEnd())) {
@@ -3078,16 +3059,15 @@ public class LeaveService {
     }
 
     /**
-     * GET /api/leave/review-summary phase (Phase A0b): stamps {@code canReview} onto {@code dto} for
-     * THIS {@code user} -- a capability flag ("this actor could act on this employee's requests"),
-     * computed from the SAME decision {@link #approve}/{@link #reject} already gate on ({@link
-     * #canReviewAll}(user) OR {@link #isDirectManager}), not a role check: {@code REVIEW_ALL_ROLES}
-     * is {@code {hr, ceo}} (ceo joined 2026-09-01), but any ฝ่าย manager may review their own
-     * direct reports too. Exposed so
-     * the frontend stops inferring "can I approve this" from the actor's own role alone, which would
-     * under-report for a department manager. It says nothing about whether THIS PARTICULAR request is
-     * actionable right now -- {@link #approve}/{@link #reject} still enforce {@code status ==
-     * SUBMITTED} server-side regardless of this flag, and callers should too.
+     * Stamps {@code canReview} onto {@code dto} for THIS {@code user} -- a capability flag ("this
+     * actor could act on this employee's requests"), computed from the SAME decision {@link
+     * #approve}/{@link #reject} gate on ({@link #canReviewAll}(user) OR {@link #isDirectManager}),
+     * not a role check: {@code REVIEW_ALL_ROLES} is {@code {hr, ceo}}, but any ฝ่าย manager may
+     * review their own direct reports too. Exposed so the frontend does not infer "can I approve
+     * this" from the actor's own role alone, which would under-report for a department manager. It
+     * says nothing about whether THIS PARTICULAR request is actionable right now -- {@link
+     * #approve}/{@link #reject} still enforce {@code status == SUBMITTED} server-side regardless of
+     * this flag, and callers should too.
      *
      * <p>{@code user.employeeId()} is read directly (not via {@link #requireEmployeeId}) so this can
      * never turn an otherwise-successful {@link #list} call into a 400 for an account with no bound
@@ -3122,9 +3102,8 @@ public class LeaveService {
     }
 
     /**
-     * GET /api/leave/review-summary (Phase A0b). Returns TWO independent signals -- see {@link
-     * LeaveReviewSummaryDto}'s Javadoc for the full rationale, which this method's design refinement
-     * (added after the frontend's phase A1 started consuming it) exists to satisfy:
+     * GET /api/leave/review-summary. Returns TWO independent signals -- see {@link
+     * LeaveReviewSummaryDto}'s Javadoc for the full rationale:
      *
      * <ul>
      *   <li>{@code isReviewer}: can this actor review ANYONE at all, independent of whether anything
@@ -3141,10 +3120,9 @@ public class LeaveService {
      * </ul>
      *
      * <p>A manager whose whole team happens to be caught up (zero SUBMITTED rows right now) still
-     * gets {@code isReviewer = true} -- the motivating case a single "reviewable count" collapsed
-     * into one field would have gotten wrong: it would have been indistinguishable from that actor
-     * having no review rights at all, hiding the review queue's tab/entry point for exactly the
-     * managers who use it, and making it flicker in and out of existence as requests come and go.
+     * gets {@code isReviewer = true}: a single "reviewable count" field would be indistinguishable
+     * from having no review rights at all, hiding the review queue's tab/entry point for exactly
+     * the managers who use it and making it flicker in and out as requests come and go.
      */
     public LeaveReviewSummaryDto reviewSummary(UserPrincipal user) {
         if (canReviewAll(user)) {
@@ -3157,30 +3135,26 @@ public class LeaveService {
     }
 
     /**
-     * GET /api/leave/attachments/{attachmentId} (Phase A0b): resolves an attachment to its storage
-     * location, authorizing BEFORE returning it -- mirrors {@code
-     * SpecialMoneyService#resolveAttachmentForDownload} (the pattern this phase's brief names to
-     * copy). An unknown/nonexistent attachment id returns 404, never 403, so this endpoint cannot be
-     * used to probe which ids exist -- the SAME 404-before-authz-check ordering
-     * SpecialMoneyService's version uses.
+     * GET /api/leave/attachments/{attachmentId}: resolves an attachment to its storage location,
+     * authorizing BEFORE returning it -- mirrors {@code
+     * SpecialMoneyService#resolveAttachmentForDownload}. An unknown/nonexistent attachment id
+     * returns 404, never 403, so this endpoint cannot be used to probe which ids exist -- the SAME
+     * 404-before-authz-check ordering SpecialMoneyService's version uses.
      *
-     * <p>AUTHORIZATION CHANGE (stated per CLAUDE.md's rule for sales/CRM-adjacent authz work, though
-     * leave is outside that section -- the same discipline applies to any new authz surface): before
-     * this endpoint existed, a leave attachment (e.g. a SICK medical certificate) was upload-only --
-     * nothing could read it back. The access predicate is {@link #canAccessEmployee} (self or direct
-     * manager) OR {@link #canReviewEmployee} (HR/CEO or direct manager) -- the union is: the employee
-     * themselves, their own direct manager, or HR/CEO. A same-department peer who is not the manager,
-     * an unrelated employee, or a DIFFERENT employee's manager are all refused. This is a NEW
-     * authorization decision, not inferred from {@code mockApi.js} -- see the real-Postgres
-     * integration test ({@code LeaveAttachmentDownloadAuthzIntegrationTest}) this phase ships
-     * alongside it, written wrong-way-round (asserting what each caller CANNOT reach).
+     * <p>Access predicate: {@link #canAccessEmployee} (self or direct manager) OR {@link
+     * #canReviewEmployee} (HR/CEO or direct manager) -- i.e. the employee themselves, their own
+     * direct manager, or HR/CEO. A same-department peer who is not the manager, an unrelated
+     * employee, or a DIFFERENT employee's manager are all refused. This is its own authorization
+     * decision, not inferred from {@code mockApi.js} -- see the real-Postgres integration test
+     * ({@code LeaveAttachmentDownloadAuthzIntegrationTest}), which asserts what each caller CANNOT
+     * reach.
      *
-     * <p><b>V134 storage-durability fix -- ordering is itself a security property, do not
-     * reorder:</b> this method now ALSO reports whether the attachment's bytes are actually
-     * available ({@link LeaveAttachmentRepository.AttachmentLocation#storageState()} {@code
-     * DATABASE}, or {@code DISK_LEGACY} with a file that still resolves), and throws {@code 410
-     * GONE} when they are not -- but that check runs STRICTLY AFTER the 404 (unknown id) and 403
-     * (known id, not permitted) checks above. If availability were checked first, a caller could
+     * <p><b>Ordering is itself a security property, do not reorder (V134 storage durability):</b>
+     * this method also reports whether the attachment's bytes are actually available ({@link
+     * LeaveAttachmentRepository.AttachmentLocation#storageState()} {@code DATABASE}, or {@code
+     * DISK_LEGACY} with a file that still resolves), and throws {@code 410 GONE} when they are not
+     * -- but that check runs STRICTLY AFTER the 404 (unknown id) and 403 (known id, not permitted)
+     * checks above. If availability were checked first, a caller could
      * distinguish "this id doesn't exist" (404) from "this id exists but its bytes are gone" (what
      * would otherwise be 410) WITHOUT ever being authorized to know the id exists at all -- turning
      * an availability signal into an existence-probe oracle. An unauthorized caller must always see
@@ -3213,7 +3187,7 @@ public class LeaveService {
      * LeaveAttachmentRepository#saveWithContent} inserts the blob and flips {@code storage_state}
      * to {@code DATABASE} in the same transaction, so the two can never disagree for a row this
      * query can see at all. {@code DISK_LEGACY} rows are checked against the actual filesystem
-     * (they may already be gone -- e.g. every UAT/Render deploy before this migration). Anything
+     * (they may already be gone). Anything
      * else ({@code MISSING}, or a future state this code doesn't know about) is unavailable.
      */
     private boolean bytesAvailable(LeaveAttachmentRepository.AttachmentLocation location) {
