@@ -60,9 +60,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         // Mon 2026-01-05 .. Sun 2026-04-12: exactly 98 CALENDAR days (verified independently of
         // LeaveDayMath: 27 remaining days of January + 28 of February + 31 of March + 12 of April =
         // 98), INCLUDING every Saturday/Sunday inside the range -- §5.4 MATERNITY calendar-day
-        // counting (V119). Before V119, this same range would have counted as roughly 70 WORKING
-        // days, not 98 -- the defect this migration fixes. MATERNITY's 98-day quota fully covers the
-        // request, but its 45-day paid_days_cap (V116, now bounding CALENDAR days) is what actually
+        // counting. Counted as WORKING days this range would be roughly 70, not 98.
+        // MATERNITY's 98-day quota fully covers the
+        // request, but its 45-day paid_days_cap (bounding CALENDAR days) is what actually
         // determines the split -- this is the gate the MATERNITY row exists to prove.
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "MATERNITY", "2026-01-05", "2026-04-12"),
@@ -82,13 +82,13 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void aMaternityRequestCountsCalendarDaysButAnIdenticalSickRequestCountsOnlyWorkingDays() {
-        // §5.4 MATERNITY calendar-day counting (V119): the vacuous-fixture guard, through the REAL
-        // repository/SQL this time (LeaveServiceTest's Mockito-level companion proves the same thing
+        // §5.4 MATERNITY calendar-day counting: the vacuous-fixture guard, through the REAL
+        // repository/SQL (LeaveServiceTest's Mockito-level companion proves the same thing
         // against a faked LeaveTypeDto). Mon 2026-07-13 .. Sun 2026-07-19 -- a full week, both
         // weekend days included -- must count 7 for MATERNITY (every day) but only 5 for SICK
         // (Mon-Fri only).
         //
-        // The SICK side is submitted without an attachment. V124 (§5.1): this is now the employee's
+        // The SICK side is submitted without an attachment. Per §5.1 this is the employee's
         // FIRST certificate-less occasion this month, tolerated (seeded 3/month), so it is APPROVED
         // -- irrelevant either way to what this test proves, since totalDays is computed BEFORE the
         // auto-reject gates run and stored unconditionally on every submission (LeaveService#submit).
@@ -136,22 +136,20 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void aNinetyDayMilitaryRequestIsAcceptedWithSixtyPaidAndThirtyUnpaidDays() {
-        // Defect 2 fix (V120): §5.5 caps only the PAY (60 days/year), not the leave itself -- V116
-        // wrongly seeded annual_quota_days=60 with no paid_days_cap at all, which capped the LEAVE
-        // at 60 days and refused anything past it. Fixed by moving the real 60-day limit onto
-        // paid_days_cap and raising annual_quota_days to a 366-day sentinel that can never itself
-        // bind (see V120's migration comment).
+        // §5.5 caps only the PAY (60 days/year), not the leave itself: the real 60-day limit
+        // lives on paid_days_cap, and annual_quota_days is a 366-day sentinel that can never
+        // itself bind.
         //
         // MUTATION-CHECK NOTE: the paidDays/unpaidDays split (60/30) alone happens to come out
-        // IDENTICAL whether the 60-day limit lives on paid_days_cap (fixed) or on annual_quota_days
-        // (V116's defect) -- LeaveService#submit's approve-and-split design means both seedings
+        // IDENTICAL whether the 60-day limit lives on paid_days_cap or on annual_quota_days --
+        // LeaveService#submit's approve-and-split design means both seedings
         // bound the paid portion at 60 either way for THIS ONE request. What genuinely
-        // distinguishes them is quotaRemainingAfter: under the V116 seed the 90-day request would
-        // exhaust the (wrongly 60-day) "quota" down to 0 remaining; under the fix, 90 days consumed
-        // out of the 366-day sentinel leaves 276 remaining -- proving the leave itself was never
+        // distinguishes them is quotaRemainingAfter: with the limit on annual_quota_days the
+        // 90-day request would exhaust the "quota" down to 0 remaining; with the sentinel, 90 days
+        // consumed out of 366 leaves 276 remaining -- proving the leave itself is never
         // actually capped. Asserting ONLY paidDays/unpaidDays here would be a vacuous regression
-        // guard for this specific defect (see CLAUDE.md's fixture-supplies-what-production-lacks
-        // trap) -- quotaRemainingAfter is the assertion that actually pins the fix.
+        // guard (see CLAUDE.md's fixture-supplies-what-production-lacks
+        // trap) -- quotaRemainingAfter is the assertion that actually pins it.
         long employeeId = insertEmployee("MIL-001", LocalDate.parse("2015-01-01"));
 
         // Mon 2026-01-05 .. Fri 2026-05-08: exactly 90 working weekdays (verified independently of
@@ -185,24 +183,24 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // §5.6 ORDINATION minimum service (V164 gap-closing coverage, 2026-09-10). MIN_SERVICE_MONTHS is
-    // WARN_UNPAID_ALL (V164): an under-12-month employee now still submits, unpaid in full, rather
+    // §5.6 ORDINATION minimum service. MIN_SERVICE_MONTHS is
+    // WARN_UNPAID_ALL: an under-12-month employee still submits, unpaid in full, rather
     // than being auto-rejected outright. ORDINATION is NOT prorated_first_year (unlike
-    // VACATION/PERSONAL, V120) and carries advance_notice_days=0 (V116), so this gate is isolated --
+    // VACATION/PERSONAL) and carries advance_notice_days=0, so this gate is isolated --
     // neither HIRE_DATE_MISSING_PRORATED nor ADVANCE_NOTICE can fire alongside it for these requests.
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void ordinationWarnsUnpaidInFullForAnEmployeeUnderTwelveMonthsOfService() {
         // Hired 2026-01-13 -- exactly 6 completed months of service by the 2026-07-13 request start,
-        // well under ORDINATION's 12-month min_service_months (V116).
+        // well under ORDINATION's 12-month min_service_months.
         long employeeId = insertEmployee("ORD-MINSVC-001", LocalDate.parse("2026-01-13"));
 
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "ORDINATION", "2026-07-13", "2026-07-14"), // 2 working days
             employee(employeeId));
 
-        // Wrong-way-round: SUBMITTED, not AUTO_REJECTED -- V164's entire point for this code.
+        // Wrong-way-round: SUBMITTED, not AUTO_REJECTED -- this code only warns.
         assertThat(result.status()).isEqualTo("SUBMITTED");
         assertThat(result.systemNoteCode()).isNull();
         assertThat(result.systemNote()).isNull();
@@ -213,7 +211,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(result.unpaidByRuleDays()).isEqualByComparingTo("2.00");
         assertThat(result.paidDays()).isEqualByComparingTo("0.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("2.00");
-        // Owner ruling #1: unpaid-by-rule days consume NO quota -- before/after must be identical.
+        // Unpaid-by-rule days consume NO quota -- before/after must be identical.
         assertThat(result.quotaRemainingBefore()).isEqualByComparingTo(result.quotaRemainingAfter());
     }
 
@@ -238,10 +236,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void vacationQuotaIsProratedUnderOneYearOfServiceAndFullAfterOneYear() {
-        // Defect 1 fix (V120): §5.3's parenthetical grants a PRO-RATED quota to an employee under a
-        // year of service, not an outright refusal -- V116's original bug seeded
-        // min_service_months=12 as a hard eligibility floor, which is what this test used to assert
-        // (vacationIsRefusedBelowTheTwelveMonthServiceFloor, pre-V120). Both sides asserted on ONE
+        // §5.3's parenthetical grants a PRO-RATED quota to an employee under a
+        // year of service, not an outright refusal -- min_service_months=12 must not act as a
+        // hard eligibility floor for VACATION. Both sides are asserted in ONE
         // test, same request shape, so it cannot pass by only ever constructing the easy (>1 year)
         // case.
         long underOneYear = insertEmployee("VAC-PRORATE-001", LocalDate.parse("2026-01-13")); // 6 months before the request below
@@ -250,9 +247,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         // 6 completed months of service -> prorated quota = 6.00 * 6/12 = 3.00 (rounded to the
         // nearest 0.5 day -- see LeaveService#employeeAnnualQuota's Javadoc for the formula and its
         // interpretation caveat). Mon 2026-07-13 .. Thu 2026-07-16 is 4 working days: exactly 3 of
-        // them paid, 1 unpaid -- this pins the 3.00 prorated figure exactly (not zero, not the full
-        // 6.00 the pre-V120 gate would have refused outright, and not the 6.00 an under-pro-rated
-        // fix would have wrongly granted from day one).
+        // them paid, 1 unpaid -- this pins the 3.00 prorated figure exactly (not zero, which an
+        // outright refusal would give, and not the full 6.00 that skipping pro-ration would
+        // wrongly grant from day one).
         LeaveRequestDto underOneYearResult = leaveService.submit(
             submitRequest(underOneYear, "VACATION", "2026-07-13", "2026-07-16"),
             employee(underOneYear));
@@ -307,15 +304,12 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveMayExceedThreeConsecutiveDaysOnceTheEmployeeHasClearedOneYearOfService() {
-        // Defect 3 fix (V120): the 2561-era blanket max_consecutive_days=3 rule this test USED to
-        // assert (personalLeaveIsRefusedWhenItSpansMoreThanThreeConsecutiveDays, pre-V120) applied to
-        // EVERY employee regardless of tenure. The current (2567) announcement text dropped
-        // "ติดต่อกัน" ("consecutive") and moved its 3-day figure INSIDE the under-one-year
-        // parenthesis -- an owner-ruled ANNUAL TOTAL ceiling for under-1-year employees only, not a
-        // per-request span limit for everyone (see LeaveService#autoRejectNote's first-year-max-days
-        // gate). PERSONAL's max_consecutive_days is now NULL (V120), so this exact 4-calendar-day
-        // span that used to be refused must now be approved for a >1-year employee, wrong-way-round
-        // proof the old rule is genuinely gone, not merely narrowed.
+        // The current (2567) announcement text has no "ติดต่อกัน" ("consecutive") and puts its
+        // 3-day figure INSIDE the under-one-year parenthesis -- an ANNUAL TOTAL ceiling for
+        // under-1-year employees only, not a per-request span limit for everyone (see
+        // LeaveService#autoRejectNote's first-year-max-days gate). PERSONAL's max_consecutive_days
+        // is NULL, so a 4-calendar-day span must be approved for a >1-year employee,
+        // wrong-way-round proof that no blanket 3-consecutive-day rule applies.
         long employeeId = insertEmployee("PERSONAL-LONG-001", LocalDate.parse("2015-01-01"));
 
         LeaveRequestDto result = leaveService.submit(
@@ -341,11 +335,11 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // §5.2 PERSONAL first-year total-days cap (V120, defect 3). SEPARATE rule from pro-ration and
+    // §5.2 PERSONAL first-year total-days cap. SEPARATE rule from pro-ration and
     // from the probation gate above -- see LeaveService#autoRejectNote's Javadoc. Composes with
     // pro-ration as effectiveCap = min(proratedQuota, firstYearMaxDays); both directions of that
-    // min() are proven below, plus the wrong-way-round proof above that the OLD blanket
-    // consecutive-day rule this replaces is genuinely gone for a >1-year employee.
+    // min() are proven below, plus the wrong-way-round proof above that no blanket
+    // consecutive-day rule applies to a >1-year employee.
     // ─────────────────────────────────────────────────────────────────────
 
     @Test
@@ -363,8 +357,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(allowed.status()).isEqualTo("SUBMITTED");
         assertThat(allowed.paidDays()).isEqualByComparingTo("1.00");
 
-        // V164 (owner-approved change, 2026-09-09): FIRST_YEAR_MAX_DAYS is now WARN_UNPAID_EXCESS,
-        // not BLOCK -- this request's entire 2 working days are excess over the 1.00 effectiveCap
+        // FIRST_YEAR_MAX_DAYS is WARN_UNPAID_EXCESS, not BLOCK -- this request's entire 2 working days are excess over the 1.00 effectiveCap
         // (usedThisYear 1.00 + this request's 2.00 = 3.00, 2.00 over the 1.00 cap, capped at the
         // request's own totalDays of 2.00), so it still submits, wholly unpaid by rule.
         LeaveRequestDto warned = leaveService.submit(
@@ -392,7 +385,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(allowed.status()).isEqualTo("SUBMITTED");
         assertThat(allowed.paidDays()).isEqualByComparingTo("3.00");
 
-        // V164 (owner-approved change, 2026-09-09): see the identical WARN_UNPAID_EXCESS reasoning in
+        // See the identical WARN_UNPAID_EXCESS reasoning in
         // personalLeaveFirstYearCapIsBoundByTheProratedQuotaWhenItIsBelowThreeDays above -- this
         // request's whole 4 working days are excess over the 3.00 effectiveCap (usedThisYear 3.00 +
         // this request's 4.00 = 7.00, 4.00 over the cap, capped at the request's own totalDays).
@@ -409,8 +402,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveWarnsUnpaidWithLessThanOneWorkingDayOfNotice() {
-        // V164 (owner-approved change, 2026-09-09): ADVANCE_NOTICE is now WARN_UNPAID_ALL, not BLOCK
-        // -- renamed/updated in place from "...IsRefused...". FIXED_NOW is Wed 2026-07-01 09:00
+        // ADVANCE_NOTICE is WARN_UNPAID_ALL, not BLOCK. FIXED_NOW is Wed 2026-07-01 09:00
         // Bangkok; PERSONAL requires 1 day of notice. Requesting leave for 2026-07-01 itself (same
         // day, zero notice) still submits, wholly unpaid by rule.
         long employeeId = insertEmployee("PERSONAL-NOTICE-001", LocalDate.parse("2015-01-01"));
@@ -500,7 +492,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(atCap.paidDays()).isEqualByComparingTo("3.00");
         assertThat(atCap.purposeCode()).isEqualTo("WEDDING");
 
-        // V164 (owner-approved change, 2026-09-09): WEDDING_MAX_DAYS is now WARN_UNPAID_EXCESS, not
+        // WEDDING_MAX_DAYS is WARN_UNPAID_EXCESS, not
         // BLOCK -- only the 1 day beyond the 3-day cap is unpaid by rule; the other 3 still go
         // through the ordinary quota machinery (7.00 quota, 3.00 already used by the atCap request
         // above, 4.00 remaining -> paid in full).
@@ -573,7 +565,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
         }
 
-        // V164 (owner-approved change, 2026-09-09): EMERGENCY_TOLERANCE_EXHAUSTED is now
+        // EMERGENCY_TOLERANCE_EXHAUSTED is
         // WARN_UNPAID_ALL, not BLOCK -- the 4th occasion still submits, wholly unpaid by rule.
         LeaveRequestDto fourth = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
@@ -599,8 +591,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(result.status()).isEqualTo("SUBMITTED");
         }
         // June is now fully used -- regression pin that the SAME-month 4th occasion still warns
-        // unpaid (V164, owner-approved change, 2026-09-09 -- EMERGENCY_TOLERANCE_EXHAUSTED is
-        // WARN_UNPAID_ALL, not BLOCK).
+        // unpaid (EMERGENCY_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK).
         LeaveRequestDto juneFourth = leaveService.submit(
             submitRequestAsEmergency(employeeId, "2026-06-22"), employee(employeeId));
         assertThat(juneFourth.status()).isEqualTo("SUBMITTED");
@@ -622,13 +613,13 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveWarnsUnpaidWhileTheEmployeeIsStillInProbation() {
-        // V164 (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is now WARN_UNPAID_ALL, not
-        // BLOCK -- renamed/updated in place from "...IsRefused...". Hired 2026-06-20 (0 completed
+        // PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not
+        // BLOCK. Hired 2026-06-20 (0 completed
         // months by the request date) also means PERSONAL's own real prorated_first_year quota is
         // 0.00 for this employee, so FIRST_YEAR_MAX_DAYS (also WARN, now WARN_UNPAID_EXCESS) fires
-        // TOO -- this is genuinely correct V164 behaviour (multiple warnings can accumulate on one
-        // request now that WARN no longer short-circuits), not a test artifact to narrow away. The
-        // dominance rule (owner ruling #3) still applies: PROBATION_NOT_PASSED (an ALL) dominates
+        // TOO -- this is correct behaviour (multiple warnings can accumulate on one
+        // request since WARN does not short-circuit), not a test artifact to narrow away. The
+        // dominance rule still applies: PROBATION_NOT_PASSED (an ALL) dominates
         // outright, so unpaidByRuleDays is still the WHOLE request, never summed with the EXCESS.
         long employeeId = insertEmployee("PERS-PROB-001", LocalDate.parse("2026-06-20"), 90);
 
@@ -653,12 +644,11 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         // eligible from the hire date itself (no ADDITIONAL waiting period), proven through the
         // actual SQL read, not a mocked one.
         //
-        // V120 REVISION: this used to hire the employee on the EXACT request date (0 days of
-        // service at request time). That combination is no longer representable together with an
-        // APPROVED outcome now that PERSONAL is also prorated_first_year (V120, defect 1/3 fix) --
+        // Hiring the employee on the EXACT request date (0 days of service) is not representable
+        // together with an APPROVED outcome, since PERSONAL is prorated_first_year --
         // 0 completed months of service prorates to a genuine 0.00-day quota by
-        // LeaveService#employeeAnnualQuota's own formula, which the NEW first-year-total-days cap
-        // gate (defect 3) would then correctly refuse, for a DIFFERENT reason than probation. Hiring
+        // LeaveService#employeeAnnualQuota's own formula, which the first-year-total-days cap
+        // gate would then correctly refuse, for a DIFFERENT reason than probation. Hiring
         // 2 completed months before the request keeps this test isolated to the probation gate
         // (still trivially passed -- probation_days=0 means probationEndsOn == hire date, which is
         // always on/before any later request date) while giving pro-ration a non-zero (1.00-day)
@@ -691,9 +681,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void personalLeaveWarnsUnpaidOneDayBeforeTheDefaultProbationPeriodEndsWhenProbationDaysIsNull() {
         // Same NULL-probation_days fallback, pinned from the other side: hired one day later (118
-        // completed days, not 119) than the passing case above -> still short -> WARNS UNPAID (V164,
-        // owner-approved change, 2026-09-09 -- PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK;
-        // renamed/updated in place from "...IsRefused...").
+        // completed days, not 119) than the passing case above -> still short -> WARNS UNPAID
+        // (PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK).
         long employeeId = insertEmployee("PERS-PROB-004", LocalDate.parse("2026-03-17"), null);
 
         LeaveRequestDto result = leaveService.submit(
@@ -730,7 +719,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // confirm_date resolution (owner ruling, 2026-08-03). Real-DB proof that
+    // confirm_date resolution. Real-DB proof that
     // LeaveRepository#findConfirmDate's NULL-column mapping (confirm_date is nullable -- a naive
     // mapper NPEs on it, the same trap findProbationDays already documents) and
     // SpecialMoneyPolicyEvaluator#hasPassedProbation's day-after arithmetic hold through the actual
@@ -741,9 +730,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void personalLeaveWarnsUnpaidOnConfirmDateItselfEvenThoughHireDatePlusProbationDaysWouldAllowIt() {
         // Hired long ago with a short probation_days -- hire_date+probation_days alone would APPROVE
-        // this, but confirm_date is authoritative and the request date IS confirm_date. V164
-        // (owner-approved change, 2026-09-09): PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK --
-        // renamed/updated in place from "...IsRefused...".
+        // this, but confirm_date is authoritative and the request date IS confirm_date.
+        // PROBATION_NOT_PASSED is WARN_UNPAID_ALL, not BLOCK.
         long employeeId = insertEmployeeWithConfirmDate(
             "PERS-CONF-001", LocalDate.parse("2015-01-01"), 30, LocalDate.parse("2026-07-13"));
 
