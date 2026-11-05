@@ -11,7 +11,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
 import { statuses } from '../../data/referenceData.js';
-import { EmployeeFormModal, uniqueOptions } from './EmployeeFormModal.jsx';
+import { EmployeeFormModal } from './EmployeeFormModal.jsx';
+import { uniqueOptions } from './employeeOptions.js';
 
 // Employment status is a single axis. `statusId` already carries everything the
 // old boolean `active` select did — the backend derives `active` as
