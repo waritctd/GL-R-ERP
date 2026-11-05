@@ -1,6 +1,7 @@
 package th.co.glr.hr.pricingrequest;
 
 import java.util.ArrayList;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -309,7 +310,7 @@ public class LeadTimeChangeService {
     }
 
     private boolean isOwningRep(PricingRequestSummaryDto summary, UserPrincipal actor) {
-        return "sales".equals(actor.role()) && actor.id() == summary.ticketCreatedById();
+        return "sales".equals(actor.role()) && DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id());
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────

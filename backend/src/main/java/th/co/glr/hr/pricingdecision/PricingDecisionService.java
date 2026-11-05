@@ -1,6 +1,7 @@
 package th.co.glr.hr.pricingdecision;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
@@ -724,7 +725,7 @@ public class PricingDecisionService {
     public PricingDecisionSalesViewDto salesView(long pricingRequestId, UserPrincipal actor) {
         requireRole(actor, SALES_VIEW_ROLES);
         PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
-        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return decisions.findApprovedSalesView(pricingRequestId)

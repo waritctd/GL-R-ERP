@@ -19,6 +19,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       // deal). None here: every test in this file is about the editor itself.
       pricingRequests: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
       dealQuotations: {
+        displayNameOptions: vi.fn(),
         get: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
@@ -779,6 +780,30 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     expect(await screen.findByText('navigated-to-99')).not.toBeNull();
   });
+
+  // Deal OWNER vs KEYER (Ploy 2026-11-05): the inline create names the เจ้าของงาน too. Assumes a
+  // native <select> labelled เจ้าของงาน, fed by displayNameOptions, defaulting to the signed-in user.
+  it('the เจ้าของงาน picker defaults to the current user and its choice is sent as ownerEmployeeId', async () => {
+    api.dealQuotations.displayNameOptions.mockResolvedValue({
+      items: [{ id: 6, name: 'คุณสมหมาย ขายดี' }, { id: 9, name: 'คุณวิมล ขายเก่ง' }],
+    });
+    api.customers.contacts.mockResolvedValue({ contacts: [] });
+    api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+
+    renderInlineCreate();
+    await selectCustomerAndProject();
+    await fillOneValidItem();
+    const select = await screen.findByLabelText(/เจ้าของงาน/);
+    await waitFor(() => expect(select.querySelectorAll('option').length).toBeGreaterThan(1));
+    expect(select.value).toBe('6');
+    fireEvent.change(select, { target: { value: '9' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+
+    await waitFor(() => expect(api.tickets.create).toHaveBeenCalledTimes(1));
+    expect(api.tickets.create).toHaveBeenCalledWith(expect.objectContaining({ ownerEmployeeId: 9 }));
+  }, 10000);
 
   it('a tickets.create failure leaves the form intact and toasts the backend\'s Thai message, without ever calling dealQuotations.create', async () => {
     const backendError = new Error('สร้างดีลไม่สำเร็จ: ชื่อลูกค้าซ้ำในระบบ');

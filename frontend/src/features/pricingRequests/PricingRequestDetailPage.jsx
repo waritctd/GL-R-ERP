@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
@@ -1693,7 +1694,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const leadTimeSplit = useMemo(() => splitLeadTimeChanges(leadTimeChanges), [leadTimeChanges]);
   // B-R3: only the owning rep (sales + ticket creator, matched the way this page matches ownership
   // everywhere: ticketCreatedById === employeeId) or a sales manager decides — never the CEO.
-  const canDecideLeadTime = (isSales(user) && summary?.ticketCreatedById === user?.employeeId)
+  const canDecideLeadTime = (isSales(user) && isOwnerOrKeyer({ createdById: summary?.ticketCreatedById, keyedById: summary?.ticketKeyedById }, user?.employeeId))
     || user?.role === 'sales_manager';
   // The factory a pending request is about, for a viewer who cannot read factory quotes (sales):
   // read it off the request's own lines (every line of one change belongs to one factory).
@@ -1767,7 +1768,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // QUOTATION_ACCEPTED needs no special case: it is terminal, so it has no SUPERSEDED edge and the
   // predicate is already false for it.
   const canCreateCustomerRevision = isSales(user)
-    && summary?.ticketCreatedById === user?.employeeId
+    && isOwnerOrKeyer({ createdById: summary?.ticketCreatedById, keyedById: summary?.ticketKeyedById }, user?.employeeId)
     && summary?.ticketPaymentStatus == null // order confirmed: no new pricing round (the backend 409s it)
     && canTransition(summary?.status, 'SUPERSEDED');
   const pricingRequestAttachments = attachmentsQuery.data ?? [];
@@ -1775,7 +1776,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // own attachments while the request is DRAFT, and only on the request it owns. A wider set would
   // just produce a 409 from uploadAttachment/deleteAttachment.
   const canEditPricingRequestAttachments = isSales(user)
-    && summary?.ticketCreatedById === user?.employeeId
+    && isOwnerOrKeyer({ createdById: summary?.ticketCreatedById, keyedById: summary?.ticketKeyedById }, user?.employeeId)
     && summary?.status === 'DRAFT';
   const detailErrorStatus = apiStatus(detailQuery.error);
 

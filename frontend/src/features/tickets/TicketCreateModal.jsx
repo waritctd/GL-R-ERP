@@ -322,7 +322,7 @@ function Section({ id, title, required, done, summary, open, onOpen, body, below
 
 // ── main modal ────────────────────────────────────────────────────────────────
 
-export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
+export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
   // initialItems (only passed by TicketListPage) means the caller wants a NEW deal seeded with
   // specific items, never a reason to resurrect an unrelated old draft over them.
   const hasInitialItems = Boolean(initialItems?.length);
@@ -424,6 +424,17 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
   // focused (not just which item row) so the brand and model inputs for the
   // same row don't both render the same catalogResults dropdown at once.
   const [catalogFocus, setCatalogFocus] = useState(null);
+
+  // เจ้าของงาน (2026-11-05): admin staff key deals for other reps. Same eligible-people list as the
+  // quotation editor's print-name selectors; the default (and a missing/failed list) is the current
+  // user, and ownerEmployeeId is only sent when it names someone else.
+  const ownerOptionsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationDisplayNameOptions(),
+    queryFn: () => api.dealQuotations.displayNameOptions().then((r) => r.items ?? []),
+    retry: false,
+  });
+  const [ownerEmployeeId, setOwnerEmployeeId] = useState('');
+  const effectiveOwnerId = ownerEmployeeId || (user?.id != null ? String(user.id) : '');
 
   // ── FX rates, for showing a catalog price in baht alongside its own currency ───────────────
   // The catalog quotes EUR and USD only. This is a straight currency conversion; the old ราคาตั้ง
@@ -965,6 +976,7 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
         entryChannel,
         priority,
         nextFollowUpAt: nextFollowUpAt || null,
+        ...(effectiveOwnerId && effectiveOwnerId !== String(user?.id) ? { ownerEmployeeId: Number(effectiveOwnerId) } : {}),
         items: items.map((item) => ({
           brand: item.brand.trim(),
           model: item.model.trim(),
@@ -1663,6 +1675,16 @@ export function TicketCreateModal({ onClose, onSubmit, initialItems }) {
             })}
           </div>
         </div>
+
+        <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+          เจ้าของงาน <span className="font-semibold text-text-muted">(ค่าเริ่มต้นคือคุณ — เลือกคนอื่นถ้าคีย์ดีลแทน)</span>
+          <select value={effectiveOwnerId} onChange={(e) => setOwnerEmployeeId(e.target.value)}>
+            {user?.id != null && !(ownerOptionsQuery.data ?? []).some((o) => String(o.id) === String(user.id)) ? (
+              <option value={String(user.id)}>{user.name}</option>
+            ) : null}
+            {(ownerOptionsQuery.data ?? []).map((o) => <option key={o.id} value={String(o.id)}>{o.name}</option>)}
+          </select>
+        </label>
 
         <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
           วันติดตามครั้งถัดไป <span className="font-semibold text-text-muted">(ตั้งไว้ล่วงหน้า 14 วัน — แก้ไขได้)</span>

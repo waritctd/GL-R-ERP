@@ -1083,7 +1083,7 @@ export function TicketListPage({ user, showToast }) {
       {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
 
       {creating ? (
-        <TicketCreateModal onClose={() => setCreating(false)} onSubmit={handleCreate} />
+        <TicketCreateModal user={user} onClose={() => setCreating(false)} onSubmit={handleCreate} />
       ) : null}
     </div>
   );

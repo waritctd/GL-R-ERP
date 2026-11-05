@@ -603,3 +603,23 @@ describe('ceoGateBlockerMessage', () => {
       .toBe('โรงงาน B แจ้งไม่พร้อมเสนอราคา');
   });
 });
+
+// Deal OWNER vs KEYER (2026-11-05): the person who keyed the deal in (ticketKeyedById) passes every
+// owner gate the owner passes; a third rep still does not.
+describe('PCR gates accept the deal keyer (ticketKeyedById)', () => {
+  const keyer = { id: 3, role: 'sales' };
+  const keyed = (overrides = {}) => pr({ ticketCreatedById: 1, ticketKeyedById: 3, ...overrides });
+
+  it.each([
+    ['canUpdatePricingRequest', canUpdatePricingRequest, { status: 'DRAFT' }],
+    ['canSubmitPricingRequest', canSubmitPricingRequest, { status: 'DRAFT' }],
+    ['canCreateCustomerQuotation', canCreateCustomerQuotation, { status: 'APPROVED_FOR_QUOTATION' }],
+    ['canManageCustomerQuotation', canManageCustomerQuotation, { status: 'QUOTATION_ISSUED' }],
+    ['canViewCustomerQuotation', canViewCustomerQuotation, { status: 'QUOTATION_ISSUED' }],
+    ['canSeePricingDecisionSalesView', canSeePricingDecisionSalesView, { status: 'APPROVED_FOR_QUOTATION' }],
+    ['canCancelPricingRequest', canCancelPricingRequest, { status: 'DRAFT' }],
+  ])('%s: keyer allowed, third rep denied', (_name, gate, over) => {
+    expect(gate(keyer, keyed(over))).toBe(true);
+    expect(gate(otherSales, keyed(over))).toBe(false);
+  });
+});

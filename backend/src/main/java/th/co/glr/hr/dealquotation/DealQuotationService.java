@@ -1,6 +1,7 @@
 package th.co.glr.hr.dealquotation;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -351,7 +352,7 @@ public class DealQuotationService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
         // Owner-only, like CustomerQuotationService#requireOwner: a sales_manager is NOT admitted here (unlike
         // DealQuotationService#EDIT_ROLES for editing an EXISTING quotation).
-        if (summary.ticketCreatedById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
@@ -646,7 +647,7 @@ null, // locationLabel: not on the pricing request; rep fills in on the draft.
             requireAccountScope(ticketId);
         } else if (!hasQuotationGrant(actor)) {
             requireRole(actor, VIEW_ROLES);
-            if ("sales".equals(actor.role()) && ticket.createdById() != actor.id()) {
+            if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงดีลนี้");
             }
         }
@@ -1607,7 +1608,7 @@ requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-        if (ticket.createdById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }
@@ -3486,7 +3487,7 @@ requireNoOpenRevision(source); // locks the ticket
         if ("sales_manager".equals(actor.role()) || grant) {
             return; // any deal
         }
-        if ("sales".equals(actor.role()) && ticket.createdById() == actor.id()) {
+        if ("sales".equals(actor.role()) && DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
             return;
         }
         throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงดีลนี้");
@@ -3508,7 +3509,7 @@ requireNoOpenRevision(source); // locks the ticket
                 return; // any deal — same DEAL_DIRECT rule this role already gets, untouched.
             }
             TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-            if (ticket.createdById() != actor.id()) {
+            if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
             return;
@@ -3545,7 +3546,7 @@ requireNoOpenRevision(source); // locks the ticket
         requireRole(actor, VIEW_ROLES);
         if ("sales".equals(actor.role())) {
             TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-            if (ticket.createdById() != actor.id()) {
+            if (!DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
             }
         }
@@ -3570,7 +3571,7 @@ requireNoOpenRevision(source); // locks the ticket
         }
         if ("sales".equals(actor.role())) {
             TicketSummaryDto ticket = requireTicketSummary(quotation.ticketId());
-            return ticket.createdById() == actor.id();
+            return DealOwnership.isOwnerOrKeyer(ticket, actor.id());
         }
         return true;
     }

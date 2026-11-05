@@ -1,6 +1,7 @@
 package th.co.glr.hr.deposit;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -1082,7 +1083,7 @@ public class DepositNoticeService {
         if (!TicketStatus.APPROVED.equals(st) && !TicketStatus.DOCUMENT_ISSUED.equals(st)) {
             throw new ApiException(HttpStatus.CONFLICT, "ขอแก้ไข revision ได้เฉพาะจากสถานะ approved หรือ document_issued เท่านั้น");
         }
-        if (s.createdById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถขอแก้ไขใบเสนอราคาได้");
         }
 
@@ -1219,7 +1220,7 @@ public class DepositNoticeService {
         requireRole(actor, VIEWER_ROLES);
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if ("sales".equals(actor.role()) && t.summary().createdById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         if (IMPORT_ROLES.contains(actor.role())) {
@@ -1242,7 +1243,7 @@ public class DepositNoticeService {
     private void requireTicketOwner(long ticketId, UserPrincipal actor) {
         TicketDto t = tickets.findById(ticketId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if (t.summary().createdById() != actor.id()) {
+        if (!DealOwnership.isOwnerOrKeyer(t.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

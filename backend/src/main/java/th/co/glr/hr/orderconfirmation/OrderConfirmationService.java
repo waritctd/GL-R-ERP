@@ -1,6 +1,7 @@
 package th.co.glr.hr.orderconfirmation;
 
 import java.math.BigDecimal;
+import th.co.glr.hr.ticket.DealOwnership;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -524,7 +525,7 @@ public class OrderConfirmationService {
     /** Owner-only, matching every prior step's "sales" scoping: the deal (ticket) owner, not
      * merely the pricing request's own requested_by (which may differ). */
     private void requireOwner(PricingRequestSummaryDto summary, UserPrincipal actor) {
-        if ("sales".equals(actor.role()) && summary.ticketCreatedById() != actor.id()) {
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
     }

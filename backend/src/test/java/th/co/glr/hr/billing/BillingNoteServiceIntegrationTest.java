@@ -114,6 +114,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     private BillingNoteService billingNoteService;
 
     private long salesRepId;
+    private EmployeeRepository employees;
     private UserPrincipal salesActor;          // sales, NO grant
     private UserPrincipal importActor;         // import, NO grant
     private UserPrincipal hrActor;             // hr, NO grant
@@ -131,7 +132,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         PricingRequestRepository pricingRequests = new PricingRequestRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         customersRepo = new CustomerRepository(jdbc);
-        EmployeeRepository employees = new EmployeeRepository(
+        employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         employeeAuth = new EmployeeAuthRepository(jdbc);
         ObjectMapper objectMapper = new ObjectMapper();
@@ -1020,6 +1021,26 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     // possible access to this endpoint must not be able to tell "customer does not exist" (404)
     // apart from "customer exists but I cannot see it" (403).
     // ─────────────────────────────────────────────────────────────────────────────────────
+
+    // Deal OWNER vs KEYER (2026-11-05): a sales rep who KEYED the deal (sales.ticket.keyed_by) lists the
+    // customer's billing notes that reference it, like the owner does; a third rep does not.
+    @Test
+    void list_salesKeyerOfTheReferencedDeal_seesTheNote_thirdRepDoesNot() {
+        CustomerDto customer = createCustomer("KeyerList");
+        DealFixture deal = buildAcceptedDeal(customer, salesActor, "KeyerList");
+        BillingNoteDocumentDto note = billingNoteService.createDraft(customer.id(),
+            new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null,
+                List.of(lineFor("DEPOSIT_NOTICE", deal.depositNoticeId()))), employeeWithGrantActor);
+        long keyerId = createEmployee(employees, "ผู้คีย์ดีล BN", "keyer-bn1@glr.co.th", "SALES", "แผนกขาย", false);
+        long thirdId = createEmployee(employees, "พนักงานขายที่สาม BN", "third-bn1@glr.co.th", "SALES", "แผนกขาย", false);
+        jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :t",
+            Map.of("k", keyerId, "t", deal.ticketId()));
+
+        assertThat(billingNoteService.list(customer.id(), actor(keyerId, "sales")))
+            .extracting(BillingNoteDocumentDto::id).contains(note.id());
+        assertThat(billingNoteService.list(customer.id(), actor(thirdId, "sales")))
+            .extracting(BillingNoteDocumentDto::id).doesNotContain(note.id());
+    }
 
     @Test
     void s7_list_unauthorizedCallerGets403NotNotFound_evenForANonExistentCustomer() {

@@ -76,8 +76,34 @@ public final class PricingRequestDtos {
         // The deal ticket's payment track (sales.ticket.payment_status): null until the customer's order
         // is confirmed. Once set no new pricing round (customer-change revision / submit) can start, so the
         // frontend hides the create/submit/สร้างรอบแก้ไข controls on it.
-        String ticketPaymentStatus
+        String ticketPaymentStatus,
+        // sales.ticket.keyed_by (V202): who typed the deal in (null only on pre-V202 deals). Passes every
+        // owner check alongside ticketCreatedById -- see ticket.DealOwnership.
+        Long ticketKeyedById
     ) {
+        /** The shape before {@link #ticketKeyedById}: defaults it to null. */
+        public PricingRequestSummaryDto(
+            long id, String requestCode, long ticketId, String ticketCode, String projectName,
+            String customerName, long ticketCreatedById, String recipientType, Long recipientContactId,
+            String recipientLabel, String status, long requestedById, String requestedByName,
+            Long assignedImportId, String assignedImportName, LocalDate requiredDate,
+            BigDecimal customerTargetPrice, String targetCurrency, String note, int itemCount,
+            int revisionNo, Long parentPricingRequestId, Instant submittedAt, Instant pickedUpAt,
+            Instant cancelledAt, Instant createdAt, Instant updatedAt, Instant orderConfirmedAt,
+            String paymentTermMode, Integer creditDays, Integer validityDays, Long printedByDisplayId,
+            Long salesRepDisplayId, String deptCode, String unitCode, boolean omitContactHonorific,
+            Long customerId, String ticketStatus, String ticketPaymentStatus
+        ) {
+            this(id, requestCode, ticketId, ticketCode, projectName, customerName, ticketCreatedById,
+                recipientType, recipientContactId, recipientLabel, status, requestedById,
+                requestedByName, assignedImportId, assignedImportName, requiredDate,
+                customerTargetPrice, targetCurrency, note, itemCount, revisionNo,
+                parentPricingRequestId, submittedAt, pickedUpAt, cancelledAt, createdAt, updatedAt,
+                orderConfirmedAt, paymentTermMode, creditDays, validityDays, printedByDisplayId,
+                salesRepDisplayId, deptCode, unitCode, omitContactHonorific, customerId, ticketStatus,
+                ticketPaymentStatus, null);
+        }
+
         /** The shape without the header-terms fields — kept so every existing construction site
          * (tests, mostly) compiles unchanged. Defaults every new field to null/false, exactly what
          * a row that predates them reads as. */

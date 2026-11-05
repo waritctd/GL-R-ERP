@@ -58,6 +58,7 @@ import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
 } from './ticketDetailTabs.js';
 import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
+import { isOwnerOrKeyer } from './dealOwnership.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
@@ -422,7 +423,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // `enabled` gate. A presentation projection of the backend gate, not a new authorization rule.
   const documentsTicketSummary = ticket?.summary ?? null;
   const canViewDocumentsTab = Boolean(documentsTicketSummary) && (
-    user.id === documentsTicketSummary.createdById
+    isOwnerOrKeyer(documentsTicketSummary, user.id)
     || user.id === documentsTicketSummary.assignedToId
     || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
@@ -483,7 +484,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
   // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
-  const readsDocs = role === 'sales' && ticket?.summary?.createdById === user.id && !!ticketId;
+  const readsDocs = role === 'sales' && isOwnerOrKeyer(ticket?.summary, user.id) && !!ticketId;
   const depositNoticesQuery = useQuery({ ...depositNoticesQueryOptions(ticketId), enabled: readsDocs });
   const remainingInvoicesQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
@@ -904,7 +905,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Nothing on this page reads `quotationOnly`: a quotation-first deal is an ordinary deal
   // (IA §7, "Nothing hidden").
   const st = summary.status;
-  const isOwner = user.id === summary.createdById;
+  const isOwner = isOwnerOrKeyer(summary, user.id);
   // Reading a deal's documents is the same question as reading the deal (account/import reach the
   // เอกสาร panel, hr does not), but WRITING stays narrow: TicketAccessPolicy.canManageDocuments is
   // participant OR sales_manager/ceo. Mirrored here so the panel does not offer account/import an

@@ -42,7 +42,7 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRe
 @Repository
 public class PricingRequestRepository {
     private static final String SUMMARY_SELECT = """
-        SELECT pr.*, t.code AS ticket_code, t.title AS ticket_title, t.created_by AS ticket_created_by,
+        SELECT pr.*, t.code AS ticket_code, t.title AS ticket_title, t.created_by AS ticket_created_by, t.keyed_by AS ticket_keyed_by,
                p.name AS project_name, t.customer_name, t.customer_id, t.status AS ticket_status, t.payment_status AS ticket_payment_status,
                er.first_name_th AS requested_by_first_name_th, er.last_name_th AS requested_by_last_name_th,
                ei.first_name_th AS assigned_import_first_name_th, ei.last_name_th AS assigned_import_last_name_th,
@@ -806,7 +806,7 @@ public class PricingRequestRepository {
             params.addValue("assignedImportId", assignedImportId);
         }
         if (createdByFilter != null) {
-            sql.append(" AND t.created_by = :createdByFilter ");
+            sql.append(" AND (t.created_by = :createdByFilter OR t.keyed_by = :createdByFilter) ");
             params.addValue("createdByFilter", createdByFilter);
         }
         if (activeDealsOnly) {
@@ -820,7 +820,7 @@ public class PricingRequestRepository {
         // (t.created_by = draftOwnerId, which the service always sets to the caller's
         // own id). This is independent of createdByFilter above, which only applies to
         // the "sales" role and is a distinct concern (own-deals-only scoping).
-        sql.append(" AND (pr.status <> 'DRAFT' OR :draftOversight = TRUE OR t.created_by = :draftOwnerId) ");
+        sql.append(" AND (pr.status <> 'DRAFT' OR :draftOversight = TRUE OR t.created_by = :draftOwnerId OR t.keyed_by = :draftOwnerId) ");
         params.addValue("draftOversight", draftOversight);
         params.addValue("draftOwnerId", draftOwnerId);
         sql.append(" ORDER BY pr.created_at DESC, pr.pricing_request_id DESC ");
@@ -1283,7 +1283,8 @@ public class PricingRequestRepository {
             rs.getBoolean("omit_contact_honorific"),
             nullableLong(rs, "customer_id"),
             rs.getString("ticket_status"),
-            rs.getString("ticket_payment_status")
+            rs.getString("ticket_payment_status"),
+            nullableLong(rs, "ticket_keyed_by")
         );
     }
 

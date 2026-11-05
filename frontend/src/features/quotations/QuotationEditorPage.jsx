@@ -303,6 +303,10 @@ export function QuotationEditorPage({ user, showToast }) {
     enabled: canCreateDealQuotationStandalone(user),
   });
   const displayNameOptions = displayNameOptionsQuery.data ?? [];
+  // เจ้าของงาน (2026-11-05): who owns the deal this inline create makes. Defaults to the signed-in
+  // user; ownerEmployeeId is sent only when it names someone else.
+  const [dealOwnerId, setDealOwnerId] = useState('');
+  const effectiveDealOwnerId = dealOwnerId || (user?.id != null ? String(user.id) : '');
 
   // /quotations/new with NEITHER an :id NOR a ?ticket= is a brand-new deal that exists nowhere yet:
   // the rep picks/creates the customer and project right here. Stable per-render (not stateful): it
@@ -1674,6 +1678,7 @@ export function QuotationEditorPage({ user, showToast }) {
           // a normal pipeline deal and its order is confirmed with ยืนยันคำสั่งซื้อ while status is
           // 'draft'. See CreateTicketRequest#quotationOnly.
           quotationOnly: true,
+          ...(effectiveDealOwnerId && effectiveDealOwnerId !== String(user?.id) ? { ownerEmployeeId: Number(effectiveDealOwnerId) } : {}),
         });
         // TicketDto envelope: the new ticket's id is at `.summary.id`, never `.ticket.id`/`.id`.
         ticketId = ticketRes.ticket?.summary?.id;
@@ -2287,6 +2292,21 @@ export function QuotationEditorPage({ user, showToast }) {
                 {/* ผู้ติดต่อ, then the customer's phone/email, then the designer: one group spaced
                     like the rest of the page (gap-3). */}
                 <div className="grid gap-3">
+                  {dealMode === 'create' ? (
+                    <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
+                      เจ้าของงาน
+                      <select
+                        value={effectiveDealOwnerId}
+                        onChange={(e) => { setDealOwnerId(e.target.value); setDirty(true); }}
+                        disabled={displayNameOptionsQuery.isLoading}
+                      >
+                        {user?.id != null && !displayNameOptions.some((o) => String(o.id) === String(user.id)) ? (
+                          <option value={String(user.id)}>{user.name}</option>
+                        ) : null}
+                        {displayNameOptions.map((o) => <option key={o.id} value={String(o.id)}>{o.name}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
                   {contactPicker}
                   <OrderedByContactFields
                     terms={terms}

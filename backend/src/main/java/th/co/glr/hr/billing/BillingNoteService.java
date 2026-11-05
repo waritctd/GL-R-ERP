@@ -1,5 +1,6 @@
 package th.co.glr.hr.billing;
 
+import th.co.glr.hr.ticket.DealOwnership;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -123,7 +124,7 @@ public class BillingNoteService {
             .filter(Objects::nonNull)
             .distinct()
             .anyMatch(ticketId -> tickets.findById(ticketId)
-                .map(t -> t.summary().createdById() == actor.id())
+                .map(t -> DealOwnership.isOwnerOrKeyer(t.summary(), actor.id()))
                 .orElse(false));
     }
 
@@ -163,10 +164,10 @@ public class BillingNoteService {
         Set<Long> allTicketIds = all.stream()
             .flatMap(n -> distinctTicketIds(n).stream())
             .collect(Collectors.toSet());
-        Map<Long, Long> createdByByTicket = tickets.findCreatedByIds(allTicketIds);
+        Map<Long, Set<Long>> peopleByTicket = tickets.findOwnerAndKeyerIds(allTicketIds);
         return all.stream()
             .filter(n -> distinctTicketIds(n).stream()
-                .anyMatch(ticketId -> actor.id() == createdByByTicket.getOrDefault(ticketId, -1L)))
+                .anyMatch(ticketId -> peopleByTicket.getOrDefault(ticketId, Set.of()).contains(actor.id())))
             .toList();
     }
 
