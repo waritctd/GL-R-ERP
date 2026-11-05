@@ -10,18 +10,7 @@ import { FormGrid, formGridSpan2 } from '../../components/common/Layout.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
 import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
-
-export function uniqueOptions(rows, valueKey, labelKey) {
-  const options = new Map();
-  rows.forEach((row) => {
-    const value = row[valueKey];
-    const label = row[labelKey] || value;
-    if (value && label && !options.has(value)) {
-      options.set(value, { value, label });
-    }
-  });
-  return [...options.values()].sort((a, b) => a.label.localeCompare(b.label, 'th'));
-}
+import { uniqueOptions } from './employeeOptions.js';
 
 const employeeFormSchema = z.object({
   nameTh: z.string().min(1, 'กรุณาระบุชื่อ-นามสกุล'),

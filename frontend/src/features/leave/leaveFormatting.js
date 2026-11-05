@@ -2,20 +2,9 @@
 // (calendar list, own-request table) and ReviewQueueTab.jsx (review table) -- lifted
 // verbatim out of the pre-A1 LeavePage.jsx (same function bodies) so both tabs render
 // dates/day-counts identically instead of each growing its own slightly-different copy.
+import { bangkokTodayIso } from '../../utils/format.js';
 
-function bangkokDateParts(date = new Date()) {
-  return Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Bangkok',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date).map((part) => [part.type, part.value]));
-}
-
-export const todayIso = () => {
-  const parts = bangkokDateParts();
-  return `${parts.year}-${parts.month}-${parts.day}`;
-};
+export const todayIso = () => bangkokTodayIso();
 
 export function yearFrom(dateString) {
   return Number((dateString || todayIso()).slice(0, 4));
