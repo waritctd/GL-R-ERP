@@ -93,18 +93,18 @@ import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
 /**
- * Step 8 (Receiving, Inventory Allocation, and Delivery) — real-DB acceptance coverage for the
- * central question this step had to answer first: does {@code sales.ticket_item.qty} still match
+ * Receiving, Inventory Allocation, and Delivery — real-DB acceptance coverage for the
+ * central question: does {@code sales.ticket_item.qty} still match
  * what the pricing-request chain actually settled on by the time the deal reaches delivery? See
  * {@code OrderConfirmationService#reconcileTicketItems}'s own Javadoc for the full answer (no, it
  * drifts, both on a first submission and further after a cost-affecting revision) and the design
  * decision that followed from it.
  *
- * <p>Drives a deal through the REAL Steps 1-6 services (no shortcuts), exactly like {@code
- * ProcurementServiceIntegrationTest} — this class exists separately because Step 8's own coverage
+ * <p>Drives a deal through the REAL upstream services (no shortcuts), exactly like {@code
+ * ProcurementServiceIntegrationTest} — this class exists separately because its coverage
  * (quantity reconciliation, reserveStock/completeDelivery composition, the "cannot deliver more
- * than reconciled qty" hard constraint) is a materially different acceptance scenario from Step
- * 7's factory-PO-centric one, not because the wiring differs.
+ * than reconciled qty" hard constraint) is a materially different acceptance scenario from the
+ * factory-PO-centric one, not because the wiring differs.
  */
 class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
@@ -224,10 +224,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         // confirmOrder on it, mirroring the realistic flow (Sales would not confirm an order that
         // is about to be revised).
         //
-        // Reissue-through-CEO-chain (owner ruling 2026-08-13): this test used to drive PR1 all the
-        // way to QUOTATION_ACCEPTED, and its comment cited that as PROOF that
-        // createCustomerChangeRevision's gate did not consult PricingRequestStatus.ALLOWED. That
-        // was the bug, described as a feature. The gate now derives from the same table, so the
+        // createCustomerChangeRevision's gate derives from PricingRequestStatus.ALLOWED, so the
         // revision is created from QUOTATION_ISSUED — the last point at which one is still legal.
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationIssued(new BigDecimal("10"));
         assertThat(pricingRequestService.get(deal.pricingRequestId, salesActor).summary().status())
@@ -246,26 +243,25 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     /**
-     * <b>This test was inverted by the reissue-through-CEO-chain ruling (owner, 2026-08-13), and
-     * the inversion is the point.</b>
+     * <b>Asserts a refusal, not a convergence.</b>
      *
-     * <p>It used to walk "Sales confirms the original order (X=10), the customer then asks for a
-     * change, the revision (Y=15) is accepted and confirmed, reconciliation converges forward".
-     * That sequence is now <b>structurally unreachable</b>, and not by accident: {@code confirmOrder}
-     * requires {@code QUOTATION_ACCEPTED}, and a customer-change revision is now refused FROM
+     * <p>The sequence "Sales confirms the original order (X=10), the customer then asks for a
+     * change, the revision (Y=15) is accepted and confirmed, reconciliation converges forward" is
+     * <b>structurally unreachable</b>, and not by accident: {@code confirmOrder}
+     * requires {@code QUOTATION_ACCEPTED}, and a customer-change revision is refused FROM
      * {@code QUOTATION_ACCEPTED}. Once the customer has accepted and the order is confirmed, the
      * deal is moving to PO and fulfilment — changing it there is an order amendment, which is a
      * mechanism this codebase does not have yet.
      *
-     * <p>So rather than delete the walk and quietly lose the fact, it now asserts the refusal, and
+     * <p>So this test asserts the refusal, and
      * that the confirmed quantity is left exactly as it was.
      *
      * <p><b>Coverage genuinely lost, stated rather than hidden:</b> the forward-convergence branch
      * of {@code OrderConfirmationService}'s reconciliation (confirm PR1, then confirm PR2 on the
-     * same ticket item) no longer has a reachable trigger <i>via the revision chain</i>. A deal may
+     * same ticket item) has no reachable trigger <i>via the revision chain</i>. A deal may
      * carry 0..N pricing requests, so a second INDEPENDENT pricing request on the same ticket may
-     * still reach it — that was not verified either way here. The code is untouched and still
-     * correct; what changed is that this test can no longer drive it.
+     * still reach it — that is not verified either way here. The code is unaffected; this
+     * test can no longer drive it.
      */
     @Test
     void confirmOrder_thenACustomerChangeRevision_isRefused_soAConfirmedOrderCannotBeRevised() {
@@ -297,9 +293,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void fullChain_reserveStockAndCompleteDelivery_operateAgainstReconciledQty_notStaleTicketCreationQty() {
-        // PR1 stops at QUOTATION_ISSUED — the last point a customer-change revision is legal since
-        // the reissue-through-CEO-chain ruling. It is never confirmed, so nothing is lost here:
-        // this test only ever confirmed PR2.
+        // PR1 stops at QUOTATION_ISSUED — the last point a customer-change revision is legal.
+        // It is never confirmed, so nothing is lost here: this test only ever confirms PR2.
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationIssued(new BigDecimal("10"));
         long revisedPricingRequestId = createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("15"));
         orderConfirmation.confirmOrder(revisedPricingRequestId,
@@ -327,7 +322,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         // ── Hard constraint, wrong-way-round: deliver only PART of the 15, and confirm the deal
         //    is NOT marked delivered while an open quantity remains ─────────────────────────
-        // V184: completeDelivery/recordPartialDelivery's gate (canWriteDelivery) transferred to
+        // completeDelivery/recordPartialDelivery's gate (canWriteDelivery) is
         // {ceo, owning-rep} only -- salesActor (the deal owner, see the fixture below), not
         // importActor. See DeliveryAuthzIntegrationTest for the authz pin itself; this file is
         // about quantity reconciliation, not authz.
@@ -347,7 +342,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThat(afterComplete.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
         assertThat(afterComplete.items().get(0).qtyDelivered()).isEqualByComparingTo("15");
 
-        // Delivery-note customer confirmation (Step 8) is recorded on the completing delivery.
+        // Delivery-note customer confirmation is recorded on the completing delivery.
         assertThat(tickets.findDeliveriesByTicket(deal.ticketId))
             .filteredOn(d -> "คุณลูกค้า".equals(d.recipientName()))
             .hasSize(1);
@@ -384,14 +379,13 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * <b>Inverted by the reissue-through-CEO-chain ruling (owner, 2026-08-13)</b>, for the same
-     * structural reason as {@code confirmOrder_thenACustomerChangeRevision_isRefused_...}: getting
-     * a quantity DELIVERED requires {@code issueImportRequest}, which requires
+     * Same structural reason as {@code confirmOrder_thenACustomerChangeRevision_isRefused_...}:
+     * getting a quantity DELIVERED requires {@code issueImportRequest}, which requires
      * {@code TicketStatus.QUOTATION_ISSUED}, which only {@code confirmOrder}'s bridge write sets,
-     * which requires {@code QUOTATION_ACCEPTED} — from which a revision is now refused.
+     * which requires {@code QUOTATION_ACCEPTED} — from which a revision is refused.
      *
-     * <p>The refusal now happens one step EARLIER and more bluntly than the behaviour this test
-     * was written for: the revision cannot be created at all, so {@code confirmOrder} never gets
+     * <p>The refusal happens one step EARLIER and more bluntly than a downward reconciliation
+     * would: the revision cannot be created at all, so {@code confirmOrder} never gets
      * the chance to reject a downward reconciliation.
      *
      * <p><b>Coverage genuinely lost, stated rather than hidden:</b>
@@ -449,12 +443,11 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void confirmOrder_revisionDropsALineEntirely_closesItsTicketItemSoItStopsBlockingDelivery() {
-        // Reissue-through-CEO-chain (owner ruling 2026-08-13): PR1 stops at QUOTATION_ISSUED, and
-        // the original is NOT confirmed first. It used to be — the point being that the closeout
-        // works on a line that had genuinely been correct at some point (B reconciled to 5) rather
-        // than one merely never touched. Confirming requires QUOTATION_ACCEPTED, from which a
-        // revision is now refused, so that stronger precondition is no longer constructible and B
-        // enters the revision still holding its ticket-creation stub of 1.
+        // PR1 stops at QUOTATION_ISSUED, and the original is NOT confirmed first. (Confirming
+        // would show the closeout working on a line that had genuinely been correct at some
+        // point, B reconciled to 5, rather than one merely never touched.) Confirming requires
+        // QUOTATION_ACCEPTED, from which a revision is refused, so that stronger precondition is
+        // not constructible and B enters the revision still holding its ticket-creation stub of 1.
         //
         // The behaviour under test is unaffected: closeOutDroppedChainItems closes a dropped line
         // down to its qtyDelivered whatever its qty happened to be, and the assertion that the deal
@@ -507,7 +500,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         TicketDto delivered = ticketService.completeDelivery(
             deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
         // Reaches FULLY_DELIVERED / DealStage.DELIVERED — the exact outcome B's phantom open
-        // balance used to make permanently unreachable.
+        // balance would otherwise make permanently unreachable.
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
         assertThat(delivered.summary().salesStage()).isEqualTo(DealStage.DELIVERED);
     }
@@ -515,12 +508,12 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     /**
      * Same setup as above but B was PARTIALLY delivered (2 of 5) before the revision drops it.
      *
-     * <p><b>Inverted by the reissue-through-CEO-chain ruling (owner, 2026-08-13).</b> It used to
-     * assert that the closeout preserved delivery history (B's qty → 2, not 0), never fabricating
-     * a false "5 delivered" and never violating {@code chk_ticket_item_qty_delivered}. Reaching a
+     * <p>The closeout would preserve delivery history (B's qty → 2, not 0), never fabricating
+     * a false "5 delivered" and never violating {@code chk_ticket_item_qty_delivered}, but that
+     * scenario cannot be built: reaching a
      * partial delivery requires {@code confirmOrder} (via {@code issueImportRequest}'s
      * {@code TicketStatus.QUOTATION_ISSUED} gate), which requires {@code QUOTATION_ACCEPTED}, from
-     * which a revision is now refused — so the scenario cannot be built any more.
+     * which a revision is refused.
      *
      * <p><b>Coverage genuinely lost, stated rather than hidden:</b> the history-preserving branch
      * of {@code TicketRepository#closeOutDroppedChainItems} (close to {@code qtyDelivered} rather
@@ -582,7 +575,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // P1 hand-off notifications: deposit confirmed -> rep (A2), delivery finished -> account (A4).
+    // Hand-off notifications: deposit confirmed -> rep, delivery finished -> account.
     // Each case pins the bell row AND the email path for the same recipient.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -591,13 +584,13 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     private static final String PAYMENT_RECEIVED_TITLE = "ฝ่ายบัญชีรับชำระเงินเพิ่มแล้ว";
     private static final String PAYMENT_FULLY_PAID_TITLE = "ลูกค้าชำระเงินครบแล้ว";
 
-    /** P2 B1: what the rep reads when a payment AFTER the deposit leaves a balance. */
+    /** What the rep reads when a payment AFTER the deposit leaves a balance. */
     private String paymentReceivedMessage(long ticketId, BigDecimal received, BigDecimal outstanding) {
         return "ฝ่ายบัญชี (" + accountActor.name() + ") บันทึกรับชำระเงิน " + ThaiText.money(received) + " บาท แล้ว\n"
             + dealLabel(ticketId) + " · ยอดค้างชำระ " + ThaiText.money(outstanding) + " บาท\nแจ้งเพื่อทราบ ไม่ต้องดำเนินการ";
     }
 
-    /** P2 B1: what the rep reads when the deal reaches FULLY_PAID (by a payment, or by the no-outstanding walk). */
+    /** What the rep reads when the deal reaches FULLY_PAID (by a payment, or by the no-outstanding walk). */
     private String fullyPaidMessage(long ticketId) {
         BigDecimal payable = tickets.payableAmount(ticketId);
         return "ฝ่ายบัญชี (" + accountActor.name() + ") ยืนยันว่าลูกค้าชำระเงินครบแล้ว\n"
@@ -648,7 +641,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
 
-        // P2 B1: the payment that settles the deposit is DEPOSIT_PAYMENT_CONFIRMED only -- never also a "received" notice.
+        // The payment that settles the deposit is DEPOSIT_PAYMENT_CONFIRMED only -- never also a "received" notice.
         mailer.assertNoNotice("PAYMENT_RECEIVED", PAYMENT_RECEIVED_TITLE);
         mailer.assertNoNotice("PAYMENT_FULLY_PAID", PAYMENT_FULLY_PAID_TITLE);
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
@@ -719,7 +712,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     /**
      * The later balance payment adds no second DEPOSIT_PAYMENT_CONFIRMED; it clears the whole balance, so the
-     * rep is told the deal is fully paid (P2 B1) -- exactly once, and not as a "received" notice.
+     * rep is told the deal is fully paid -- exactly once, and not as a "received" notice.
      */
     @Test
     void confirmFinalPayment_afterTheDeposit_notifiesRepFullyPaid_andNotTheDepositAgain() {
@@ -1028,7 +1021,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
      * Same fixture, stopped one step earlier — at QUOTATION_ISSUED, before the customer's
      * acceptance is recorded.
      *
-     * <p>Reissue-through-CEO-chain (owner ruling 2026-08-13): this is now the ONLY state a
+     * <p>This is the ONLY state a
      * customer-change revision can be created from at the end of the chain. QUOTATION_ACCEPTED is
      * terminal and refused — see {@code PricingRequestStatus.ALLOWED} and the two
      * {@code customerChangeRevision_from...IsRejected} tests below. Every test in this file that
@@ -1119,8 +1112,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     /**
      * Records the customer's ACCEPTED outcome on whichever quotation of {@code pricingRequestId}
      * is currently ISSUED. Split out from {@link #driveDraftPricingRequestToQuotationAccepted} so
-     * a test can stop at QUOTATION_ISSUED and revise from there — which, since the
-     * reissue-through-CEO-chain ruling, is the only point a revision is still legal.
+     * a test can stop at QUOTATION_ISSUED and revise from there — the only point a revision is
+     * legal.
      */
     private void recordAcceptanceOnCurrentQuotation(long pricingRequestId) {
         CustomerQuotationDto issued = quotationService.listForPricingRequest(pricingRequestId, salesActor).stream()
