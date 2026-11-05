@@ -3,9 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
 import { CompactStatRow } from '../../components/common/CompactStatRow.jsx';
-import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
@@ -16,6 +15,7 @@ import {
   formatThaiMonthYearFromMonthInputValue,
   payrollDeductionKindLabel,
 } from '../../utils/format.js';
+import { EMPLOYEE_COLUMN, expandColumn } from './deductionColumns.jsx';
 
 /**
  * HR/CEO read view of the garnishment shortfall ledger (issue #376, exposed for #744).
@@ -71,19 +71,7 @@ export function DeductionShortfallsPage() {
       sortAccessor: (row) => row.payrollMonth ?? '',
       render: (row) => monthLabel(row.payrollMonth),
     },
-    {
-      key: 'employee',
-      header: 'พนักงาน',
-      sortable: true,
-      sortAccessor: (row) => row.employeeCode ?? '',
-      searchAccessor: (row) => `${row.employeeCode ?? ''} ${row.employeeName ?? ''}`,
-      render: (row) => (
-        <span className="grid">
-          <strong className="truncate" title={row.employeeName}>{row.employeeName}</strong>
-          <code className="text-text-muted text-2xs">{row.employeeCode}</code>
-        </span>
-      ),
-    },
+    EMPLOYEE_COLUMN,
     {
       key: 'deductionKind',
       header: 'ประเภทการหัก',
@@ -120,26 +108,13 @@ export function DeductionShortfallsPage() {
         <strong className="font-mono font-extrabold text-text">{formatMoney(row.shortfallAmount)}</strong>
       ),
     },
-    {
-      key: 'expand',
-      header: '',
-      render: (row) => {
-        const expanded = expandedId === row.id;
-        return (
-          <Button
-            type="button"
-            variant="icon"
-            aria-expanded={expanded}
-            aria-controls={expandedRowRegionId(row.id)}
-            title={expanded ? 'ซ่อนเหตุผล' : 'ดูเหตุผลที่หักไม่ครบ'}
-            aria-label={`${expanded ? 'ซ่อน' : 'ดู'}เหตุผลที่หักไม่ครบของ ${row.employeeName} เดือน ${monthLabel(row.payrollMonth)}`}
-            onClick={() => setExpandedId((current) => (current === row.id ? null : row.id))}
-          >
-            <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-          </Button>
-        );
-      },
-    },
+    expandColumn({
+      expandedId,
+      setExpandedId,
+      hideTitle: 'ซ่อนเหตุผล',
+      showTitle: 'ดูเหตุผลที่หักไม่ครบ',
+      labelFor: (row) => `เหตุผลที่หักไม่ครบของ ${row.employeeName} เดือน ${monthLabel(row.payrollMonth)}`,
+    }),
   ];
 
   return (

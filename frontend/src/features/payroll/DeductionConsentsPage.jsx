@@ -5,12 +5,13 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
-import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
+import { DataTable } from '../../components/common/DataTable.jsx';
 import { FieldList } from '../../components/common/FieldList.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { DeductionConsentFormModal } from './DeductionConsentFormModal.jsx';
+import { EMPLOYEE_COLUMN, expandColumn } from './deductionColumns.jsx';
 import {
   CONSENT_APPLICABLE_DEDUCTION_KINDS,
   formatThaiDate,
@@ -131,19 +132,7 @@ export function DeductionConsentsPage({ user, showToast }) {
   }
 
   const columns = [
-    {
-      key: 'employee',
-      header: 'พนักงาน',
-      sortable: true,
-      sortAccessor: (row) => row.employeeCode ?? '',
-      searchAccessor: (row) => `${row.employeeCode ?? ''} ${row.employeeName ?? ''}`,
-      render: (row) => (
-        <span className="grid">
-          <strong className="truncate" title={row.employeeName}>{row.employeeName}</strong>
-          <code className="text-text-muted text-2xs">{row.employeeCode}</code>
-        </span>
-      ),
-    },
+    EMPLOYEE_COLUMN,
     {
       key: 'deductionKind',
       header: 'ประเภทการหัก',
@@ -207,26 +196,13 @@ export function DeductionConsentsPage({ user, showToast }) {
         </Button>
       ),
     }] : []),
-    {
-      key: 'expand',
-      header: '',
-      render: (row) => {
-        const expanded = expandedId === row.id;
-        return (
-          <Button
-            type="button"
-            variant="icon"
-            aria-expanded={expanded}
-            aria-controls={expandedRowRegionId(row.id)}
-            title={expanded ? 'ซ่อนหมายเหตุ' : 'ดูหมายเหตุ'}
-            aria-label={`${expanded ? 'ซ่อน' : 'ดู'}หมายเหตุของ ${row.employeeName} (${payrollDeductionKindLabel(row.deductionKind)})`}
-            onClick={() => setExpandedId((current) => (current === row.id ? null : row.id))}
-          >
-            <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
-          </Button>
-        );
-      },
-    },
+    expandColumn({
+      expandedId,
+      setExpandedId,
+      hideTitle: 'ซ่อนหมายเหตุ',
+      showTitle: 'ดูหมายเหตุ',
+      labelFor: (row) => `หมายเหตุของ ${row.employeeName} (${payrollDeductionKindLabel(row.deductionKind)})`,
+    }),
   ];
 
   return (
