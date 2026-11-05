@@ -23,14 +23,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const user = { role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ' };
 const employee = { nickName: 'นำเข้า' };
 
-// One ticket per fulfilment stage (issueImportRequest / markIrSent /
-// markShipping / markGoodsReceived) plus a draft deal whose only open item
-// is an unpicked pricing request, plus D-005 (GOODS_RECEIVED) proving the
-// delivery-ready stage produces NEITHER a worklist row NOR a pulse tile any
-// more (owner ruling 2026-08-17 moved that prompt to Sales — see
-// importActions.js's nextImportAction) — covers every branch of
-// nextImportAction/nextFulfilmentActionCode (importActions.js) the worklist
-// and conveyor pulse both read from.
+// One ticket per fulfilment stage (issueImportRequest / markIrSent / markShipping /
+// markGoodsReceived) plus a draft deal whose only open item is an unpicked pricing request, plus
+// D-005 (GOODS_RECEIVED) proving the delivery-ready stage produces NEITHER a worklist row NOR a
+// pulse tile (that prompt belongs to Sales; see importActions.js's nextImportAction). Covers every
+// branch of nextImportAction/nextFulfilmentActionCode (importActions.js) the worklist and
+// conveyor pulse read from.
 const TICKETS = [
   { id: 1, code: 'D-001', title: 'ดีล 1', customerName: 'บริษัท A', status: 'quotation_issued', fulfillmentStatus: null, overdue: false, updatedAt: '2026-07-01T00:00:00Z' },
   { id: 2, code: 'D-002', title: 'ดีล 2', customerName: 'บริษัท B', status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED', overdue: true, updatedAt: '2026-07-02T00:00:00Z' },
@@ -88,15 +86,14 @@ describe('ImportOverview', () => {
 
     expect(pulseCount('เกินกำหนด')).toBe('1'); // D-002 only
     expect(pulseCount('ตั้งราคา')).toBe('2'); // both pricing-request rows
-    // W3-01 (owner ruling 2026-10-29): D-001 (confirmed, no IR yet) is NOT an import to-do — the dashboard
-    // lists what /fulfilment lists (an ISSUED IR onward), so only D-002 counts here.
+    // D-001 (confirmed, no IR yet) is NOT an import to-do: the dashboard lists what /fulfilment
+    // lists (an ISSUED IR onward), so only D-002 counts here.
     expect(pulseCount('จัดซื้อ/นำเข้า')).toBe('1');
     expect(pulseCount('ขนส่ง')).toBe('1'); // D-003 (markShipping pending)
     expect(pulseCount('รับเข้าคลัง')).toBe('1'); // D-004 (markGoodsReceived pending)
-    // Owner ruling 2026-08-17: stage 13-14 (ส่งมอบสินค้า) prompting moved to Sales — the ส่งมอบ tile
-    // is gone from this dashboard entirely (not merely re-counted to 0), and D-005 (GOODS_RECEIVED)
-    // contributes to no tile at all any more. MUTATION-CHECKED: reverting ImportOverview.jsx's
-    // STAGE_BUCKETS/FULFILMENT_ACTION_TO_BUCKET removal turns this assertion red.
+    // Stage 13-14 (ส่งมอบสินค้า) prompting belongs to Sales: the ส่งมอบ tile is gone entirely (not
+    // merely counted 0), and D-005 (GOODS_RECEIVED) contributes to no tile. MUTATION-CHECKED:
+    // reverting ImportOverview.jsx's STAGE_BUCKETS/FULFILMENT_ACTION_TO_BUCKET removal turns this red.
     expect(within(pulsePanel).queryByText('ส่งมอบ')).toBeNull();
   });
 
@@ -114,9 +111,8 @@ describe('ImportOverview', () => {
     const panel = worklistPanel();
 
     const rows = within(panel).getAllByText(/^บริษัท /).map((el) => el.textContent);
-    // D-005 (GOODS_RECEIVED, "บริษัท E") no longer produces a row at all — nextImportAction now
-    // returns null for a delivery-ready deal (owner ruling 2026-08-17: that prompt is Sales' now).
-    // 4: D-001 (no IR yet, W3-01) and D-005 (delivery-ready) produce no row.
+    // D-005 (GOODS_RECEIVED, "บริษัท E") produces no row: nextImportAction returns null for a
+    // delivery-ready deal. 4: D-001 (no IR yet) and D-005 (delivery-ready) produce no row.
     expect(rows).toHaveLength(4);
     // D-002 is the only overdue deal — it must lead the worklist regardless
     // of its fulfilment stage.
@@ -129,12 +125,12 @@ describe('ImportOverview', () => {
       return within(row).getByRole('button').textContent;
     }
 
-    // W3-01: a confirmed deal with no IR yet shows NO entry and NO ออกคำขอนำเข้า button.
+    // A confirmed deal with no IR yet shows NO entry and NO ออกคำขอนำเข้า button.
     expect(within(panel).queryByText('บริษัท A')).toBeNull();
     expect(within(panel).queryByRole('button', { name: 'ออกคำขอนำเข้า' })).toBeNull();
-    // PR-B REVIEW ROUND 1, S8: IR_ISSUED's CTA is now the neutral "อัปเดตสถานะนำเข้า" — the old
-    // "ส่งคำขอนำเข้าแล้ว" implied a single legacy click /fulfilment no longer performs for an
-    // IR-tracked deal (see importActions.js's nextImportAction, markIrSent branch).
+    // IR_ISSUED's CTA is the neutral "อัปเดตสถานะนำเข้า": "ส่งคำขอนำเข้าแล้ว" would imply a single
+    // legacy click /fulfilment no longer performs for an IR-tracked deal (see importActions.js's
+    // nextImportAction, markIrSent branch).
     expect(ctaFor('บริษัท B')).toBe('อัปเดตสถานะนำเข้า');
     expect(ctaFor('บริษัท C')).toBe('บันทึกออกเดินทาง');
     expect(ctaFor('บริษัท D')).toBe('ยืนยันรับเข้าคลัง');
@@ -148,7 +144,7 @@ describe('ImportOverview', () => {
     renderOverview();
     await screen.findAllByText(/^บริษัท /);
 
-    // 4 — neither D-001 (no IR yet, W3-01) nor D-005 (GOODS_RECEIVED) produces a worklist row.
+    // 4 — neither D-001 (no IR yet) nor D-005 (GOODS_RECEIVED) produces a worklist row.
     expect(within(worklistPanel()).getAllByText(/^บริษัท /)).toHaveLength(4);
 
     fireEvent.click(screen.getByText('รับเข้าคลัง').closest('button'));
@@ -196,9 +192,9 @@ describe('ImportOverview deal links', () => {
     expect(screen.getByTestId('location').textContent).toBe('/import/deals/3');
   });
 
-  // BUG B: รับงาน · ขอราคา used to navigate to the queue (/pricing-requests), whose default import
-  // tab cannot list a SUBMITTED row. It must land on the PCR itself (PRICING_REQUESTS[0] = id 101,
-  // SUBMITTED, ticket 6 -> บริษัท F).
+  // รับงาน · ขอราคา must land on the PCR itself (PRICING_REQUESTS[0] = id 101, SUBMITTED, ticket 6
+  // -> บริษัท F), not the queue (/pricing-requests), whose default import tab cannot list a
+  // SUBMITTED row.
   it('sends the รับงาน · ขอราคา CTA to the SUBMITTED pricing request detail page', async () => {
     renderWithProbe();
     await screen.findAllByText(/^บริษัท /);
@@ -217,9 +213,9 @@ describe('ImportOverview deal links', () => {
   });
 });
 
-// W3-02 (owner ruling 2026-10-29): the ขนส่ง tile and the กำลังขนส่ง list count PER-FACTORY shipments, the
-// way /fulfilment does (one stored ใบขอซื้อ row at step IN_TRANSIT = one shipment) — a deal whose
-// deal-level status is still IR_ISSUED can have factories on the water.
+// The ขนส่ง tile and the กำลังขนส่ง list count PER-FACTORY shipments, the way /fulfilment does (one
+// stored ใบขอซื้อ row at step IN_TRANSIT = one shipment): a deal whose deal-level status is still
+// IR_ISSUED can have factories on the water.
 describe('ImportOverview per-factory in-transit', () => {
   const TRACKED = [
     { id: 21, code: 'D-021', title: 'ดีล 21', customerName: 'บริษัท รายโรงงาน', status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED', overdue: false, updatedAt: '2026-07-01T00:00:00Z' },
