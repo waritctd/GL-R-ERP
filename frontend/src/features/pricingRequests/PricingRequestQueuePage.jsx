@@ -13,34 +13,23 @@ import { SalesTabs } from '../sales/SalesTabs.jsx';
 import { formatThaiDate, pricingRequestStatusLabel } from '../../utils/format.js';
 import { canPickupPricingRequest, pricingRequestRecipientLabel } from './pricingRequestMeta.js';
 
-// Import's three meaningful stages (owner ruling, 2026-08-11) — รับเรื่อง,
-// เจรจาราคากับโรงงาน, รอ CEO อนุมัติราคา — bracketed by the two ends of the
-// queue: SUBMITTED (nothing has picked it up yet) and CANCELLED (dead, but
-// still needs to be findable). Deliberately absent: DRAFT, the sales rep's
-// private scratchpad, which is never Import's work; and MORE_INFO_REQUIRED,
-// whose ขอข้อมูลเพิ่มเติม feature was removed from the product entirely.
-// "ทั้งหมด" still lets import/ceo/sales_manager see the full picture.
+// Import's stages (รับเรื่อง, เจรจาราคากับโรงงาน, รอ CEO อนุมัติราคา) bracketed by SUBMITTED
+// (not picked up yet) and CANCELLED (dead, but must stay findable). DRAFT is the sales rep's
+// private scratchpad, never Import's work; MORE_INFO_REQUIRED no longer exists.
+// "ทั้งหมด" shows the full queue to import/ceo/sales_manager.
 //
-// `statuses` is a LIST, not a string, because เจรจาราคากับโรงงาน still has to
-// match TWO stored values. V140 merged COSTING_IN_PROGRESS into
-// AWAITING_FACTORY_RESPONSE and dropped it from the DB constraint, but rows sit
-// in the old value for the whole window between this code deploying and the
-// migration running — so the chip keeps matching both ON PURPOSE. Do not
-// "simplify" it to a single status: doing so makes those rows unreachable from
-// the chip that is supposed to find them, and the failure is invisible in tests
-// because every fixture is already on the new value.
+// `statuses` is a LIST because เจรจาราคากับโรงงาน must match TWO stored values: rows can still
+// sit in COSTING_IN_PROGRESS (merged into AWAITING_FACTORY_RESPONSE by migration V140) until the
+// migration runs. Do not "simplify" to one status: those rows would become unreachable, and tests
+// would not notice because every fixture uses the new value.
 //
-// GET /api/pricing-requests takes a SINGLE `status` value
-// (PricingRequestController#list -> PricingRequestService.list, which 400s on
-// anything that is not one valid status — and COSTING_IN_PROGRESS is no longer
-// one), so a two-status chip cannot be expressed server-side at all. It
-// therefore fetches everything (status=undefined) and narrows the rows below.
-// Once V140 has run everywhere, this entry can collapse to a single-value chip
-// and the client-side filter can go with it.
+// GET /api/pricing-requests takes a SINGLE `status` (PricingRequestService.list 400s on anything
+// else), so a two-status chip cannot be expressed server-side: fetch everything
+// (status=undefined) and narrow the rows below. Once V140 has run everywhere this can collapse
+// to one value and the client-side filter can go.
 //
-// Labels are read from pricingRequestStatusLabel (utils/format.js), the
-// canonical source, so a chip can never drift from the badge on the row it
-// filters to. Only the "all" chip carries its own label.
+// Labels come from pricingRequestStatusLabel (utils/format.js) so a chip never drifts from the
+// row badge. Only the "all" chip carries its own label.
 const STATUS_FILTERS = [
   { key: 'ALL', label: 'ทั้งหมด', statuses: [] },
   { key: 'SUBMITTED', statuses: ['SUBMITTED'] },
@@ -54,31 +43,21 @@ function statusFilterLabel(filter) {
   return filter.label ?? pricingRequestStatusLabel(filter.statuses[0]).label;
 }
 
-// Task tabs (GLA-110): a role-aware "what should I work on" view that sits above the
-// existing status chips. This is pure client-side scoping over the SAME shared,
-// unscoped /api/pricing-requests queue endpoint — everyone still sees every request
-// under ทั้งหมด, so this is NOT an authz change (nothing here touches who the
-// backend lets read what). Only import and ceo get task tabs: they are the two
-// roles this queue is actually a worklist for (import triages/works requests,
-// ceo approves them); sales_manager keeps browsing the plain chip list it always
-// has, since it has no personal "my work" subset of this queue — it oversees the
-// whole pipeline, so it lands on ทั้งหมด (owner ruling, 2026-09-19) rather than
-// import's own SUBMITTED inbox.
+// Task tabs: a role-aware "what should I work on" view above the status chips. Pure client-side
+// scoping over the SAME unscoped /api/pricing-requests endpoint (everyone still sees every
+// request under ทั้งหมด), so NOT an authz change. Only import and ceo get task tabs: the queue
+// is their worklist. sales_manager oversees the whole pipeline, so it has no tabs and lands on
+// ทั้งหมด rather than import's SUBMITTED inbox.
 //
-// Each role's first tab doubles as its count badge and its default landing tab
-// (Owner ruling: import starts on its own claimed work, ceo starts on what is
-// waiting on it — neither should have to click past ทั้งหมด to find their own
-// queue).
+// Each role's first tab is its count badge and default landing tab (import: its own claimed
+// work; ceo: what waits on it).
 const IMPORT_MY_WORK_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'];
 const CEO_MY_REVIEW_STATUSES = ['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
 
-// 2026-09-19 owner ruling: a task tab (งานของฉัน / รอรับเรื่อง / รอฉันพิจารณา) is a worklist,
-// not a browse view — the request that has been waiting longest belongs on top, so it doesn't
-// get buried by newer arrivals. ทั้งหมด (and any role with no task tabs, e.g. sales_manager) is
-// deliberately left in the API's own order, unaffected. `submittedAt` is when the request
-// actually entered this queue; `createdAt` covers the rare DRAFT-era row without one yet, and
-// `id` is the final, always-present tie-break (PricingRequestDtos.java ~36-39; mirrored in
-// mockApi.js ~1686).
+// A task tab (งานของฉัน / รอรับเรื่อง / รอฉันพิจารณา) is a worklist: longest-waiting request on
+// top. ทั้งหมด (and roles with no task tabs) keeps the API's own order. `submittedAt` is when it
+// entered this queue; `createdAt` covers a DRAFT-era row without one; `id` is the final tie-break
+// (PricingRequestDtos.java ~36-39; mirrored in mockApi.js ~1686).
 function byOldestFirst(a, b) {
   const aTime = new Date(a.submittedAt ?? a.createdAt ?? 0).getTime();
   const bTime = new Date(b.submittedAt ?? b.createdAt ?? 0).getTime();
@@ -98,15 +77,15 @@ const TASK_TABS_BY_ROLE = {
 };
 
 const DEFAULT_EMPTY_TITLE = 'ไม่มีคำขอราคาในเงื่อนไขนี้';
-// Shown instead of a tab's own "nothing here" copy when its query actually failed — a fetch error
-// read as confident "you have no work" is worse than no message at all (review finding, GLA-110).
+// Shown instead of a tab's own "nothing here" copy when its query failed: a fetch error read as
+// "you have no work" is worse than no message.
 const ERROR_EMPTY_TITLE = 'โหลดคิวขอราคาไม่สำเร็จ';
 
 /**
- * GLA-110: the ผู้รับเรื่อง cell reads "คุณ" for the viewer's own claimed rows instead of their own
- * name — shared between the desktop column and the mobile QueueCard so the two can never drift.
- * Returns `null` (not '-') when there is no assignee at all, so a caller that wants to omit the
- * whole line (QueueCard) can tell "nobody yet" apart from "somebody, unnamed".
+ * The ผู้รับเรื่อง cell reads "คุณ" for the viewer's own claimed rows; shared by the desktop column
+ * and the mobile QueueCard so they cannot drift. Returns `null` (not '-') when there is no
+ * assignee, so a caller can omit the whole line (QueueCard) and tell "nobody yet" apart from
+ * "somebody, unnamed".
  */
 function assigneeName(row, user) {
   if (row.assignedImportId != null && Number(row.assignedImportId) === Number(user?.id)) return 'คุณ';
@@ -176,10 +155,7 @@ function buildColumns(user) {
     {
       key: 'assignedImportName',
       header: 'ผู้รับเรื่อง',
-      // GLA-110: "คุณ" for the viewer's own claimed rows — see assigneeName's own doc.
-      // Most useful on งานของฉัน, where every row is this exact comparison, but left
-      // on for every tab so a request picked up by "me" reads the same way from
-      // ทั้งหมด too.
+      // "คุณ" for the viewer's own claimed rows, on every tab (see assigneeName).
       render: (row) => assigneeName(row, user) ?? '-',
     },
   ];
@@ -187,11 +163,8 @@ function buildColumns(user) {
 
 function QueueCard({ row, user, onPickup, canPickup, pickingUp }) {
   const status = pricingRequestStatusLabel(row.status);
-  // GLA-110 (review fix): this card never showed ผู้รับเรื่อง at all, so "คุณ" — the
-  // whole point of assigneeName — never appeared on mobile. Omit the line entirely
-  // rather than falling back to '-' the way the desktop column does: a card is
-  // already dense, and "no assignee yet" is exactly what SUBMITTED rows in รอรับเรื่อง
-  // look like, so the line would be near-permanent noise there.
+  // Omit the line when there is no assignee instead of '-' like the desktop column: the card is
+  // dense, and "no assignee yet" is what every SUBMITTED row in รอรับเรื่อง looks like.
   const assignee = assigneeName(row, user);
   return (
     <>
@@ -232,68 +205,49 @@ function QueueCard({ row, user, onPickup, canPickup, pickingUp }) {
 }
 
 /**
- * Import's cross-deal PricingRequest queue (commit 6). Route-guarded by
- * ROLE_PERMISSIONS.canViewPricingRequestQueue (import/ceo/sales_manager) —
+ * Import's cross-deal PricingRequest queue. Route-guarded by
+ * ROLE_PERMISSIONS.canViewPricingRequestQueue (import/ceo/sales_manager),
  * see app/permissions.js PATH_GUARDS for '/pricing-requests'.
  *
- * GLA-110: import and ceo additionally get a row of task tabs above the status
- * chips (TASK_TABS_BY_ROLE), each scoping the SAME shared queue endpoint down
- * to "what should I work on" — the queue stays global and unscoped (everyone
- * still sees everything under ทั้งหมด), this only changes what each role sees
- * by default:
- *   - import: งานของฉัน (its own claimed, still-open requests — IMPORT_REVIEWING /
- *     AWAITING_FACTORY_RESPONSE / legacy COSTING_IN_PROGRESS, see STATUS_FILTERS'
- *     comment on why that legacy value stays), รอรับเรื่อง (SUBMITTED, unclaimed),
- *     ทั้งหมด (today's chip list).
- *   - ceo: รอฉันพิจารณา (READY_FOR_CEO_REVIEW + CEO_REVIEWING — both are waiting on
- *     the CEO, the second because the CEO opened the review but hasn't decided
- *     yet), ทั้งหมด.
- *   - every other role that can reach this page (sales_manager): no tabs — chips
- *     only, defaulting to the ทั้งหมด chip (owner ruling, 2026-09-19: this role
- *     oversees the whole pipeline rather than owning a personal "my work" slice
- *     of it, so it should not land on import's own SUBMITTED inbox).
+ * import and ceo also get task tabs above the status chips (TASK_TABS_BY_ROLE), each scoping the
+ * SAME shared queue endpoint to "what should I work on"; everyone still sees everything under
+ * ทั้งหมด:
+ *   - import: งานของฉัน (its own claimed, still-open requests: IMPORT_REVIEWING /
+ *     AWAITING_FACTORY_RESPONSE / legacy COSTING_IN_PROGRESS, see STATUS_FILTERS), รอรับเรื่อง
+ *     (SUBMITTED, unclaimed), ทั้งหมด.
+ *   - ceo: รอฉันพิจารณา (READY_FOR_CEO_REVIEW + CEO_REVIEWING, both waiting on the CEO), ทั้งหมด.
+ *   - sales_manager: no tabs, chips only, defaulting to ทั้งหมด.
  * The first tab of each role doubles as its badge count, fetched via its own
- * `enabled: hasTaskTabs` query so the count still shows while a different tab is
- * active. Status chips render only inside the ทั้งหมด tab (or always, for roles
- * with no tabs) — every task tab is already status-scoped, so chips there would
- * just intersect down to nothing.
+ * `enabled: hasTaskTabs` query so the count shows while another tab is active. Status chips
+ * render only inside ทั้งหมด (or always, for roles with no tabs): task tabs are already
+ * status-scoped, so chips there would intersect down to nothing.
  *
- * 2026-09-19 additions:
- *   - Task-tab rows are re-sorted oldest-first (byOldestFirst) — a worklist, not a
- *     browse view. ทั้งหมด is untouched. `<DataTable key={activeTab}>` remounts on
- *     every tab switch (also resetting its search text and page, deliberately — a
- *     fresh worklist view per tab) so a manual column-header sort from a previous
- *     tab can never leak into the next one and fight this default.
- *   - An empty งานของฉัน that still has unclaimed work waiting (รอรับเรื่อง count > 0)
- *     shows a "ไม่มีงานค้าง" prompt (`role="status"`, so it's announced) with a button
- *     straight to รอรับเรื่อง, instead of a bare empty state — see `showEmptyWorkPrompt`
- *     below. This is why unclaimedQuery now runs whenever the role is import, not
- *     only while its own tab is active.
- *   - Review fix, same date: landing on รอรับเรื่อง (by tab click OR the prompt's
- *     button — `goToUnclaimed`) force-refetches it when stale, since it no longer
- *     gets react-query's own becomes-enabled refetch now that it's always enabled;
- *     the button additionally moves focus to the รอรับเรื่อง tab (Tabs.jsx's own DOM
- *     id convention), and a failed pickup now invalidates the same broad key a
- *     successful one does, so a 409 (someone else claimed it) drops the stale row.
+ * - Task-tab rows are sorted oldest-first (byOldestFirst); ทั้งหมด is untouched.
+ *   `<DataTable key={activeTab}>` remounts on every tab switch (resetting search text and page on
+ *   purpose) so a manual column sort from a previous tab cannot fight this default.
+ * - An empty งานของฉัน with unclaimed work waiting (รอรับเรื่อง count > 0) shows a "ไม่มีงานค้าง"
+ *   prompt (`role="status"`, so it is announced) with a button to รอรับเรื่อง instead of a bare
+ *   empty state (`showEmptyWorkPrompt`). That is why unclaimedQuery runs for the whole import
+ *   role, not only while its own tab is active.
+ * - Landing on รอรับเรื่อง (tab click or the prompt button, `goToUnclaimed`) refetches it when
+ *   stale; the button also moves focus to that tab (Tabs.jsx's DOM id convention). A failed
+ *   pickup invalidates the same broad key as a successful one, so a 409 (someone else claimed
+ *   it) drops the stale row.
  */
 export function PricingRequestQueuePage({ user, showToast }) {
   const queryClient = useQueryClient();
   const taskTabs = TASK_TABS_BY_ROLE[user.role] ?? null;
   const hasTaskTabs = !!taskTabs;
   const [activeTab, setActiveTab] = useState(taskTabs ? taskTabs[0].key : null);
-  // Every role lands the ทั้งหมด tab/chip-only view on its own ทั้งหมด chip (owner ruling,
-  // 2026-09-19) — task-tab roles because it is already status-scoped chrome on top of their own
-  // default tab, and no-tab roles (sales_manager) because it oversees the whole pipeline rather
-  // than owning a personal slice of it, so SUBMITTED — import's own inbox — is the wrong default.
+  // Every role lands on its own ทั้งหมด chip in the ทั้งหมด view: task-tab roles because it is
+  // already status-scoped on top of their default tab, sales_manager because it oversees the
+  // whole pipeline and SUBMITTED (import's inbox) is the wrong default.
   const [filterKey, setFilterKey] = useState('ALL');
 
-  // GLA-110 (review fix): this page is never remounted on a role change (AppShell keeps one
-  // instance across a session), so without this, a stale `activeTab` from a previous role could
-  // point at a tab key the new role's TASK_TABS_BY_ROLE entry does not have at all (e.g. import's
-  // 'UNCLAIMED' surviving into a ceo session) — every branch below falls through to the ทั้งหมด
-  // behaviour in that case rather than crashing, but it would silently show the wrong default
-  // instead of that role's own first tab. Re-derive both pieces of state the instant the role
-  // changes, from the same defaults the initial useState above already encodes.
+  // AppShell keeps one instance of this page across a session, so a stale `activeTab` from a
+  // previous role could name a tab the new role's TASK_TABS_BY_ROLE entry lacks (import's
+  // 'UNCLAIMED' surviving into a ceo session). Branches fall through to ทั้งหมด rather than
+  // crash, but would show the wrong default. Re-derive both states when the role changes.
   useEffect(() => {
     const nextTabs = TASK_TABS_BY_ROLE[user.role] ?? null;
     setActiveTab(nextTabs ? nextTabs[0].key : null);
@@ -347,25 +301,16 @@ export function PricingRequestQueuePage({ user, showToast }) {
     [myReviewQuery.data],
   );
 
-  // รอรับเรื่อง (import only): unclaimed work, pushed server-side as a plain SUBMITTED
-  // filter. `enabled` is role-only, not tab-only, as of 2026-09-19 — an empty งานของฉัน
-  // needs to know THIS count too (to offer "ไม่มีงานค้าง … ดูคำขอที่รอรับเรื่อง" instead of a
-  // bare empty state, see showEmptyWorkPrompt below), so it must be known before its own
-  // tab is ever opened, and import now always fetches this list once on load rather than
-  // only after opening the tab. This count now ALSO shows as the รอรับเรื่อง tab's own badge
-  // (owner ask 2026-09-24 — matching งานของฉัน), reusing this exact query rather than adding a
-  // new fetch: it is the SAME query/cache key as the (now-retired-as-a-default) SUBMITTED chip,
-  // so nothing is fetched here that this page didn't already sometimes fetch before.
+  // รอรับเรื่อง (import only): unclaimed work, pushed server-side as a plain SUBMITTED filter.
+  // `enabled` is role-only, not tab-only: an empty งานของฉัน needs this count (for the
+  // "ไม่มีงานค้าง" prompt, see showEmptyWorkPrompt) and the tab badge reuses it, so import
+  // always fetches this list on load. Same query/cache key as the SUBMITTED chip.
   //
-  // ⚠️ Freshness trade-off (review finding, 2026-09-19): because `enabled` no longer flips
-  // false->true when this tab is opened, react-query's own "refetch on a query becoming
-  // enabled" trigger no longer fires here — so without `goToUnclaimed` below explicitly
-  // forcing a refetch, this is the single most-contended list on the page (several import
-  // users racing to claim the same SUBMITTED rows) yet could sit on a stale cache entry for
-  // up to `queryClient.js`'s 30s staleTime after switching in. `goToUnclaimed` closes that gap
-  // by refetching on entry — but only `{ stale: true }`, i.e. only when the cached copy has
-  // actually aged out, so a user bouncing between tabs inside the 30s window still gets the
-  // cheap cache hit the rest of this page relies on.
+  // Freshness trade-off: because `enabled` never flips false->true on tab open, react-query's
+  // refetch-on-enable does not fire. This is the most contended list (several import users
+  // racing to claim the same rows) and could sit on a stale entry for queryClient.js's 30s
+  // staleTime, so `goToUnclaimed` refetches on entry, only `{ stale: true }`, keeping the cheap
+  // cache hit when bouncing between tabs inside the 30s window.
   const unclaimedQueryKey = queryKeys.pricingRequestQueue({ status: 'SUBMITTED', activeOnly: true });
   const unclaimedQuery = useQuery({
     queryKey: unclaimedQueryKey,
@@ -384,10 +329,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
     document.getElementById('pcr-queue-tasks-tab-UNCLAIMED')?.focus();
   }, [activeTab]);
 
-  // Shared by the Tabs onChange handler and the ไม่มีงานค้าง prompt's button — both are ways
-  // to LAND on รอรับเรื่อง, so both need the same staleness fix above. `focus: true` is only
-  // passed by the prompt button, whose click target (a button inside a DIFFERENT panel) is not
-  // itself the รอรับเรื่อง tab, unlike a real tab click.
+  // Shared by the Tabs onChange and the ไม่มีงานค้าง prompt's button: both land on รอรับเรื่อง and
+  // need the staleness fix above. `focus: true` is passed only by the prompt button, whose click
+  // target is not itself the รอรับเรื่อง tab.
   function goToUnclaimed({ focus = false } = {}) {
     setActiveTab('UNCLAIMED');
     queryClient.refetchQueries({ queryKey: unclaimedQueryKey, stale: true });
@@ -432,26 +376,22 @@ export function PricingRequestQueuePage({ user, showToast }) {
     emptyTitle = ERROR_EMPTY_TITLE;
   }
 
-  // 2026-09-19: an import user who has genuinely cleared งานของฉัน (loaded, zero rows, no
-  // error) but still has unclaimed work sitting in รอรับเรื่อง should be pointed at it rather
-  // than shown a bare "nothing here". `unclaimedQuery.isSuccess` (not just `.data`) is the gate
-  // for the SAME reason the badge gates on it — "not yet loaded" and "genuinely zero" must
-  // read differently, and the error branch above already wins over this regardless.
+  // An import user who cleared งานของฉัน (loaded, zero rows, no error) but has unclaimed work in
+  // รอรับเรื่อง is pointed at it instead of a bare "nothing here". Gate on
+  // `unclaimedQuery.isSuccess` (not `.data`) like the badge: "not yet loaded" and "zero" must
+  // read differently. The error branch above wins regardless.
   const unclaimedCount = unclaimedQuery.isSuccess ? (unclaimedQuery.data?.length ?? 0) : null;
   const showEmptyWorkPrompt = user.role === 'import' && activeTab === 'MY_WORK'
     && !isLoading && !isError && rows.length === 0
     && unclaimedCount != null && unclaimedCount > 0;
 
-  // GLA-110 (review fix): the badge must read as unknown — not a confident "0" — while its query
-  // is loading, disabled, or errored. `isSuccess` is the one react-query flag that is only ever
-  // true once real data has actually landed, so gate on that rather than on `data` (which this
-  // page defaults to `[]` before the first response, making an unloaded badge indistinguishable
-  // from a genuinely-empty one).
+  // The badge must read as unknown, not "0", while its query is loading, disabled or errored.
+  // `isSuccess` is true only once real data has landed; `data` defaults to `[]` here, which
+  // would make an unloaded badge look genuinely empty.
   const badgeCount = hasTaskTabs && badgeQuery.isSuccess ? badgeRows.length : null;
-  // รอรับเรื่อง carries its OWN badge (owner ask 2026-09-24 — matching งานของฉัน) from the
-  // unclaimedCount already computed above for the empty-work prompt; badgeCount is the role's
-  // first-tab count. unclaimedCount is import-only (its query is enabled for import alone) and
-  // null for ceo, which has no รอรับเรื่อง tab anyway.
+  // รอรับเรื่อง has its OWN badge from the unclaimedCount computed above; badgeCount is the
+  // role's first-tab count. unclaimedCount is import-only (null for ceo, which has no
+  // รอรับเรื่อง tab).
   const tabBadgeCount = (key) => (key === 'UNCLAIMED' ? unclaimedCount : badgeCount);
   const tabItems = taskTabs?.map((tab) => {
     const count = tab.hasBadge ? tabBadgeCount(tab.key) : null;
@@ -473,11 +413,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
     },
     onError: (error) => {
       showToast('error', error.message || 'รับเรื่องไม่สำเร็จ');
-      // 2026-09-19 review: the usual failure here is someone else already picked this row up
-      // (a 409 compare-and-set miss, PricingRequestService.pickup) — the row this button was on
-      // is already stale, so invalidate the same broad key onSuccess uses to drop it from
-      // รอรับเรื่อง/งานของฉัน's badge on the next render instead of leaving a dead รับเรื่อง
-      // button pointed at a request that already belongs to someone else.
+      // The usual failure is someone else already picked this row up (409 compare-and-set miss,
+      // PricingRequestService.pickup): the row is stale, so invalidate the same broad key as
+      // onSuccess to drop it from the badges instead of leaving a dead รับเรื่อง button.
       queryClient.invalidateQueries({ queryKey: ['pricingRequests'] });
     },
   });
@@ -545,13 +483,10 @@ export function PricingRequestQueuePage({ user, showToast }) {
         </div>
       ) : (
         <DataTable
-          // Remounts on every tab switch (stable across chip clicks within one tab, since
-          // `activeTab` itself doesn't change for those): a manual column-header sort from a
-          // previous tab is uncontrolled internal DataTable state, and without this key it would
-          // silently carry over and fight byOldestFirst's default ordering on the next tab. This
-          // also resets DataTable's own search text and pagination page on every tab switch —
-          // deliberate, not a side effect to work around: each tab is its own fresh worklist
-          // view, not a continuation of whatever was typed/paged into a different one.
+          // Remounts on every tab switch (stable across chip clicks within one tab): a manual
+          // column sort is uncontrolled DataTable state and would carry over and fight
+          // byOldestFirst. Also resets search text and page, on purpose: each tab is a fresh
+          // worklist view.
           key={activeTab ?? 'no-tabs'}
           columns={columns}
           rows={rows}
