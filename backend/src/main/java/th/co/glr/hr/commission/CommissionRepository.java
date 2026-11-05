@@ -156,22 +156,19 @@ public class CommissionRepository {
     }
 
     /**
-     * Commission redesign calc-refine (2026-07-22): the exact, un-divided sum of {@code
-     * actual_received &times; weight_multiplier} across every active (non-VOID, non-REJECTED)
-     * commission record for the rep/month. This is real money multiplied by a small integer, so
-     * the sum is exact -- no precision is lost here. The caller ({@link
-     * CommissionCalculator#monthlyTierBase}) divides by VAT exactly once, at full precision,
-     * instead of this repository summing each receipt's already-2dp-rounded {@code
-     * commissionable_base} column (the old {@code sumActiveMonthlyBase}, which let per-receipt
-     * rounding accumulate across many small receipts).
+     * The exact, un-divided sum of {@code actual_received &times; weight_multiplier} across every
+     * active (non-VOID, non-REJECTED) commission record for the rep/month. This is real money
+     * multiplied by a small integer, so the sum is exact -- no precision is lost here. The caller
+     * ({@link CommissionCalculator#monthlyTierBase}) divides by VAT exactly once, at full
+     * precision, rather than this repository summing each receipt's already-2dp-rounded {@code
+     * commissionable_base} column, which would let per-receipt rounding accumulate across many
+     * small receipts.
      *
-     * <p>V148 (per-item stock-commission weighting): the per-record weight used here is now
+     * <p>Per-item stock-commission weighting: the per-record weight used here is
      * {@code COALESCE(effective_weight_multiplier, weight_multiplier)} -- the frozen, blended
      * per-item weight when one was computed at record-creation time, else the plain manager-set
-     * multiplier exactly as before this feature. Every record that predates V148 (and every record
-     * this feature does not apply to) has {@code effective_weight_multiplier IS NULL}, so the
-     * COALESCE falls straight through to {@code weight_multiplier} and this sum is BYTE-IDENTICAL
-     * to what it computed before this migration for every such row -- see {@link
+     * multiplier. Every record without item weighting has {@code effective_weight_multiplier IS
+     * NULL}, so the COALESCE falls straight through to {@code weight_multiplier} -- see {@link
      * CommissionRecord#effectiveWeight()} for the same COALESCE mirrored in Java, used where this
      * method's single SQL aggregate cannot reach ({@link
      * CommissionService#computeRepPayrollCommissions}'s per-record accumulation).
@@ -192,12 +189,12 @@ public class CommissionRepository {
     }
 
     /**
-     * Commission redesign calc-refine: the UNWEIGHTED sum of {@code actual_received} -- real cash
-     * actually received, with no 2x/3x tier-base weighting applied. Kept deliberately separate
-     * from {@link #sumActiveWeightedActualReceived}: "real cash received" and "weighted tier
-     * base" are two different numbers once any receipt is weighted, and a future team-commission
-     * slice needs the unweighted one. Not currently wired into any response DTO — available here
-     * for that slice and for tests that need to assert the two totals diverge.
+     * The UNWEIGHTED sum of {@code actual_received} -- real cash actually received, with no 2x/3x
+     * tier-base weighting applied. Kept deliberately separate from {@link
+     * #sumActiveWeightedActualReceived}: "real cash received" and "weighted tier base" are two
+     * different numbers once any receipt is weighted, and a future team-commission slice needs the
+     * unweighted one. Not currently wired into any response DTO — available here for that slice
+     * and for tests that need to assert the two totals diverge.
      */
     public BigDecimal sumActiveActualReceived(long salesRepId, LocalDate payrollMonth) {
         BigDecimal value = jdbc.queryForObject("""
@@ -215,13 +212,13 @@ public class CommissionRepository {
     }
 
     /**
-     * Issue #405: the INCENTIVE ladder generation active for {@code payrollMonth} — the latest
+     * The INCENTIVE ladder generation active for {@code payrollMonth} — the latest
      * {@code effective_from} that is &le; the month, mirroring {@link #findTiers}'s config-driven
      * pattern (see {@code V108__commission_incentive_and_stock_bonus_config.sql}). No matching
      * generation (e.g. a month before 2026-08-01, or before anything is ever seeded) returns an
      * empty list, which {@link CommissionCalculator#monthlyIncentive} treats as ZERO — this
      * generation-selection rule is what keeps every payroll month before the effective date
-     * computing byte-identically to before this migration.
+     * computing without any incentive.
      */
     public List<IncentiveTierConfig> findIncentiveTiers(LocalDate payrollMonth) {
         return jdbc.query("""
@@ -244,7 +241,7 @@ public class CommissionRepository {
     }
 
     /**
-     * Issue #405: the STOCK_BONUS config generation active for {@code payrollMonth} — same
+     * The STOCK_BONUS config generation active for {@code payrollMonth} — same
      * generation-selection rule as {@link #findIncentiveTiers}. Empty when no generation has an
      * {@code effective_from} &le; the month; the caller ({@link CommissionService}) treats that
      * the same as {@link StockBonusConfig#disabled()}.
@@ -270,20 +267,19 @@ public class CommissionRepository {
     }
 
     /**
-     * Issue #405: STOCK_BONUS's per-rep-per-month "stock receipts" input — {@code
+     * STOCK_BONUS's per-rep-per-month "stock receipts" input — {@code
      * SUM(actual_received &times; stockShare(ticket))}, where {@code stockShare(ticket) =
      * SUM(ticket_item.qty_from_stock) / SUM(ticket_item.qty)} for the record's {@code
      * source_ticket_id} (0 when that ticket's items sum to 0 qty). Records with {@code
      * source_ticket_id IS NULL} (every manual kind, including manual STOCK_BONUS/INCENTIVE
      * entries) contribute 0 through the LEFT JOIN's {@code COALESCE}.
      *
-     * <p><b>Review fix (2026-08-02):</b> this mirrors {@link #findApprovedRecordsByMonth}'s
+     * <p>This mirrors {@link #findApprovedRecordsByMonth}'s
      * {@code status = 'APPROVED'} filter — the same records {@link CommissionService
      * #computeRepPayrollCommissions}'s tier-base aggregation is built from — NOT {@link
      * #sumActiveWeightedActualReceived}'s broader {@code NOT IN ('VOID','REJECTED')} (which also
      * admits SUBMITTED/MANAGER_APPROVED and feeds {@code simulate()}, a live preview endpoint,
-     * not the payroll path). An earlier version of this method used the broader filter; an
-     * independent review proved with a real-DB probe that it let a still-SUBMITTED receipt (never
+     * not the payroll path). The broader filter would let a still-SUBMITTED receipt (never
      * approved by anyone) contribute to a paid stock bonus — unapproved money must never reach a
      * payroll figure, the same invariant {@code CommissionDocumentationInvariantIntegrationTest}
      * pins for {@link CommissionService#payrollCommissionTotalsByEmployee}. A CLAWBACK's negative
@@ -294,7 +290,7 @@ public class CommissionRepository {
      * <p>V54's warning applies here too: {@code qty_from_stock} is a manual staff declaration for
      * that deal only, not a real warehouse reservation ledger.
      *
-     * <p>Known deviation (stated in the PR, not hidden here): the written rule is per DELIVERY;
+     * <p>Known deviation: the written rule is per DELIVERY;
      * there is no invoice-to-delivery FK, so this computes per TICKET, per month instead — a deal
      * shipped as three separate ฿80,000 stock deliveries pays a bonus here that a strict
      * per-delivery reading would not. Exactly why STOCK_BONUS ships config-gated OFF ({@link
@@ -410,8 +406,7 @@ public class CommissionRepository {
     }
 
     /**
-     * Issue #737, SCOPE per owner ruling 2026-08-14 (2nd ruling, supersedes the per-caller
-     * division scoping this method briefly had): the manual-commission rep picker's data source
+     * The manual-commission rep picker's data source
      * for BOTH {@code sales_manager} and {@code ceo} — every ACTIVE employee in ฝ่ายขาย, i.e. the
      * set of people who actually earn commission. Division MEMBERSHIP, not "has a commission
      * record on file" — a brand-new rep, or a sales manager never yet paid one, still appears.
@@ -450,10 +445,10 @@ public class CommissionRepository {
      * NULL-comparison false negative that happens to also exclude them today for a different,
      * more fragile reason.
      *
-     * <p>Two load-bearing choices carried over unchanged from the earlier per-role split:
+     * <p>Two load-bearing choices:
      * <ul>
-     *   <li><b>No LIMIT, ever.</b> A cap here would truncate the picker silently — the exact
-     *       failure mode issue #737 reports for the ticket-derived list this replaced.</li>
+     *   <li><b>No LIMIT, ever.</b> A cap here would truncate the picker silently — the failure
+     *       mode of the earlier ticket-derived list this replaced.</li>
      *   <li><b>{@code ORDER BY display_name, e.employee_id} is TOTAL</b> (a tie-break on a unique
      *       column), so the result order never depends on Postgres's undefined tie-break and a
      *       future LIMIT/paging change cannot silently reorder it. Postgres's default collation
@@ -499,7 +494,7 @@ public class CommissionRepository {
     }
 
     /**
-     * V102 note ({@code chk_invoice_details_evidence_present}, see
+     * Note on {@code chk_invoice_details_evidence_present} (see
      * {@code V102__invoice_evidence_provenance.sql}): a plain Postgres {@code CHECK} constraint is
      * NOT deferrable — it is evaluated immediately after THIS statement, not at transaction
      * commit. {@code CommissionService#submit}/{@code #createFromDeal} always insert the bare
@@ -523,23 +518,20 @@ public class CommissionRepository {
      * category and must never be treated as one — {@link #PENDING_ATTACHMENT_SENTINEL} is private
      * to this class specifically so nothing outside it can read or branch on the value.
      *
-     * <p><b>Review note (2026-07-30):</b> the preferred alternative — pre-allocate {@code
-     * invoice_id} via {@code nextval}, store the file, then INSERT once with the real {@code
-     * invoice_attachment_id} already known, eliminating the sentinel entirely — was evaluated and
-     * NOT taken. {@code invoice_id} is a {@code GENERATED ALWAYS AS IDENTITY} column, so writing a
+     * <p>Why a sentinel at all: pre-allocating {@code invoice_id} via {@code nextval}, storing the
+     * file, then INSERTing once with the real {@code invoice_attachment_id} would eliminate it,
+     * but {@code invoice_id} is a {@code GENERATED ALWAYS AS IDENTITY} column, so writing a
      * pre-fetched value back would need {@code OVERRIDING SYSTEM VALUE} on every insert path, and
-     * {@link #createInvoice}/{@link #attachInvoiceFile}'s current two-call shape is depended on
-     * directly (not just through {@code CommissionService}) by five other test files —
-     * {@code CommissionServiceTest} (Mockito call-count/argument verification on both methods),
-     * {@code ManualCommissionIntegrationTest}, {@code CommissionCalcRefineIntegrationTest}, {@code
+     * {@link #createInvoice}/{@link #attachInvoiceFile}'s two-call shape is depended on directly
+     * (not just through {@code CommissionService}) by {@code CommissionServiceTest} (Mockito
+     * call-count/argument verification on both methods), {@code ManualCommissionIntegrationTest},
+     * {@code CommissionCalcRefineIntegrationTest}, {@code
      * CommissionDocumentationInvariantIntegrationTest}, {@code
-     * InvoiceEvidenceProvenanceIntegrationTest}, and {@code
-     * PayrollCommissionWeightedBaseIntegrationTest} — plus the reviewer-authored {@code
-     * CommissionInvoiceSentinelRollbackIntegrationTest}, which this branch keeps verbatim. That is
-     * a wide, cross-cutting change for a documentation-branch fix to make safely; per the review
-     * instructions this was stopped rather than half-done. The sentinel stays, tightened instead
-     * (V102's CHECK is now a closed allow-list — {@code PRE_ERP_PAPER_APPROVAL} or {@code
-     * PENDING_ATTACHMENT} — rather than "any non-null string").
+     * InvoiceEvidenceProvenanceIntegrationTest}, {@code
+     * PayrollCommissionWeightedBaseIntegrationTest} and {@code
+     * CommissionInvoiceSentinelRollbackIntegrationTest}. The CHECK is a closed allow-list
+     * ({@code PRE_ERP_PAPER_APPROVAL} or {@code PENDING_ATTACHMENT}) rather than "any non-null
+     * string".
      */
     private static final String PENDING_ATTACHMENT_SENTINEL = "PENDING_ATTACHMENT";
 
@@ -597,10 +589,10 @@ public class CommissionRepository {
     }
 
     /**
-     * @param dealPayableAmountSnapshot Step 9 cross-check snapshot of the linked deal's payable
+     * @param dealPayableAmountSnapshot Cross-check snapshot of the linked deal's payable
      *                                  amount at submission time, or {@code null} when
      *                                  {@code sourceTicketId} is {@code null} (unlinked commission).
-     * @param dealAmountMismatch        Step 9 flag — {@code true} when grossAmount diverged from the
+     * @param dealAmountMismatch        Cross-check flag — {@code true} when grossAmount diverged from the
      *                                  snapshot by more than the gate's threshold. Never blocks
      *                                  submission; surfaced for reviewers at approval time.
      */
@@ -614,25 +606,24 @@ public class CommissionRepository {
         BigDecimal dealPayableAmountSnapshot,
         boolean dealAmountMismatch
     ) {
-        // V148: every caller reaching this overload has no item-derived weight to freeze (test
-        // fixtures seeding a record directly, or a caller written before this feature existed) --
-        // null is exactly the "not applicable / not computed" value a pre-V148 row already has, so
-        // this delegation changes nothing about what any existing caller's row looks like.
+        // Every caller reaching this overload has no item-derived weight to freeze (test
+        // fixtures seeding a record directly) -- null is the "not applicable / not computed"
+        // value for the effective weight.
         return createCommissionRecord(invoiceId, sourceTicketId, salesRepId, submittedById,
             payrollMonth, calculation, dealPayableAmountSnapshot, dealAmountMismatch, null);
     }
 
     /**
-     * V148 (per-item stock-commission weighting) full overload -- the only one that FREEZES
+     * Full overload (per-item stock-commission weighting) -- the only one that FREEZES
      * {@code effective_weight_multiplier} at INSERT time. Called directly only by {@code
      * CommissionService#submit}/{@code #createFromDeal}, the two places that ever have a
      * freshly-computed item-derived weight to freeze; every other caller (both shorter overloads
      * above, and every test file seeding a commission_record directly through this repository)
      * goes through one of them and gets {@code effectiveWeightMultiplier = null} here.
      *
-     * @param dealPayableAmountSnapshot  Step 9 cross-check snapshot -- see the two-arg overload's
+     * @param dealPayableAmountSnapshot  Cross-check snapshot -- see the two-arg overload's
      *                                   own Javadoc.
-     * @param dealAmountMismatch         Step 9 flag -- see the two-arg overload's own Javadoc.
+     * @param dealAmountMismatch         Cross-check flag -- see the two-arg overload's own Javadoc.
      * @param effectiveWeightMultiplier  the FROZEN, blended per-item weight computed by {@link
      *                                   CommissionCalculator#itemDerivedWeight} at THIS moment, or
      *                                   {@code null} when nothing could be derived (unlinked
@@ -686,7 +677,7 @@ public class CommissionRepository {
      * sale would only reverse 1x of the original's contribution to the monthly TIER BASE,
      * silently leaving half of the original's weighted credit in place after the "cancellation".
      *
-     * <p>V148 (per-item stock-commission weighting): {@code effective_weight_multiplier} is copied
+     * <p>Per-item stock-commission weighting: {@code effective_weight_multiplier} is copied
      * verbatim (null or a value) for the exact same reason. A SALE frozen at a blended 1.6x (from
      * per-item stock weighting) whose clawback fell back to copying only the plain {@code
      * weight_multiplier} (which stays at its 1x default for a record whose weight came from items,
@@ -787,10 +778,9 @@ public class CommissionRepository {
     }
 
     /**
-     * Slice A2: the sales-manager review step can now rewrite any invoice input, not just the
-     * three original deduction fields — {@code grossAmount}/{@code bankFees}/{@code suspenseVat}
-     * joined {@code transportFee}/{@code cutFee}/{@code shortfall}/{@code withholdingTax}/
-     * {@code overpayment}. Every value here is already the resolved "new value or keep existing"
+     * The sales-manager review step can rewrite any invoice input — {@code grossAmount}/
+     * {@code bankFees}/{@code suspenseVat}/{@code transportFee}/{@code cutFee}/{@code shortfall}/
+     * {@code withholdingTax}/{@code overpayment}. Every value here is already the resolved "new value or keep existing"
      * result (see {@code CommissionService#valueOrExisting}); this method just persists it.
      */
     public void updateDeductions(long invoiceId, BigDecimal grossAmount, BigDecimal bankFees, BigDecimal suspenseVat,
@@ -859,7 +849,7 @@ public class CommissionRepository {
 
     /**
      * Freezes a recomputed blended weight onto a record, but ONLY while it is still SUBMITTED. The sole
-     * sanctioned post-creation write to {@code effective_weight_multiplier} (owner ruling 2026-10-01): the
+     * sanctioned post-creation write to {@code effective_weight_multiplier}: the
      * sales manager's {@link CommissionService#adjustItemWeights}. Returns rows updated; 0 means the record
      * left SUBMITTED underneath the caller.
      */

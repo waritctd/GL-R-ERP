@@ -13,16 +13,14 @@ import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.ticket.TicketAccessPolicy;
 
 /**
- * P0 fix: {@code CustomerController}'s three reads ({@code GET /api/customers},
- * {@code /{id}/contacts}, {@code /{id}/projects}) used to call only {@code sessions.requireUser} —
- * authenticated, not authorized — so every logged-in role, including {@code employee},
+ * Role gate for {@code CustomerController}'s three reads ({@code GET /api/customers},
+ * {@code /{id}/contacts}, {@code /{id}/projects}). Authenticated is not enough: {@code employee},
  * {@code warehouse} and {@code qc} (the roles {@code DivisionAccessPolicy} hands ordinary staff,
- * with no sales access anywhere else in the system), could read the customer master
- * ({@code taxId}, {@code address}, {@code phone}) and every contact's name/email/phone.
+ * with no sales access anywhere else in the system) must not read the customer master
+ * ({@code taxId}, {@code address}, {@code phone}) or any contact's name/email/phone.
  *
- * <p>Unlike {@code CatalogController}'s reads, there was no recorded product-owner ruling for this
- * one — the {@code :26-28} comment on the controller justified only the write gate. The audience
- * below is <strong>derived</strong> from every real caller, not assumed:
+ * <p>There is no recorded product-owner ruling for this audience. It is
+ * <strong>derived</strong> from every real caller, not assumed:
  *
  * <ul>
  *   <li>{@code TicketCreateModal}'s customer/contact/project picker — the deal-creation flow,
@@ -35,15 +33,15 @@ import th.co.glr.hr.ticket.TicketAccessPolicy;
  *
  * <p>The union of both is exactly {@link TicketAccessPolicy#VIEWER_ROLES} — the same audience as
  * {@code canViewCatalog} and {@code canViewTickets} on the frontend. Aliased here rather than
- * hand-copied a fourth time: see {@link TicketAccessPolicy}'s own javadoc for why issue #389 made
- * that the rule (drift between hand-written copies of this exact set is how #389 happened; {@code
+ * hand-copied a fourth time: see {@link TicketAccessPolicy}'s own javadoc for why (drift between
+ * hand-written copies of this exact set caused an earlier bug; {@code
  * DepositNoticeService} still carries the one un-migrated copy). No non-UI (backend-internal)
  * caller needs a wider audience than this either — {@code PricingRequestService} and {@code
  * DepositNoticeService}/{@code CustomerQuotationService}/{@code TicketService} all reach customer
  * data by injecting {@code CustomerRepository}/{@code ContactRepository} directly, never through
  * this controller, and each already enforces its own (equal-or-narrower) role gate.
  *
- * <p>Owner ruling 2026-09-10 ({@link DealEntryAccess}): these three reads ALSO admit any employee
+ * <p>Per {@link DealEntryAccess}, these three reads ALSO admit any employee
  * holding the live {@code canCreateQuotation} grant — the inline-deal-creation typeahead
  * ({@code /quotations/new}'s customer/project picker) would otherwise 403 for exactly the people
  * the grant was created to unblock. {@code sales_manager} is already inside
@@ -60,8 +58,7 @@ public class CustomerService {
     // Deal-ENTRY grant read only (see DealEntryAccess's own Javadoc) -- ORed alongside
     // VIEWER_ROLES below, never replacing it (import/ceo/account must stay reachable too).
     private final EmployeeAuthRepository employeeAuth;
-    // Quotation-editor bug fix (2026-09-16) — see #updateContact's own Javadoc. Only ever reached
-    // from that one method; every read above it stays exactly as narrow as it was.
+    // Only used by #updateContact (see its Javadoc); the reads above stay as narrow as before.
     private final DealQuotationRepository dealQuotations;
 
     public CustomerService(CustomerRepository customers, ContactRepository contacts, ProjectRepository projects,
@@ -96,16 +93,14 @@ public class CustomerService {
     }
 
     /**
-     * Owner re-report 2026-09-16 ("แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): wraps
-     * {@link ContactRepository#update} and {@link DealQuotationRepository#refreshDraftContactSnapshot}
+     * Wraps {@link ContactRepository#update} and {@link DealQuotationRepository#refreshDraftContactSnapshot}
      * in ONE transaction, so a contact correction and the DRAFT snapshots it feeds either both land
-     * or neither does. This is the caller {@link CustomerController#updateContact} now goes through
-     * instead of {@code contacts.update(...)} directly.
+     * or neither does. {@link CustomerController#updateContact} goes through this rather than
+     * {@code contacts.update(...)} directly.
      *
-     * <p><strong>Stated business-logic change</strong> (CLAUDE.md's sales-flow relaxation — declared,
-     * not smuggled in): a DRAFT quotation's ผู้สั่งซื้อ phone/email snapshot used to refresh only on
-     * that DRAFT's own next save ({@code DealQuotationRepository#updateHeader}'s comment). It now
-     * refreshes the moment the CONTACT itself is corrected — see
+     * <p>A DRAFT quotation's ผู้สั่งซื้อ phone/email snapshot refreshes the moment the CONTACT
+     * itself is corrected, not only on that DRAFT's own next save
+     * ({@code DealQuotationRepository#updateHeader}'s comment) — see
      * {@code DealQuotationRepository#refreshDraftContactSnapshot}'s own Javadoc for the full
      * reasoning and why an already-submitted document is untouched either way.
      *
