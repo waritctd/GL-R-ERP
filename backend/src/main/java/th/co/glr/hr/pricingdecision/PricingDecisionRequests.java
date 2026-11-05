@@ -12,7 +12,7 @@ public final class PricingDecisionRequests {
         BigDecimal defaultMarginPct, String currency, String ceoNote, String clientRequestId) {}
 
     /**
-     * {@code priceMode} (Phase 2, CEO pricing method — owner rulings 2026-09-18/19) is chosen
+     * {@code priceMode} (the CEO's pricing method) is chosen
      * ONCE per decision, header-level, mirroring {@code sales.quotation.price_mode} (V168) and
      * reusing its exact three codes ({@code NET}/{@code SPECIAL_SQM}/{@code DIRECT_NET} —
      * {@link th.co.glr.hr.dealquotation.WastageCalculator}'s own constants). Omitted/null leaves
@@ -20,7 +20,7 @@ public final class PricingDecisionRequests {
      * field here) — it is never required on every call, only on the first one that sets it.
      * {@code ceo}-only, enforced the same way every other CEO-editing action on this aggregate is
      * ({@code PricingDecisionService.CEO_ROLES}); rejected outright when the decision's pricing
-     * request is not the Phase 1 (V185) PER_PIECE + {@code sqm_per_piece} shape — see
+     * request is not the (V185) PER_PIECE + {@code sqm_per_piece} shape — see
      * {@link PricingDecisionService#requireNewFormEligible}. */
     public record UpdatePricingDecisionRequest(
         String ceoNote, String priceMode, List<UpdatePricingDecisionItemRequest> items) {
@@ -47,8 +47,7 @@ public final class PricingDecisionRequests {
      * meaningless (never read).
      *
      * <p>{@code sellingPriceOverride}/{@code clearSellingPriceOverride} are the one deliberate
-     * exception to "never trust a client-supplied price" (Phase 1 UI simplification,
-     * "ปรับราคาเอง"): a real, explicit, reason-logged CEO action that sets the FINAL price
+     * exception to "never trust a client-supplied price" ("ปรับราคาเอง"): a real, explicit, reason-logged CEO action that sets the FINAL price
      * directly, bypassing margin for that line entirely. The two fields together form a tri-state
      * the COALESCE-based columns above cannot express on their own — set (
      * {@code sellingPriceOverride} non-null), clear ({@code clearSellingPriceOverride} true,
@@ -57,11 +56,11 @@ public final class PricingDecisionRequests {
      * leave untouched (both absent). Reason is mandatory in BOTH directions and is carried in
      * {@code decisionNote} on the SAME request — see
      * {@link PricingDecisionService#applyItemUpdates}. Deliberately NOT reused by the new-form
-     * price-mode path (Phase 2): there the CEO's typed price IS the primary input for every item,
+     * price-mode path: there the CEO's typed price IS the primary input for every item,
      * not an override of a baseline, so no reason is required for it — see
-     * {@code PricingDecisionService}'s own Phase 2 header comment for this judgment call.
+     * {@code PricingDecisionService}'s own header comment for this judgment call.
      *
-     * <p>Phase 2 (owner rulings 2026-09-18/19) — {@code discountPct} (mode {@code NET}),
+     * <p>{@code discountPct} (mode {@code NET}),
      * {@code specialPriceSqm} (mode {@code SPECIAL_SQM}, VAT-inclusive บาท/ตร.ม.),
      * {@code directNetPrice} (mode {@code DIRECT_NET}) mirror the direct-deal quotation editor's
      * own per-item price inputs exactly and are validated/derived the same way
@@ -70,30 +69,25 @@ public final class PricingDecisionRequests {
      * {@code priceMode} (set on the SAME request or already stored) — see
      * {@link PricingDecisionService#computeNetUnitPrice}.
      *
-     * <p><b>Owner correction (2026-09-19), superseding the ORIGINAL Phase 2 shape:</b> NET mode's
-     * list price ({@code list_unit_price}) is NEVER a client input. Owner ruling A already made
-     * clear the CEO never types it — it is always the auto-calculated formula price
-     * ({@code proposedSellingPricePerRequestedUnit}, money2-rounded); the CEO's only price lever
-     * is {@code sellingPriceOverride} ("ปรับราคาเอง", ruling B), a SEPARATE field. This record used
-     * to also carry {@code listUnitPrice}/{@code clearListUnitPrice} as a fifth client-settable
-     * price-mode field, mirrored on a "protect the CEO's typed value from being clobbered by a
-     * cost recompute" premise — that premise was wrong (there was never a CEO-typed value to
-     * protect) and reintroduced review finding #1's uncosted-item deadlock through a second door:
-     * an item that starts uncostable (list_unit_price null) and later becomes costable via
-     * {@code overrideItemCost}/{@code recalculateCost}/{@code overrideItemProductType} would have
+     * <p>For a costed line, NET mode's list price ({@code list_unit_price}) is NEVER a client input
+     * (stock lines are the exception, see {@code listUnitPrice} below): the CEO never types it —
+     * it is always the auto-calculated formula price ({@code
+     * proposedSellingPricePerRequestedUnit}, money2-rounded); the CEO's only price lever is
+     * {@code sellingPriceOverride} ("ปรับราคาเอง"), a SEPARATE field. A client-settable
+     * list price would deadlock an uncostable item: one that starts uncostable (list_unit_price
+     * null) and later becomes costable via {@code
+     * overrideItemCost}/{@code recalculateCost}/{@code overrideItemProductType} would have
      * its formula reference become computable while list_unit_price stayed null forever, since
-     * nothing refreshed it and the client-set path only ever wrote what the CEO happened to send
-     * (nothing, for an item they never touched). The fix: list_unit_price is now maintained
+     * nothing refreshed it. So list_unit_price is maintained
      * EXCLUSIVELY server-side — refreshed to {@code money2(proposedSellingPricePerRequestedUnit)}
      * every time that formula reference is recomputed (see
      * {@link PricingDecisionRepository.FrozenCostUpdate}, wired into
      * {@link PricingDecisionService#overrideItemCost} and
      * {@link PricingDecisionService#recomputeCostingInPlace}, the latter shared by
-     * {@code recalculateCost}/{@code overrideItemProductType}) — removed from this request
-     * entirely so there is exactly one source of truth for it, matching the owner's own words:
-     * "the list price is auto-calculated from the formula; the CEO never types it".
+     * {@code recalculateCost}/{@code overrideItemProductType}), giving exactly one source of
+     * truth: "the list price is auto-calculated from the formula; the CEO never types it".
      *
-     * <p>Review finding #6 (2026-09-19): each of the remaining three now has its own
+     * <p>Each of the remaining three has its own
      * {@code clearXxx} sibling ({@code clearDiscountPct}, {@code clearSpecialPriceSqm},
      * {@code clearDirectNetPrice}), mirroring {@code sellingPriceOverride}/
      * {@code clearSellingPriceOverride}'s own tri-state exactly — a bare {@code null} on one of
@@ -115,7 +109,7 @@ public final class PricingDecisionRequests {
         BigDecimal discountPct, Boolean clearDiscountPct,
         BigDecimal specialPriceSqm, Boolean clearSpecialPriceSqm,
         BigDecimal directNetPrice, Boolean clearDirectNetPrice,
-        // Slice 1 of the stock-line feature (V194): the CEO's ราคาตั้ง for a STOCK line (IN_THAILAND /
+        // Stock lines (V194): the CEO's ราคาตั้ง for a STOCK line (IN_THAILAND /
         // IN_TRANSIT). Stock lines have no cost and therefore no formula price, so the CEO types it;
         // it becomes the item's list_unit_price and the decision's single price mode then applies
         // (NET: net = list x (1 - discount%)). Deliberately NOT a reuse of sellingPriceOverride:
@@ -123,8 +117,7 @@ public final class PricingDecisionRequests {
         // SPECIAL_SQM/DIRECT_NET, so the number approve() gates on would not be the number typed),
         // and never writes list_unit_price. Set-only: a stock line cannot be un-priced, and sending
         // this for an IMPORT line must be refused (list_unit_price stays server-maintained for
-        // costed lines - see the owner correction of 2026-09-19 above).
-        // TEST-FIRST SCAFFOLDING: the field exists so the tests compile; nothing reads it yet.
+        // costed lines - see the Javadoc above).
         BigDecimal listUnitPrice) {
         /** Absent (null) {@code clear*} flags normalise to {@code false}, so every accessor is
          * non-null and the service's {@code ||}/{@code &&} call sites unbox safely. */
@@ -179,7 +172,7 @@ public final class PricingDecisionRequests {
      * ReturnPricingDecisionRequest}'s own mandatory-reason precedent). */
     public record CostOverrideRequest(BigDecimal manualLandedCostPerUnitThb, String reason) {}
 
-    /** V152 (V109 engine wiring), owner ruling 2026-08-16: the CEO's per-item duty product_type
+    /** V152 (V109 engine wiring): the CEO's per-item duty product_type
      * override — {@code productType == null} (or blank) CLEARS the override, reverting to
      * {@code LandedCostCalculator}'s TILE default. Unlike {@link CostOverrideRequest}, no reason
      * field: this does not replace a computed figure the way a cost/price override does, it

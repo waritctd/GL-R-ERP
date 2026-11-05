@@ -17,18 +17,16 @@ import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.ThaiText;
 
 /**
- * Renders ใบวางบิล (billing note, GLA-99 step 3) into the official template by filling dynamic
+ * Renders ใบวางบิล (billing note) into the official template by filling dynamic
  * cells. The template's own {@code SUM(F12:F26)} total formula is REPLACED with a computed literal
- * (F4, GLA-99 step 3 round 1 review) rather than left for Excel/LibreOffice to recalculate on
- * open — a formula is only correct for a reader that recalculates it, and this document's printed
+ * rather than left for Excel/LibreOffice to recalculate on open — a formula is only correct for a reader that recalculates it, and this document's printed
  * total must never be able to disagree with its own baht-text words for a reader that does not.
  * See {@link #toXlsx}'s own total/baht-text block.
  *
- * <p><b>ONE template serves BOTH types.</b> The owner's reference form ({@code
- * ~/Downloads/ฟอร์มใบวางบิล.xls}) ships two sheets — ค่าสินค้า (goods) and ค่าขนส่ง (freight) — that
- * are the IDENTICAL layout with different sample data; only the ค่าขนส่ง sheet is blank of real
- * customer data, so {@code billing_note_template.xls} was built from that one sheet alone (see its
- * own extraction, GLA-99 step 3 PR body). {@link BillingNoteDocumentDto#type} therefore never
+ * <p><b>ONE template serves BOTH types.</b> The owner's reference form ships two sheets — ค่าสินค้า
+ * (goods) and ค่าขนส่ง (freight) — that are the IDENTICAL layout with different sample data; only
+ * the ค่าขนส่ง sheet is blank of real customer data, so {@code billing_note_template.xls} was
+ * built from that one sheet alone. {@link BillingNoteDocumentDto#type} therefore never
  * selects a different template — it is a business field on the row, not a rendering switch.
  *
  * <p><b>Template layout, measured cell-by-cell with POI against the real ค่าขนส่ง sheet</b>
@@ -44,10 +42,9 @@ import th.co.glr.hr.common.ThaiText;
  *       columns B-G — static, never overwritten.</li>
  *   <li>Rows 11-25 (0-based), 15 rows: the line-item zone this class writes into. Measured from
  *       the template's OWN {@code SUM(F12:F26)} formula (1-based), not trusted from any summary
- *       count — see {@link #MAX_LINE_ROWS}'s own comment for why 15, not the 14 an earlier
- *       description estimated.</li>
+ *       count — see {@link #MAX_LINE_ROWS}'s own comment for why 15, not 14.</li>
  *   <li>Row 26 (0-based): total — F27's own {@code SUM(F12:F26)} formula is REPLACED with a
- *       computed literal (F4, GLA-99 step 3 round 1 review — a formula cell is only correct for a
+ *       computed literal (a formula cell is only correct for a
  *       reader that recalculates it, and this document's own total must never disagree with its
  *       baht-text words for one that does not); B27 (merged B27:E27) gets this class's own
  *       computed {@link ThaiText#bahtText} literal of that SAME total, replacing the template's
@@ -57,7 +54,7 @@ import th.co.glr.hr.common.ThaiText;
  *       dotted lines — STATIC, never written. The rendered file always ships this block blank for
  *       physical pen signing; {@code sales.billing_note.received_by_name}/{@code
  *       payment_appointment_date} are this system's OWN record of a later signature, read back by
- *       a screen (GLA-99 step 4), never re-printed onto this file.</li>
+ *       a screen, never re-printed onto this file.</li>
  *   <li>Row 31 (0-based): "โปรดจ่ายเช็คในนาม …" — static footer, never written.</li>
  *   <li>Row 32 (0-based): "หมายเหตุ : " label at B33; the note's own free-text {@code note} value
  *       written at C33.</li>
@@ -71,8 +68,7 @@ public class BillingNoteRenderer {
     private static final String TEMPLATE = "templates/billing_note_template.xls";
     private static final int LINE_START_ROW = 11; // 0-based (= row 12 in 1-based)
     // Measured directly against the template's own SUM(F12:F26) formula (1-based rows 12-26 = 15
-    // rows), NOT the "14 rows max" an earlier summary of the owner's form estimated — see this
-    // class's own Javadoc for the measurement. A caller sizing a draft against this constant gets
+    // rows) — see this class's own Javadoc. A caller sizing a draft against this constant gets
     // the real ceiling the template can actually hold.
     public static final int MAX_LINE_ROWS = 15;
     private static final int TOTAL_ROW = 26; // 0-based (= row 27 in 1-based)
@@ -138,22 +134,20 @@ public class BillingNoteRenderer {
             }
 
             // ── Total + baht-text — BOTH derived from the SAME `total`, not from F27's own SUM
-            // formula (F4, Opus review, GLA-99 step 3 round 1): the template's SUM(F12:F26) formula
-            // is REPLACED with this literal, because a consumer that opens the file without
+            // formula: the template's SUM(F12:F26) formula is REPLACED with this literal, because a consumer that opens the file without
             // recalculating formulas (most non-Excel readers) would otherwise show F27's stale
             // cached template value while B27's baht-text literal shows the real total — two
             // numbers that can disagree for exactly the readers this discipline exists to protect
             // against. One computed value, written to both cells, cannot disagree with itself.
             //
-            // S5 (Opus review, GLA-99 step 3 round 2) — F4's own fix regressed F27's STYLE: it
-            // applied `moneyStyle` (a fresh, borderless, default-font style meant only for the 15
-            // blank line-amount cells, which borrow no style of their own from the source sheet —
-            // see that style's own comment) to F27 too, discarding the template's own borders and
-            // Thai font on the printed total cell. `getOrCreate` already blanks a FORMULA cell's
-            // stored formula before a literal write; F27's STYLE index is untouched by that blank,
-            // so leaving it alone here is enough to keep exactly what the template shipped with.
+            // Do NOT apply `moneyStyle` to F27: it is a fresh, borderless, default-font style meant
+            // only for the 15 blank line-amount cells (which borrow no style of their own from the
+            // source sheet — see that style's own comment), and would discard the template's own
+            // borders and Thai font on the printed total cell. `getOrCreate` already blanks a
+            // FORMULA cell's stored formula before a literal write; F27's STYLE index is untouched
+            // by that blank, so leaving it alone here keeps exactly what the template shipped with.
             BigDecimal total = doc.totalAmount() != null ? doc.totalAmount() : sumAmounts(lines);
-            Cell totalCell = getOrCreate(sh, TOTAL_ROW, 5); // F27 — NO setCellStyle here (S5)
+            Cell totalCell = getOrCreate(sh, TOTAL_ROW, 5); // F27 — NO setCellStyle here
             totalCell.setCellValue(total.doubleValue());
             setStr(sh, TOTAL_ROW, 1, ThaiText.bahtText(total));
 
