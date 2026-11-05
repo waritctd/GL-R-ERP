@@ -1,8 +1,13 @@
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api } from '../../api/index.js';
 import { hasPermission } from '../../app/permissions.js';
 import { Button } from '../../components/common/Button.jsx';
-import { expandedRowRegionId } from '../../components/common/DataTable.jsx';
+import { DataTable, expandedRowRegionId } from '../../components/common/DataTable.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
+import { StatePanel } from '../../components/common/StatePanel.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { downloadBlob } from '../../utils/download.js';
 import { leaveStatusLabel as statusInfo, pendingApproverText } from '../../utils/format.js';
 import {
   formatDateRange, formatDateTime, formatDays, formatDaysOrDash,
@@ -336,4 +341,227 @@ export function buildLeaveRequestColumns({
       render: (request) => renderActions(request),
     },
   ];
+}
+
+function isPermissionError(error) {
+  return error?.status === 403;
+}
+
+// Phase A2 (#485): a rejected/auto-rejected request's own retry link -- one of the composer's
+// three named deep-link entry points (LeaveRequestPage.jsx's own doc comment lists all three:
+// this row action, the empty state below, and the auto-rejection notification). Prefills the same
+// type/dates the rejected request used so the employee starts from what they already chose, not a
+// blank form -- they are here to fix ONE thing the system flagged, not re-decide everything.
+function retryLeaveRequestHref(request) {
+  const params = new URLSearchParams({
+    type: request.leaveTypeCode,
+    start: request.startDate,
+    end: request.endDate,
+  });
+  return `/leave/new?${params.toString()}`;
+}
+
+const noSummaryPrefix = () => '';
+
+/**
+ * The request table shared by the "ของฉัน" and team tabs: split into DataTable (loading skeleton / real rows /
+ * pagination / error+retry) plus a StatePanel for the three zero-row cases the pre-A1 table
+ * collapsed into one generic EmptyState: `filtered` (non-default filters applied, offers a
+ * clear-filters action), `empty` (teaching copy -- first-time, no data at all yet), and `denied`
+ * (the request errored with a 403). `emptyState` is the tab's own
+ * teaching copy; `viewer`/`summaryPrefix` are the only per-tab row differences.
+ */
+export function LeaveRequestsSection({
+  requestsQuery, rows, hasCustomFilters, onClearFilters, expandedId, onToggleExpand, onCancel, user, showToast,
+  viewer, emptyState, summaryPrefix = noSummaryPrefix,
+}) {
+  const navigate = useNavigate();
+  // Phase A4: the medical-certificate download for the requester's OWN expanded row -- the
+  // reviewer-side equivalent lives in ReviewQueueTab.jsx. Local to this section (not lifted to
+  // MyLeaveTab) since only this table's expanded row ever needs it.
+  const [downloadingAttachmentId, setDownloadingAttachmentId] = useState(null);
+  async function downloadAttachment(request) {
+    setDownloadingAttachmentId(request.id);
+    try {
+      const blob = await api.leave.downloadAttachment(request.attachmentId);
+      downloadBlob(blob, `leave-attachment-${request.id}`, 'pdf');
+    } catch (error) {
+      showToast('error', error.message || 'ดาวน์โหลดเอกสารไม่สำเร็จ');
+    } finally {
+      setDownloadingAttachmentId(null);
+    }
+  }
+  const loading = requestsQuery.isPending;
+  const denied = requestsQuery.isError && isPermissionError(requestsQuery.error);
+  const hasError = requestsQuery.isError && !denied;
+
+  const columns = useMemo(() => buildLeaveRequestColumns({
+    expandedId,
+    onToggleExpand,
+    viewer,
+    renderActions: (request) => {
+      const isOwn = Number(request.employeeId) === Number(user.employeeId);
+      const canCancel = isOwn && request.status === 'SUBMITTED';
+      const canRetry = isOwn && ['AUTO_REJECTED', 'REJECTED'].includes(request.status);
+      if (!canCancel && !canRetry) return null;
+      return (
+        <span className="flex items-center gap-1">
+          {canRetry ? (
+            <Button
+              type="button"
+              variant="icon"
+              title="ยื่นคำขอใหม่"
+              aria-label="ยื่นคำขอใหม่"
+              onClick={() => navigate(retryLeaveRequestHref(request))}
+            >
+              <Icon name="refresh" size={14} />
+            </Button>
+          ) : null}
+          {canCancel ? (
+            <Button type="button" variant="icon" title="ยกเลิก" aria-label="ยกเลิก" onClick={() => onCancel(request.id)}>
+              <Icon name="ban" size={14} />
+            </Button>
+          ) : null}
+        </span>
+      );
+    },
+  }), [expandedId, onToggleExpand, onCancel, user, viewer, navigate]);
+
+  function mobileCard(request) {
+    const status = statusInfo(request.status);
+    const isOwn = Number(request.employeeId) === Number(user.employeeId);
+    const canCancel = isOwn && request.status === 'SUBMITTED';
+    const canRetry = isOwn && ['AUTO_REJECTED', 'REJECTED'].includes(request.status);
+    const expanded = expandedId === request.id;
+    // Same collapsed-row unpaid-days badge as leaveRequestTable.jsx's shared desktop status column
+    // and ReviewQueueTab.jsx's own mobile card (owner ruling, V164 follow-up) -- see either's own
+    // comment for why this reads `unpaidDays` (a §5 WARN gate's own unpaidByRuleDays is always a
+    // SUBSET of it -- LeaveRequestDto's Javadoc) rather than unpaidByRuleDays alone. This is the
+    // requester's OWN history view -- "part of my leave will be unpaid" matters here as much as it
+    // does on the approver's queue, and this card previously showed no such signal at all.
+    const hasUnpaidDays = Number(request.unpaidDays || 0) > 0;
+    return (
+      <>
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          {/* Wraps, never truncates — see ReviewQueueTab.jsx's own comment: `truncate` cut the
+              Buddhist-era year off the end date at 390px, which reads as a complete date. */}
+          <strong className="min-w-0 text-sm font-extrabold text-text">
+            {formatDateRange(request.startDate, request.endDate)}
+          </strong>
+          <span className="flex shrink-0 items-start gap-1.5">
+            {/* Stacked vertically, never inline (owner ruling, V164 follow-up) -- two badges
+                sharing one line in a narrow column is what forces truncation; stacking removes the
+                problem at every width with no breakpoint variant needed. */}
+            <span className="flex flex-col items-start gap-1">
+              <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+              {hasUnpaidDays ? (
+                <StatusBadge tone="warning">ไม่รับค่าจ้าง {formatDays(request.unpaidDays)}</StatusBadge>
+              ) : null}
+            </span>
+            <Button
+              type="button"
+              variant="icon"
+              aria-expanded={expanded}
+              aria-controls={expandedRowRegionId(request.id)}
+              title={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
+              aria-label={expanded ? 'ซ่อนรายละเอียด' : 'ดูรายละเอียด'}
+              onClick={() => onToggleExpand(request.id)}
+            >
+              <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
+            </Button>
+          </span>
+        </div>
+        <PendingApproverNote request={request} viewer={viewer} />
+        <span className="min-w-0 truncate text-xs text-text-muted">
+          {summaryPrefix(request)}{request.leaveTypeNameTh || request.leaveTypeCode} · {formatDays(request.totalDays)}
+        </span>
+        <span className="min-w-0 truncate text-xs text-text-muted">{request.reason}</span>
+        {canRetry ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="mt-1 min-h-11"
+            onClick={() => navigate(retryLeaveRequestHref(request))}
+          >
+            <Icon name="refresh" size={14} />
+            ยื่นคำขอใหม่
+          </Button>
+        ) : null}
+        {canCancel ? (
+          <Button type="button" variant="secondary" className="mt-1 min-h-11" onClick={() => onCancel(request.id)}>
+            <Icon name="ban" size={14} />
+            ยกเลิกคำขอ
+          </Button>
+        ) : null}
+      </>
+    );
+  }
+
+  if (!loading && denied) {
+    return (
+      <StatePanel
+        state="denied"
+        description={requestsQuery.error?.message || 'ไม่มีสิทธิ์เข้าถึงรายการนี้'}
+      />
+    );
+  }
+
+  if (!loading && !hasError && rows.length === 0) {
+    return hasCustomFilters ? (
+      <StatePanel
+        state="filtered"
+        action={<Button type="button" variant="secondary" onClick={onClearFilters}>ล้างตัวกรอง</Button>}
+      />
+    ) : emptyState;
+  }
+
+  return (
+    <DataTable
+      columns={columns}
+      rows={rows}
+      getRowKey={leaveRequestRowKey}
+      gridClassName={LEAVE_REQUEST_TABLE_GRID}
+      // DataTable brings its OWN `<Panel flush>` card, and this table is additionally wrapped in a
+      // titled `<Panel flush>` below, so the two 1px borders sat adjacent: a card inside a card.
+      // Every other DataTable caller in the app renders it bare; these two leave tabs keep the
+      // outer panel only for its section title, so the inner card's chrome is what has to go, not
+      // the heading.
+      //
+      // Scroll is deliberately NOT set here. The 980px grid floor inside an `overflow-hidden`
+      // flush Panel used to clip 229px of this table -- measured at 834px, unreachable by any
+      // gesture -- but #650 fixed that in Panel's own default and removed the three call-site
+      // patches that had each worked around it. See ReviewQueueTab.jsx's comment at the same spot.
+      panelClassName="rounded-none border-0"
+      loading={loading}
+      error={hasError}
+      onRetry={() => requestsQuery.refetch()}
+      mobileCard={mobileCard}
+      renderExpanded={(request) => {
+        if (expandedId !== request.id) return null;
+        return (
+          <>
+            {renderLeaveRequestExpanded(request)}
+            {request.attachmentId ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-surface px-3 py-2">
+                <span className="inline-flex min-w-0 items-center gap-2 text-sm text-text">
+                  <Icon name="fileText" size={16} className="text-icon-muted" />
+                  <span className="min-w-0 truncate">{request.attachmentFileName || 'เอกสารแนบ'}</span>
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={downloadingAttachmentId === request.id}
+                  onClick={() => downloadAttachment(request)}
+                >
+                  <Icon name="fileText" size={14} />
+                  {downloadingAttachmentId === request.id ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด'}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        );
+      }}
+      showPagination
+    />
+  );
 }
