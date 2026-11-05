@@ -48,7 +48,7 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 public class FactoryQuoteService {
     private static final Set<String> RAW_QUOTE_ROLES = Set.of("import", "ceo");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
-    // CR-1 (GLA-167) B-R1: the CEO may also run the contact step -- generate/edit the email draft and
+    // The CEO may also run the contact step -- generate/edit the email draft and
     // mark the factory contacted. Everything else on a quote (receive, attachments, ...) stays import-only.
     private static final Set<String> CONTACT_ROLES = Set.of("import", "ceo");
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -98,22 +98,17 @@ public class FactoryQuoteService {
 
     /**
      * Generates drafts for every factory that RESOLVES, instead of blocking the whole batch on
-     * lines that do not (owner decision, manual-RFQ redesign). Only when NO line resolves to a
-     * factory does this throw — generating nothing while still returning 200 would be a silent
-     * no-op, which is worse than the 422 it replaces. Partially-unresolved requests are common
-     * (Import routes factories to lines one at a time), and used to force a second, otherwise
-     * pointless round trip once the last line was fixed; now a re-run after filling the gap
-     * completes the set.
+     * lines that do not. Only when NO line resolves to a factory does this throw (422) —
+     * generating nothing while still returning 200 would be a silent no-op. Partially-unresolved
+     * requests are common (Import routes factories to lines one at a time), so a re-run after
+     * filling the gap completes the set.
      *
-     * <p><b>A factory that already has a current quote is not simply skipped (BLOCKER 1 fix).</b>
-     * This Javadoc used to claim the only silent-no-op this method could produce was the
-     * all-unresolved case above, thrown as a 422 — that was wrong. "Every resolved factory
-     * already has a quote" was a SECOND silent no-op: the old code skipped such a factory
-     * unconditionally, which permanently stranded any line resolved to it AFTER its draft was
-     * first created — this method would skip that factory on every future re-run, {@code
+     * <p><b>A factory that already has a current quote is not simply skipped.</b>
+     * Skipping it unconditionally would permanently strand any line resolved to it AFTER its draft
+     * was first created — this method would skip that factory on every future re-run, {@code
      * PricingRequestService#setItemFactory} would 409 on any attempt to move the line elsewhere,
-     * and {@code receive}'s item-set check meant the existing quote could never absorb it either.
-     * Now: while the current quote is still {@code DRAFT}, newly-resolved items are ADDED to it
+     * and {@code receive}'s item-set check means the existing quote could never absorb it either.
+     * So while the current quote is still {@code DRAFT}, newly-resolved items are ADDED to it
      * (see {@link #addNewlyResolvedItemsToExistingDraft}); only once the quote has advanced past
      * DRAFT — REQUESTED and beyond, meaning a human has already sent it or the factory has
      * already answered — is it left alone, because its item set is then exactly what was
@@ -171,10 +166,10 @@ public class FactoryQuoteService {
     }
 
     /**
-     * BLOCKER 1a (review remediation): the other half of {@link #generateDrafts}' fix for a
+     * The other half of {@link #generateDrafts}' handling of a
      * factory whose current quote already exists. Adds whichever of {@code resolvedItems} are not
-     * already on {@code currentQuote} — and ONLY while it is still {@code DRAFT} — instead of the
-     * old unconditional skip that stranded them. {@code resolvedItems} is the FULL set of items
+     * already on {@code currentQuote} — and ONLY while it is still {@code DRAFT} — instead of
+     * skipping them (which would strand them). {@code resolvedItems} is the FULL set of items
      * currently resolved to this factory (old and new alike; see {@link #groupByFactory}), so
      * filtering against the quote's existing item ids is what isolates the genuinely new ones.
      *
@@ -238,13 +233,13 @@ public class FactoryQuoteService {
     }
 
     /**
-     * CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" -- replaces the old manual {@code send}. A HUMAN (import or
+     * "ติดต่อโรงงานแล้ว" -- there is no system send. A HUMAN (import or
      * the CEO) has already contacted the factory outside the system; this records the date, an
      * optional note and who did it, moves the quote DRAFT -> REQUESTED (which is what unlocks price
      * entry, see {@link #receive}) and advances the pricing request IMPORT_REVIEWING ->
      * AWAITING_FACTORY_RESPONSE, all in one transaction. Nothing is sent from here.
      *
-     * <p><b>No undo, no edit (owner ruling R7):</b> only a current DRAFT quote can be marked, and the
+     * <p><b>No undo, no edit:</b> only a current DRAFT quote can be marked, and the
      * UPDATE is guarded on {@code status = 'DRAFT'}, so a second call is a 409 and can never rewrite
      * the recorded date, note or actor. {@code contactedOn} is required and may not be later than
      * today in Asia/Bangkok (a clock-date, not an instant, so the zone decides "today").
@@ -294,9 +289,9 @@ public class FactoryQuoteService {
     }
 
     /**
-     * CR-1 (B2): a draft's default currency is the one Sales fixed on its lines. Seeded only when the
+     * A draft's default currency is the one Sales fixed on its lines. Seeded only when the
      * lines name exactly ONE currency between them; if none is set (legacy) or they disagree the
-     * caller keeps the old THB default, since there is no single right answer to seed.
+     * caller keeps the THB default, since there is no single right answer to seed.
      */
     private static String seededCurrency(List<PricingRequestItemDto> lines) {
         Set<String> currencies = lines.stream()
@@ -635,7 +630,7 @@ public class FactoryQuoteService {
             request.reason());
         notifyCeo(summary, PricingRequestEventKind.FACTORY_NOT_AVAILABLE,
             "คำขอราคา " + summary.requestCode() + " โรงงานไม่สามารถเสนอราคาได้: " + quote.factoryName());
-        // P2 B3: the rep who asked for the price learns the factory cannot quote (CEO already told above).
+        // The rep who asked for the price learns the factory cannot quote (CEO already told above).
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
             PricingRequestEventKind.FACTORY_NOT_AVAILABLE,
             "ฝ่ายนำเข้า (" + actor.name() + ") แจ้งว่าโรงงาน " + quote.factoryName()
@@ -656,7 +651,7 @@ public class FactoryQuoteService {
 
     /**
      * Groups a pricing request's lines by the factory each one is routed to. A line with no
-     * resolved factory is simply SKIPPED, not fatal (owner decision, manual-RFQ redesign) — {@link
+     * resolved factory is simply SKIPPED, not fatal — {@link
      * #generateDrafts} decides whether an entirely-empty result is an error; this method's only
      * job is the grouping.
      */
@@ -684,20 +679,18 @@ public class FactoryQuoteService {
      * factory, in on-screen row order — used by {@link #generateDrafts} to build its 422 message
      * when NO line resolves at all.
      *
-     * <p><b>The message names the ROW, not the primary key.</b> It used to read
-     * {@code "รายการที่ " + item.id()} — the {@code sales.pricing_request_item} PK. The identical
-     * Thai phrase means the 1-based row position everywhere else in this workflow (see
-     * {@code PricingRequestService#identityErrorMessage}), so Import read "รายการที่ 35" on a
-     * three-line request and had no way to tell which line was meant: the PK appears nowhere on
-     * screen. The position below matches what the detail page renders because {@code findItems}
+     * <p><b>The message names the ROW, not the primary key</b> ({@code sales.pricing_request_item}
+     * PK). The identical Thai phrase means the 1-based row position everywhere else in this
+     * workflow (see {@code PricingRequestService#identityErrorMessage}), and the PK appears
+     * nowhere on screen, so "รายการที่ 35" on a three-line request would not say which line is
+     * meant. The position below matches what the detail page renders because {@code findItems}
      * already returns {@code ORDER BY sort_order, pricing_request_item_id} and
      * {@link java.util.List#sort} is stable, so re-sorting on {@code sortOrder} alone preserves
      * that order. The product name is included as well, so the line is identifiable even if the
      * reader is looking at a stale render.
      *
-     * <p>It also reports EVERY offending line rather than just the first. Fixing them one 422 at a
-     * time was the difference between one trip through
-     * {@code PricingRequestService#setItemFactory} and N of them.
+     * <p>It reports EVERY offending line rather than just the first, so fixing them takes one trip
+     * through {@code PricingRequestService#setItemFactory} rather than one 422 per line.
      */
     private List<String> unresolvedLineDescriptions(List<PricingRequestItemDto> items) {
         List<PricingRequestItemDto> ordered = items.stream()
@@ -749,7 +742,7 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.CONFLICT, "สกุลเงินต้องเป็น " + requestItem.requestedCurrency()
                     + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
             }
-            // Owner ruling 2026-10-01: factories sell on different terms, so import may quote a
+            // Factories sell on different terms, so import may quote a
             // per-ตร.ม. line per แผ่น (and the reverse). Only that pair switches; any other basis
             // stays locked to what Sales asked for. Costing normalises the requested quantity onto
             // the quoted basis (V68), so a switched line still prices correctly.
@@ -856,40 +849,35 @@ public class FactoryQuoteService {
     }
 
     /**
-     * English RFQ draft body (manual-RFQ redesign, P2). Contains what the owner approved for this
-     * template: a greeting identifying GL&R as the requester, one numbered block per item (brand/
-     * model/catalog code, colour/surface/size, quantity, special requirement), the sales note if
+     * English RFQ draft body. Contains: a greeting identifying GL&R as the requester, one
+     * numbered block per item (brand/model/catalog code, colour/surface/size, quantity, special
+     * requirement), the sales note if
      * any, and a sign-off naming the requesting user and their email. Deliberately NO
-     * commercial-terms block and NO reply-by-date block — the owner declined both explicitly. This
+     * commercial-terms block and NO reply-by-date block (declined by the owner). This
      * is a human-reviewed DRAFT the requester edits and sends from their own mail client (factory
      * RFQ email is manual-only — see {@link #send}), not a machine-sent message, so it reads as
      * ordinary business correspondence rather than a system dump of field names.
      *
-     * <p><b>Numbered blocks, not a fixed-width table (2026-09).</b> The previous {@code
-     * String.format} table only listed brand/model/size/quantity/unit, and a fixed-width table
-     * falls apart in real mail clients (proportional fonts). This also left out colour, surface
-     * (texture), the catalog product code, and the line's special requirement — details a factory
-     * needs to quote the right product. Each optional field is skipped outright when blank; this
+     * <p><b>Numbered blocks, not a fixed-width table:</b> a fixed-width table falls apart in real
+     * mail clients (proportional fonts). Each block carries the details a factory needs to quote
+     * the right product: brand/model/catalog code, colour, surface (texture), size, quantity and
+     * the line's special requirement. Each optional field is skipped outright when blank; this
      * NEVER prints a "null" or "-" placeholder for a missing field. Quantities are formatted via
      * {@link BigDecimal#stripTrailingZeros()} so "120.000" reads as "120". Thickness, pieces-per-
-     * box, and a sales-typed product code deliberately stay OUT of this block — they arrive via
-     * another session's unmerged V185, which will extend this template later.
+     * box, and a sales-typed product code deliberately stay OUT of this block.
      *
-     * <p><b>Packing-details ask (2026-09).</b> The factory's reply is where GL&R actually learns
+     * <p><b>Packing-details ask.</b> The factory's reply is where GL&R actually learns
      * the packing (pieces per box, m² per box, box weight) — the catalog frequently lacks box
-     * counts — so the request sentence now asks for pricing, lead time, AND packing details, not
-     * pricing and lead time alone.
+     * counts — so the request sentence asks for pricing, lead time, AND packing details.
      *
-     * <p><b>Attachment list (review remediation, HIGH 4) — a DEVIATION from the owner's approved
-     * template above, flagged rather than assumed.</b> {@code include_in_factory_email} has had no
-     * caller since {@code attemptSend} (the old dispatch worker) was deleted: Import could still
-     * tick "include this attachment in the factory email" on a pricing-request attachment, and
-     * nothing would ever attach it, because nothing sends anything any more. Rather than leave
-     * that toggle live and silently pointless, this appends a short plain-text list of the marked
+     * <p><b>Attachment list — a deviation from the approved template above.</b> {@code
+     * include_in_factory_email} has no caller that sends anything: Import can tick "include this
+     * attachment in the factory email" on a pricing-request attachment, and
+     * nothing would ever attach it, because nothing sends. Rather than leave
+     * that toggle silently pointless, this appends a short plain-text list of the marked
      * attachments' file names — ONLY when at least one is marked — so the human copying this draft
      * into their own mail client knows what to physically attach. It is deliberately a bare file
-     * list, not a table, specifically so it is trivial to delete outright if the owner says no to
-     * it on review.
+     * list, not a table, so it is trivial to delete outright if the owner rejects it.
      */
     private String emailBody(PricingRequestSummaryDto summary, String factoryName, List<PricingRequestItemDto> items,
                              UserPrincipal actor) {

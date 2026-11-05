@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 /**
  * Year-to-date carry-forward feeding {@link PayrollCalculator}'s annual projection.
  *
- * <p>ป.96/2543 compliance (2026-07-28): income and withholding are now carried as TWO limbs, because
+ * <p>ป.96/2543 compliance: income and withholding are carried as TWO limbs, because
  * คำชี้แจง แบบ ภ.ง.ด.1 treats them under different clauses and they cannot be recombined afterwards:
  *
  * <ul>
@@ -17,14 +17,13 @@ import java.math.BigDecimal;
  *       multiplied out, then taxed as the DIFFERENCE between the tax with it and the tax without it.</li>
  * </ul>
  *
- * <p>F7 correction (Opus review, 2026-07-30): the slot numbers above were updated to match the
- * accountant's-workbook renumbering (handoff section 9d, 2026-07-29) -- คอมมิชชั่น moved from พิเศษ 6
- * to พิเศษ 7 (a new พิเศษ 2, ค่าเช่าบ้าน, was inserted ahead of it, shifting every later slot by one).
- * See {@code PayrollCalculator}'s {@code COMMISSION_SPECIAL_PAY_INDEX}, already correct, for the same
- * numbering applied to the actual index used by {@code calculate()}.
+ * <p>The slot numbers above follow the accountant's workbook numbering: คอมมิชชั่น is พิเศษ 7 (พิเศษ
+ * 2, ค่าเช่าบ้าน, sits ahead of it). See {@code PayrollCalculator}'s {@code
+ * COMMISSION_SPECIAL_PAY_INDEX} for the same numbering applied to the index used by {@code
+ * calculate()}.
  *
- * <p>The split is owner-stated, not inferred from the slot labels — an earlier version read พิเศษ 1-5
- * as standing allowances and had this exactly backwards. See {@code PayrollCalculator}'s
+ * <p>The split is owner-stated, not inferred from the slot labels (พิเศษ 1-5 are NOT standing
+ * allowances). See {@code PayrollCalculator}'s
  * {@code COMMISSION_SPECIAL_PAY_INDEX} for the owner's account and why the classification is not a
  * contiguous slot range.
  *
@@ -38,7 +37,7 @@ public record PayrollYearToDate(
     BigDecimal socialSecurity,
     BigDecimal regularWithholdingTax,
     BigDecimal variableWithholdingTax,
-    // Per-limb breakdown (task 2, 2026-07-29): withholdingTax below stays the TOTAL across all three
+    // Per-limb breakdown: withholdingTax below stays the TOTAL across all three
     // ป.96 limbs (still used by callers that only need the aggregate). The classified engine
     // (PayrollCalculator#calculateClassified) needs the REGULAR and CUMULATIVE limbs' own prior
     // contributions separately -- ข้อ 1(4)'s reprojection reads regularLimbTaxableIncome /
@@ -47,27 +46,23 @@ public record PayrollYearToDate(
     // deliberately NOT carried here -- each known-frequency payment is taxed as its own period's
     // marginal difference and never reprojected forward, so it needs no YTD state.
     //
-    // SUPERSEDED going forward for the regular/variable pair above (rebase onto branch 117, commit
-    // c52080b6, 2026-07-29 -- see docs/agent-handoffs/119_feat-payroll-classification-and-hr-
-    // declarations.md, "Progress -- task 4: rebase report + F1-F7 fixes" for what that rebase actually
-    // changed; F4 correction, Opus review 2026-07-30, that section did not exist when this comment was
-    // first written): calculateLine now runs exclusively through calculateClassified, which reads the
-    // *Limb fields below, not regularIncome/variableIncome/regularWithholdingTax/variableWithholdingTax.
-    // Those four (and the legacy calculate() method that still reads them) exist only for
-    // PayrollExcelReconciliationTest's
-    // frozen regression suite and other calculate()-only callers.
+    // The regular/variable pair above is superseded: calculateLine runs exclusively through
+    // calculateClassified, which reads the *Limb fields below, not
+    // regularIncome/variableIncome/regularWithholdingTax/variableWithholdingTax. Those four (and the
+    // legacy calculate() method that still reads them) exist only for
+    // PayrollExcelReconciliationTest's frozen regression suite and other calculate()-only callers.
     BigDecimal withholdingTax,
     BigDecimal regularLimbTaxableIncome,
     BigDecimal regularLimbWithholdingTax,
     BigDecimal cumulativeLimbTaxableIncome,
     BigDecimal cumulativeLimbWithholdingTax,
-    // F1 fix (Opus review, 2026-07-30): a settled EXTRA_KNOWN_FREQUENCY payment (ข้อ 1(5), e.g. a
+    // A settled EXTRA_KNOWN_FREQUENCY payment (ข้อ 1(5), e.g. a
     // bonus) is taxed and fully withheld in the period it is paid and is deliberately NOT reprojected
     // -- but it is still real income that must stay part of the running total the CUMULATIVE limb is
     // layered on top of in every LATER period. Without this field, PayrollCalculator#calculateClassified
-    // had no way to know a known-limb payment had already happened this year once its own period ended,
-    // so the cumulative limb's marginal tax silently dropped it from the bracket position -- the KNOWN
-    // and CUMULATIVE limbs then consumed the same tax brackets twice and the year under-withheld. This
+    // could not know a known-limb payment had already happened this year once its own period ended,
+    // so the cumulative limb's marginal tax would drop it from the bracket position -- the KNOWN
+    // and CUMULATIVE limbs would consume the same tax brackets twice and the year under-withhold. This
     // is the sum of every period's own taxable_income_known_limb (payroll_line), i.e. the running total
     // of known-limb income SETTLED so far this year -- not reprojected, just accumulated.
     BigDecimal knownLimbTaxableIncome

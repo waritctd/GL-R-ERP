@@ -5,10 +5,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Input/output for {@link PayrollCalculator#calculateClassified}, the task-2 (2026-07-29) rewrite
- * that replaces the hardcoded single-limb income split with the per-employee, per-component tax
- * treatment and SSO inclusion data introduced by task 1 (V95) and the per-limb year-to-date tracking
- * added by V96. See docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
+ * Input/output for {@link PayrollCalculator#calculateClassified}, which uses the per-employee,
+ * per-component tax treatment and SSO inclusion data (V95) and the per-limb year-to-date tracking
+ * (V96) instead of a hardcoded single-limb income split.
  *
  * <p>Deliberately a NEW pair of records rather than more trailing fields on {@link
  * PayrollCalculationInput}/{@link PayrollCalculation}: those two are frozen by {@code
@@ -26,8 +25,7 @@ public final class PayrollClassifiedCalculationDtos {
     public record PayrollClassifiedCalculationInput(
         long employeeId,
         // Employee code + name, used only to name the employee in the unclassified-component
-        // rejection message (handoff section 1: "reject the payroll run with a message naming the
-        // employee and the component").
+        // rejection message (names the employee and the component).
         String employeeLabel,
         // This period's amount per component. A component absent from this map is treated as zero --
         // NOT as "unclassified and blocking" (only a component with amount().signum() > 0 and no
@@ -42,23 +40,19 @@ public final class PayrollClassifiedCalculationDtos {
         // Per-component SSO wage-base inclusion for this employee/tax-year (PayrollRepository
         // #findComponentSsoInclusionByEmployee). A component absent from THIS map is excluded from the
         // SSO wage base -- there is still no implicit default at this calculator layer, deliberately:
-        // #ssoIncluded below stays a pure lookup. P1 fix (Opus review, 2026-07-30): the default-TRUE
-        // behaviour used to live ONLY in PayrollRepository#seedSsoInclusionDefaults, reachable solely
-        // through the API create path -- an employee inserted by raw SQL got no rows at all and
-        // silently computed ฿0.00 SSO. PayrollService#ssoInclusionFor now supplies the SAME default
-        // map (PayrollRepository#defaultSsoIncluded) as this constructor argument whenever an employee
-        // has NO stored rows, one layer upstream of this record -- so this map is never actually empty
-        // for a real employee any more, even though the map/lookup semantics here are unchanged.
+        // #ssoIncluded below stays a pure lookup. The default-TRUE behaviour lives upstream:
+        // PayrollService#ssoInclusionFor supplies the default map (PayrollRepository#defaultSsoIncluded)
+        // whenever an employee has NO stored rows (e.g. inserted by raw SQL, which would otherwise
+        // silently compute ฿0.00 SSO), so this map is never actually empty for a real employee.
         Map<PayrollComponent, Boolean> componentSsoInclusion,
         BigDecimal unpaidLeaveDays,
         BigDecimal leaveRefundDays,
         BigDecimal studentLoanDeduction,
         BigDecimal otherPretaxDeduction,
         BigDecimal otherPostTaxDeductions,
-        // หักตามใบเตือน (handoff section 6): POST-TAX only now -- never reduces taxable gross or 50
-        // ทวิ. Branch 117 had this pre-tax; this task moves it.
+        // หักตามใบเตือน: POST-TAX only -- never reduces taxable gross or 50 ทวิ.
         BigDecimal warningLetterDeduction,
-        // หัก 6 ลูกค้าคืนสินค้า (handoff section 6). When customerReturnAlreadyEarned is false (the
+        // หัก 6 ลูกค้าคืนสินค้า. When customerReturnAlreadyEarned is false (the
         // commission was not yet earned), the caller (PayrollService) has ALREADY netted this amount
         // out of componentAmounts.get(COMMISSION_PAY) pre-tax -- the calculator does not apply it
         // again. When true (already earned and paid), the calculator applies it here as a POST-TAX
@@ -67,23 +61,21 @@ public final class PayrollClassifiedCalculationDtos {
         boolean customerReturnAlreadyEarned,
         BigDecimal garnishmentRequested,
         // Nullable: null defaults to SALARY, reproducing the pre-existing single 30%-plus-฿20,000-
-        // floor rule exactly (handoff section 7).
+        // floor rule exactly.
         PayrollGarnishmentType garnishmentType,
         PayrollTaxAllowanceInput taxAllowances,
         PayrollYearToDate yearToDate,
         int payrollMonthValue,
-        // Rebase consequence (2026-07-29): branch 117's retirementAllowance(...) grew a taxYear
-        // parameter so the SSF (กองทุนรวมเพื่อการออม) sunset (SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025)
-        // applies uniformly across both PayrollCalculator entry points. This engine had no year field
-        // at all before -- payrollMonthValue is month-only (1-12) -- so it is added here and threaded
-        // from PayrollService#calculateLine (which already derives it from payrollMonth.getYear() for
-        // the tax-treatment/SSO-inclusion lookups). See PayrollCalculator#allowanceBreakdown.
+        // retirementAllowance(...) takes a taxYear so the SSF (กองทุนรวมเพื่อการออม) sunset
+        // (SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025) applies uniformly across both PayrollCalculator
+        // entry points. payrollMonthValue is month-only (1-12), hence this separate field, threaded
+        // from PayrollService#calculateLine (payrollMonth.getYear()). See PayrollCalculator#allowanceBreakdown.
         int taxYear,
         // Resolved effective withholding-tax override (per-run typed value if present, else the
         // employee's standing override, else null). Same semantics as PayrollCalculationInput's field
         // of the same name -- see that record's javadoc.
         BigDecimal withholdingTaxOverride,
-        // Daily-rate support (2026-07-30): the employee's actual PER-DAY rate (hr.employee
+        // Daily-rate support: the employee's actual PER-DAY rate (hr.employee
         // .current_salary for a pay_type = 'D' employee), or null for a monthly employee. When
         // present, PayrollCalculator#calculateClassified uses this DIRECTLY as the dailyRate that
         // feeds unpaidLeaveDeduction/leaveDeductionRefund/hourlyRate, instead of deriving it as
@@ -91,16 +83,15 @@ public final class PayrollClassifiedCalculationDtos {
         // (rate * daysWorked, computed by PayrollService#calculateLine), and dividing THAT by 30 would
         // silently produce the wrong per-day figure (e.g. 11,250/30 = 375, not the true 450 rate) the
         // moment a month's days-worked figure differs from a 30-day baseline. Null is a complete no-op:
-        // the monthly derivation (baseSalary/30) is exactly what ran before this field existed.
+        // the monthly derivation (baseSalary/30) applies.
         BigDecimal dailyRateOverride
     ) {
         /**
-         * Legacy 20-arg constructor: the full signature as it stood right before {@code
-         * dailyRateOverride} (daily-rate support, 2026-07-30) existed -- i.e. through {@code
-         * withholdingTaxOverride}. Keeps every pre-existing positional call site (including
+         * Legacy 20-arg constructor: the full signature without {@code dailyRateOverride}, i.e.
+         * through {@code withholdingTaxOverride}. Keeps every pre-existing positional call site (including
          * PayrollExcelReconciliationTest and PayrollClassifiedLimbClampReviewTest, which must not be
          * edited) compiling unchanged; {@code dailyRateOverride} defaults to {@code null} (monthly
-         * derivation, unchanged from today's behaviour).
+         * derivation).
          */
         public PayrollClassifiedCalculationInput(
             long employeeId,
@@ -165,7 +156,7 @@ public final class PayrollClassifiedCalculationDtos {
         BigDecimal unpaidLeaveDeduction,
         BigDecimal grossTaxableIncome,
         BigDecimal ssoWageBase,
-        // V123 (defect-2 fix): the UNCAPPED sum this same method computes before clamping it into
+        // V123: the UNCAPPED sum this same method computes before clamping it into
         // ssoWageBase above (see PayrollCalculator#calculateClassified's own comment on
         // ssoWageBaseRaw). Persisted to payroll_line.sso_wage_gross so SsoExporter can report the
         // real เงินค่าจ้างทั้งสิ้น instead of the capped figure -- does not change ssoWageBase or
@@ -197,16 +188,14 @@ public final class PayrollClassifiedCalculationDtos {
         BigDecimal withholdingTaxRegularLimb,
         BigDecimal withholdingTaxCumulativeLimb,
         PayrollGarnishmentType garnishmentType,
-        // Defect fix (Opus review, 2026-07-29): ค่าอาหาร / เบี้ยเลี้ยง (V97) were read from the request,
-        // folded into componentAmounts for tax purposes (MEAL_ALLOWANCE / PER_DIEM_TAXABLE), and then
-        // discarded -- neither this record nor PayrollLineDto carried them back out, so they never
-        // reached the INSERT column list. mealAllowance/perDiemTaxable mirror bonusPay/otherOneOffPay
-        // above: an explicit echo of the already-classified component amount, not a new calculation.
+        // ค่าอาหาร / เบี้ยเลี้ยง (V97): read from the request and folded into componentAmounts for tax
+        // (MEAL_ALLOWANCE / PER_DIEM_TAXABLE). These two fields echo the already-classified component
+        // amounts so they reach the INSERT column list, like bonusPay/otherOneOffPay above -- not a
+        // new calculation.
         BigDecimal mealAllowance,
         BigDecimal perDiemTaxable,
-        // F3 fix (Opus review, 2026-07-30): the classified engine's own analogue of the legacy
-        // #calculate()'s excessWithheldToDate -- over-withholding for the tax year AS AT THE END OF
-        // THIS PERIOD, i.e. the running total actually withheld (yearToDate.withholdingTax() plus this
+        // The classified engine's analogue of the legacy #calculate()'s excessWithheldToDate --
+        // over-withholding for the tax year AS AT THE END OF THIS PERIOD, i.e. the running total actually withheld (yearToDate.withholdingTax() plus this
         // period's own POST-OVERRIDE withholdingTax above) exceeding the TRUE annual liability given
         // everything known so far this year. See #calculateClassified's own computation for why
         // annualTaxWithCumulativeYtd (F1's carried-known-limb base), not the narrower reported
