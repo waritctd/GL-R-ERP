@@ -55,7 +55,7 @@ public class PayrollService {
     private static final Set<String> PAYROLL_VIEW_ROLES = Set.of("hr", "ceo");
     private static final Set<String> PAYROLL_EDIT_ROLES = Set.of("hr");
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
-    // Finding 4 fix (Opus review, 2026-07-30): calendar-plausible ceiling for a daily-rate employee's
+    // Calendar-plausible ceiling for a daily-rate employee's
     // HR-typed days-worked figure -- see #calculateLine's own comment on where this is enforced and
     // why, and V103's chk_payroll_line_days_worked_range for the matching DB-level backstop.
     private static final BigDecimal MAX_DAYS_WORKED = new BigDecimal("31");
@@ -65,9 +65,9 @@ public class PayrollService {
     private final CommissionService commissionService;
     private final AuditService auditService;
     private final PayslipRenderer payslipRenderer;
-    // Leave -> payroll dependency on the leave package. #suggestedInputs (2026-07-23) uses it
+    // Leave -> payroll dependency on the leave package. #suggestedInputs uses it
     // read-only to overlay leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays.
-    // #preview/#process (2026-07-23, AUTO-REFUND) additionally read + (on process only) resolve
+    // #preview/#process (auto-refund) additionally read + (on process only) resolve
     // hr.leave_payroll_correction rows to auto-apply the cancel-after-close refund -- see
     // #calculateLine and #process below.
     private final LeaveRepository leaveRepository;
@@ -76,7 +76,7 @@ public class PayrollService {
     private final SsoExporter ssoExporter;
     private final PayrollDetailExporter payrollDetailExporter;
     private final AppProperties appProperties;
-    // Deduction obligation tracking (issue #373): resolves the obligation-derived monthly amount
+    // Deduction obligation tracking: resolves the obligation-derived monthly amount
     // during #calculateLine, and records the remittance ledger during #process. See that class's
     // own javadoc for the full split between its read-only and side-effecting hooks.
     private final DeductionObligationService deductionObligationService;
@@ -122,16 +122,16 @@ public class PayrollService {
     }
 
     /**
-     * Special-pay carry-forward (2026-07-23): read-only suggestions to pre-fill a brand-new monthly
+     * Special-pay carry-forward: read-only suggestions to pre-fill a brand-new monthly
      * payroll run from each employee's most-recent PRIOR processed {@code payroll_line}. Does NOT feed
-     * {@link #preview(ProcessPayrollRequest, UserPrincipal)} or {@link #process}, which keep taking
-     * explicit inputs exactly as before — the frontend reads this endpoint separately and pre-fills
+     * {@link #preview(ProcessPayrollRequest, UserPrincipal)} or {@link #process}, which take
+     * explicit inputs only — the frontend reads this endpoint separately and pre-fills
      * form fields HR can still edit/override. There is no "omitted means carry" ambiguity to resolve
      * here: the carry-forward step happens entirely client-side, before HR submits, and whatever value
      * is in the field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is
-     * what goes into {@code inputs} and gets calculated/stored, unchanged from today's behaviour.
+     * what goes into {@code inputs} and gets calculated/stored.
      *
-     * <p>Leave -&gt; payroll unpaid-day deduction (2026-07-23): also overlays, per employee, this
+     * <p>Leave -&gt; payroll unpaid-day deduction: also overlays, per employee, this
      * month's leave-derived {@code unpaidLeaveDays} ({@link
      * LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}) and any unresolved
      * cancel-after-close {@code pendingUnpaidLeaveCorrectionDays} ({@link
@@ -141,7 +141,7 @@ public class PayrollService {
      * the rest of this method, this NEVER feeds {@code preview()}/{@code process()} directly -- the
      * frontend pre-fills the unpaidLeaveDays form field from it, and HR can still override.
      *
-     * <p>Leave requires approval (2026-08-05): also surfaces {@code pendingSubmittedLeaveCount}
+     * <p>Leave requires approval: also surfaces {@code pendingSubmittedLeaveCount}
      * ({@link LeaveRepository#countSubmittedLeaveOverlappingMonth}), a month-level (not
      * per-employee) advisory count of leave still awaiting approval for this month -- see {@link
      * PayrollCarryForwardDtos}'s own Javadoc paragraph for why this exists. Read-only, additive, same
@@ -197,7 +197,7 @@ public class PayrollService {
         PayrollPeriodDto preview = preview(month, safeInputs(request.inputs()), actor);
         requireEveryDailyRateEmployeeHasDaysWorked(preview.lines());
         long periodId = payrollRepository.saveProcessedPeriod(month, actor.employeeId(), preview.lines());
-        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): the lines just saved already have
+        // Cancel-after-close reversal, auto-refund: the lines just saved already have
         // the refund baked in (computed by #preview above, in this same transaction). Now mark the
         // hr.leave_payroll_correction rows that refund came from as resolved by THIS period -- see
         // LeaveRepository#resolvePendingCorrections for exactly how that stays consistent with the
@@ -210,7 +210,7 @@ public class PayrollService {
         // guarantee saveProcessedPeriod's delete-then-insert gives hr.payroll_line. Never called
         // from #preview, which must stay side-effect-free.
         payrollRepository.markWelfareIncludedInPeriod(month, periodId);
-        // Deduction obligation tracking (issue #373): record what was ACTUALLY deducted this period
+        // Deduction obligation tracking: record what was ACTUALLY deducted this period
         // (post every other cap) against each employee's driving obligation, then re-derive
         // ACTIVE/COMPLETED from the recomputed cumulative total. Idempotent per (obligation,
         // payrollMonth) -- see DeductionObligationRepository#upsertRemittance -- so reprocessing
@@ -218,36 +218,35 @@ public class PayrollService {
         // saveProcessedPeriod's own delete-then-insert already gives hr.payroll_line. Deliberately
         // NEVER called from #preview, which must stay side-effect-free.
         deductionObligationService.recordRemittances(month, periodId, preview.lines());
-        // Deduction shortfall tracking (issue #376, generalising #373's requested/actual/shortfall
-        // triple): the ONLY currently-supported deduction that can come out lower than what was
+        // Deduction shortfall tracking (requested/actual/shortfall triple): the ONLY currently-supported deduction that can come out lower than what was
         // requested is LEGAL_EXECUTION_GARNISHMENT, via the ALREADY-enforced ป.วิ.พ. ม.302 cap (see
         // DeductionObligationService#recordGarnishmentShortfalls's own javadoc for why every other
         // deduction never has anything to record). Pure record-keeping -- changes no persisted
         // amount, reads figures that are already computed above.
         //
-        // D-376-1 fix (Opus review): "requested" comes from preview.lines() itself
+        // "requested" comes from preview.lines() itself
         // (PayrollLineDto#legalExecutionRequested), NEVER by calling #resolveMonthlyAmount again here.
         // A second call after #recordRemittances (above) has already possibly flipped an obligation's
         // ACTIVE/COMPLETED status is unsafe -- #findDrivingObligation's ORDER BY (status='ACTIVE') DESC
         // can then resolve a DIFFERENT obligation than the one #calculateLine actually used, fabricating
-        // a "requested" figure the court order never asked for (reviewer's probe: two LEGAL_EXECUTION
+        // a "requested" figure the court order never asked for (e.g. two LEGAL_EXECUTION
         // obligations, one completing this very run, produced a ฿4,900 phantom shortfall against a
         // ฿100 court order that was satisfied in full). Reading it off the line instead makes that
         // re-derivation impossible by construction.
         deductionObligationService.recordGarnishmentShortfalls(month, periodId, preview.lines());
         PayrollPeriodDto period = payrollRepository.findPeriodById(periodId)
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Payroll period was not saved"));
-        // Payroll input draft (2026-07-30): this month's real values are now committed to
+        // Payroll input draft: this month's real values are now committed to
         // hr.payroll_line, so any leftover hr.payroll_input_draft rows for it are superseded --
         // clear them in the same transaction so a stale draft can never resurrect over the
         // processed values on a later reload (see #getInputDraft's precedence rule).
         //
-        // Optimistic concurrency (issue #422 follow-up): process() is a second writer of the same
+        // Optimistic concurrency: process() is a second writer of the same
         // draft set saveInputDraft's lock protects, so it takes the same month-scoped advisory
         // lock before clearing -- otherwise a concurrent saveInputDraft could read-compare-write
         // between this delete and the transaction's commit, silently resurrecting a draft row for
-        // a month that just got processed. The clear itself is unconditional either way (as
-        // before this change): once processed, no If-Match token is honoured for the month again
+        // a month that just got processed. The clear itself is unconditional either way:
+        // once processed, no If-Match token is honoured for the month again
         // -- the next saveInputDraft call sees an empty draft set (PayrollDraftETag.EMPTY) and any
         // pre-process token it holds is refused as stale, exactly like any other conflict.
         payrollRepository.lockInputDraftMonth(month);
@@ -259,23 +258,23 @@ public class PayrollService {
     }
 
     /**
-     * Payroll input draft (2026-07-30): read back whatever HR last saved for this month via
+     * Payroll input draft: read back whatever HR last saved for this month via
      * {@link #saveInputDraft}. Read-only, HR/CEO view like every other payroll GET -- never feeds
      * {@link #preview}/{@link #process} directly. The frontend applies it ONLY when hydrating a
      * brand-new run (a month with no processed/void period yet, {@code status == PREVIEW && id ==
      * null}) so a draft can never shadow real persisted values from an already-touched period --
      * see PayrollPage.jsx's {@code load()}/{@code applyPeriod} for that precedence rule.
      *
-     * <p>Optimistic concurrency (issue #422 follow-up): also returns the month-level ETag ({@link
+     * <p>Optimistic concurrency: also returns the month-level ETag ({@link
      * PayrollDraftETag}) the client must thread back as {@code If-Match} on the next {@link
      * #saveInputDraft}. A plain snapshot, not locked -- this is advisory information for the
      * client, not the enforcement point (the enforcement point is {@link #saveInputDraft}'s locked
      * compare-then-write) -- but it MUST still come from a single read, not two.
      *
-     * <p><b>Opus review finding F2, corrected:</b> this used to call {@link
-     * PayrollRepository#findInputDrafts} and {@link PayrollRepository#findInputDraftVersions} as
-     * two separate, unsynchronized round trips. Under READ COMMITTED, each takes its own snapshot,
-     * so a writer committing in the gap produces a hazard in the UNSAFE direction: the figures read
+     * <p>Both reads must come from one statement: two separate, unsynchronized round trips
+     * ({@link PayrollRepository#findInputDrafts} then {@link
+     * PayrollRepository#findInputDraftVersions}) would each take their own snapshot under READ
+     * COMMITTED, so a writer committing in the gap produces a hazard in the UNSAFE direction: the figures read
      * can reflect the OLD state while the version read reflects the NEW (legitimately current)
      * state, handing the caller old data paired with a token that is not stale -- a caller who
      * edits from that view and saves passes the {@code If-Match} compare cleanly and silently
@@ -292,16 +291,15 @@ public class PayrollService {
     }
 
     /**
-     * Payroll input draft (2026-07-30): HR-only, same edit gate as {@code process}/tax-allowances/
+     * Payroll input draft: HR-only, same edit gate as {@code process}/tax-allowances/
      * ytd-seed/component-tax-treatments. Persists the raw typed inputs as-is -- no calculation is
      * performed here, and this never touches {@code hr.payroll_line} or any payroll math. See
      * {@link #getInputDraft} for the read side and {@link #process} for how a draft is superseded
      * once the month is actually processed.
      *
-     * <p>Optimistic concurrency (issue #422 follow-up): {@code ifMatch} is now REQUIRED -- a
-     * deliberate API contract change, not a side effect (see the PR body). A missing header is
+     * <p>Optimistic concurrency: {@code ifMatch} is REQUIRED. A missing header is
      * refused with 428 rather than silently allowed, because a headerless write is exactly the
-     * hole this closes: two HR users on the same month previously overwrote each other with no
+     * hole this closes: two HR users on the same month would overwrite each other with no
      * conflict signal at all. The lock-then-compare-then-write below is what makes the check real
      * rather than decorative -- {@link PayrollRepository#lockInputDraftMonth} is held for the rest
      * of this transaction, so a second concurrent call blocks until the first commits (or rolls
@@ -313,7 +311,7 @@ public class PayrollService {
             ProcessPayrollRequest request, UserPrincipal actor, String ifMatch) {
         requireRole(actor, PAYROLL_EDIT_ROLES);
         if (ifMatch == null || ifMatch.isBlank()) {
-            // Opus review finding NIT-8: this message surfaces verbatim to HR (the frontend's
+            // This message surfaces verbatim to HR (the frontend's
             // catch does `error.message || fallback`), so it must read as a normal Thai UI message,
             // not leak an HTTP header name -- matches the frontend's own fallback wording (see
             // PayrollPage.jsx's saveDraft 428 branch) rather than naming "If-Match".
@@ -345,8 +343,7 @@ public class PayrollService {
      * header carries and a caller copying that header value verbatim should not be punished for
      * following the HTTP-correct form instead of the body field.
      *
-     * <p><b>Known divergence from RFC 9110 §13.1.1 (Opus review finding F12/NEW-2), recorded
-     * rather than fixed</b>: a real {@code If-Match} header can be the wildcard {@code *} (meaning
+     * <p><b>Known divergence from RFC 9110 §13.1.1, recorded rather than fixed</b>: a real {@code If-Match} header can be the wildcard {@code *} (meaning
      * "any current representation is fine") or a comma-separated list of multiple entity-tags. This
      * method does neither: {@code *} is compared as the four-character literal string {@code "*"},
      * which will never equal a real SHA-256 hex token, so it always 409s instead of the RFC's
@@ -372,7 +369,7 @@ public class PayrollService {
     }
 
     /**
-     * Finding 1 fix (Opus review, 2026-07-30): a daily-rate employee HR never entered a day count
+     * A daily-rate employee HR never entered a day count
      * for -- either because no input row was submitted at all for them, or an explicitly typed 0 --
      * computes {@code SALARY = rate * 0 = ฿0} with no error anywhere: {@link #calculateLine} treats a
      * null/omitted {@code daysWorked} as "0 unless entered", the exact same convention every other
@@ -418,11 +415,10 @@ public class PayrollService {
      * {@code VOID}ed period still has a real {@code periodId} and exports whatever remains in
      * {@code hr.payroll_line} for it, same as those three kinds have always done ({@code
      * findExportRows} has never special-cased VOID). {@link PayrollExportKind#PAYROLL_DETAIL} is
-     * different (owner requirement, 2026-07-30): for a genuinely {@code PROCESSED} period it reads
+     * different: for a genuinely {@code PROCESSED} period it reads
      * the persisted lines verbatim (they ARE the authoritative record of what was actually paid),
      * but for anything else — most concretely a {@code VOID} period whose {@code hr.payroll_line}
-     * rows hold HR's typed inputs behind stale/zero computed figures (a real, current example: 2026-07,
-     * {@code period_id=1}, {@code status='VOID'}) — this method reconstructs those inputs (see
+     * rows hold HR's typed inputs behind stale/zero computed figures — this method reconstructs those inputs (see
      * {@link #reconstructInputRequest}) and re-runs them through the SAME live {@link #preview}
      * path a fresh preview uses, so the workbook always reflects a real calculation rather than
      * whatever happens to be sitting in the row. See {@link #exportDetailPreview} for the case with
@@ -477,7 +473,7 @@ public class PayrollService {
     /**
      * Fail closed, before any exporter runs, when the employer registration fields a {@code
      * KBANK}/{@code PND1}/{@code SSO} file renders have no value configured. {@link
-     * ProductionReadinessConfig} now WARNs about exactly this gap at startup, but a WARN is easy to
+     * ProductionReadinessConfig} WARNs about exactly this gap at startup, but a WARN is easy to
      * miss in a log stream -- without this precondition, an unset {@code
      * app.payroll.employer.company-tax-id} (etc.) would flow straight into {@link Pnd1Exporter},
      * which reads {@code digits(employer.getCompanyTaxId())} with no guard of its own and happily
@@ -495,9 +491,8 @@ public class PayrollService {
      * the effective date -- not required); {@code PND1} needs {@code companyTaxId} + {@code
      * pnd1Branch}; {@code SSO} needs only {@code ssoBranch}, the sheet an employee with no {@code
      * sso_branch_code} of their own falls back to -- a blank there would name a sheet Excel refuses
-     * to open. It no longer needs {@code ssoEmployerAccount} or {@code establishmentName}/{@code
-     * companyNameTh}: {@link SsoExporter} became a workbook on 2026-08-31 and renders no employer
-     * identity at all.
+     * to open. It does not need {@code ssoEmployerAccount} or {@code establishmentName}/{@code
+     * companyNameTh}: {@link SsoExporter} renders a workbook with no employer identity at all.
      */
     private void requireEmployerConfiguredForStatutoryExport(PayrollExportKind kind, AppProperties.Employer employer) {
         List<String> missing = new ArrayList<>();
@@ -510,10 +505,9 @@ public class PayrollService {
                 requireConfigured(missing, employer.getCompanyTaxId(), "APP_PAYROLL_COMPANY_TAX_ID");
                 requireConfigured(missing, employer.getPnd1Branch(), "APP_PAYROLL_PND1_BRANCH");
             }
-            // SSO needs only the fallback branch. The employer account and establishment name were
-            // required while this kind rendered a CP874 header that carried them; the workbook that
-            // replaced it (2026-08-31) has no employer fields at all, so continuing to demand them
-            // would 503 an export that cannot be affected by their absence.
+            // SSO needs only the fallback branch. The SSO workbook has no employer fields at all,
+            // so demanding the employer account or establishment name would 503 an export that
+            // cannot be affected by their absence.
             case SSO -> requireConfigured(missing, employer.getSsoBranch(), "APP_PAYROLL_SSO_BRANCH");
             default -> { }
         }
@@ -536,8 +530,7 @@ public class PayrollService {
 
     /**
      * The detailed payroll xlsx for a month that has never been (or is not yet) processed at all --
-     * owner requirement, 2026-07-30: "July 2026 is live and still unprocessed... HR's whole reason
-     * to want this file is to review the month BEFORE committing it." There is no {@code periodId}
+     * HR's whole reason to want this file is to review the month BEFORE committing it. There is no {@code periodId}
      * to key off in this case ({@link #preview} never persists one), so the caller must submit the
      * same {@code payrollMonth}/{@code inputs} payload {@code POST /api/payroll/preview} already
      * takes. Reuses that exact private {@link #preview} computation -- the one the on-screen
@@ -654,7 +647,7 @@ public class PayrollService {
     }
 
     /**
-     * Bulk payslip ZIP (owner requirement, 2026-07-30): every payslip for a processed period in one
+     * Bulk payslip ZIP: every payslip for a processed period in one
      * archive, so HR can review the whole batch BEFORE {@code POST /{periodId}/distribute} emails it
      * to every employee -- today the only way to check is one-by-one, or after the emails are
      * already out. Reuses {@link PayslipRenderer#toPdf} per line -- the EXACT same call {@link
@@ -865,12 +858,12 @@ public class PayrollService {
         // V128: approved สวัสดิการ now reaches payroll instead of being keyed by hand.
         Map<Long, BigDecimal> welfareByEmployee = payrollRepository.findApprovedWelfarePayByEmployee(payrollMonth);
         Map<Long, PayrollYearToDate> yearToDateByEmployee = payrollRepository.findYearToDateByEmployee(payrollMonth);
-        // C1: the standing tax-allowance declaration for this payroll's tax year is the BASE. Any
+        // The standing tax-allowance declaration for this payroll's tax year is the BASE. Any
         // field the request body supplies for an employee (non-null) is an in-run correction and wins
         // over the stored value -- stored = standing declaration, body = this-run override.
         Map<Long, PayrollTaxAllowanceInput> storedAllowancesByEmployee =
             payrollRepository.findTaxAllowancesByEmployee(payrollMonth);
-        // Cancel-after-close reversal, AUTO-REFUND (2026-07-23): existingPeriodId is null the first
+        // Cancel-after-close reversal, auto-refund: existingPeriodId is null the first
         // time this month is previewed/processed, and non-null on a re-preview/re-process of a month
         // that already has a period row (PREVIEW-only rows from currentOrPreview's persistence path
         // do not exist -- only saveProcessedPeriod creates one -- so in practice this is non-null
@@ -882,9 +875,8 @@ public class PayrollService {
         Long existingPeriodId = payrollRepository.findPeriodByMonth(payrollMonth).map(PayrollPeriodDto::id).orElse(null);
         Map<Long, BigDecimal> leaveRefundDaysByEmployee = leaveRepository.findRefundableUnpaidDaysByEmployee(existingPeriodId);
 
-        // Task 2 (2026-07-29): per-employee, per-component tax treatment + SSO inclusion, replacing
-        // the hardcoded single-limb split. See PayrollCalculator#calculateClassified and
-        // docs/agent-handoffs/119_feat-payroll-classification-and-hr-declarations.md.
+        // Per-employee, per-component tax treatment + SSO inclusion (not a hardcoded single-limb
+        // split). See PayrollCalculator#calculateClassified.
         int taxYear = payrollMonth.getYear();
         Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> treatmentsByEmployee =
             payrollRepository.findComponentTaxTreatmentsByEmployee(taxYear);
@@ -935,12 +927,11 @@ public class PayrollService {
     }
 
     /**
-     * P0 fix (Opus review, 2026-07-30): the signal {@link #treatmentsFor} needs to tell "an employee a
-     * real onboarding path touched" apart from "an employee that merely has an incidental, unrelated
-     * SSO row" -- see that method's own javadoc for the regression that made a cruder {@code
-     * containsKey} check insufficient. A real onboarding path ({@code
+     * The signal {@link #treatmentsFor} needs to tell "an employee a real onboarding path touched"
+     * apart from "an employee that merely has an incidental, unrelated SSO row" -- a cruder {@code
+     * containsKey} check is insufficient. A real onboarding path ({@code
      * PayrollRepository#seedSsoInclusionDefaults}, called from V96's backfill, {@code
-     * EmployeeService#create}, and this task's own P1 fix) always writes a row for EVERY {@link
+     * EmployeeService#create}, and the treatment-resolution fix) always writes a row for EVERY {@link
      * PayrollComponent} in one pass, so it always includes several components other than {@code
      * SALARY}. Checking for at least one non-SALARY component is therefore robust to exactly which
      * components got seeded (V96 predates {@code MEAL_ALLOWANCE}/{@code PER_DIEM_TAXABLE}, so an
@@ -949,29 +940,27 @@ public class PayrollService {
      * several tests in this suite seed purely so their OWN unrelated {@code socialSecurity} assertion
      * comes out non-zero (see e.g. {@code PayrollClassifiedEngineIntegrationTest#seedEmployee}).
      *
-     * <p><b>Finding 1 fix (fourth Opus review, 2026-07-30): the polarity of the "no SSO rows at all"
-     * case was backwards.</b> This method used to {@code return false} the instant {@code
-     * ssoInclusion == null} -- i.e. an employee with ZERO rows in BOTH matrices was treated as "not
-     * onboarded" and got no synthesized default, 409ing the run. That is exactly backwards: V96 (the
-     * SSO backfill) and V100 (the tax-treatment backfill) both {@code CROSS JOIN hr.employee} with no
-     * {@code WHERE}, and {@code EmployeeService#create} seeds both matrices in the SAME transaction --
-     * no real deployment path ever produces "SSO rows present, treatment rows absent" without ALSO
-     * producing the reverse (both present) or "both absent" first. "Both absent" is the population
-     * this safety net exists for in the first place: {@code db/migration-uat/V900} inserts 93
-     * employees by raw {@code INSERT INTO hr.employee}, and on a freshly rebuilt uat Flyway runs V96/
-     * V97/V100 (all merged-location, ordered by version number) BEFORE V900, reaching none of those
-     * 93 rows -- {@code V902} then seeds approved overtime for them, so the payroll page's own initial
-     * GET carries a non-zero component for every one of them with no HR input at all. The previous
-     * logic refused exactly this population the fix's own stated goal was written to cover. Zero rows
-     * in BOTH matrices is therefore unambiguously "never onboarded by any path" and now synthesizes,
-     * same as the pre-existing non-SALARY-row case below (which stays exactly as it was, still
-     * covering {@link PayrollClassificationReachabilityIntegrationTest}'s employee -- seeded through
-     * {@code seedSsoInclusionDefaults} alone, so it has SSO rows but zero treatment rows). The one
-     * state that must still NOT synthesize -- an SSO map that exists but carries only the incidental
+     * <p><b>An employee with ZERO rows in BOTH matrices ({@code ssoInclusion == null}) counts as
+     * onboarded</b> (returns {@code true}, so a default is synthesized), not as "not onboarded":
+     * V96 (the SSO backfill) and V100 (the tax-treatment backfill) both {@code CROSS JOIN
+     * hr.employee} with no {@code WHERE}, and {@code EmployeeService#create} seeds both matrices in
+     * the SAME transaction -- no real deployment path ever produces "SSO rows present, treatment
+     * rows absent" without ALSO producing the reverse (both present) or "both absent" first. "Both
+     * absent" is the population this safety net exists for: {@code db/migration-uat/V900} inserts 93
+     * employees by raw {@code INSERT INTO hr.employee}, and on a freshly rebuilt uat Flyway runs
+     * V96/V97/V100 (all merged-location, ordered by version number) BEFORE V900, reaching none of
+     * those 93 rows -- {@code V902} then seeds approved overtime for them, so the payroll page's own
+     * initial GET carries a non-zero component for every one of them with no HR input at all.
+     * Refusing that population (409ing the run) would defeat the safety net. Zero rows in BOTH
+     * matrices is therefore unambiguously "never onboarded by any path" and synthesizes, same as
+     * the non-SALARY-row case below (which covers {@link
+     * PayrollClassificationReachabilityIntegrationTest}'s employee -- seeded through {@code
+     * seedSsoInclusionDefaults} alone, so it has SSO rows but zero treatment rows). The one state
+     * that must still NOT synthesize -- an SSO map that exists but carries only the incidental
      * SALARY-only convenience row several tests seed (see {@code
-     * PayrollClassifiedEngineIntegrationTest#seedEmployee}) -- is unaffected: {@code ssoInclusion} is
-     * non-null there, so this branch is not taken, and the {@code anyMatch} check below still returns
-     * {@code false} for it exactly as before.
+     * PayrollClassifiedEngineIntegrationTest#seedEmployee}) -- never takes the zero-rows branch
+     * ({@code ssoInclusion} is non-null there), and the {@code anyMatch} check below returns
+     * {@code false} for it.
      */
     private static boolean hasBeenOnboardedForPayroll(
         long employeeId, Map<Long, Map<PayrollComponent, Boolean>> ssoInclusionByEmployee
@@ -984,10 +973,10 @@ public class PayrollService {
     }
 
     /**
-     * P0 fix (Opus review, 2026-07-30), layer 3 -- the read-time safety net {@link
+     * Read-time safety net -- the third layer of tax-treatment defaults, which {@link
      * PayrollClassificationReachabilityIntegrationTest
      * #payrollRunsForAnEmployeeConfiguredOnlyThroughThePathsAProductionDeploymentActuallyHas} demands.
-     * Layers 1 (V100's migration backfill) and 2 ({@code EmployeeService#create}'s new call to {@link
+     * Layer 1 (V100's migration backfill) and layer 2 ({@code EmployeeService#create}'s call to {@link
      * PayrollRepository#seedComponentTaxTreatmentDefaults}) only reach an employee that either
      * existed when V100 ran or was created through the API. That reachability test's employee is
      * neither: it is inserted by raw SQL mid-test, mimicking an employee whose classification rows
@@ -995,12 +984,12 @@ public class PayrollService {
      * import -- the identical gap {@link #ssoInclusionFor} already closes for SSO inclusion). Without
      * this layer such an employee has ZERO stored {@code hr.payroll_component_tax_treatment} rows and
      * {@link PayrollCalculator#calculateClassified}'s classification gate 409s the entire run the
-     * moment they carry a single non-zero special pay -- production-realistic (handoff section 9d:
-     * employee 10012's real ฿407 พิเศษ 1), not a contrived edge case.
+     * moment they carry a single non-zero special pay -- production-realistic (a real employee's ฿407
+     * พิเศษ 1), not a contrived edge case.
      *
-     * <p><b>Why this does not weaken "HR sets every line, no silent default" (handoff section 1):</b>
+     * <p><b>Why this does not weaken "HR sets every line, no silent default":</b>
      * that rule governs the EXPLICIT "not yet classified" state -- a row that EXISTS with {@code
-     * tax_treatment = NULL}, which the handoff distinguishes deliberately from a row that is simply
+     * tax_treatment = NULL}, which is deliberately distinct from a row that is simply
      * ABSENT (see {@link PayrollRepository#findComponentTaxTreatmentsByEmployee}'s own javadoc on the
      * distinction). This method only ever synthesizes a default when the employee has NO ROW AT ALL --
      * the map lookup itself returns {@code null}, meaning classification has never been touched for
@@ -1012,20 +1001,18 @@ public class PayrollService {
      * second-guessed. This mirrors {@link #ssoInclusionFor}'s identical reasoning for the sibling
      * matrix exactly.
      *
-     * <p><b>{@code hasBeenOnboarded} -- found necessary by a regression this method's first version
-     * caused, not designed up front:</b> an unconditional "zero rows -&gt; synthesize" rule collided
-     * head-on with the ALREADY-GREEN {@code
+     * <p><b>Why {@code hasBeenOnboarded} gates the synthesis:</b> an unconditional "zero rows -&gt;
+     * synthesize" rule collides head-on with {@code
      * PayrollClassifiedEngineIntegrationTest#unclassifiedNonZeroComponentRejectsTheRunNamingEmployeeAndComponent}
-     * -- the test that pins down "HR sets every line, no silent default" in the first place. That
-     * test's employee ALSO has zero tax-treatment rows (it seeds literally nothing before previewing),
-     * and legitimately expects the 409. Worse, a first attempt at a distinguishing signal
-     * (merely {@code ssoInclusionByEmployee.containsKey(employeeId)}) ALSO failed against that same
-     * test: this file's own {@code seedEmployee} helper -- unrelated test convenience, nothing to do
-     * with onboarding -- seeds exactly one incidental SSO row (SALARY only, via {@code
-     * AbstractPostgresIntegrationTest#seedSsoIncluded}) for every employee it creates, so "has ANY SSO
-     * row" was true for that test too. See {@link #hasBeenOnboardedForPayroll} for the signal that
-     * actually distinguishes "a real onboarding path touched this employee's SSO matrix" (every
-     * component, including several non-SALARY ones) from "a test fixture happens to carry one
+     * -- the test that pins down "HR sets every line, no silent default". That test's employee ALSO
+     * has zero tax-treatment rows (it seeds literally nothing before previewing), and legitimately
+     * expects the 409. Merely checking {@code ssoInclusionByEmployee.containsKey(employeeId)} also
+     * fails against that same test: this file's own {@code seedEmployee} helper -- unrelated test
+     * convenience, nothing to do with onboarding -- seeds exactly one incidental SSO row (SALARY only,
+     * via {@code AbstractPostgresIntegrationTest#seedSsoIncluded}) for every employee it creates, so
+     * "has ANY SSO row" is true for that test too. See {@link #hasBeenOnboardedForPayroll} for the
+     * signal that actually distinguishes "a real onboarding path touched this employee's SSO matrix"
+     * (every component, including several non-SALARY ones) from "a test fixture happens to carry one
      * unrelated SALARY-only row" -- the reachability test's employee has the former (it calls {@code
      * seedSsoInclusionDefaults} directly), the blocking test's employee has neither.
      *
@@ -1046,19 +1033,18 @@ public class PayrollService {
     }
 
     /**
-     * P1 fix (fifth Opus review, 2026-07-30) -- the "partial classification cliff". {@link
-     * #treatmentsFor} used to be all-or-nothing PER EMPLOYEE: the instant {@code stored} was
-     * non-null (i.e. HR had classified even ONE component for this employee), it was returned
-     * VERBATIM, so every OTHER component silently lost its synthesized default and reverted to
-     * "not yet classified" -- which {@link PayrollCalculator#requireEveryNonZeroComponentClassified}
-     * then 409s for. Because {@code TaxTreatmentMatrixSection.save()} (PayrollPage.jsx) sends only
-     * the edited DIFF, not the full resolved matrix, classifying ONE cell for ONE employee took that
-     * employee from "zero rows, every component defaulted, run succeeds" to "one row, every OTHER
-     * non-zero component unclassified, run 409s" -- and because {@link #preview} maps every active
-     * employee through one stream, that 409 aborted the WHOLE period for EVERY employee, not just the
-     * one HR edited.
+     * Avoids the "partial classification cliff": {@link #treatmentsFor} must NOT be all-or-nothing
+     * PER EMPLOYEE. If, the instant {@code stored} was non-null (i.e. HR had classified even ONE
+     * component for this employee), it were returned VERBATIM, every OTHER component would silently
+     * lose its synthesized default and revert to "not yet classified" -- which {@link
+     * PayrollCalculator#requireEveryNonZeroComponentClassified} then 409s for. Because {@code
+     * TaxTreatmentMatrixSection.save()} (PayrollPage.jsx) sends only the edited DIFF, not the full
+     * resolved matrix, classifying ONE cell for ONE employee would take that employee from "zero
+     * rows, every component defaulted, run succeeds" to "one row, every OTHER non-zero component
+     * unclassified, run 409s" -- and because {@link #preview} maps every active employee through one
+     * stream, that 409 would abort the WHOLE period for EVERY employee, not just the one HR edited.
      *
-     * <p>Fixed by resolving PER MISSING COMPONENT instead of per employee: merge the synthesized
+     * <p>So it resolves PER MISSING COMPONENT instead of per employee: merge the synthesized
      * defaults UNDER whatever is actually stored, so a component with no stored row still gets its
      * default and a component with a stored row keeps exactly what is stored.
      *
@@ -1092,15 +1078,15 @@ public class PayrollService {
     }
 
     /**
-     * P1 fix (Opus review, 2026-07-30): {@code EmployeeService#create} seeds SSO-inclusion defaults
-     * only on the API create path. An employee inserted by raw SQL afterwards (uat's {@code V900},
-     * {@code db/migration-demo/V21}, any bulk import) never runs that call and ends up with ZERO
-     * stored {@code hr.payroll_component_sso_inclusion} rows -- which used to fall through to {@code
-     * Map.of()} at the call site below (every component absent, and {@link
+     * {@code EmployeeService#create} seeds SSO-inclusion defaults only on the API create path. An
+     * employee inserted by raw SQL afterwards (uat's {@code V900}, {@code db/migration-demo/V21},
+     * any bulk import) never runs that call and ends up with ZERO stored {@code
+     * hr.payroll_component_sso_inclusion} rows -- which, passed through as {@code Map.of()} at the
+     * call site below, would mean every component absent ({@link
      * PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput#ssoIncluded} treats absent as
-     * excluded), so the SSO wage base silently computed to ฿0.00 with no error at all.
+     * excluded), so the SSO wage base would silently compute to ฿0.00 with no error at all.
      *
-     * <p>Fixed at this READ/RESOLUTION layer rather than chasing every writer (the seed call itself,
+     * <p>Handled at this READ/RESOLUTION layer rather than chasing every writer (the seed call itself,
      * every demo/uat seed migration, any future bulk import): an employee with genuinely NO stored
      * rows gets the same company-wide default {@link PayrollRepository#seedSsoInclusionDefaults} would
      * have written ({@link PayrollRepository#defaultSsoIncluded}, factored out so both paths can never
@@ -1141,7 +1127,7 @@ public class PayrollService {
         Map<PayrollComponent, PayrollTaxTreatment> componentTaxTreatments,
         Map<PayrollComponent, Boolean> componentSsoInclusion
     ) {
-        // Withholding-tax override precedence (2026-07-24, V88): a per-run HR-typed value wins; else
+        // Withholding-tax override precedence: a per-run HR-typed value wins; else
         // the employee's standing override; else null (= compute normally). NULL is meaningful at every
         // level -- a 0 override (withhold nothing) is honoured and must not collapse to "no override",
         // so this is a plain null check, never a truthiness/sign test. The per-run TYPED value is what
@@ -1152,11 +1138,10 @@ public class PayrollService {
             ? perRunWithholdingOverride
             : employee.withholdingTaxOverride();
 
-        // F2 fix (Opus review, 2026-07-30): the frontend used to expose per-diem AMOUNT inputs with no
-        // basis selector, and this method passed input.perDiemBasis() straight through to the INSERT
-        // unvalidated -- so Preview always succeeded (it never writes a row) but Process 500'd on
-        // V97's chk_payroll_line_per_diem_basis_present CHECK constraint the moment HR typed a
-        // per-diem amount without a basis. Validate here, before that INSERT is ever reached, and fail
+        // Passing input.perDiemBasis() straight through to the INSERT unvalidated would let Preview
+        // succeed (it never writes a row) but make Process 500 on V97's
+        // chk_payroll_line_per_diem_basis_present CHECK constraint the moment HR typed a per-diem
+        // amount without a basis. Validate here, before that INSERT is ever reached, and fail
         // with a clear Thai-language 400 naming the employee and the missing basis instead of a bare
         // DataIntegrityViolationException turning into a 500.
         BigDecimal perDiemExemptAmount = input == null ? BigDecimal.ZERO : safe(input.perDiemExempt());
@@ -1181,21 +1166,19 @@ public class PayrollService {
             effectiveCommissionPay = effectiveCommissionPay.subtract(customerReturnDeduction).max(BigDecimal.ZERO);
         }
 
-        // Daily-rate support (2026-07-30): hr.employee.pay_type ('M'/'D', existed since V1) was never
-        // read by payroll before this fix -- current_salary went straight into PayrollComponent.SALARY
-        // as if it were always a monthly figure, so a daily-rate employee's DAY RATE was paid as their
-        // MONTHLY salary (verified in production: employee 203, ฿450/day, would be paid ฿450 instead
-        // of ฿11,250 for 25 days). For a 'D' employee, employee.baseSalary() (hr.employee.current_salary)
+        // Daily-rate support: hr.employee.pay_type ('M'/'D') decides how current_salary is read.
+        // Treating it as always monthly would pay a daily-rate employee's DAY RATE as their
+        // MONTHLY salary (e.g. ฿450/day paid ฿450 instead of ฿11,250 for 25 days). For a 'D'
+        // employee, employee.baseSalary() (hr.employee.current_salary)
         // IS the per-day rate; this period's gross SALARY component is that rate multiplied by
         // HR-entered daysWorked (a null/omitted daysWorked contributes zero gross, same "0 unless
         // entered" convention as bonusPay/otherOneOffPay). A monthly employee is entirely unaffected:
-        // daysWorked is never read for them, and grossSalaryComponent is employee.baseSalary() exactly
-        // as before this change.
+        // daysWorked is never read for them, and grossSalaryComponent is employee.baseSalary() exactly.
         boolean dailyRatePay = employee.dailyRatePay();
         BigDecimal enteredDaysWorked = input == null ? null : input.daysWorked();
-        // Finding 4 fix (Opus review, 2026-07-30): @Max(31) on the request DTO is only enforced
+        // @Max(31) on the request DTO is only enforced
         // through @Valid at the controller boundary (PayrollController's /preview and /process),
-        // which every integration test in this package -- including the reviewer's own -- bypasses
+        // which every integration test in this package bypasses
         // by calling PayrollService directly. Re-check here, in the one place BOTH entry points
         // actually flow through, before daysWorked ever reaches the multiply below or an INSERT: a
         // calendar-impossible count (e.g. 45 in a 31-day month) must not be accepted and paid, and a
@@ -1269,13 +1252,12 @@ public class PayrollService {
         componentAmounts.put(PayrollComponent.NON_TAXABLE_INCOME,
             input == null ? BigDecimal.ZERO : safe(input.nonTaxableIncome()).add(safe(input.perDiemExempt())));
 
-        // Deduction obligation tracking (issue #373, AUTHORISED PAYROLL BUSINESS-LOGIC CHANGE --
-        // see the PR body). When this employee has a driving hr.deduction_obligation row for a
-        // kind, its instructed monthly amount -- clamped to the remaining instructed total, and
-        // auto-stopped at 0 once that total is reached unless HR has recorded an explicit override
-        // -- REPLACES whatever HR typed this run for that field. An employee with no obligation on
-        // file for a kind falls back to the HR-typed figure exactly as before this change (legacy
-        // behaviour is unaffected). See DeductionObligationService#resolveMonthlyAmount.
+        // Deduction obligation tracking: when this employee has a driving hr.deduction_obligation
+        // row for a kind, its instructed monthly amount -- clamped to the remaining instructed
+        // total, and auto-stopped at 0 once that total is reached unless HR has recorded an
+        // explicit override -- REPLACES whatever HR typed this run for that field. An employee with
+        // no obligation on file for a kind falls back to the HR-typed figure. See
+        // DeductionObligationService#resolveMonthlyAmount.
         BigDecimal resolvedStudentLoanDeduction = deductionObligationService.resolveMonthlyAmount(
             employee.employeeId(), DeductionObligationKind.STUDENT_LOAN, payrollMonth,
             input == null ? null : input.studentLoanDeduction());
@@ -1283,15 +1265,15 @@ public class PayrollService {
             employee.employeeId(), DeductionObligationKind.LEGAL_EXECUTION, payrollMonth,
             input == null ? null : safe(input.legalExecutionDeduction()));
 
-        // Whole-baht earnings (owner decision, 2026-08-29). Every component is rounded HALF_UP HERE,
+        // Whole-baht earnings. Every component is rounded HALF_UP HERE,
         // at the single point where the map is assembled, so nothing downstream -- gross, the ป.96
         // limbs, the SSO wage base, the tax, net pay, the payslip, the KBank transfer amount -- is
         // ever derived from a satang the payslip cannot show. HR typing 1,500.50 into a พิเศษ slot
-        // silently becomes 1,501; that is the owner's explicit instruction, and the stored line (not
+        // silently becomes 1,501; that is the intended rule, and the stored line (not
         // the typed value) is what the payslip and every export render, so they stay consistent.
         //
         // Deliberately NOT rounded: the garnishment (กรมบังคับคดี) below. A court order names an exact
-        // figure -- ฿0.39 in the August 2026 run -- and rounding it would change what the court is
+        // figure (e.g. ฿0.39) -- and rounding it would change what the court is
         // owed. That single line is why one employee's net can legitimately carry satang.
         componentAmounts.replaceAll((component, amount) -> payrollWholeBaht(amount));
 
@@ -1315,7 +1297,7 @@ public class PayrollService {
             mergeAllowances(storedAllowances, input),
             yearToDate,
             payrollMonth.getMonthValue(),
-            // Rebase consequence (2026-07-29): retirementAllowance's taxYear parameter (117) must reach
+            // retirementAllowance's taxYear parameter must reach
             // calculateClassified too (see PayrollClassifiedCalculationDtos#taxYear javadoc). Derived
             // the same way the outer preview()/process() methods already derive it for the tax-
             // treatment/SSO-inclusion lookups above.
@@ -1383,11 +1365,10 @@ public class PayrollService {
             BigDecimal.ZERO,
             calculation.bonusPay(),
             calculation.otherOneOffPay(),
-            // F3 fix (Opus review, 2026-07-30): this used to be hardcoded to ZERO on every processed
-            // line -- see calculateClassified's own comment on excessWithheldToDate for the computation
-            // and why it now flows through. Kept persisting it so PayslipRenderer's over-withholding
-            // notice (line 158) and the ภ.ง.ด.1 working-paper figure spec section 8 requires are both
-            // reachable again.
+            // Persisted (not hardcoded to ZERO) -- see calculateClassified's own comment on
+            // excessWithheldToDate for the computation. It must be stored so PayslipRenderer's
+            // over-withholding notice and the ภ.ง.ด.1 working-paper figure (spec section 8) are
+            // reachable.
             calculation.excessWithheldToDate(),
             calculation.taxableIncomeRegularLimb(),
             calculation.taxableIncomeKnownLimb(),
@@ -1404,14 +1385,14 @@ public class PayrollService {
             input == null ? BigDecimal.ZERO : safe(input.perDiemExempt()),
             calculation.perDiemTaxable(),
             input == null || input.perDiemBasis() == null ? null : input.perDiemBasis().name(),
-            // D1 fix (fourth reachability audit, 2026-07-30, V101): the raw request value, ALWAYS --
+            // The raw request value, ALWAYS --
             // regardless of customerReturnAlreadyEarned -- so the form field (and the checkbox that
             // gates on it being > 0) round-trip after a reload. Deliberately NOT `customerReturnDeduction`
             // above, which is calculateClassified's POST-TAX bookkeeping figure and stays 0 in the
             // unearned path (the amount is instead netted pre-tax out of commissionPay, see this
             // method's own `effectiveCommissionPay` computation above).
             customerReturnDeduction,
-            // Daily-rate support (2026-07-30): the raw HR-typed days-worked figure (nullable -- see
+            // Daily-rate support: the raw HR-typed days-worked figure (nullable -- see
             // PayrollLineDto#daysWorked's own javadoc) and the employee's pay_type AS OF THIS RUN, so
             // the frontend can gate the days-worked input to daily-rate employees and the value
             // survives a reload.
@@ -1421,7 +1402,7 @@ public class PayrollService {
             // see PayrollLineDto#ssoWageGross's own javadoc. NOT calculation.ssoWageBase(), which
             // stays the capped figure tax/contribution math uses, unchanged.
             calculation.ssoWageBaseRaw(),
-            // Issue #376, D-376-1 fix: the EXACT figure this run resolved and fed to
+            // The EXACT figure this run resolved and fed to
             // PayrollCalculator as garnishmentRequested -- see PayrollLineDto#legalExecutionRequested's
             // own javadoc for why this must be carried out here rather than re-derived later.
             resolvedLegalExecutionRequested,
@@ -1442,7 +1423,7 @@ public class PayrollService {
     }
 
     /**
-     * C1: merges the standing stored declaration with this run's request body, field by field. A
+     * Merges the standing stored declaration with this run's request body, field by field. A
      * non-null field on the request is an explicit in-run correction and wins; a null field falls back
      * to the stored standing declaration.
      */
@@ -1530,7 +1511,7 @@ public class PayrollService {
         return stored == null ? BigDecimal.ZERO : stored;
     }
 
-    // ---- C1 / C2: HR-typed standing declarations, view broader than edit ----------------------
+    // ---- HR-typed standing declarations, view broader than edit --------------------------------
 
     public TaxAllowanceListResponse getTaxAllowances(int taxYear, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
@@ -1566,13 +1547,13 @@ public class PayrollService {
         return result;
     }
 
-    // ---- P0 fix (Opus review, 2026-07-30): tax-treatment matrix HTTP surface -------------------
+    // ---- tax-treatment matrix HTTP surface -----------------------------------------------------
     //
-    // PayrollRepository#upsertComponentTaxTreatment existed since task 1 with zero callers in
-    // src/main -- nothing could ever write hr.payroll_component_tax_treatment on a real deployment,
-    // so PayrollCalculator#calculateClassified's classification gate (correct on its own terms) 409s
-    // every run for any employee with a non-zero, non-SALARY component. Same view/edit split as the
-    // C1/C2 declarations above (HR+CEO view, HR-only edit).
+    // This is the only HTTP route that writes hr.payroll_component_tax_treatment (through
+    // PayrollRepository#upsertComponentTaxTreatment); without it,
+    // PayrollCalculator#calculateClassified's classification gate would 409 every run for any
+    // employee with a non-zero, non-SALARY component. Same view/edit split as the standing
+    // declarations above (HR+CEO view, HR-only edit).
 
     public PayrollClassificationDtos.TaxTreatmentListResponse getComponentTaxTreatments(int taxYear, UserPrincipal actor) {
         requireRole(actor, PAYROLL_VIEW_ROLES);
@@ -1580,23 +1561,22 @@ public class PayrollService {
     }
 
     /**
-     * Minor fix (fourth reachability audit, 2026-07-30): {@code @Valid} on {@code PayrollController
+     * {@code @Valid} on {@code PayrollController
      * #putComponentTaxTreatments}'s {@code @RequestBody List<ComponentTaxTreatmentUpsertRequest>} is
      * INERT -- Spring's {@code SpringValidatorAdapter} does not cascade {@code @Valid} onto the
      * ELEMENTS of a bare {@code List} request body, only onto fields of an enclosing object. So
      * {@code ComponentTaxTreatmentUpsertRequest}'s own {@code @NotNull employeeId}/{@code component}
      * never actually fire, and a malformed body (a null {@code employeeId}, say) reaches this method
      * and the repository unvalidated -- the frontend always populates both, so this is not a
-     * reachability blocker in practice, but a malformed client would previously hit an unclear
+     * reachability blocker in practice, but a malformed client would otherwise hit an unclear
      * {@code DataIntegrityViolationException} (or worse) instead of a clean 400.
      *
      * <p>Not fixed by wrapping the list in a new record: {@code
      * PayrollClassificationReachabilityIntegrationTest#hrHasSomeHttpWayToClassifyAComponentBeforeTheEngineDemandsIt}
      * reflects on {@code PayrollController}'s methods for a parameter whose generic type name
      * literally contains {@code ComponentTaxTreatmentUpsertRequest} -- a wrapper type's name would
-     * not, and that test is kept verbatim per instruction. Validated explicitly here instead, at the
-     * same layer {@link #upsertComponentTaxTreatments}'s sibling validation (F2's per-diem-basis
-     * check) already uses.
+     * not. Validated explicitly here instead, at the same layer {@link
+     * #upsertComponentTaxTreatments}'s sibling validation (the per-diem-basis check) already uses.
      */
     @Transactional
     public PayrollClassificationDtos.TaxTreatmentListResponse upsertComponentTaxTreatments(
@@ -1621,11 +1601,9 @@ public class PayrollService {
     }
 
     /**
-     * F2 fix (fifth Opus review, 2026-07-30): used to project {@code
-     * byEmployee.getOrDefault(id, Map.of())} -- the RAW stored map -- straight onto the screen,
-     * regardless of what {@link #treatmentsFor} would actually resolve for that same employee at
-     * payroll time. Now resolves the SAME merged/effective map {@code treatmentsFor} does (same
-     * {@code hasBeenOnboardedForPayroll} signal, same defaults), so the screen can never show a
+     * Resolves the SAME merged/effective map {@code treatmentsFor} does (same {@code
+     * hasBeenOnboardedForPayroll} signal, same defaults) rather than projecting {@code
+     * byEmployee.getOrDefault(id, Map.of())} -- the RAW stored map -- onto the screen, so the screen can never show a
      * different classification than the engine applies, and separately reports which components HR
      * actually has a stored row for, so the frontend can distinguish "HR set this" from "the system
      * is defaulting this".
@@ -1664,20 +1642,19 @@ public class PayrollService {
     }
 
     /**
-     * Commission-payroll weighted-base + manual-entries fix (2026-07-23): delegates to {@link
+     * Delegates to {@link
      * CommissionService#payrollCommissionTotalsByEmployee}, the exact same weighted-tier +
      * approved-manual-entries aggregation {@link CommissionService#payrollReadySummary} uses for
-     * what HR sees on the payroll-ready screen -- the two paths now share one implementation and
-     * can never diverge again.
+     * what HR sees on the payroll-ready screen -- the two paths share one implementation so they
+     * cannot diverge.
      *
-     * <p>This used to reimplement the tier/VAT math independently here, two bugs deep: (1) it
-     * summed each APPROVED record's already-2dp-rounded {@code commissionableBase} UNWEIGHTED
-     * instead of the weighted, full-precision monthly tier base, underpaying a rep with a
-     * 2x/3x-weighted receipt (owner-reconciled "jennet" case: weighted 67,849.23 vs. the old
-     * unweighted 67,390.34); and (2) it excluded approved manual entries (ADJUSTMENT/MANAGER/
-     * STOCK_BONUS/INCENTIVE, V84) from the payroll figure entirely, even though real payroll pays
-     * tier commission PLUS those manual entries (same "jennet" case with a 15,000 INCENTIVE added:
-     * 82,849.23). See {@code PayrollCommissionWeightedBaseIntegrationTest} for the real-DB
+     * <p>Do not reimplement the tier/VAT math here. Two traps: (1) summing each APPROVED record's
+     * already-2dp-rounded {@code commissionableBase} UNWEIGHTED, instead of the weighted,
+     * full-precision monthly tier base, underpays a rep with a 2x/3x-weighted receipt (e.g.
+     * weighted 67,849.23 vs. unweighted 67,390.34); and (2) leaving out approved manual entries
+     * (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, V84) understates the payroll figure, because real
+     * payroll pays tier commission PLUS those manual entries (same case with a 15,000 INCENTIVE
+     * added: 82,849.23). See {@code PayrollCommissionWeightedBaseIntegrationTest} for the real-DB
      * regression coverage of both.
      */
     private Map<Long, BigDecimal> commissionPayByEmployee(LocalDate payrollMonth) {
@@ -1686,8 +1663,8 @@ public class PayrollService {
     }
 
     /**
-     * Approved overtime payable this month, rounded to whole baht per employee (owner decision,
-     * 2026-08-28) — the same whole-baht house convention commission follows (HALF_UP, no statutory basis),
+     * Approved overtime payable this month, rounded to whole baht per employee — the same
+     * whole-baht house convention commission follows (HALF_UP, no statutory basis),
      * and for the same reason: the accountant's workbook and the bank transfer file both carry
      * whole baht, and a satang here is what forces a manual reconciliation pass every month.
      *
@@ -1720,18 +1697,16 @@ public class PayrollService {
     }
 
     /**
-     * Slot labels, ALIGNED TO THE ACCOUNTANT'S WORKBOOK (2026-07-29, owner decision).
+     * Slot labels, ALIGNED TO THE ACCOUNTANT'S WORKBOOK.
      *
-     * <p>`2026.xlsx` numbers these differently from the system's original labels: it carries
-     * ค่าเช่าบ้าน as พิเศษ 2, which shifted every later number by one. The names always matched; only
-     * the numbers disagreed, so the system's slot 6 (คอมมิชชั่น) was the workbook's พิเศษ 7 and every
-     * reconciliation needed a translation table in someone's head.
+     * <p>`2026.xlsx` carries ค่าเช่าบ้าน as พิเศษ 2, so every later slot number is one higher than
+     * the system's original numbering. The names match; only the numbers differ, so without this
+     * alignment the system's slot 6 (คอมมิชชั่น) is the workbook's พิเศษ 7 and every reconciliation
+     * needs a translation table.
      *
-     * <p>The first decision was to leave the system alone and have the accountant renumber, because
-     * renumbering would have redefined 149 processed rows across five filed months. The owner then
-     * confirmed **nothing has ever been processed or paid from this ERP** — all five runs were tests,
-     * now VOIDed — so that argument collapsed and the decision was reversed. With every period VOID
-     * this is a pure relabel: no stored figure moves and no filed return exists to be affected.
+     * <p>Aligning is a pure relabel: no stored figure moves and no filed return is affected,
+     * because nothing has been processed or paid from this ERP (every earlier run was a test, now
+     * VOID).
      *
      * <p>⚠️ Branch 117 hardcodes commission at slot 6. It is slot 7 now. See the handoff's cross-branch
      * break note — merging 117 without updating that constant puts commission in the wrong ป.96 limb
