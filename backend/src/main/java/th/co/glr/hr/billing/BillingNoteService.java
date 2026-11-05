@@ -27,20 +27,20 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
 /**
- * ใบวางบิล (billing note, GLA-99 step 3) — a CUSTOMER-level cover sheet rolling several already-
+ * ใบวางบิล (billing note) — a CUSTOMER-level cover sheet rolling several already-
  * ISSUED documents (remaining invoices, deposit notices, possibly across several of the customer's
  * deals) into one billed total for one credit cycle. DRAFT -&gt; ISSUED (mint number, freeze every
  * line) -&gt; {@code SUPERSEDED} (via {@link #revise}) | {@code CANCELLED} (via {@link #cancel},
  * lines released for re-billing) | {@code SETTLED} — reached automatically (see {@link
  * BillingNoteRepository#reconcileSettlementForCustomer}'s own Javadoc for the recompute-on-read
  * mechanism and why no ticket/audit trail is written for it) OR explicitly via {@link
- * #markSettled} (owner ruling C1, 2026-09-20: an ALL-MANUAL note, e.g. ค่าขนส่ง, can never
+ * #markSettled} (an ALL-MANUAL note, e.g. ค่าขนส่ง, can never
  * auto-settle — it needs a human to mark it paid). Numbered on the SAME shared {@code AR_GLR}
  * sequence {@link th.co.glr.hr.deposit.RemainingInvoiceService} draws from, via {@link
  * ArGlrSequence}.
  *
- * <p><b>Many ISSUED notes of the same (customer, type) coexist — one per credit cycle (owner
- * ruling B1, 2026-09-20).</b> Live-uniqueness (at most one live DRAFT, at most one live ISSUED) is
+ * <p><b>Many ISSUED notes of the same (customer, type) coexist — one per credit cycle.</b>
+ * Live-uniqueness (at most one live DRAFT, at most one live ISSUED) is
  * scoped to the REVISION CHAIN a note belongs to, not to {@code (customerId, type)}: {@link
  * #createDraft} starts a brand-new chain (no predecessor check at all — several may be in progress
  * at once); {@link #revise} is the only thing that ties a draft to a specific predecessor, via
@@ -48,7 +48,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
  * following that pointer, never by scanning for "the" ISSUED note of this customer+type (there may
  * now be several). See V189's own header comment for the full reasoning and the replaced indexes.
  *
- * <p><b>Authorisation (owner rulings, 2026-09-19/20) is a NEW, standalone gate — not reused from
+ * <p><b>Authorisation is a NEW, standalone gate — not reused from
  * any existing sales-shaped role set</b>, because this grant must work for a caller in ANY role,
  * including plain {@code employee} (ภิญญดา, QC&amp;ISO):
  * <ul>
@@ -71,11 +71,11 @@ public class BillingNoteService {
     private static final Set<String> TYPES = Set.of("GOODS", "FREIGHT");
     private static final Set<String> READ_ROLES = Set.of("account", "sales_manager", "ceo");
     private static final Set<String> SOURCE_TYPES = Set.of("REMAINING_INVOICE", "DEPOSIT_NOTICE", "MANUAL");
-    // S6 (Opus review, GLA-99 step 3 round 2): the real Postgres unique-index name V189's own
-    // "no double billing" invariant is enforced by — used to NARROW every catch (DataIntegrityViolationException e)
-    // below to the ONE violation that genuinely means "already claimed elsewhere", rather than
-    // blindly reporting every DataIntegrityViolationException (e.g. a value too long for a VARCHAR
-    // column) as a misleading "เอกสารนี้อยู่ในใบวางบิลอื่นอยู่แล้ว" double-billing conflict.
+    // The real Postgres unique-index name V189's own "no double billing" invariant is enforced
+    // by — used to NARROW every catch (DataIntegrityViolationException e) below to the ONE
+    // violation that genuinely means "already claimed elsewhere", rather than blindly reporting
+    // every DataIntegrityViolationException (e.g. a value too long for a VARCHAR column) as a
+    // misleading "เอกสารนี้อยู่ในใบวางบิลอื่นอยู่แล้ว" double-billing conflict.
     private static final String DOUBLE_BILLING_CONSTRAINT = "ux_billing_note_line_source_live";
 
     private final BillingNoteRepository stored;
@@ -127,7 +127,7 @@ public class BillingNoteService {
                 .orElse(false));
     }
 
-    /** S6 (round 2): true only for the ONE constraint this class's own catches actually mean to
+    /** True only for the ONE constraint this class's own catches actually mean to
      * handle. A caller that does not match this must re-throw {@code e} unchanged, letting {@code
      * DataAccessException}'s generic handler report the real DB error instead of a misleading
      * double-billing message. */
@@ -140,12 +140,11 @@ public class BillingNoteService {
     // ── Reads ────────────────────────────────────────────────────────────────────────────────
 
     public List<BillingNoteDocumentDto> list(long customerId, UserPrincipal actor) {
-        // S7 (Opus review, GLA-99 step 3 round 2): the role-only part of the gate runs BEFORE
-        // requireCustomer, same fix F2 (round 1) already made for every write method — otherwise a
-        // caller with NO access at all (neither the write grant/READ_ROLES nor `sales`) could tell
-        // "customer does not exist" (404) apart from "customer exists but I cannot see it" (403)
-        // without ever having been entitled to either answer, an existence oracle. A `sales`/
-        // full-access caller's own requireCustomer 404 stays exactly as before — the oracle concern
+        // The role-only part of the gate runs BEFORE requireCustomer, same as every write method —
+        // otherwise a caller with NO access at all (neither the write grant/READ_ROLES nor `sales`)
+        // could tell "customer does not exist" (404) apart from "customer exists but I cannot see
+        // it" (403) without ever having been entitled to either answer, an existence oracle. A
+        // `sales`/full-access caller's own requireCustomer 404 is unaffected — the oracle concern
         // is specifically about a role with NO possible access to this endpoint at all.
         boolean fullAccess = READ_ROLES.contains(actor.role()) || hasWriteGrant(actor);
         boolean possibleSalesAccess = "sales".equals(actor.role());
@@ -157,10 +156,10 @@ public class BillingNoteService {
         if (fullAccess) {
             return all;
         }
-        // Batched (review nit, round 2): ONE ticket-ownership query for every distinct ticket
-        // referenced across ALL of this customer's notes, instead of {@link
-        // #ownsAnyReferencedTicket}'s own one-tickets.findById-per-ticket-per-note (an N+1 for a
-        // sales rep customer with many notes/deals).
+        // Batched: ONE ticket-ownership query for every distinct ticket referenced across ALL of
+        // this customer's notes, instead of {@link #ownsAnyReferencedTicket}'s own
+        // one-tickets.findById-per-ticket-per-note (an N+1 for a sales rep customer with many
+        // notes/deals).
         Set<Long> allTicketIds = all.stream()
             .flatMap(n -> distinctTicketIds(n).stream())
             .collect(Collectors.toSet());
@@ -177,10 +176,10 @@ public class BillingNoteService {
         return note;
     }
 
-    /** Nit fix (Opus review, GLA-99 step 3 round 1): returns the doc_number the filename needs
-     * ALONGSIDE the rendered bytes, in the SAME {@code requireStored}/{@code requireReadAccess}
-     * pass, so {@link BillingNoteController#file} no longer has to call {@link #get} first just to
-     * learn the filename — that loaded and authorized this exact row a second time. */
+    /** Returns the doc_number the filename needs ALONGSIDE the rendered bytes, in the SAME
+     * {@code requireStored}/{@code requireReadAccess} pass, so {@link BillingNoteController#file}
+     * does not have to call {@link #get} first just to learn the filename — that would load and
+     * authorize this exact row a second time. */
     public RenderedFile file(long id, UserPrincipal actor) {
         BillingNoteDocumentDto note = requireStored(id);
         requireReadAccess(note, actor);
@@ -197,7 +196,7 @@ public class BillingNoteService {
      * so the caller can explain the exclusion, per the plan's own "report which note"). Fully paid
      * docs are silently excluded from both lists. */
     public BillingNoteCandidatesDto candidates(long customerId, UserPrincipal actor) {
-        // S7 (round 2): role check before requireCustomer — same existence-oracle fix as list()'s
+        // Role check before requireCustomer — same existence-oracle fix as list()'s
         // own above (no `sales` partial-access branch exists here, so this is a plain reorder).
         if (!(READ_ROLES.contains(actor.role()) || hasWriteGrant(actor))) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์ดูรายการที่วางบิลได้ของลูกค้ารายนี้");
@@ -205,11 +204,11 @@ public class BillingNoteService {
         CustomerDto customer = requireCustomer(customerId);
         List<BillingNoteCandidateDto> eligible = new ArrayList<>();
         List<BillingNoteCandidateDto> alreadyBilled = new ArrayList<>();
-        // candidatesForCustomer runs the B2 settlement reconcile FIRST (see its own Javadoc), so
+        // candidatesForCustomer runs the settlement reconcile FIRST (see its own Javadoc), so
         // the claims map read next already reflects any note that just settled and released.
         List<BillingNoteRepository.CandidateRow> rows = stored.candidatesForCustomer(customerId);
         // Batched — one query for every row's claim status, not one findLiveClaim call per row
-        // (review nit, GLA-99 step 3 round 1: this was an N+1 for a customer with many candidates).
+        // (that would be an N+1 for a customer with many candidates).
         Map<String, BillingNoteRepository.ClaimedBy> liveClaims = stored.findLiveClaimsForCustomer(customerId);
         for (BillingNoteRepository.CandidateRow row : rows) {
             if (row.outstandingAmount() == null || row.outstandingAmount().signum() <= 0) {
@@ -230,13 +229,11 @@ public class BillingNoteService {
 
     // ── Writes ───────────────────────────────────────────────────────────────────────────────
 
-    /** B1: a brand-new draft starts its OWN chain — no predecessor check at all, since many ISSUED
+    /** A brand-new draft starts its OWN chain — no predecessor check at all, since many ISSUED
      * notes of this same (customer, type) may already legitimately exist (one per credit cycle).
-     * The two refusals this method used to run here ("already has an ISSUED note, revise instead"
-     * and "already has a DRAFT") were both customer+type-scoped and are GONE per B1 — several
-     * brand-new drafts of the same customer+type may now be in progress at once (e.g. preparing
-     * next cycle's bill while the current one is still ISSUED-but-unsettled). The only live-
-     * uniqueness left is per CHAIN, and a brand-new draft (revisionOfId {@code null}) is not part
+     * Several brand-new drafts of the same customer+type may be in progress at once (e.g.
+     * preparing next cycle's bill while the current one is still ISSUED-but-unsettled). The only
+     * live-uniqueness is per CHAIN, and a brand-new draft (revisionOfId {@code null}) is not part
      * of one yet — {@link #revise} is where the per-chain refusal actually lives. */
     @Transactional
     public BillingNoteDocumentDto createDraft(long customerId, BillingNoteDraftRequest req, UserPrincipal actor) {
@@ -255,11 +252,11 @@ public class BillingNoteService {
 
     @Transactional
     public BillingNoteDocumentDto updateDraft(long id, BillingNoteDraftRequest req, UserPrincipal actor) {
-        // F2 (Opus review, GLA-99 step 3 round 1): authz BEFORE the existence/state check in every
-        // write method below — today's ordering let an unauthorized caller distinguish "no such
-        // note" (404) from "exists but wrong state" (409) without ever passing the write gate, an
-        // existence/state oracle. requireWriteAccess needs only `actor`, so it can always run
-        // first with no loss of information the caller was entitled to anyway.
+        // Authz BEFORE the existence/state check in every write method below: otherwise an
+        // unauthorized caller could distinguish "no such note" (404) from "exists but wrong state"
+        // (409) without ever passing the write gate, an existence/state oracle. requireWriteAccess
+        // needs only `actor`, so it can always run first with no loss of information the caller was
+        // entitled to anyway.
         requireWriteAccess(actor);
         BillingNoteDocumentDto existing = requireDraft(id);
 
@@ -284,7 +281,7 @@ public class BillingNoteService {
         return requireStored(id);
     }
 
-    /** B1: finds ITS OWN predecessor via {@link BillingNoteDocumentDto#revisionOfId} — never by
+    /** Finds ITS OWN predecessor via {@link BillingNoteDocumentDto#revisionOfId} — never by
      * scanning for "the" ISSUED note of this customer+type, since several may now legitimately
      * coexist across credit cycles. {@code revisionOfId} is set only by {@link #revise}, so a
      * brand-new draft (the common case) mints a first-ever base_number with no predecessor at all;
@@ -325,10 +322,10 @@ public class BillingNoteService {
 
         // Supersede the predecessor BEFORE this row's own compare-and-set — forced ordering, same
         // reasoning V154's own header comment gives at length (and RemainingInvoiceService#issue
-        // already follows): ux_billing_note_base_number_issued (B1's replacement for the old
-        // per-customer+type index) allows at most ONE ISSUED row per CHAIN, so the two rows must
-        // never both read ISSUED, not even for the instant between two separate writes. Issuing
-        // this row FIRST would trip that very index against its own still-ISSUED predecessor.
+        // already follows): ux_billing_note_base_number_issued (per revision chain) allows at most
+        // ONE ISSUED row per CHAIN, so the two rows must never both read ISSUED, not even for the
+        // instant between two separate writes. Issuing this row FIRST would trip that very index
+        // against its own still-ISSUED predecessor.
         predecessor.ifPresent(p -> stored.supersede(p.id(), id));
 
         int rows = stored.issue(id, baseNumber, version, docNumber, today, actor.id(), actor.name());
@@ -347,7 +344,7 @@ public class BillingNoteService {
         return requireStored(id);
     }
 
-    /** Prepares a correction: a new DRAFT, tied to its predecessor via {@code revisionOfId} (B1),
+    /** Prepares a correction: a new DRAFT, tied to its predecessor via {@code revisionOfId},
      * copying the ISSUED note's own body/lines VERBATIM (not a live re-resolution — {@link
      * #updateDraft} is how a corrector refreshes content before re-issuing). The predecessor stays
      * {@code ISSUED} until the replacement is actually issued ({@link #issue} does the supersede),
@@ -376,9 +373,9 @@ public class BillingNoteService {
         try {
             stored.replaceLines(newId, copied);
         } catch (DataIntegrityViolationException e) {
-            // S6 (round 2): narrowed to the ONE constraint this message actually describes — any
-            // OTHER DataIntegrityViolationException (e.g. a value too long for a column) must not
-            // be misreported as "another note already claimed this", so it re-throws unchanged.
+            // Narrowed to the ONE constraint this message actually describes — any OTHER
+            // DataIntegrityViolationException (e.g. a value too long for a column) must not be
+            // misreported as "another note already claimed this", so it re-throws unchanged.
             if (!isDoubleBillingViolation(e)) {
                 throw e;
             }
@@ -420,14 +417,14 @@ public class BillingNoteService {
         return requireStored(id);
     }
 
-    /** C1 (owner ruling, 2026-09-20) — the ONLY caller-triggered path into {@code SETTLED}: an
-     * all-MANUAL note (e.g. ค่าขนส่ง) can never satisfy the automatic path's own "at least one
-     * non-MANUAL line" requirement (see {@link BillingNoteRepository#reconcileSettlementForCustomer}'s
-     * own Javadoc), so a human marks it paid instead. Same write gate as every other mutation —
-     * NOT restricted to all-MANUAL notes specifically; a grant holder may also use this to settle a
-     * mixed note early (e.g. the non-MANUAL side is known-paid through an out-of-band channel
-     * before the next recompute-on-read observes it). Records who/when, unlike the automatic path,
-     * which deliberately leaves {@code settledById}/{@code settledByName}/{@code settledAt} null. */
+    /** The ONLY caller-triggered path into {@code SETTLED}: an all-MANUAL note (e.g. ค่าขนส่ง)
+     * can never satisfy the automatic path's own "at least one non-MANUAL line" requirement (see
+     * {@link BillingNoteRepository#reconcileSettlementForCustomer}'s own Javadoc), so a human
+     * marks it paid instead. Same write gate as every other mutation — NOT restricted to
+     * all-MANUAL notes specifically; a grant holder may also use this to settle a mixed note early
+     * (e.g. the non-MANUAL side is known-paid through an out-of-band channel before the next
+     * recompute-on-read observes it). Records who/when, unlike the automatic path, which
+     * deliberately leaves {@code settledById}/{@code settledByName}/{@code settledAt} null. */
     @Transactional
     public BillingNoteDocumentDto markSettled(long id, UserPrincipal actor) {
         requireWriteAccess(actor);
@@ -439,17 +436,16 @@ public class BillingNoteService {
     }
 
     /** A draft that should not exist is deleted, not tombstoned. If it was a correction-in-progress
-     * (B1: its OWN {@code revisionOfId} names the predecessor, never a customer+type scan — several
-     * ISSUED notes of this customer+type may now exist and only one of them is this draft's own),
+     * (its OWN {@code revisionOfId} names the predecessor, never a customer+type scan — several
+     * ISSUED notes of this customer+type may exist and only one of them is this draft's own),
      * the predecessor's lines are restored to their live {@code ISSUED} claim first, so abandoning
      * a correction never leaves the original note's own sources un-claimed.
      *
-     * <p>F3 (Opus review, GLA-99 step 3 round 1): restoring those lines can itself lose a race — if
-     * some OTHER note claimed the exact same source in the window between this correction's own
-     * {@link #revise} (which released them) and this delete, {@code restoreLinesToIssued} trips
-     * {@code ux_billing_note_line_source_live} exactly like {@link #revise}'s own {@code
-     * replaceLines} race above. Mapped to the same 409 shape, not left to surface as an unmapped
-     * 500. */
+     * <p>Restoring those lines can itself lose a race — if some OTHER note claimed the exact same
+     * source in the window between this correction's own {@link #revise} (which released them) and
+     * this delete, {@code restoreLinesToIssued} trips {@code ux_billing_note_line_source_live}
+     * exactly like {@link #revise}'s own {@code replaceLines} race above. Mapped to the same 409
+     * shape, not left to surface as an unmapped 500. */
     @Transactional
     public void deleteDraft(long id, UserPrincipal actor) {
         requireWriteAccess(actor);
@@ -467,7 +463,7 @@ public class BillingNoteService {
             try {
                 stored.restoreLinesToIssued(predecessor.get().id());
             } catch (DataIntegrityViolationException e) {
-                // S6 (round 2): see revise()'s own comment on the identical narrowing.
+                // See revise()'s own comment on the identical narrowing.
                 if (!isDoubleBillingViolation(e)) {
                     throw e;
                 }
@@ -502,7 +498,7 @@ public class BillingNoteService {
         try {
             stored.replaceLines(billingNoteId, resolved);
         } catch (DataIntegrityViolationException e) {
-            // S6 (round 2): see revise()'s own comment on the identical narrowing.
+            // See revise()'s own comment on the identical narrowing.
             if (!isDoubleBillingViolation(e)) {
                 throw e;
             }
