@@ -30,12 +30,10 @@ const PANEL_CLASS = 'bg-surface border border-border rounded-md p-5';
 
 // The payroll export files HR can generate for a processed period. `value` is the backend export
 // slug (/api/payroll/{id}/export/{value}); `filePrefix` names the downloaded blob; `extension`
-// MIRRORS PayrollExportKind's own file extension and is not derived from it -- kbank/pnd1 are
-// CP874 .txt, sso and payroll-detail are real xlsx workbooks. NOTHING enforces that this list
-// stays in step with the enum: the server sends the bytes and its own Content-Type, but the
-// downloaded filename is built here, so a backend-side extension change that is not mirrored here
-// saves the right bytes under the wrong suffix. Change both together (sso moved .txt -> .xlsx on
-// 2026-08-31; PayrollServiceTest#ssoExportIsAnXlsxWorkbook pins the backend half).
+// MIRRORS PayrollExportKind's file extension and is not derived from it (kbank/pnd1 are CP874 .txt,
+// sso and payroll-detail are xlsx). Nothing enforces that this list matches the enum: the server
+// sends the bytes, but the filename is built here, so a backend extension change not mirrored here
+// saves the right bytes under the wrong suffix. Change both together.
 const EXPORT_KINDS = [
   { value: 'kbank', label: 'KBank Payroll', filePrefix: 'PCT', extension: 'txt' },
   { value: 'pnd1', label: 'ภ.ง.ด.1', filePrefix: 'Pnd1', extension: 'txt' },
@@ -83,21 +81,14 @@ function createEmployeeColumn(selectedEmployeeId) {
     searchAccessor: (line) => line.employeeName,
     render: (line) => {
       const selected = Number(line.employeeId) === Number(selectedEmployeeId);
-      // B4 fix (Opus review, 2026-07-31): moved from `.payroll-employee-cell`/`.payroll-selected-cue`
-      // styles.css rules to Tailwind utilities at the call site (CLAUDE.md Tailwind-first) -- plain
-      // flex/badge layout with no dynamic/cross-component coupling, so nothing here needed a
-      // stylesheet rule in the first place.
+      // Tailwind utilities at the call site, not styles.css rules (Tailwind-first).
       //
-      // Defect 1 fix (Opus review, 2026-07-31): `min-w-0` on the inner span only lets the flex item
-      // SHRINK -- it does nothing to the text inside once shrunk, so a name too long for the
-      // available space just painted past its own right edge and under the `.payroll-selected-cue`
-      // badge (a later sibling, so it paints on top). The legacy `.data-row > td > span/strong/small`
-      // rule in styles.css used to backstop this with block+ellipsis, but that rule lives in
-      // `@layer legacy` and Tailwind utilities always win over it (see styles-css-loses-to-tailwind-
-      // utilities gotcha), so it can no longer be relied on here now that the cell is Tailwind-first.
-      // `<strong>`/`<small>` are inline by default and render as two separate lines only because nothing
-      // upstream declares `display: block` for them anymore -- each needs its own `block truncate` so
-      // it clips with an ellipsis at ITS OWN width instead of overflowing into the badge.
+      // `min-w-0` on the inner span only lets the flex item shrink; it does not clip the text inside, so
+      // a long name would paint past its edge and under the `.payroll-selected-cue` badge (a later
+      // sibling). The legacy `.data-row > td > span/strong/small` block+ellipsis rule lives in
+      // `@layer legacy` and Tailwind utilities always win over it, so it cannot be relied on here.
+      // `<strong>`/`<small>` are inline and only stack because of that rule, so each needs its own
+      // `block truncate` to clip at its own width instead of overflowing into the badge.
       const warning = line.payType === 'D' && !(Number(line.daysWorked) > 0)
         ? '⚠ ยังไม่ได้ระบุจำนวนวันทำงาน'
         : null;
@@ -107,12 +98,10 @@ function createEmployeeColumn(selectedEmployeeId) {
             <span className="min-w-0 overflow-hidden">
               <strong className="block truncate">{line.employeeName}</strong>
               <small className="block truncate">{line.employeeCode} · {line.departmentName || '-'}</small>
-              {/* Finding 1 fix (Opus review, 2026-07-30): list-level warning so a daily-rate employee
-                  with no/zero days-worked is visible WITHOUT having to open their detail panel first --
-                  the gap the ฿0-payslip bug actually lived in (hasPayrollInput below never submits a row
-                  with nothing entered, so HR could Process a whole month without ever noticing). Purely
-                  a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked is the real
-                  enforcement. */}
+              {/* List-level warning so a daily-rate employee with no/zero days-worked is visible without opening
+                  the detail panel (hasPayrollInput never submits a row with nothing entered, so HR could Process
+                  a month without noticing). Only a nudge; PayrollService#requireEveryDailyRateEmployeeHasDaysWorked
+                  is the real enforcement. */}
               {warning && (
                 <small className="block truncate text-warning">{warning}</small>
               )}
@@ -261,8 +250,7 @@ function buildPayrollReconciliation(rows, period) {
 }
 
 const specialPayFields = [
-  // Numbering ALIGNED to the accountant's workbook (2026.xlsx) on 2026-07-29 — see
-  // PayrollService#specialPayDtos for why the system moved rather than the ledger.
+  // Numbering aligned to the accountant's workbook (2026.xlsx); see PayrollService#specialPayDtos.
   { key: 'specialPay1', label: 'พิเศษ 1 (ค่าครองชีพ)', defaultValue: '500' },
   { key: 'specialPay2', label: 'พิเศษ 2 (ค่าเช่าบ้าน)' },
   { key: 'specialPay3', label: 'พิเศษ 3 (เบี้ยเลี้ยงประจำ)' },
@@ -274,9 +262,8 @@ const specialPayFields = [
   { key: 'specialPay9', label: 'พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ)' },
 ];
 
-// ค่าอาหาร and เบี้ยเลี้ยง (ตจว/ตปท) — V97. Real taxable columns in the accountant's ledger
-// (2026.xlsx cols K and P) that the product had no field for until 2026-07-29. Not พิเศษ slots:
-// the workbook doesn't number them as พิเศษ either.
+// ค่าอาหาร and เบี้ยเลี้ยง (ตจว/ตปท): real taxable columns in the accountant's ledger (2026.xlsx cols
+// K and P). Not พิเศษ slots: the workbook doesn't number them as พิเศษ either.
 const namedAllowanceFields = [
   { key: 'mealAllowance', label: 'ค่าอาหาร' },
   // เบี้ยเลี้ยง is entered as two amounts because มาตรา 42 exempts it only PARTIALLY — the portion
@@ -286,27 +273,23 @@ const namedAllowanceFields = [
   { key: 'perDiemTaxable', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
 ];
 
-// F2 fix (Opus review, 2026-07-30): the two มาตรา 42 limbs a เบี้ยเลี้ยง payment can be made under —
-// see backend PerDiemBasis. Values must match that enum's names exactly; they are sent verbatim as
-// `perDiemBasis` on the request. Required only when a per-diem amount (exempt or taxable) is actually
-// entered — V97's chk_payroll_line_per_diem_basis_present CHECK otherwise rejects the Process insert.
+// The two มาตรา 42 limbs a เบี้ยเลี้ยง payment can be made under (backend PerDiemBasis). Values must
+// match that enum's names exactly; they are sent verbatim as `perDiemBasis`. Required only when a
+// per-diem amount is entered: chk_payroll_line_per_diem_basis_present rejects the Process insert.
 const PER_DIEM_BASIS_OPTIONS = [
   { value: 'FLAT_RATE_S42_2', label: 'เหมาจ่ายตามอัตราราชการ (ม.42(2)) — ไม่ต้องมีใบเสร็จ' },
   { value: 'REIMBURSED_S42_1', label: 'จ่ายจริงตามหน้าที่ (ม.42(1)) — ต้องมีใบเสร็จ' },
 ];
-// P1 fix (Opus review, 2026-07-30): เงินโบนัส / อื่นๆ — the dedicated one-off fields the backend has
-// carried since V96 (task 2, 2026-07-29) with no input anywhere on this page. The spec calls
-// bonusPay "the archetypal EXTRA_KNOWN_FREQUENCY" and names it explicitly in section 10's list of HR
-// screens to build; until this fix HR could not pay a bonus through payroll at all.
+// เงินโบนัส / อื่นๆ: the dedicated one-off fields the backend carries (bonusPay is the archetypal
+// EXTRA_KNOWN_FREQUENCY component).
 const oneOffPayFields = [
   { key: 'bonusPay', label: 'เงินโบนัส' },
   { key: 'otherOneOffPay', label: 'เงินก้อนอื่นๆ (ครั้งเดียว)' },
 ];
-// P1 fix (Opus review, 2026-07-30): which statutory cap applies to a legal-execution garnishment
-// (handoff section 7 / backend PayrollGarnishmentType) — never selectable before this fix, so every
-// garnishment silently used the SALARY cap (PayrollCalculator:746 defaults null to SALARY) even for a
-// bonus, OT/diligence, or severance payout, making the BONUS 50% / OVERTIME 30% / SEVERANCE ฿300,000
-// rules dead code. Values must match PayrollGarnishmentType's names exactly.
+// Which statutory cap applies to a legal-execution garnishment (backend PayrollGarnishmentType).
+// Unset falls back to the SALARY cap in PayrollCalculator, which is wrong for a bonus, OT/diligence
+// or severance payout (BONUS 50% / OVERTIME 30% / SEVERANCE ฿300,000). Values must match that
+// enum's names exactly.
 const GARNISHMENT_TYPE_OPTIONS = [
   { value: 'SALARY', label: 'เงินเดือน/ค่าจ้าง — สูงสุด 30% ต้องเหลือสุทธิ ≥ ฿20,000' },
   { value: 'BONUS', label: 'เงินโบนัส — สูงสุด 50% ของโบนัสงวดนี้' },
@@ -322,28 +305,26 @@ const deductionInputKeys = [
   'studentLoanDeduction',
   'legalExecutionDeduction',
   'otherPostTaxDeductions',
-  // Reconciliation additions (2026-07-21, C4): the three pre-tax deductions the accountant's sheet
-  // subtracts before tax (columns Z/AA/AB). Editable per run, like the other deduction inputs above —
-  // unlike director remuneration below, which is fixed on the employee record.
+  // The three pre-tax deductions the accountant's sheet subtracts before tax (columns Z/AA/AB).
+  // Editable per run, unlike director remuneration below, which is fixed on the employee record.
   'warningLetterDeduction',
   'customerReturnDeduction',
   'otherPretaxDeduction',
 ];
-// Daily-rate support (2026-07-30): days worked this period. Only meaningful for a pay_type = 'D'
-// employee (hr.employee.current_salary is that employee's PER-DAY rate, not a monthly figure) --
-// PayrollComponent.SALARY for such an employee is rate * daysWorked. One-off like bonusPay/
-// otherOneOffPay above, re-entered fresh every run rather than carried forward, since a day count
-// is specific to the month worked.
+// Days worked this period. Only meaningful for a pay_type = 'D' employee
+// (hr.employee.current_salary is that employee's PER-DAY rate): PayrollComponent.SALARY is
+// rate * daysWorked. One-off like bonusPay/otherOneOffPay, re-entered fresh every run since a day
+// count is specific to the month worked.
 const dailyRateInputKeys = ['daysWorked'];
 const payrollInputKeys = [
   ...specialPayKeys, ...namedAllowanceKeys, ...oneOffPayKeys, ...incomeInputKeys, ...deductionInputKeys,
   ...dailyRateInputKeys,
 ];
 
-// P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen (spec sections 1
-// and 10). Every non-SALARY, non-NON_TAXABLE_INCOME PayrollComponent HR can classify — labels mirror
-// specialPayFields/namedAllowanceFields/oneOffPayFields above and PayrollComponent's own javadoc.
-// SALARY is deliberately absent: it is locked to REGULAR_REPROJECT and never needs a stored row.
+// The withholding-tax classification matrix screen. Every non-SALARY, non-NON_TAXABLE_INCOME
+// PayrollComponent HR can classify; labels mirror specialPayFields/namedAllowanceFields/
+// oneOffPayFields above and PayrollComponent's own javadoc. SALARY is absent: it is locked to
+// REGULAR_REPROJECT and never needs a stored row.
 const TAX_TREATMENT_COMPONENTS = [
   { key: 'SPECIAL_PAY_1', label: 'พิเศษ 1 (ค่าครองชีพ)' },
   { key: 'SPECIAL_PAY_2', label: 'พิเศษ 2 (ค่าเช่าบ้าน)' },
@@ -385,15 +366,12 @@ function draftValue(value, fallback = '') {
   return amount > 0 ? String(amount) : fallback;
 }
 
-// Special-pay carry-forward (2026-07-23, extended to all 9 slots + meal allowance 2026-07-29): the
-// recurring fields pre-filled from the employee's most recent prior processed payroll_line (via GET
-// /api/payroll/suggested-inputs) when HR starts a brand-new run. Which of the nine specialPay slots
-// actually carries is now PER EMPLOYEE, PER COMPONENT (hr.payroll_component_carry_forward, V98) —
-// not a hardcoded slot exclusion here. An employee for whom a slot's carry_forward flag is off (or
-// unset) simply gets 0 back from the suggestions endpoint for that key, same as any other
-// non-recurring field. This is a client-side pre-fill convenience only: whatever value sits in the
-// field when HR hits Preview/Process — carried, edited, or explicitly cleared to 0 — is submitted
-// as-is via `payload()` below, same as today.
+// Carry-forward: the recurring fields pre-filled from the employee's most recent prior processed
+// payroll_line (GET /api/payroll/suggested-inputs) when HR starts a brand-new run. Which of the nine
+// specialPay slots carries is per employee, per component (hr.payroll_component_carry_forward), not
+// hardcoded here; a slot with the flag off gets 0 back. This is a client-side pre-fill only:
+// whatever sits in the field when HR hits Preview/Process (carried, edited, or cleared to 0) is
+// submitted as-is via `payload()`.
 function indexSuggestionsByEmployee(rows) {
   const map = {};
   (rows || []).forEach((row) => {
@@ -411,44 +389,30 @@ function suggestedFallback(suggestion, key) {
   return amount > 0 ? String(amount) : null;
 }
 
-// Payroll input draft (2026-07-30): a saved-but-not-yet-processed value HR typed earlier this
-// session (or a prior one) beats a mere carried-forward guess -- it is HR's own actual work, not a
-// suggestion.
+// A saved-but-not-yet-processed draft value HR typed earlier beats a carried-forward guess.
 //
-// DELIBERATELY NOT the same collapsing rule as suggestedFallback above. A suggestion is only ever
-// consulted to fill in a genuinely blank/zero field, so collapsing "suggested 0" to "no
-// suggestion" is harmless -- a suggested zero and no suggestion produce the identical outcome
-// either way. A DRAFT is different: it is saved as a COMPLETE snapshot of the whole form for that
-// employee (saveDraft() submits every field via normalizedAdjustment, not just the ones HR
-// touched), so once ANY draft row exists for an employee, every field in it -- including one HR
-// deliberately cleared down to zero -- is exactly what they saw on screen when they hit บันทึกร่าง,
-// and must win over the suggestion. Collapsing that zero to null here would let a stale
-// carry-forward suggestion silently resurrect over a value HR explicitly zeroed out (e.g. clearing
-// a carried เบี้ยขยันประจำ that should not repeat this month) -- the bug this comment replaces.
+// Deliberately NOT the same collapsing rule as suggestedFallback above. A suggestion only fills a
+// blank/zero field, so "suggested 0" and "no suggestion" are equivalent. A draft is saved as a
+// COMPLETE snapshot of the form (saveDraft() submits every field), so once any draft row exists
+// every field in it, including one HR deliberately zeroed, is what they saw on screen and must win
+// over the suggestion. Collapsing that zero to null would let a stale carry-forward suggestion
+// resurrect over a value HR cleared (e.g. a carried เบี้ยขยันประจำ that should not repeat).
 //
-// So: return '' (not null) for "draft row exists, field is 0" -- a real, non-nullish value the
-// `??` chain at every call site will NOT fall through past, while still rendering as blank (not a
-// literal "0"), preserving the "0 and blank read the same" DISPLAY convention every other field on
-// this form already follows (see draftValue). Return null ONLY when there is no draft row at all
-// for this employee (they have never saved one this session) -- that is the one case where falling
-// through to the suggestion is correct.
-//
-// No field-level "was this key actually present" tracking is needed (the alternative the review
-// suggested): a draft row is written wholesale, all fields at once, so presence is naturally an
-// EMPLOYEE-level fact (does a row exist for employee+month), not a per-field one -- there is no
-// saved-draft state where some fields are "there" and others are structurally missing.
+// So return '' (not null) for "draft row exists, field is 0": non-nullish, so the `??` chain at
+// every call site does not fall through, yet it still renders blank like every other field (see
+// draftValue). Return null only when there is no draft row at all for this employee. Presence is an
+// employee-level fact: a draft row is written wholesale, never with some fields missing.
 function draftFallback(draft, key) {
   if (!draft) return null;
   const amount = Number(draft[key] || 0);
   return amount > 0 ? String(amount) : '';
 }
 
-// Withholding-tax override (V88) is NULLABLE/meaningful, so it cannot ride the generic
+// The withholding-tax override is NULLABLE/meaningful, so it cannot ride the generic
 // draftValue/parsePayrollNumber machinery (which collapses ''<->0). A stored/carried 0 is a real
 // override (withhold nothing) and must round-trip as "0"; only null/'' means "no override".
-// Priority: the line's own persisted per-run value > a saved draft (2026-07-30) > last month's
-// carried per-run value > blank. The standing employee override is deliberately NOT surfaced here
-// — it re-applies server-side.
+// Priority: the line's own persisted per-run value > a saved draft > last month's carried per-run
+// value > blank. The standing employee override is not surfaced here; it re-applies server-side.
 function overrideDraft(lineValue, suggestion, draft) {
   if (lineValue != null) return String(lineValue);
   if (draft && draft.withholdingTaxOverride != null) return String(draft.withholdingTaxOverride);
@@ -474,26 +438,21 @@ function blankAdjustment(employeeId, { applyDefaults = false } = {}) {
     warningLetterDeduction: '',
     customerReturnDeduction: '',
     otherPretaxDeduction: '',
-    // F2 fix (Opus review, 2026-07-30): ค่าอาหาร/เบี้ยเลี้ยง (V97) were defined in
-    // namedAllowanceFields/payrollInputKeys but never actually defaulted or rendered -- HR had no way
-    // to enter them at all. mealAllowance/perDiemExempt/perDiemTaxable are plain numeric fields like
-    // the special-pay slots above; perDiemBasis is a nullable enum ('' = not yet chosen), same
-    // treatment as withholdingTaxOverride below -- kept out of the numeric payrollInputKeys.
+    // ค่าอาหาร/เบี้ยเลี้ยง: mealAllowance/perDiemExempt/perDiemTaxable are plain numeric fields like
+    // the special-pay slots above; perDiemBasis is a nullable enum ('' = not yet chosen), like
+    // withholdingTaxOverride below, so it stays out of the numeric payrollInputKeys.
     mealAllowance: '',
     perDiemExempt: '',
     perDiemTaxable: '',
     perDiemBasis: '',
-    // Daily-rate support (2026-07-30): one-off like bonusPay/otherOneOffPay above -- never carried
-    // forward, re-entered fresh every run.
+    // One-off like bonusPay/otherOneOffPay above: never carried forward, re-entered fresh every run.
     daysWorked: '',
-    // P1 fix (Opus review, 2026-07-30): เงินโบนัส/เงินก้อนอื่นๆ — plain numeric fields like the
-    // special-pay slots above.
+    // เงินโบนัส/เงินก้อนอื่นๆ: plain numeric fields like the special-pay slots above.
     bonusPay: '',
     otherOneOffPay: '',
-    // P1 fix (Opus review, 2026-07-30): garnishmentType is a nullable enum ('' = not chosen, backend
-    // defaults to SALARY), same treatment as perDiemBasis above. customerReturnAlreadyEarned is a
-    // plain boolean (default false = "not yet earned", the pre-tax netting path) -- see
-    // PayrollCalculator#calculateClassified's own comment on the flag for what each value means.
+    // garnishmentType is a nullable enum ('' = not chosen, backend defaults to SALARY), like
+    // perDiemBasis above. customerReturnAlreadyEarned is a plain boolean (default false = "not yet
+    // earned", the pre-tax netting path); see PayrollCalculator#calculateClassified.
     garnishmentType: '',
     customerReturnAlreadyEarned: false,
     // Nullable per-run withholding override ('' = compute/standing). Kept out of the numeric keys below.
@@ -505,9 +464,8 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null, dr
   const adjustment = blankAdjustment(line.employeeId, { applyDefaults });
   (line.specialPays || []).forEach((item, index) => {
     const key = `specialPay${index + 1}`;
-    // Priority: the line's own real value (already-submitted/persisted) > a saved draft
-    // (2026-07-30, HR's own not-yet-processed work) > a carried figure from last month > the
-    // hardcoded UAT demo default. A draft/suggestion only ever fills in for a genuinely blank/zero
+    // Priority: the line's own real value (already persisted) > a saved draft > a carried figure
+    // from last month > the hardcoded UAT demo default. A draft/suggestion only fills a blank/zero
     // field on a fresh run.
     const fallback = draftFallback(draft, key) ?? suggestedFallback(suggestion, key) ?? defaultSpecialPayValue(key, applyDefaults);
     adjustment[key] = draftValue(item.amount, fallback);
@@ -515,11 +473,9 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null, dr
   adjustment.nonTaxableIncome = draftValue(
     line.nonTaxableIncome,
     draftFallback(draft, 'nonTaxableIncome') ?? suggestedFallback(suggestion, 'nonTaxableIncome') ?? '');
-  // Leave -> payroll unpaid-day deduction (2026-07-23): unpaidLeaveDays is event-driven (this
-  // month's approved-beyond-quota leave, from GET /api/payroll/suggested-inputs), unlike the other
-  // carried fields above which are prior-month recurring amounts -- but it pre-fills the same way:
-  // a real line value (already-submitted/persisted) wins, otherwise a saved draft, otherwise the
-  // suggestion. HR can still edit/clear it before Preview/Process, same as every other field here.
+  // unpaidLeaveDays is event-driven (this month's approved-beyond-quota leave, from GET
+  // /api/payroll/suggested-inputs), unlike the carried recurring amounts above, but pre-fills the
+  // same way: a real line value wins, otherwise a saved draft, otherwise the suggestion.
   adjustment.unpaidLeaveDays = draftValue(
     line.unpaidLeaveDays,
     draftFallback(draft, 'unpaidLeaveDays') ?? suggestedFallback(suggestion, 'unpaidLeaveDays') ?? '');
@@ -531,34 +487,28 @@ function adjustmentFromLine(line, { applyDefaults = false, suggestion = null, dr
     draftFallback(draft, 'legalExecutionDeduction') ?? suggestedFallback(suggestion, 'legalExecutionDeduction') ?? '');
   adjustment.otherPostTaxDeductions = draftValue(line.otherPostTaxDeductions, draftFallback(draft, 'otherPostTaxDeductions') ?? '');
   adjustment.warningLetterDeduction = draftValue(line.warningLetterDeduction, draftFallback(draft, 'warningLetterDeduction') ?? '');
-  // D1 fix (fourth reachability audit, 2026-07-30): hydrate from customerReturnRequested, NOT
-  // customerReturnDeduction. The latter is the POST-TAX bookkeeping figure the backend persists --
-  // it is 0 whenever customerReturnAlreadyEarned is false (the unearned amount is instead netted
-  // pre-tax out of commission), so reading it back here silently wiped the form field AND the
-  // checkbox below (which gates on this value being > 0) on every reload, and a reprocess of the
-  // same month silently stopped re-applying the netting. customerReturnRequested always echoes what
-  // was actually typed, regardless of the earned flag.
+  // Hydrate from customerReturnRequested, NOT customerReturnDeduction: the latter is the POST-TAX
+  // bookkeeping figure and is 0 whenever customerReturnAlreadyEarned is false (the unearned amount
+  // is netted pre-tax out of commission), so reading it back would wipe the form field and the
+  // checkbox below (which gates on > 0) on every reload and stop a reprocess re-applying the netting.
+  // customerReturnRequested always echoes what was typed.
   adjustment.customerReturnDeduction = draftValue(line.customerReturnRequested, draftFallback(draft, 'customerReturnDeduction') ?? '');
   adjustment.otherPretaxDeduction = draftValue(line.otherPretaxDeduction, draftFallback(draft, 'otherPretaxDeduction') ?? '');
-  // ค่าอาหาร carries forward like the other recurring fields above; the two เบี้ยเลี้ยง amounts and
-  // the basis do not (V98's carry-forward flags only cover mealAllowance for this group -- see the
-  // task-3 handoff fix 5) -- a per-diem is trip-driven, not a standing monthly figure, so re-entering
-  // it (and its basis) fresh each run is correct, not a gap. A saved draft still fills in for all
-  // three, same as it does for every other field here.
+  // ค่าอาหาร carries forward like the other recurring fields; the two เบี้ยเลี้ยง amounts and the
+  // basis do not (the carry-forward flags only cover mealAllowance for this group): a per-diem is
+  // trip-driven, so re-entering it fresh each run is correct. A saved draft still fills in all three.
   adjustment.mealAllowance = draftValue(
     line.mealAllowance,
     draftFallback(draft, 'mealAllowance') ?? suggestedFallback(suggestion, 'mealAllowance') ?? '');
   adjustment.perDiemExempt = draftValue(line.perDiemExempt, draftFallback(draft, 'perDiemExempt') ?? '');
   adjustment.perDiemTaxable = draftValue(line.perDiemTaxable, draftFallback(draft, 'perDiemTaxable') ?? '');
   adjustment.perDiemBasis = line.perDiemBasis || draft?.perDiemBasis || '';
-  // P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay do not carry forward (they are one-off
-  // by definition, same reasoning as perDiemExempt/perDiemTaxable above) -- re-entered fresh each
-  // run, though a saved draft still fills in.
+  // bonusPay/otherOneOffPay are one-off, so they do not carry forward (same as perDiemExempt/
+  // perDiemTaxable above); a saved draft still fills in.
   adjustment.bonusPay = draftValue(line.bonusPay, draftFallback(draft, 'bonusPay') ?? '');
   adjustment.otherOneOffPay = draftValue(line.otherOneOffPay, draftFallback(draft, 'otherOneOffPay') ?? '');
-  // Daily-rate support (2026-07-30): survives a reload -- hydrate from the persisted line's own
-  // daysWorked first, else a saved draft (2026-07-30). No carry-forward suggestion (a day count is
-  // specific to the month worked, not a recurring figure).
+  // Survives a reload: persisted line's daysWorked first, else a saved draft. No carry-forward (a
+  // day count is specific to the month worked).
   adjustment.daysWorked = draftValue(line.daysWorked, draftFallback(draft, 'daysWorked') ?? '');
   adjustment.garnishmentType = line.garnishmentType || draft?.garnishmentType || '';
   adjustment.customerReturnAlreadyEarned = Boolean(line.customerReturnAlreadyEarned) || Boolean(draft?.customerReturnAlreadyEarned);
@@ -571,18 +521,15 @@ function withholdingOverrideValue(input) {
   return raw === '' || raw == null ? null : Number(raw);
 }
 
-// F2 fix (Opus review, 2026-07-30): perDiemBasis is a nullable enum, not an amount -- same reasoning
-// as withholdingOverrideValue above. '' (never chosen) submits as null; a chosen value submits as its
-// PerDiemBasis name verbatim (matches th.co.glr.hr.payroll.PerDiemBasis exactly).
+// perDiemBasis is a nullable enum, not an amount (see withholdingOverrideValue above). '' (never
+// chosen) submits as null; a chosen value submits as its PerDiemBasis name verbatim.
 function perDiemBasisValue(input) {
   const raw = input.perDiemBasis;
   return raw === '' || raw == null ? null : raw;
 }
 
-// P1 fix (Opus review, 2026-07-30): garnishmentType is a nullable enum, same reasoning as
-// perDiemBasisValue above. '' (never chosen) submits as null, which PayrollEmployeeInputRequest's own
-// javadoc says the backend defaults to SALARY -- reproducing the pre-existing single-rule behaviour
-// exactly for a run where HR does not pick a type.
+// garnishmentType is a nullable enum (see perDiemBasisValue above). '' (never chosen) submits as
+// null, which the backend defaults to SALARY (see PayrollEmployeeInputRequest).
 function garnishmentTypeValue(input) {
   const raw = input.garnishmentType;
   return raw === '' || raw == null ? null : raw;
@@ -595,10 +542,10 @@ function normalizedAdjustment(input) {
     // Nullable: '' -> null ("compute/standing"), a number (incl. 0) -> that override. Kept separate
     // from the numeric keys above precisely so a cleared field stays null instead of collapsing to 0.
     withholdingTaxOverride: withholdingOverrideValue(input),
-    // F2 fix (Opus review, 2026-07-30): nullable enum, same reasoning as withholdingTaxOverride above.
+    // Nullable enum, like withholdingTaxOverride above.
     perDiemBasis: perDiemBasisValue(input),
-    // P1 fix (Opus review, 2026-07-30): nullable enum (garnishmentType) and a plain boolean
-    // (customerReturnAlreadyEarned) -- neither belongs in the numeric payrollInputKeys spread above.
+    // Nullable enum (garnishmentType) and a plain boolean (customerReturnAlreadyEarned); neither
+    // belongs in the numeric payrollInputKeys spread above.
     garnishmentType: garnishmentTypeValue(input),
     customerReturnAlreadyEarned: Boolean(input.customerReturnAlreadyEarned),
   };
@@ -611,20 +558,18 @@ function hasPayrollInput(input) {
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
 
-// A5 fix (issue #422): the two raw `<input type="number">` fields on this page (unpaidLeaveDays,
-// daysWorked) have no equivalent of MoneyInput's own onChange clamp, so a typed "-5" reached
-// updateAdjustment verbatim -- @PositiveOrZero on PayrollEmployeeInputRequest then 400s the
-// ENTIRE draft/preview/process PUT with no client-side signal at all (every OTHER employee's
-// legitimate edits silently rejected along with it). Mirrors MoneyInput's own clamp exactly.
+// The two raw `<input type="number">` fields on this page (unpaidLeaveDays, daysWorked) have no
+// equivalent of MoneyInput's onChange clamp, so a typed "-5" would reach updateAdjustment verbatim
+// and @PositiveOrZero on PayrollEmployeeInputRequest would 400 the ENTIRE draft/preview/process PUT
+// (every other employee's edits rejected with it). Mirrors MoneyInput's clamp.
 function clampNonNegative(value) {
   if (value !== '' && Number(value) < 0) return '0';
   return value;
 }
 
-// A5 belt-and-braces (issue #422): MoneyInput and clampNonNegative above already stop a negative
-// from being TYPED into any field on this page, but saveDraft() below scans the built payload one
-// more time before sending it -- a defensive backstop against a future field that forgets the
-// clamp, not a redundant check. Returns the first offending {employeeId, key} pair, or null.
+// MoneyInput and clampNonNegative above already stop a negative from being typed, but saveDraft()
+// scans the built payload once more before sending: a backstop against a future field that forgets
+// the clamp. Returns the first offending {employeeId, key} pair, or null.
 function findNegativeAdjustmentField(inputs) {
   for (const input of inputs) {
     for (const key of payrollInputKeys) {
@@ -731,54 +676,45 @@ function downloadBlob(blob, filename) {
 
 export function PayrollPage({ user, showToast }) {
   const isMobile = useIsMobile();
-  // Split (issue #390): PayrollController mirrors -- every GET, plus the non-persisting POST
-  // /preview and /preview/export/{kind}, is @PreAuthorize("hasAnyRole('HR','CEO')"); every write
-  // (process, PUT input-draft, PUT tax-allowances, PUT ytd-seed, PUT component-tax-treatments,
-  // POST distribute) is hasRole('HR') only. This is an ALLOWLIST read straight off
-  // ROLE_PERMISSIONS.canManagePayroll (routes.js) via the same `hasPermission` helper every other
-  // route guard uses -- deliberately NOT a `role !== 'ceo'` denylist, which would fail OPEN (grant
-  // every write) to any role added to canViewPayroll later without anyone touching this file.
-  // `hasPermission(undefined, ...)` returns false, so an absent `user` reads as no management
-  // access, not full access -- every caller (including tests) must pass a real user explicitly.
+  // PayrollController mirrors this split: every GET, plus the non-persisting POST /preview and
+  // /preview/export/{kind}, is hasAnyRole('HR','CEO'); every write (process, PUT input-draft,
+  // tax-allowances, ytd-seed, component-tax-treatments, POST distribute) is hasRole('HR') only. This
+  // is an ALLOWLIST read off ROLE_PERMISSIONS.canManagePayroll (routes.js) via `hasPermission`,
+  // deliberately NOT a `role !== 'ceo'` denylist, which would fail OPEN to any role later added to
+  // canViewPayroll. `hasPermission(undefined, ...)` is false, so every caller (including tests) must
+  // pass a real user.
   const canManage = hasPermission(user?.role, 'canManagePayroll');
   const [month, setMonth] = useState(() => bangkokMonthStartIso().slice(0, 7));
   const [period, setPeriod] = useState(null);
   const [adjustments, setAdjustments] = useState({});
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  // B1 fix (Opus review, 2026-07-31): the detail panel has exactly two presentations, not three.
-  // >=1366px is a persistent side panel next to the table; below that it is the fixed slide-over
-  // overlay tablet already used. The query is the JS-side mirror of the CSS `payroll-wide:` custom
-  // variant (`min-width: 1366px`, see index.css's `@custom-variant`) so the two can never disagree
-  // about which mode is active.
-  //
-  // Phase A (2026-07-31): the command-surface pass shrinks the side panel floor to 310px, which lets
-  // the table's measured 714px minimum and the 16px gap fit side-by-side at 1366px without hidden
-  // money columns. 1280px still stays overlay; the content width there cannot pay for the panel.
+  // The detail panel has two presentations: >=1366px is a persistent side panel next to the table;
+  // below that it is a fixed slide-over overlay. The query is the JS-side mirror of the CSS
+  // `payroll-wide:` custom variant (`min-width: 1366px`, see index.css's `@custom-variant`) so the
+  // two cannot disagree. The 310px panel floor lets the table's 714px minimum and the 16px gap fit
+  // side-by-side at 1366px; 1280px stays overlay because the content width cannot pay for the panel.
   const isDesktopPanel = useMediaQuery('(min-width: 1366px)');
   const isOverlayPanel = !isDesktopPanel;
   const detailPanelRef = useRef(null);
   const [saving, setSaving] = useState(false);
   const [confirmProcess, setConfirmProcess] = useState(false);
-  // Leave -> payroll unpaid-day deduction (2026-07-23): the raw suggestions response, kept only so
-  // the pending cancel-after-close correction credit (if any) can be shown as a hint next to the
-  // unpaidLeaveDays field. Never re-applied to `adjustments` after the initial pre-fill in
-  // applyPeriod -- HR's edits always win.
+  // The raw suggestions response, kept so the pending cancel-after-close correction credit (if any)
+  // can be shown as a hint next to unpaidLeaveDays. Never re-applied to `adjustments` after the
+  // initial pre-fill in applyPeriod: HR's edits always win.
   const [suggestionsByEmployee, setSuggestionsByEmployee] = useState({});
-  // Leave requires approval (2026-08-05): month-level (not per-employee) advisory count of leave
-  // requests still SUBMITTED (not yet approved) that overlap the current payroll month -- see
-  // PayrollCarryForwardDtos#SuggestedInputsResponse's Javadoc. Fetched alongside suggestionsByEmployee
-  // (same suggestedInputs() call, same fresh-PREVIEW-only gate above), defaulting to 0 whenever that
-  // call is skipped or fails, so the warning below only ever renders on a real, non-zero count.
+  // Month-level (not per-employee) advisory count of leave requests still SUBMITTED that overlap the
+  // current payroll month (PayrollCarryForwardDtos#SuggestedInputsResponse). Fetched with the same
+  // suggestedInputs() call and fresh-PREVIEW-only gate, defaulting to 0 when that call is skipped or
+  // fails, so the warning only renders on a real non-zero count.
   const [pendingSubmittedLeaveCount, setPendingSubmittedLeaveCount] = useState(0);
   const [payDate, setPayDate] = useState(() => `${month}-26`);
   const [draftDirty, setDraftDirty] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
-  // Optimistic concurrency (issue #422 follow-up): 'conflict' is a new terminal status alongside
-  // the existing 'saved'/'dirty'/'saving'/'error' -- reached only on a 409 from PUT /input-draft,
-  // and cleared only by the explicit "โหลดข้อมูลใหม่" action below (never by the retry machinery,
-  // which would just 409 again against the same stale token). See draftConflictRef's own comment
-  // for why the synchronous gate lives in a ref, not this state value.
+  // 'conflict' is a terminal status alongside 'saved'/'dirty'/'saving'/'error': reached only on a
+  // 409 from PUT /input-draft, cleared only by the explicit "โหลดข้อมูลใหม่" action (never by the
+  // retry machinery, which would just 409 again against the same stale token). See
+  // draftConflictRef for why the synchronous gate lives in a ref.
   const [draftSaveStatus, setDraftSaveStatus] = useState('saved');
   // The Thai message from the 409 response, shown in the persistent conflict banner below (unlike
   // the transient toast, which auto-dismisses after 3.2s -- see useToast.js -- and is therefore
@@ -787,23 +723,18 @@ export function PayrollPage({ user, showToast }) {
   const adjustmentsRef = useRef({});
   const draftDirtyRef = useRef(false);
   const draftVersionRef = useRef(0);
-  // Optimistic concurrency (issue #422 follow-up): the month-level ETag saveDraft() must thread
-  // through as If-Match on the NEXT save. Deliberately a ref updated on a strict allowlist, not
-  // whenever a fresh value is available -- see the "data arrived" effect below for why a
-  // background poll must never refresh this while the form is dirty: doing so would silently
-  // adopt another user's concurrent save as "the version I started from," defeating the entire
-  // conflict check the next time HR saves. Updated only: (a) the month-change effect, reset to
-  // null; (b) the "data arrived" effect, ONLY when the form is clean; (c) on saveDraft()'s own
-  // successful response, unconditionally (that response IS the new server truth); (d) explicitly
-  // after a successful process() (which clears the server's draft rows out from under whatever
-  // token was current). Never mutated on a 409 -- see draftConflictRef.
+  // The month-level ETag saveDraft() threads through as If-Match on the NEXT save. A ref updated on a
+  // strict allowlist, not whenever a fresh value arrives: a background poll must never refresh it
+  // while the form is dirty, or it would silently adopt another user's concurrent save as "the
+  // version I started from" and defeat the conflict check. Updated only: (a) month change, reset to
+  // null; (b) "data arrived" effect, only when the form is clean; (c) saveDraft()'s own successful
+  // response; (d) after a successful process() (which clears the server's draft rows). Never mutated
+  // on a 409.
   const draftEtagRef = useRef(null);
-  // Synchronous companion to draftSaveStatus === 'conflict': saveDraft()'s own `finally` block
-  // decides whether to auto-retry a few lines below, and reading React state there would see the
-  // PREVIOUS render's value (setDraftSaveStatus('conflict') hasn't flushed yet at that point in
-  // the same synchronous call), which would let the auto-retry chain hammer the backend with the
-  // same doomed-to-409 token on every subsequent keystroke. This ref is set the instant the 409 is
-  // caught, in time for that same function invocation's `finally` to see it.
+  // Synchronous companion to draftSaveStatus === 'conflict': saveDraft()'s `finally` decides whether
+  // to auto-retry, and reading React state there would see the previous render's value, letting the
+  // retry chain hammer the backend with the same doomed-to-409 token on every keystroke. This ref is
+  // set the instant the 409 is caught.
   const draftConflictRef = useRef(false);
   const queryClient = useQueryClient();
 
@@ -817,70 +748,44 @@ export function PayrollPage({ user, showToast }) {
   const selectedSuggestion = selectedLine ? suggestionsByEmployee[selectedLine.employeeId] : null;
   const pendingUnpaidLeaveCorrectionDays = Number(selectedSuggestion?.pendingUnpaidLeaveCorrectionDays || 0);
   const status = statusInfo(period?.status);
-  // F1: guard the irreversible "Process Payroll" action against an empty period. PayrollService
-  // #process (backend) does NOT need a period id -- it recomputes from
-  // payrollRepository.findActiveEmployees() and calls saveProcessedPeriod regardless. If no period
-  // was ever loaded/previewed for this month, `adjustments` is `{}`, so `payload().inputs` is `[]`
-  // -- the backend still recomputes system-derived figures, but every HR-entered value (8 special
-  // pays, non-taxable income, student loan, legal execution, unpaid-leave days, withholding
-  // override) commits as zero. Worse, `status = 'PROCESSED'` is one-way (PayrollRepository only ever
-  // writes PROCESSED, there is no un-process path) and OvertimeService#requirePayrollMonthOpen then
-  // refuses OT approval for that month.
+  // Guard the irreversible "Process Payroll" action against an empty period. The backend #process
+  // does not need a period id: it recomputes from findActiveEmployees() and saves regardless. With no
+  // period loaded, `adjustments` is `{}` so `payload().inputs` is `[]`, and every HR-entered value
+  // (special pays, non-taxable income, student loan, legal execution, unpaid-leave days, withholding
+  // override) would commit as zero. `status = 'PROCESSED'` is one-way and OvertimeService
+  // #requirePayrollMonthOpen then refuses OT approval for that month.
   //
   // MUST guard on `!(period?.lineCount > 0)`, NOT `!period?.id`: PayrollService#preview builds its
-  // DTO with `id: null`, and `currentOrPreview` (backend) falls back to preview for any month with
-  // no saved row -- so `period.id` is null for EVERY month that has never been processed, i.e. the
-  // normal first run. Guarding on id would make first-time processing impossible. That is exactly
-  // why the other action groups below (export/send) can key off `!period?.id` (they require an
-  // already-*saved* period) and this one cannot. See PayrollPage.test.jsx's
-  // "enables Process Payroll for a fresh (never-processed) period ... id === null" test, which pins
-  // this down as the regression guard against "simplifying" it back to `!period?.id`.
+  // DTO with `id: null` and `currentOrPreview` falls back to preview for any never-processed month,
+  // so `period.id` is null on the normal first run. That is why the export/send groups below can key
+  // off `!period?.id` (they need an already-saved period) and this one cannot. PayrollPage.test.jsx's
+  // "enables Process Payroll for a fresh (never-processed) period ... id === null" pins this.
   const emptyPeriod = !period || !(period.lineCount > 0);
-  // Payroll input draft (2026-07-30; WIDENED 2026-08-02, issue #422 A1): this used to require
-  // `period?.status === 'PREVIEW' && !period?.id` -- a brand-new, never-touched run only -- on
-  // the theory that a draft would be "useless" once a period was PROCESSED or
-  // VOID-with-real-lines, because the line's own persisted value always wins in
-  // adjustmentFromLine regardless. That reasoning holds for RESTORE, but not for
-  // EDIT-IN-PROGRESS: every field on those periods stays fully editable (gated only on
-  // !canManage below), so the old gate just let HR type into a form that silently kept nothing
-  // -- no badge, no toast, no save (issue #422 §A1: "I saved a draft and it was gone", reported
-  // from a PROCESSED month and from a VOID month with pre-loaded real inputs alike).
+  // Draft saving is allowed for any loaded period, any status. Every field stays editable (gated
+  // only on !canManage below), so a narrower gate would let HR type into a form that silently kept
+  // nothing. It is safe because draftValue()'s `> 0` precedence means a committed non-zero figure on
+  // the line always beats a draft restore: a draft only fills a field that is blank/zero on the real
+  // line. Known gap, intentionally left: HR clearing a non-zero COMMITTED field down to 0 still sees
+  // the committed value reappear on reload, because draftValue cannot tell "never touched" from
+  // "deliberately zeroed" once a persisted value exists.
   //
-  // Widening this to "any loaded period, any status" is safe by construction, not just
-  // convenient: draftValue()'s own `> 0` precedence (see its comment above) means a committed
-  // non-zero figure already on the line ALWAYS beats whatever a draft restore would supply -- a
-  // draft can only ever fill in a field that is genuinely blank/zero on the real line. One
-  // residual gap is pre-existing and intentionally NOT fixed here (it would change restore
-  // precedence for already-committed payroll): HR clearing a non-zero COMMITTED field down to 0
-  // still sees the committed value reappear on reload, because draftValue can't distinguish
-  // "never touched" from "deliberately zeroed" once a real persisted value exists.
-  //
-  // CEO can never save a draft (PUT /input-draft is hasRole('HR') only) -- folded into the same
-  // condition as the period-existence check so the autosave status badge and the blur autosave
-  // below both stay off for a read-only session, not just visually hidden.
+  // CEO can never save a draft (PUT /input-draft is hasRole('HR') only), so that is folded into this
+  // condition to keep the autosave badge and blur autosave off for a read-only session.
   const canSaveDraft = canManage && Boolean(period);
-  // "Latest" mirror of canSaveDraft for code that runs OUTSIDE this render's own closure -- the
-  // month-change effect's cleanup (A4 below) and the beforeunload listener. Both are set up once
-  // per effect instance and, without this, would keep reading whatever canSaveDraft/period were
-  // AT THE TIME that effect instance was created (e.g. right when `month` changed, before `load`
-  // even resolved), not the current render's values -- a stale closure, not a "wrong month" bug,
-  // but just as silent. Updated in a post-render effect (not during render itself -- React's own
-  // lint rules forbid mutating a ref while rendering), which still runs well before either
-  // consumer below can possibly fire.
+  // "Latest" mirror of canSaveDraft for code that runs OUTSIDE this render's closure: the
+  // month-change effect's cleanup and the beforeunload listener. Both are set up once per effect
+  // instance and would otherwise read a stale canSaveDraft/period. Updated in a post-render effect
+  // (React lint forbids mutating a ref during render), which still runs before either consumer fires.
   const canSaveDraftRef = useRef(canSaveDraft);
   useEffect(() => {
     canSaveDraftRef.current = canSaveDraft;
   });
-  // P2 fix (issue #422, adversarial review, round 2): a monotonically incremented VISIT token,
-  // not a "latest month VALUE" mirror -- bumped directly in the month-change effect's own body
-  // below (never in a separate no-deps passive effect: a promise settling in the microtask right
-  // after `setMonth` commits, but before a SEPARATE effect gets its turn in the passive-effect
-  // flush, would still see the stale value and slip through). A value mirror is not enough on its
-  // own either way: July -> June -> July makes `month === monthAtStart` true again by
-  // coincidence, so a save from the FIRST (abandoned) July visit would pass a value-based guard
-  // as if it belonged to the second. Each visit -- including a round trip back to a month HR
-  // already left -- gets its own token value, so `saveDraft()`'s resolution can tell "this exact
-  // visit" from "a same-named but different visit" instead of merely "this month name".
+  // A monotonically incremented VISIT token, not a "latest month VALUE" mirror. It is bumped in the
+  // month-change effect's own body (never a separate no-deps passive effect: a promise settling right
+  // after `setMonth` commits could still see the stale value). A value mirror alone is not enough
+  // either: July -> June -> July makes `month === monthAtStart` true again, so a save from the first
+  // (abandoned) July visit would pass as if it belonged to the second. Each visit gets its own token,
+  // so saveDraft()'s resolution can tell "this exact visit" from "a same-named but different visit".
   const monthVisitTokenRef = useRef(0);
   const processBlockedReason = emptyPeriod
     ? 'ยังไม่มีพนักงานในรอบเงินเดือนนี้ — กดคำนวณตัวอย่างหรือเลือกรอบเดือนที่มีข้อมูลก่อนประมวลผล'
@@ -896,39 +801,29 @@ export function PayrollPage({ user, showToast }) {
     setDetailOpen(false);
   }
 
-  // B2 fix (Opus review, 2026-07-31): focus trap + Escape-to-close + focus-restoration, shared with
-  // Modal.jsx via useDialogFocus (see that hook's own comment). `active` is false whenever the panel
-  // is the >=1366px persistent side panel rather than the <1366px overlay -- a side panel must not
-  // steal Tab or respond to Escape, since the rest of the page beside it is not actually hidden.
+  // Focus trap + Escape-to-close + focus restoration, shared with Modal.jsx via useDialogFocus.
+  // `active` is false in the >=1366px persistent side panel, which must not steal Tab or respond to
+  // Escape since the rest of the page beside it is not hidden.
   useDialogFocus({ active: isOverlayPanel && detailOpen, containerRef: detailPanelRef, onClose: closeDetailPanel });
 
-  // Issue #422 B1: PayrollPage onto react-query, so it participates in the shared cache (an
-  // approval elsewhere can now invalidate it -- see B5's `['payroll']` prefix calls in
-  // CommissionPage/OvertimePanel/LeavePage) and gets a 60s poll + window-focus refetch instead of
-  // being a dead end that only ever refreshed on month change or an explicit action. A combined
-  // queryFn (period + suggestions + draft in one) rather than three separate queries: it keeps
-  // the exact sequencing/resilience the old imperative load() had (a failing suggestion or draft
-  // fetch must never block the period from loading -- each keeps its own try/catch) and gives one
-  // single query-cache entry to invalidate from elsewhere.
+  // react-query so this page shares the cache (approvals elsewhere invalidate the `['payroll']`
+  // prefix) and gets a 60s poll + window-focus refetch. One combined queryFn (period + suggestions +
+  // draft) gives a single cache entry to invalidate, and each of the suggestion/draft fetches keeps
+  // its own try/catch so a failure never blocks the period from loading.
   const payrollQuery = useQuery({
     queryKey: queryKeys.payrollCurrent(month),
     queryFn: async () => {
       const response = await api.payroll.current({ payrollMonth: month });
       const nextPeriod = response.period;
-      // Special-pay carry-forward (2026-07-23): a SUGGESTION only makes sense for a genuinely
-      // fresh run (PREVIEW with no processed/void period yet) -- an already-touched period
-      // (PROCESSED, or VOID like July's pre-loaded real inputs) already reflects real, submitted
-      // values in the line itself, and adjustmentFromLine's own precedence means the line's value
-      // always wins regardless, so fetching a suggestion for it would be pure waste, not a
-      // correctness issue. (issue #422 A1 widened the DRAFT fetch below past this same gate --
-      // see canSaveDraft's own comment for why a draft, unlike a suggestion, is NOT safe to skip
-      // once a period is touched: the fields stay editable regardless of status.)
+      // A SUGGESTION only makes sense for a fresh run (PREVIEW with no processed/void period): an
+      // already-touched period reflects real submitted values and adjustmentFromLine's precedence
+      // means the line's value wins anyway, so fetching one is pure waste. A draft, unlike a
+      // suggestion, is NOT safe to skip once a period is touched (fields stay editable); see
+      // canSaveDraft.
       let suggestionsByEmployee = {};
-      // Leave requires approval (2026-08-05): pendingSubmittedLeaveCount travels with the SAME
-      // suggestedInputs() response/gate/try-catch as suggestionsByEmployee -- it is just another
-      // field on that read-only advisory payload, not a separate fetch, so it shares its resilience
-      // (never blocks payroll from loading) and its fresh-PREVIEW-only scope (see the comment above
-      // this block for why a touched period skips the call entirely).
+      // pendingSubmittedLeaveCount rides the same suggestedInputs() response/gate/try-catch as
+      // suggestionsByEmployee: another field on that read-only advisory payload, same resilience and
+      // fresh-PREVIEW-only scope.
       let pendingSubmittedLeaveCount = 0;
       if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
         try {
@@ -943,16 +838,12 @@ export function PayrollPage({ user, showToast }) {
           pendingSubmittedLeaveCount = 0;
         }
       }
-      // Payroll input draft (2026-07-30; UNCONDITIONAL as of issue #422 A1): fetched on every
-      // load, not only a fresh PREVIEW run -- see canSaveDraft's own comment for the full
-      // reasoning. Same resilience as suggestedInputs above -- a draft is a convenience restore
-      // only and must never block payroll from loading.
+      // Fetched on every load, not only a fresh PREVIEW run (see canSaveDraft). A draft is a
+      // convenience restore only and must never block payroll from loading.
       //
-      // Optimistic concurrency (issue #422 follow-up): draftEtag is the month-level token this
-      // page must thread back as If-Match on the next save -- see draftEtagRef's own comment for
-      // exactly when it is (and is not) applied from a query resolution. `null` here (the fetch
-      // itself failed) is a real, defined value distinct from `undefined` (a cache seed that never
-      // carried draft info at all, e.g. preview()'s) -- the "data arrived" effect treats them
+      // draftEtag is the month-level token threaded back as If-Match on the next save (see
+      // draftEtagRef for when it is applied). `null` (the fetch failed) is distinct from `undefined`
+      // (a cache seed with no draft info, e.g. preview()'s); the "data arrived" effect treats them
       // differently.
       let draftByEmployee = {};
       let draftEtag = null;
@@ -969,31 +860,19 @@ export function PayrollPage({ user, showToast }) {
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
-  // `isLoading` (true only for the FIRST fetch of a given month, i.e. no cached data yet) drives
-  // every loading skeleton on this page -- unlike `isFetching`, it stays false during the silent
-  // 60s poll/focus refetch, so a background refresh never flashes the table/stat strip.
+  // `isLoading` (true only for the FIRST fetch of a month) drives every loading skeleton; unlike
+  // `isFetching` it stays false during the silent 60s poll/focus refetch, so a background refresh
+  // never flashes the table/stat strip.
   const loading = payrollQuery.isLoading;
 
-  // PR #426 (P0, adversarial review) introduced this showToastRef indirection because `showToast`
-  // (useToast(), App.jsx) used to be a PLAIN function re-created on every App render -- calling it
-  // did setToast(...), which re-rendered App, which handed this component a new `showToast`
-  // identity, which (sitting directly in this effect's deps, as it used to) re-fired the effect
-  // for as long as `payrollQuery.error` stayed non-null: an infinite `Maximum update depth
-  // exceeded` loop that every OTHER test here missed only because every other test passes a
-  // stable `vi.fn()` instead of an App-shaped one.
-  //
-  // The root cause is now fixed at the source -- useToast.js wraps showToast in useCallback([]),
-  // so it has a stable identity everywhere in production, and this ref is no longer load-bearing
-  // there. Kept anyway, deliberately, rather than deleted: this file's own regression test
-  // (PayrollPage.test.jsx, "does not call showToast more than once ... driven by an App-shaped
-  // (unstable) showToast") renders through a harness whose counting wrapper AROUND showToast is
-  // itself a fresh closure every render of that harness, independent of useToast.js's fix --
-  // removing this ref would put that still-locally-unstable wrapper directly in this effect's
-  // deps and fail that test, for a reason that has nothing to do with the bug this ref was
-  // written to fix. Still keyed on the error's MESSAGE (a primitive), not the Error object:
-  // `payrollQuery` polls every 60s (refetchInterval above), and a repeated failure hands back a
-  // new Error instance each attempt even when the text is identical, which would otherwise
-  // re-toast the same message every poll.
+  // showToast sits behind a ref so an unstable identity cannot re-fire this effect. useToast.js now
+  // wraps showToast in useCallback([]), so the ref is no longer load-bearing in production, but it
+  // is kept because the regression test ("does not call showToast more than once ... driven by an
+  // App-shaped (unstable) showToast") uses a harness whose counting wrapper is a fresh closure every
+  // render; putting that wrapper in this effect's deps would loop (`Maximum update depth exceeded`)
+  // while `payrollQuery.error` stays non-null. Keyed on the error's MESSAGE (a primitive), not the
+  // Error object: the 60s poll hands back a new Error instance per failed attempt, which would
+  // otherwise re-toast the same message every poll.
   const showToastRef = useRef(showToast);
   useEffect(() => {
     showToastRef.current = showToast;
@@ -1019,37 +898,23 @@ export function PayrollPage({ user, showToast }) {
     setSelectedEmployeeId((current) => current || nextPeriod?.lines?.[0]?.employeeId || null);
   }
 
-  // Applies the query's data to local state whenever it changes -- the INITIAL load for a month
-  // AND every subsequent background refetch (60s poll / window focus) alike.
+  // Applies the query's data to local state whenever it changes (initial load and every background
+  // refetch alike).
   //
-  // Governing constraint (issue #422 B1, read this twice): a background refetch must NEVER
-  // clobber what HR is currently typing. period/suggestionsByEmployee (server-derived, read-only)
-  // always update; adjustments (the FORM values) are re-applied only when the form is clean
-  // (`!draftDirtyRef.current`) -- while dirty, only `period` is updated (so e.g. the stat strip
-  // and other-employees' figures stay live), and the typed values are left exactly as HR left
-  // them. The next successful autosave, an explicit บันทึกร่าง, or a month change is what
-  // eventually reconciles them with the server -- never a silent background overwrite
-  // mid-keystroke.
+  // Governing constraint: a background refetch must NEVER clobber what HR is typing.
+  // period/suggestionsByEmployee (server-derived, read-only) always update; adjustments (the FORM
+  // values) are re-applied only when the form is clean (`!draftDirtyRef.current`). While dirty, only
+  // `period` updates, and typed values stay until the next successful autosave, an explicit
+  // บันทึกร่าง, or a month change reconciles them.
   useEffect(() => {
     if (!payrollQuery.data) return;
-    // Regression fix (issue #422 follow-up, caught by PayrollPage.test.jsx "allows clearing
-    // zero/default amounts and sends them as zeroes" while wiring the ETag work): preview()/
-    // process() both call applyPeriod(response.period) directly (applyUatDefaults=false -- see
-    // their own definitions) AND seed that identical response into the query cache via
-    // queryClient.setQueryData, purely so the next 60s background poll diffs against fresh data
-    // instead of the stale pre-action one. That cache write ALSO makes payrollQuery.data change,
-    // which re-runs this very effect a second time for the SAME result. Previously this went
-    // unnoticed only because react-query's structural-sharing bail-out (replaceEqualDeep)
-    // sometimes treated the reseeded shape as unchanged and skipped notifying subscribers at all
-    // -- an accident of cache-content equality, not a real guarantee: it silently stopped holding
-    // the moment either seed's shape or values changed for any unrelated reason (this task's
-    // `draftEtag` addition being one such reason). The effect must instead be correct regardless
-    // of whether react-query happens to re-fire: `applyUatDefaults` now travels WITH the data
-    // (defaulted to `true` below for an ordinary fetch -- the pre-existing first-load/poll
-    // convenience) and preview()/process() explicitly seed `applyUatDefaults: false`, so a
-    // redundant re-run derives `adjustments` with EXACTLY the same inputs the direct call already
-    // used and produces an identical result -- true idempotence, not merely a race that happened
-    // not to lose.
+    // preview()/process() call applyPeriod(response.period) directly (applyUatDefaults=false) AND
+    // seed that same response into the query cache via setQueryData so the next poll diffs against
+    // fresh data. That cache write also changes payrollQuery.data and re-runs this effect for the
+    // same result. This must be correct whether or not react-query re-fires (structural sharing
+    // sometimes skips it, by accident of cache equality), so `applyUatDefaults` travels WITH the
+    // data (true for an ordinary fetch) and preview()/process() seed `applyUatDefaults: false`; a
+    // redundant re-run then derives `adjustments` from exactly the same inputs.
     const {
       period: nextPeriod,
       suggestionsByEmployee: nextSuggestions,
@@ -1061,10 +926,9 @@ export function PayrollPage({ user, showToast }) {
     setSuggestionsByEmployee(nextSuggestions);
     setPendingSubmittedLeaveCount(nextPendingSubmittedLeaveCount);
     if (draftDirtyRef.current) {
-      // Optimistic concurrency (issue #422 follow-up): draftEtagRef is DELIBERATELY left alone
-      // here -- see its own comment above. Adopting a fresher token while HR is mid-edit would let
-      // the next save silently match a version that already contains someone ELSE's change,
-      // which is precisely the lost-update this whole feature exists to prevent.
+      // draftEtagRef is deliberately left alone here (see its comment): adopting a fresher token
+      // mid-edit would let the next save match a version that already contains someone else's change,
+      // the lost update this feature prevents.
       setPeriod(nextPeriod);
       return;
     }
@@ -1076,16 +940,11 @@ export function PayrollPage({ user, showToast }) {
     if (draftEtag !== undefined) {
       draftEtagRef.current = draftEtag;
     }
-    // Regression fix (Opus review, NEW-1): this clean path had adopted a fresh server token (just
-    // above) without ever clearing draftConflictRef -- the ONLY other place that ref goes back to
-    // false is a save success, reloadAfterDraftConflict, a month change, or a process() success.
-    // Reachable sequence: a 409/428 sets draftConflictRef=true on a CLEAN form (that branch never
-    // touches draftDirtyRef, so the form stays clean); the next ordinary poll/focus refetch then
-    // takes THIS branch, adopts a good token, and clears the banner (draftSaveStatus -> 'saved')
-    // -- but draftConflictRef stayed stuck true, so autosaveDraft's `|| draftConflictRef.current`
-    // guard returns early FOREVER after that, with no banner and no toast to explain why nothing
-    // is saving. Exactly the silent-autosave-failure class issue #422/PR #426 exists to eliminate.
-    // A fresh, adopted token means whatever conflict existed genuinely IS resolved here.
+    // A clean path that adopts a fresh server token must also clear draftConflictRef. Otherwise: a
+    // 409/428 sets draftConflictRef=true on a clean form; the next poll takes this branch, adopts a
+    // good token and clears the banner, but the ref stays true and autosaveDraft's
+    // `|| draftConflictRef.current` guard returns early forever with no banner or toast. A fresh,
+    // adopted token means the conflict is resolved.
     draftConflictRef.current = false;
     setDraftSaveStatus('saved');
   }, [payrollQuery.data]);
@@ -1101,27 +960,15 @@ export function PayrollPage({ user, showToast }) {
     };
   }
 
-  // A4 fix (issue #422): flush whatever HR had typed for the OUTGOING month before switching (or
-  // unmounting) -- this effect used to just call load() for the new month, which unconditionally
-  // reset draftDirtyRef.current with no attempt to save the previous month's in-progress edits
-  // first.
+  // Flush what HR typed for the OUTGOING month before switching (or unmounting); without it, the
+  // month change resets draftDirtyRef with no attempt to save the previous month's edits.
   //
-  // Adversarial-review correction: an earlier version of this fix introduced a separate
-  // `flushDraftFor(monthValue)` helper here, on the theory that `draftPayload()` above "reads the
-  // current month from closure" and would read the INCOMING month by the time this cleanup runs.
-  // That theory was wrong and the reviewer proved it by mutation-testing: swapping
-  // `draftPayload()` back in here left every test green. `month` is a plain primitive captured by
-  // this render's closure -- both `draftPayload` and this effect (including the cleanup it
-  // returns) are (re)created together on every render that this component function runs, so they
-  // close over the SAME `month` binding. When `month` changes, React tears down the PREVIOUS
-  // effect instance (the one created during the render where `month` was still the outgoing
-  // value) before setting up the new one, so the cleanup below runs with `draftPayload`'s closure
-  // still pointing at the outgoing month -- exactly like `month` itself does. This is unlike
-  // canSaveDraftRef/draftDirtyRef just below, which genuinely DO need to be refs: those track
-  // values that can change (via other state updates) WITHOUT this effect re-running, since its
-  // dependency array is `[month]` alone -- a plain closure over `canSaveDraft`/`draftDirty` here
-  // would go stale the moment either changed without a month change, which is exactly the
-  // scenario this effect exists to handle correctly.
+  // `draftPayload()` here is correct and needs no `flushDraftFor(month)` helper: `month` is a
+  // primitive captured by this render's closure, and `draftPayload` and this effect (cleanup
+  // included) are created together, so they close over the same `month`. React runs the previous
+  // effect instance's cleanup before the new one, so the cleanup still sees the outgoing month. This
+  // differs from canSaveDraftRef/draftDirtyRef just below, which must be refs because they change
+  // WITHOUT this effect re-running (its deps are `[month]` alone).
   useEffect(() => {
     // Bumped here, in this effect's own body -- see monthVisitTokenRef's own comment above for
     // why this exact spot (not a separate passive effect, not during render).
@@ -1137,25 +984,19 @@ export function PayrollPage({ user, showToast }) {
     setDraftSaveStatus('saved');
     setDraftConflictMessage(null);
     draftVersionRef.current = 0;
-    // Optimistic concurrency (issue #422 follow-up): a new month visit starts with no known token
-    // (the incoming month's own query resolution below supplies one); any conflict from the
-    // OUTGOING month is unrelated to the incoming one.
+    // A new month visit starts with no known token (the incoming month's query resolution supplies
+    // one); a conflict from the OUTGOING month is unrelated.
     draftEtagRef.current = null;
     draftConflictRef.current = false;
     return () => {
       if (draftDirtyRef.current && canSaveDraftRef.current) {
-        // Fire-and-forget: switching months (or navigating away) must not block on this, and
-        // there is nowhere left to show a toast by the time it resolves/rejects. Errors are
-        // swallowed deliberately -- the beforeunload guard below is the backstop for the case
-        // that actually matters (closing the tab with unsaved work); a failed background flush on
-        // ordinary month navigation just means the next autosave-on-blur picks it up again.
+        // Fire-and-forget: month switching must not block on this, and there is nowhere left to
+        // toast. Errors are swallowed; the beforeunload guard below is the backstop for closing the
+        // tab with unsaved work, and a failed flush just means the next blur autosave picks it up.
         //
-        // Optimistic concurrency (issue #422 follow-up): If-Match is now REQUIRED by the backend
-        // -- threading draftEtagRef.current here (the outgoing month's last known token, still
-        // intact at this point; the reset above belongs to the render that already committed)
-        // keeps this flush a normal conditional save instead of a guaranteed 428. If it has
-        // already gone stale (another session saved first), this 409s and is swallowed exactly
-        // like any other flush failure -- there is nothing left on screen to tell.
+        // If-Match is required by the backend; draftEtagRef.current (the outgoing month's last token)
+        // keeps this a normal conditional save instead of a guaranteed 428. If it is stale, this 409s
+        // and is swallowed like any other flush failure.
         void api.payroll.saveInputDraft(draftPayload(), { ifMatch: draftEtagRef.current }).catch(() => {});
       }
     };
@@ -1167,11 +1008,9 @@ export function PayrollPage({ user, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
 
-  // A4 fix (issue #422): warn before an actual tab close/reload with unsaved draft edits --
-  // `grep -rn "beforeunload" frontend/src` was zero hits before this. No async save is attempted
-  // here (browsers do not reliably wait for one); this is purely the "are you sure" backstop for
-  // the case the month-change/unmount flush above cannot cover (the whole page going away, not a
-  // React-driven cleanup).
+  // Warn before a real tab close/reload with unsaved draft edits. No async save is attempted
+  // (browsers do not reliably wait for one); this is the backstop for what the month-change/unmount
+  // flush above cannot cover.
   useEffect(() => {
     function handleBeforeUnload(event) {
       if (draftDirtyRef.current && canSaveDraftRef.current) {
@@ -1190,26 +1029,20 @@ export function PayrollPage({ user, showToast }) {
     };
   }
 
-  // Phase A command-surface cleanup: Preview is the only read-only recompute command. It keeps the
-  // old Refresh semantics too: commission, overtime, leave refund, director remuneration, tax/SSO
-  // are recomputed from current upstream data and shown WITHOUT committing. load()/current can still
-  // return a saved processed snapshot; this command is the safe "show me the latest run" path.
+  // Preview is the only read-only recompute command: commission, overtime, leave refund, director
+  // remuneration, tax/SSO are recomputed from current upstream data and shown WITHOUT committing.
+  // load()/current can return a saved processed snapshot; this is the safe "show me the latest run".
   async function preview() {
     setSaving(true);
     try {
       const response = await api.payroll.preview(payload());
       applyPeriod(response.period);
-      // B1 fix (issue #422): seed the result straight into the query cache so the NEXT background
-      // poll (60s) diffs against this fresh value instead of the stale pre-preview one -- without
-      // this, the UI would flash back to the old figures for up to a minute before the poll caught
-      // up. suggestionsByEmployee/draftByEmployee are reset to {} to match applyPeriod's own
-      // defaults above (preview does not re-consult either). `applyUatDefaults: false` matches
-      // the DIRECT applyPeriod(response.period) call two lines up (which uses its own default of
-      // `false`) -- see the "data arrived" effect's own comment for why this seed must mirror the
-      // direct call's exact inputs, not just its output, for a redundant re-run to be genuinely
-      // idempotent rather than a race that happened not to lose. `draftEtag: draftEtagRef.current`
-      // is likewise the honest current value -- preview() never touches server-side drafts, so the
-      // token genuinely has not changed.
+      // Seed the result into the query cache so the next background poll diffs against this value
+      // instead of the stale pre-preview one. suggestionsByEmployee/draftByEmployee are {} to match
+      // applyPeriod's defaults. `applyUatDefaults: false` mirrors the direct applyPeriod(response.period)
+      // call so a redundant effect re-run is idempotent (see the "data arrived" effect).
+      // `draftEtag: draftEtagRef.current` is the honest current value: preview() never touches
+      // server-side drafts.
       queryClient.setQueryData(queryKeys.payrollCurrent(month), {
         period: response.period,
         suggestionsByEmployee: {},
@@ -1225,24 +1058,20 @@ export function PayrollPage({ user, showToast }) {
     }
   }
 
-  // Payroll input draft (2026-07-30; Phase A autosave UI): persist exactly what HR has typed so a
-  // browser reload does not lose it. Unfiltered by hasPayrollInput -- unlike payload() above, a
-  // draft must also capture an employee HR has started but not finished (e.g. only a garnishment type
-  // picked with no amount yet), not just what already qualifies for submission.
+  // Persist exactly what HR typed so a reload does not lose it. Unfiltered by hasPayrollInput, unlike
+  // payload() above: a draft must also capture an employee HR started but did not finish (e.g. only a
+  // garnishment type picked, no amount yet).
   async function saveDraft({ quiet = false } = {}) {
     if (!canSaveDraft) return;
-    // P2 fix (issue #422, adversarial review, round 2): captured so the resolution below can
-    // detect HR having since moved on from THIS EXACT visit to a month while this PUT was in
-    // flight -- see monthVisitTokenRef's own comment for why this is a token, not `month` itself
-    // (a value comparison alone is fooled by a round trip back to the same month).
+    // Captured so the resolution below can detect HR having moved on from THIS EXACT visit while the
+    // PUT was in flight; a token, not `month`, because a value comparison is fooled by a round trip
+    // back to the same month (see monthVisitTokenRef).
     const visitTokenAtStart = monthVisitTokenRef.current;
     const draftPayloadValue = draftPayload();
-    // A5 belt-and-braces (issue #422): MoneyInput and clampNonNegative already stop a negative
-    // from being TYPED into any field on this page, but refuse to SEND one anyway -- a single
-    // negative used to 400 the ENTIRE draft PUT with no visible error (issue #422 §A2/A5), taking
-    // every OTHER employee's legitimate edits down with it. Naming exactly which employee/field is
-    // wrong and refusing client-side is safer than silently clamping here: clamping would change a
-    // number HR actually typed without them noticing.
+    // MoneyInput and clampNonNegative already stop a negative from being typed, but refuse to SEND
+    // one anyway: a single negative 400s the ENTIRE draft PUT with no visible error, taking every
+    // other employee's edits with it. Naming the employee/field and refusing is safer than clamping,
+    // which would change a number HR typed without them noticing.
     const negativeField = findNegativeAdjustmentField(draftPayloadValue.inputs);
     if (negativeField) {
       setDraftSaveStatus('error');
@@ -1253,29 +1082,21 @@ export function PayrollPage({ user, showToast }) {
       return;
     }
     const versionAtStart = draftVersionRef.current;
-    // Optimistic concurrency (issue #422 follow-up): the token this exact attempt is conditioned
-    // on, captured now rather than read again after the await -- see draftEtagRef's own comment
-    // for why nothing else may refresh it while dirty, but a SUBSEQUENT saveDraft() call
-    // overlapping this one (e.g. the auto-retry chain in `finally` below, or the explicit button
-    // racing a blur) reads draftEtagRef.current fresh at ITS OWN call time, same as draftPayload().
+    // The token this exact attempt is conditioned on, captured now rather than after the await. A
+    // later overlapping saveDraft() (auto-retry in `finally`, or the button racing a blur) reads
+    // draftEtagRef.current fresh at its own call time.
     const ifMatchAtStart = draftEtagRef.current;
     setDraftSaving(true);
     setDraftSaveStatus('saving');
     try {
       const response = await api.payroll.saveInputDraft(draftPayloadValue, { ifMatch: ifMatchAtStart });
-      // P2 fix (issue #422, adversarial review; round 2 corrected the guard from a month-VALUE
-      // comparison to a visit-TOKEN comparison): if HR has since moved on from this exact visit
-      // (a genuine month change, OR a round trip back to the same month -- July -> June -> July
-      // bumps the token twice, so the second July visit's token differs from the first's even
-      // though the month VALUE is identical again), this resolution belongs to a visit that is no
-      // longer on screen. The badge/toast must not paint a save-state signal for the WRONG visit
-      // (e.g. the first July visit's late success/failure flipping a freshly reloaded second July
-      // visit's clean badge to "รอบันทึกอัตโนมัติ"/"บันทึกอัตโนมัติไม่สำเร็จ" for work that visit
-      // never touched). The A4 month-change flush already accounts for the outgoing visit's own
-      // final state when HR left it; this stale resolution has nothing further to contribute to
-      // what's on screen now, so it is a no-op here. Deliberately also skips the etag update below
-      // -- draftEtagRef now belongs to whatever month HR is actually looking at, and this response
-      // is for the one they left.
+      // If HR has moved on from this exact visit (a month change, or a round trip July -> June ->
+      // July, which bumps the token twice), this resolution belongs to a visit no longer on screen.
+      // The badge/toast must not paint a save state for the wrong visit (e.g. a late success flipping
+      // a freshly reloaded July's clean badge to "รอบันทึกอัตโนมัติ"). The month-change flush already
+      // covers the outgoing visit's final state, so this is a no-op. It also skips the etag update:
+      // draftEtagRef now belongs to the month HR is looking at, and this response is for the one they
+      // left.
       if (monthVisitTokenRef.current !== visitTokenAtStart) return;
       // The server just wrote successfully -- its returned ETag is unconditionally the new truth
       // for this month, regardless of whether draftVersionRef drifted further during the await
@@ -1299,22 +1120,17 @@ export function PayrollPage({ user, showToast }) {
     } catch (error) {
       // Same cross-visit guard as the success path above.
       if (monthVisitTokenRef.current !== visitTokenAtStart) return;
-      // Optimistic concurrency (issue #422 follow-up): a 409 means another user (or another tab)
-      // saved this month's draft first. Per the owner's explicit requirement, HR's typed values
-      // must NOT be discarded and the form must stay dirty -- unlike every other failure branch
-      // here, this one deliberately does not touch draftDirtyRef/setDraftDirty, and it does NOT
-      // refresh draftEtagRef (the stale token stays stale on purpose, so a blind retry keeps
-      // refusing instead of guessing). draftSaveStatus === 'conflict' is a new terminal state,
-      // distinct from 'error', with its own persistent banner (below, near the badge) -- the
-      // existing badge/toast machinery was built for a transient failure with an implicit retry,
-      // not "someone else's data is now sitting on the server and yours would clobber it."
+      // A 409 means another user (or tab) saved this month's draft first. HR's typed values must NOT
+      // be discarded and the form must stay dirty, so unlike every other failure branch this one does
+      // not touch draftDirtyRef/setDraftDirty and does NOT refresh draftEtagRef (the stale token stays
+      // stale so a blind retry keeps refusing). 'conflict' is a terminal state distinct from 'error',
+      // with its own persistent banner: the badge/toast machinery is built for a transient failure
+      // with an implicit retry, not "someone else's data is on the server and yours would clobber it".
       //
-      // Opus review finding F8: 428 (missing If-Match -- can happen if draftEtagRef never got a
-      // real token, e.g. the initial GET itself failed) gets the SAME treatment as 409, not just
-      // the generic error branch below. Without this, a 428 leaves draftConflictRef untouched, so
-      // the `finally` retry chain AND every subsequent blur's autosaveDraft keep re-firing the
-      // identical headerless PUT -- a request storm of doomed retries that can never succeed
-      // without HR reloading, since draftEtagRef.current stays null either way.
+      // 428 (missing If-Match, e.g. the initial GET failed so draftEtagRef never got a token) gets the
+      // same treatment. Otherwise draftConflictRef stays untouched and the `finally` retry chain and
+      // every blur's autosaveDraft keep re-firing the identical headerless PUT, a request storm that
+      // cannot succeed without a reload.
       if (error?.status === 409 || error?.status === 428) {
         draftConflictRef.current = true;
         setDraftSaveStatus('conflict');
@@ -1326,19 +1142,16 @@ export function PayrollPage({ user, showToast }) {
         return;
       }
       setDraftSaveStatus('error');
-      // A3 fix (issue #422): a failed autosave used to be swallowed entirely (`if (!quiet)` also
-      // guarded the ERROR toast, not just the success one) -- a 400/403/409 surfaced only as a
-      // small badge in the page header, easy to miss and, before A1, not even rendered at all on
-      // a PROCESSED/VOID period. Always visible now, quiet autosave or not.
+      // A failed autosave always toasts (quiet autosave or not); a 400/403/409 shown only as a small
+      // header badge is easy to miss.
       showToast('error', error.message || 'บันทึกร่างไม่สำเร็จ');
     } finally {
       setDraftSaving(false);
       if (
         monthVisitTokenRef.current === visitTokenAtStart
         && draftDirtyRef.current && draftVersionRef.current !== versionAtStart && canSaveDraft
-        // Optimistic concurrency (issue #422 follow-up): never auto-chain a retry against a token
-        // already known to be stale -- without this, every further keystroke would fire another
-        // doomed PUT (and another 409 toast) until HR explicitly reloads.
+        // Never auto-chain a retry against a token already known to be stale; every further
+        // keystroke would fire another doomed PUT (and 409 toast) until HR reloads.
         && !draftConflictRef.current
       ) {
         void saveDraft({ quiet: true });
@@ -1355,12 +1168,10 @@ export function PayrollPage({ user, showToast }) {
     saveDraft({ quiet: true });
   }
 
-  // Optimistic concurrency (issue #422 follow-up): the conflict banner's explicit resolution --
-  // HR chose to look at the other user's version rather than keep fighting a stale token. This is
-  // the ONE place a background/automatic action is allowed to discard HR's own unsaved typing,
-  // because it is not automatic: HR clicked it, after being told exactly why their save was
-  // refused. Clearing draftDirtyRef BEFORE refetching lets the ordinary "data arrived" effect
-  // apply the fresh server state the normal way, instead of duplicating applyPeriod's logic here.
+  // The conflict banner's explicit resolution: HR chose to look at the other user's version. This is
+  // the ONE place HR's unsaved typing may be discarded, because HR clicked it after being told why
+  // their save was refused. Clearing draftDirtyRef BEFORE refetching lets the ordinary "data arrived"
+  // effect apply the fresh server state instead of duplicating applyPeriod's logic here.
   async function reloadAfterDraftConflict() {
     draftDirtyRef.current = false;
     setDraftDirty(false);
@@ -1370,29 +1181,19 @@ export function PayrollPage({ user, showToast }) {
     await payrollQuery.refetch();
   }
 
-  // Issue #422 owner decision (one button, not two): the existing preview command doubles as the
-  // draft-save trigger for HR instead of a second button -- PUT /input-draft, THEN POST /preview.
-  // CEO cannot write a draft (PUT /input-draft is hasRole('HR') only), so the CEO branch (see the
-  // button JSX below) calls `preview` directly instead of this, keeping the original คำนวณตัวอย่าง
+  // One button, not two: for HR the preview command doubles as the draft-save trigger (PUT
+  // /input-draft, THEN POST /preview). CEO cannot write a draft (hasRole('HR') only), so the CEO
+  // branch (see the button JSX below) calls `preview` directly and keeps the original คำนวณตัวอย่าง
   // label so it never promises a save CEO cannot perform.
   //
-  // saveDraft() above never throws -- it catches its own errors and always toasts them (A3) -- so
-  // awaiting it here and unconditionally continuing to `preview()` afterward satisfies the owner's
-  // third condition verbatim: "if the draft PUT fails, still surface the error and still run the
-  // preview (read-only, useful on its own) -- but the toast must say the draft did not save."
-  // saveDraft's own error toast already says exactly that; nothing extra is needed here.
+  // saveDraft() never throws (it catches and toasts its own errors), so a failed draft PUT still
+  // surfaces its error and the preview still runs.
   //
-  // Opus review finding F4: that "unconditionally" was too unconditional. preview() calls
-  // applyPeriod(response.period) DIRECTLY, bypassing the dirty-guard the "data arrived" effect
-  // otherwise respects, and its own payload() filters inputs by hasPayrollInput -- unlike
-  // draftPayload(), which submits every touched employee unfiltered specifically so a
-  // started-but-unfinished row (e.g. a garnishment type picked with no amount yet) is not lost.
-  // Running preview() after a 409/428 therefore painted a period built from a payload that had
-  // ALREADY silently dropped that unfinished row, wiping it from the form even though the promise
-  // in this function's own comment ("HR's typed values must NOT be discarded") was upheld inside
-  // saveDraft() itself. Skip preview() outright when the draft save hit a conflict -- the banner
-  // already tells HR what happened and what to do; there is nothing useful preview() can safely
-  // show without repeating the same clobber.
+  // Exception: skip preview() when the draft save hit a conflict. preview() calls
+  // applyPeriod(response.period) directly, bypassing the dirty-guard, and its payload() filters
+  // inputs by hasPayrollInput (unlike draftPayload()), so it would paint a period built from a
+  // payload that already dropped an unfinished row, wiping it from the form. The banner already
+  // tells HR what to do.
   async function saveDraftAndPreview() {
     setSaving(true);
     await saveDraft({ quiet: false });
@@ -1418,16 +1219,12 @@ export function PayrollPage({ user, showToast }) {
     try {
       const response = await api.payroll.process(payload());
       applyPeriod(response.period);
-      // Optimistic concurrency (issue #422 follow-up): process() clears the server's draft rows
-      // out from under whatever token draftEtagRef was holding, so the token itself is now stale
-      // too, not just the local adjustments. Re-fetch it explicitly rather than assuming the
-      // well-defined empty-set token's literal value here -- that value is PayrollDraftETag's to
-      // define, not this page's to duplicate. Best-effort: if this fails, draftEtagRef falls back
-      // to null, and the next save attempt gets a clean 428 asking HR to reload, rather than a
-      // wrong/stale token risking a silent bad match. Fetched BEFORE the cache seed below so the
-      // seed can carry the correct value in one shot -- see preview()'s own comment for why the
-      // seed's shape must match the queryFn's natural shape at all (structural-sharing parity),
-      // not just why the token itself matters.
+      // process() clears the server's draft rows, so the held token is stale too. Re-fetch it rather
+      // than assuming the empty-set token's literal value (PayrollDraftETag's to define). Best-effort:
+      // on failure draftEtagRef falls back to null and the next save gets a clean 428 asking HR to
+      // reload, rather than risking a wrong token matching silently. Fetched BEFORE the cache seed
+      // below so the seed carries the right value in one shot (the seed's shape must match the
+      // queryFn's for structural-sharing parity).
       let freshDraftEtag = null;
       try {
         const freshDraft = await api.payroll.getInputDraft({ payrollMonth: month });
@@ -1436,12 +1233,9 @@ export function PayrollPage({ user, showToast }) {
         freshDraftEtag = null;
       }
       draftEtagRef.current = freshDraftEtag;
-      // B1 fix (issue #422): same cache-seed as preview() above, same reasoning -- keeps the next
-      // background poll from flashing back to the pre-process figures for up to a minute.
-      // `applyUatDefaults: false` matches applyPeriod(response.period)'s own default two lines up
-      // -- see preview()'s identical seed for why this must mirror the direct call's inputs, not
-      // just rely on `status` already being 'PROCESSED' (true today, but this keeps the seed
-      // correct on its own terms rather than by coincidence of a status this code doesn't check).
+      // Same cache seed as preview(), so the next poll does not flash the pre-process figures.
+      // `applyUatDefaults: false` mirrors the direct applyPeriod call (see preview()) rather than
+      // relying on `status` already being 'PROCESSED'.
       queryClient.setQueryData(queryKeys.payrollCurrent(month), {
         period: response.period,
         suggestionsByEmployee: {},
@@ -1449,8 +1243,7 @@ export function PayrollPage({ user, showToast }) {
         draftEtag: freshDraftEtag,
         applyUatDefaults: false,
       });
-      // The backend clears hr.payroll_input_draft for this month once processed (see
-      // PayrollService#process) -- there is nothing left to save a draft over now.
+      // The backend clears hr.payroll_input_draft for this month once processed (PayrollService#process).
       draftDirtyRef.current = false;
       setDraftDirty(false);
       setDraftSaveStatus('saved');
@@ -1468,11 +1261,9 @@ export function PayrollPage({ user, showToast }) {
   async function generateExportFile(kindValue) {
     const kind = EXPORT_KINDS.find((item) => item.value === kindValue) || EXPORT_KINDS[0];
     const isDetailKind = kind.value === 'payroll-detail';
-    // KBank/PND1/SSO genuinely need a processed, paid period -- unchanged. payroll-detail must
-    // also work for a month that has never been processed (owner requirement, 2026-07-30: "July
-    // 2026 is live and still unprocessed... HR's whole reason to want this file is to review the
-    // month BEFORE committing it"), so it only requires SOME period to be loaded (lineCount > 0),
-    // not a persisted id.
+    // KBank/PND1/SSO need a processed, paid period. payroll-detail must also work for a month that
+    // was never processed (HR wants to review the month BEFORE committing it), so it only requires
+    // SOME period to be loaded (lineCount > 0), not a persisted id.
     if (isDetailKind ? !(period?.lineCount > 0) : !period?.id) return;
     setSaving(true);
     try {
@@ -1572,8 +1363,7 @@ export function PayrollPage({ user, showToast }) {
     };
     adjustmentsRef.current = nextAdjustments;
     setAdjustments(nextAdjustments);
-    // Payroll input draft (2026-07-30): any typed change is not yet saved anywhere durable until
-    // the blur autosave succeeds (or Process, which persists it for real).
+    // A typed change is not saved anywhere durable until the blur autosave succeeds (or Process).
     draftDirtyRef.current = true;
     setDraftDirty(true);
     setDraftSaveStatus('dirty');
@@ -1622,9 +1412,8 @@ export function PayrollPage({ user, showToast }) {
       disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : null),
     }] : []),
   ];
-  // Optimistic concurrency (issue #422 follow-up): 'conflict' takes priority over every other
-  // status -- it is the one state where "keep waiting/retrying" is actively wrong (the token is
-  // known-stale until HR explicitly reloads via the banner below).
+  // 'conflict' takes priority over every other status: it is the one state where "keep waiting or
+  // retrying" is wrong (the token is stale until HR reloads via the banner below).
   const draftStatusLabel = draftSaveStatus === 'conflict'
     ? 'มีการบันทึกที่ขัดแย้งกัน'
     : draftSaveStatus === 'error'
@@ -1649,11 +1438,9 @@ export function PayrollPage({ user, showToast }) {
         subtitle="Payroll Processing"
         actions={(
           <div className="flex flex-wrap gap-2.5 items-center mobile:w-full mobile:items-stretch mobile:gap-2">
-            {/* Read-only oversight indicator (issue #390): the backend deliberately grants CEO a
-                read of everything on this page (PayrollController: every GET plus the
-                non-persisting preview endpoints are hasAnyRole('HR','CEO')) while every write
-                stays HR-only -- this badge is the one visible cue that the missing controls below
-                are intentional, not a bug. */}
+            {/* Read-only oversight indicator: the backend grants CEO a read of everything on this page
+                (every GET plus the non-persisting preview endpoints) while every write stays HR-only;
+                this badge is the cue that the missing controls below are intentional. */}
             {!canManage && (
               <StatusBadge tone="info">มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว</StatusBadge>
             )}
@@ -1690,11 +1477,10 @@ export function PayrollPage({ user, showToast }) {
         )}
       />
 
-      {/* Leave requires approval (2026-08-05): advisory only, never a gate -- rendered before every
-          other banner on this page so HR sees it before reaching for Process. Leave that is still
-          SUBMITTED (not yet approved) does not feed findUnpaidLeaveDaysByEmployeeForMonth, so it
-          contributes NOTHING to this run's unpaid-day deduction until a human approves it -- this is
-          the one place that gap is surfaced before payroll runs, not after a payslip looks wrong. */}
+      {/* Advisory only, never a gate; rendered before every other banner so HR sees it before
+          Process. Leave still SUBMITTED does not feed findUnpaidLeaveDaysByEmployeeForMonth, so it
+          contributes nothing to this run's unpaid-day deduction until approved; this is where that
+          gap is surfaced before payroll runs. */}
       {pendingSubmittedLeaveCount > 0 && (
         <div
           role="status"
@@ -1708,12 +1494,9 @@ export function PayrollPage({ user, showToast }) {
         </div>
       )}
 
-      {/* Optimistic concurrency (issue #422 follow-up): the persistent conflict message the plan
-          requires -- unlike the header badge above (a small, easy-to-miss status word) and the
-          global toast (auto-dismisses after 3.2s, see useToast.js), this banner stays on screen
-          until HR explicitly acts, because "another user saved this month's draft" is exactly the
-          kind of thing a transient notification is wrong for: HR's own typed values are still
-          sitting in the form, unsaved, and must not be quietly abandoned. */}
+      {/* Persistent conflict message: unlike the header badge (easy to miss) and the global toast
+          (auto-dismisses after 3.2s), this stays until HR acts, because HR's typed values are still
+          sitting unsaved in the form and must not be quietly abandoned. */}
       {canSaveDraft && draftSaveStatus === 'conflict' && (
         <div
           role="alert"
@@ -1730,13 +1513,10 @@ export function PayrollPage({ user, showToast }) {
         </div>
       )}
 
-      {/* Issue #394 fix: a bare "-" in all four tiles read as broken UI, not "no
-          data yet". `loading` now drives CompactStatRow's own skeleton state
-          (already built for exactly this, just never wired up here) for the
-          normal fetch-in-flight window; the true empty case — no period at all
-          once loading has settled (e.g. the initial load failed) — gets a real
-          empty state explaining what would populate the strip, instead of four
-          silent dashes. */}
+      {/* A bare "-" in all four tiles read as broken UI, not "no data yet". `loading` drives
+          CompactStatRow's skeleton for the fetch-in-flight window; the true empty case (no period
+          once loading has settled, e.g. the initial load failed) gets an empty state explaining what
+          would populate the strip. */}
       {!loading && !period ? (
         <EmptyState
           icon="badgeDollar"
@@ -1750,18 +1530,14 @@ export function PayrollPage({ user, showToast }) {
         />
       )}
 
-      {/* Phase A command surface: routine commands are Preview + one labelled document menu. Process
-          stays in its own Tailwind-styled region so the irreversible action remains visually apart
-          without keeping dead `.payroll-actions-*` legacy rules in styles.css. */}
+      {/* Routine commands are Preview + one labelled document menu. Process stays in its own region so
+          the irreversible action is visually apart. */}
       <FilterBar className="flex-col items-stretch gap-[14px]">
         <div className="flex flex-wrap items-center gap-3">
-          {/* Review — safe, read-only recompute. Issue #422 owner decision (one button, not two):
-              for HR this doubles as the draft-save trigger (บันทึกร่าง; saveDraftAndPreview PUTs
-              the draft, THEN previews) instead of a second button. CEO cannot write a draft
-              (PUT /input-draft is hasRole('HR') only), so this branches on canManage rather than
-              canSaveDraft -- the label must never promise a save CEO cannot perform, even on a
-              render where canSaveDraft happens to be false for HR too (e.g. period not loaded
-              yet). */}
+          {/* Review: safe, read-only recompute. For HR this doubles as the draft-save trigger
+              (saveDraftAndPreview PUTs the draft, THEN previews). CEO cannot write a draft, so this
+              branches on canManage rather than canSaveDraft: the label must never promise a save CEO
+              cannot perform, even where canSaveDraft is false for HR too (e.g. period not loaded). */}
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
@@ -1799,19 +1575,16 @@ export function PayrollPage({ user, showToast }) {
             />
           </div>
 
-          {/* Run — the irreversible action. Kept in its own region with the period state and pushed
-              after routine preview/export/send work. Phone stays editable; the extra mobile-only
-              typed phrase lives in the confirm dialog instead of disabling this button outright.
-              POST /process is hasRole('HR') only — a CEO session never sees this button at all
-              (not disabled: no state would ever enable it for that role), only the same period
-              status in a neutral, non-actionable readout.
+          {/* Run: the irreversible action, in its own region after routine preview/export/send work.
+              Phone stays editable; the mobile-only typed phrase lives in the confirm dialog instead
+              of disabling this button. POST /process is hasRole('HR') only, so a CEO session never
+              sees the button (not disabled: nothing would ever enable it), only the period status
+              in a neutral readout.
 
-              Issue #394: within the HR branch, the region's border only turns danger-red once the
-              action is actually armed (a real period with lines to process, ready to fire an
-              irreversible commit) — an unmet precondition (emptyPeriod, see processBlockedReason)
-              is a disabled control waiting on data, not a failure, so it reads neutral instead.
-              Red on a screen that also surfaces genuine payroll failures must stay reserved for
-              genuine failures, or HR learns to ignore it. */}
+              Within the HR branch the border turns danger-red only once the action is armed (a real
+              period with lines to process). An unmet precondition (emptyPeriod, see
+              processBlockedReason) is a disabled control waiting on data, not a failure, so it reads
+              neutral; red must stay reserved for genuine failures or HR learns to ignore it. */}
           {canManage ? (
             <section
               className={cn(
@@ -1841,13 +1614,10 @@ export function PayrollPage({ user, showToast }) {
                   <Icon name="check" size={15} />
                   ประมวลผลเงินเดือน
                 </Button>
-                {/* Informational state, not an error: this explains why the button is
-                    unavailable right now, so it reads in muted body colour rather than
-                    danger red. Utilities at the call site, not a styles.css rule —
-                    styles.css sits in @layer legacy and loses to any text utility a
-                    future caller adds here. An `info` icon carries the same "this is
-                    guidance, not an alarm" signal non-visually too (WCAG 1.4.1 — the
-                    disabled state must not rely on the border colour alone). */}
+                {/* Informational, not an error: explains why the button is unavailable, so it uses
+                    muted body colour. Utilities at the call site, not a styles.css rule (styles.css
+                    is in @layer legacy and loses to any text utility). The `info` icon carries the
+                    "guidance, not an alarm" signal non-visually too (WCAG 1.4.1). */}
                 {processBlockedReason && (
                   <span
                     id="payroll-process-block-reason"
@@ -1872,33 +1642,24 @@ export function PayrollPage({ user, showToast }) {
         </div>
       </FilterBar>
 
-      {/* P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix screen. Without
-          this, HR had no way to satisfy PayrollCalculator#calculateClassified's classification gate
-          for any component beyond the V100 backfill defaults — a screen HR can actually use, per spec
-          sections 1 and 10. Collapsed by default so it does not compete with the main payroll
-          workflow above; one employee per sub-section, per the owner's "never a shrunken
-          fifteen-column table" mobile decision (section 9c). */}
+      {/* The withholding-tax classification matrix. HR needs it to satisfy
+          PayrollCalculator#calculateClassified's classification gate for any component beyond the
+          backfill defaults. Collapsed by default so it does not compete with the main workflow;
+          one employee per sub-section ("never a shrunken fifteen-column table" on mobile). */}
       <TaxTreatmentMatrixSection payrollMonth={month} showToast={showToast} canManage={canManage} />
 
-      {/* B1/B4 fix (Opus review, 2026-07-31): layout moved to Tailwind utilities at the call site
-          (CLAUDE.md Tailwind-first) instead of a `.payroll-workspace` styles.css rule -- two states,
-          not three: below the `payroll-wide:` custom variant (the panel's overlay floor, see the
-          isDesktopPanel comment above) the table is the only in-flow column; at >=1366px a second
-          `minmax(310px, 0.3fr)` column holds the sticky side panel. `minmax(0, ...)` on both tracks
-          deliberately, never a bare `1fr`/`0.35fr` -- a bare fr track floors at min-content and was
-          the root cause of the panel-pushed-off-canvas regression this fix replaces.
-
-          Phase A (2026-07-31): shrinking the panel floor to 310px lets 1366px keep the persistent
-          side panel while still paying for the table's 714px floor and the 16px gap. 1280px remains
-          overlay, where the content width still cannot afford both. */}
+      {/* Layout at the call site (Tailwind-first). Two states: below the `payroll-wide:` custom
+          variant (the panel's overlay floor, see isDesktopPanel) the table is the only in-flow
+          column; at >=1366px a second `minmax(310px, 0.3fr)` column holds the sticky side panel.
+          `minmax(0, ...)` on both tracks, never a bare `1fr`: a bare fr track floors at min-content
+          and pushed the panel off-canvas. The 310px floor lets 1366px keep the persistent panel
+          while paying for the table's 714px floor and the 16px gap; 1280px stays overlay. */}
       <section className="grid grid-cols-[minmax(0,1fr)] payroll-wide:grid-cols-[minmax(0,1fr)_minmax(310px,0.3fr)] gap-4 items-start">
-        {/* B2 fix (Opus review, 2026-07-31): while the detail panel is a genuine overlay dialog
-            (<1366px, open), the rest of the page behind the dim backdrop must be unreachable, not
-            just visually dimmed -- otherwise Tab still walks a screen-reader/keyboard user out of
-            the panel into content that is only hidden by a z-index. `inert` (not just aria-hidden)
-            removes this region from both the accessibility tree and the tab order in one attribute.
-            `'' : undefined`, not a boolean -- React 18 only renders the bare `inert` attribute for a
-            truthy STRING value; `inert={true}` is silently dropped (verified in this repo's jsdom). */}
+        {/* While the detail panel is an open overlay dialog (<1366px), the page behind the backdrop
+            must be unreachable, not just dimmed, or Tab walks a keyboard/screen-reader user into
+            content hidden only by z-index. `inert` removes the region from the accessibility tree
+            and tab order. `'' : undefined`, not a boolean: React 18 only renders the bare `inert`
+            attribute for a truthy STRING; `inert={true}` is dropped. */}
         <div
           className="payroll-table-region"
           style={{ '--payroll-table-columns': payrollGridColumns }}
@@ -1910,18 +1671,14 @@ export function PayrollPage({ user, showToast }) {
             rows={periodLines}
             getRowKey={(line) => line.employeeId}
             gridClassName="payroll-table"
-            // Restores what `.payroll-table-region .table-panel` used to do.
-            // A full payroll is 200+ rows; without the cap the table grows to
-            // the page instead of scrolling inside its own region.
+            // A full payroll is 200+ rows; without the cap the table grows to the page instead of
+            // scrolling inside its own region.
             panelClassName="max-h-[min(68vh,760px)] overflow-auto"
             pageSize={Math.max(periodLines.length, 25)}
             searchable
             searchPlaceholder="ค้นหาพนักงาน"
-            // B4 fix (Opus review, 2026-07-31): `cursor-pointer` is a Tailwind utility at the call
-            // site (CLAUDE.md Tailwind-first) instead of a `.payroll-row { cursor: pointer }`
-            // styles.css rule -- `.payroll-row.active`'s background/shadow stay in styles.css (theme
-            // tokens, see the comment on that rule) since this is the one line that was genuinely a
-            // one-property override.
+            // `cursor-pointer` at the call site; `.payroll-row.active`'s background/shadow stay in
+            // styles.css (theme tokens).
             rowClassName={(line) => cn(
               // `.payroll-row.active` uses box-shadow for the selection inset, so focus has to
               // re-apply the shared ring token from the Tailwind utilities layer where it wins.
@@ -1946,11 +1703,9 @@ export function PayrollPage({ user, showToast }) {
           />
         </div>
 
-        {/* B2 fix (Opus review, 2026-07-31): a <button aria-hidden="true"> was the previous backdrop
-            -- an interactive element deliberately hidden from the accessibility tree is exactly the
-            anti-pattern Modal.jsx's own backdrop avoids. `role="presentation"` on a plain <div> (the
-            established pattern, see Modal.jsx) stops this element being announced as anything at
-            all, while a click still closes the panel via onClick same as before. */}
+        {/* Backdrop is a plain `role="presentation"` <div> (as in Modal.jsx), not a
+            <button aria-hidden="true">: an interactive element hidden from the accessibility tree is
+            the anti-pattern Modal's backdrop avoids. A click still closes the panel. */}
         <div
           className={cn('payroll-detail-backdrop', detailOpen && 'is-open')}
           role="presentation"
@@ -1962,13 +1717,10 @@ export function PayrollPage({ user, showToast }) {
           // tabIndex={-1}: lets the panel itself take focus programmatically (useDialogFocus falls
           // back to it when the panel has no focusable children) without ever joining the Tab order.
           tabIndex={-1}
-          // Defect 2 fix (Opus review, 2026-07-31): `@container` (Tailwind v4 has this built in, no
-          // plugin) turns the panel itself into a container-query context so the two money-field
-          // grids below can respond to the PANEL's own available width instead of the viewport's --
-          // the panel is a sticky side column at >=1366px and a fixed-width overlay below that, so
-          // its width is not a function of viewport width alone (a `sm:`/`md:` viewport breakpoint
-          // would be lying about what's actually being measured). See the `@sm:grid-cols-2` classes
-          // on payroll-detail-grid/payroll-special-grid below.
+          // `@container` (built into Tailwind v4) makes the panel a container-query context so the two
+          // money-field grids below respond to the PANEL's width, not the viewport's: it is a sticky
+          // side column at >=1366px and a fixed-width overlay below, so its width is not a function of
+          // viewport width alone. See the `@sm:grid-cols-2` classes below.
           className={cn(
             PANEL_CLASS,
             'payroll-detail-panel',
@@ -1977,10 +1729,9 @@ export function PayrollPage({ user, showToast }) {
             detailOpen && 'is-open',
           )}
           onBlurCapture={handleAdjustmentBlur}
-          // B2 fix (Opus review, 2026-07-31): dialog semantics apply ONLY in overlay mode (<1366px) --
-          // at >=1366px this is a persistent side panel beside the table, not a dialog stealing focus,
-          // so role/aria-modal/aria-labelledby must not be present there (an always-on role="dialog"
-          // on a panel that never traps focus or blocks the rest of the page would be actively wrong).
+          // Dialog semantics apply ONLY in overlay mode (<1366px). At >=1366px this is a persistent
+          // side panel that never traps focus or blocks the page, so role/aria-modal/aria-labelledby
+          // must be absent there.
           role={isOverlayPanel && detailOpen ? 'dialog' : undefined}
           aria-modal={isOverlayPanel && detailOpen ? 'true' : undefined}
           aria-labelledby={isOverlayPanel && detailOpen ? 'payroll-detail-title' : undefined}
@@ -1994,35 +1745,25 @@ export function PayrollPage({ user, showToast }) {
                 </div>
                 <div className="payroll-detail-header-actions">
                   <StatusBadge tone="info">{selectedLine.employeeCode}</StatusBadge>
-                  {/* Rendered only in the <1366px overlay presentation. At >=1366px the panel is a
-                      persistent side column whose visibility is NOT gated by `detailOpen` at all
-                      (only the overlay's CSS transform states are), so a dismiss control there is
-                      inert -- it would set `detailOpen=false` and nothing would visibly happen.
+                  {/* Rendered only in the <1366px overlay. At >=1366px the panel's visibility is not
+                      gated by `detailOpen` (only the overlay's CSS transform states are), so a dismiss
+                      control there would set `detailOpen=false` and visibly do nothing.
 
-                      This is a conditional RENDER rather than a `display` toggle on purpose. The
-                      previous attempt lived in styles.css (`.payroll-detail-close { display: none }`
-                      plus an `inline-flex` override under `max-width: 1365px`) and was completely
-                      dead: `buttonVariants`' own `inline-flex` sits in `layer(utilities)`, and
-                      index.css declares `@layer theme, legacy, utilities`, so a Tailwind utility
-                      always beats a styles.css rule for the same property on the same element (the
-                      "styles.css loses to Tailwind utilities" gotcha this repo keeps re-learning).
-                      Not rendering it also keeps it out of the tab order, which a `display: none`
-                      would do but a stale CSS rule never did. */}
+                      A conditional RENDER, not a `display` toggle: a styles.css rule
+                      (`.payroll-detail-close { display: none }`) is dead because `buttonVariants`'
+                      `inline-flex` sits in `layer(utilities)` and index.css declares
+                      `@layer theme, legacy, utilities`, so a Tailwind utility always beats a
+                      styles.css rule. Not rendering it also keeps it out of the tab order. */}
                   {isOverlayPanel && (
                   <Button
                     type="button"
                     variant="icon"
                     size="sm"
-                    // Item 4b fix (2026-07-31): `variant="icon" size="sm"` resolves to a 36x36
-                    // compound-variant box (Button.jsx) -- too small for the primary dismiss control
-                    // on a full-height overlay a touch user must reach reliably. Fixed at THIS call
-                    // site only (`w-11 min-h-[44px]` after `cn`'s twMerge wins the width/min-height
-                    // conflict against the compound variant's `w-9 min-h-[36px]`, same as
-                    // `buttonVariants`' own `className` override contract everywhere else) rather than
-                    // in the shared `icon`+`sm` compound variant itself -- that variant is also used by
-                    // DataTable's pagination arrows and TicketListPage's filter-panel close button,
-                    // neither of which is a full-height overlay's primary dismiss control, so widening
-                    // it there would be an unrequested, unreviewed change to two unrelated screens.
+                    // `variant="icon" size="sm"` is a 36x36 compound-variant box (Button.jsx), too small
+                    // for the primary dismiss control on a full-height overlay a touch user must reach.
+                    // Fixed at this call site (`w-11 min-h-[44px]`; `cn`'s twMerge wins over the
+                    // compound `w-9 min-h-[36px]`) rather than in the shared icon+sm variant, which
+                    // DataTable's pagination arrows and TicketListPage's filter-panel close also use.
                     className="payroll-detail-close w-11 min-h-[44px]"
                     onClick={closeDetailPanel}
                     title="ปิดรายละเอียด"
@@ -2033,12 +1774,9 @@ export function PayrollPage({ user, showToast }) {
                 </div>
               </Panel.Header>
 
-              {/* Defect 2 fix (Opus review, 2026-07-31): `grid-cols-1 @sm:grid-cols-2` at the call
-                  site (Tailwind-first, replaces the old unconditional `repeat(2, ...)` in
-                  styles.css) -- 1 column while the panel container is narrower than Tailwind's
-                  `@sm` (24rem/384px) content-box floor, 2 once there's genuinely room. This is a
-                  container query keyed off `@container` on the `<aside>` above, not a viewport
-                  breakpoint -- see that comment for why viewport width is the wrong signal here. */}
+              {/* `grid-cols-1 @sm:grid-cols-2`: 1 column while the panel container is narrower than
+                  Tailwind's `@sm` (24rem/384px) content-box floor, 2 once there is room. A container
+                  query keyed off `@container` on the `<aside>` above, not a viewport breakpoint. */}
               <div className="payroll-detail-grid grid grid-cols-1 gap-2.5 @sm:grid-cols-2">
                 <MiniMetric label="ฐานเงินเดือน" value={formatMoney(selectedLine.baseSalary)} />
                 <MiniMetric label="รายได้คิดภาษี" value={formatMoney(selectedLine.grossTaxableIncome)} />
@@ -2055,11 +1793,10 @@ export function PayrollPage({ user, showToast }) {
                 </div>
               ) : null}
 
-              {/* Daily-rate support (2026-07-30): shown only for a pay_type = 'D' employee --
-                  hr.employee.current_salary is that employee's PER-DAY rate (not a monthly figure),
-                  so "ฐานเงินเดือน" above is really rate * daysWorked and HR must type the day count
-                  each run. Reachable from selectedLine.payType, echoed onto PayrollLineDto by the
-                  backend precisely so this page can gate the field to the employees it applies to. */}
+              {/* Shown only for a pay_type = 'D' employee: hr.employee.current_salary is that
+                  employee's PER-DAY rate, so "ฐานเงินเดือน" above is really rate * daysWorked and HR
+                  types the day count each run. Gated on selectedLine.payType, echoed onto
+                  PayrollLineDto for this purpose. */}
               {selectedLine.payType === 'D' && (
                 <CollapsibleSection title="ค่าจ้างรายวัน" defaultOpen>
                   <FormGrid>
@@ -2073,18 +1810,14 @@ export function PayrollPage({ user, showToast }) {
                         id="payroll-days-worked"
                         type="number"
                         min="0"
-                        // Finding 4 fix (Opus review, 2026-07-30): frontend bound matching the
-                        // backend's @Max(31)/chk_payroll_line_days_worked_range -- no real month has
-                        // more than 31 days. Decimals stay legitimate (e.g. 21.5), so only the upper
-                        // bound is added here, step is unchanged.
+                        // Upper bound matches the backend's @Max(31)/chk_payroll_line_days_worked_range.
+                        // Decimals stay legitimate (e.g. 21.5), so step is unchanged.
                         max="31"
                         step="0.5"
                         placeholder="0"
                         value={selectedAdjustment.daysWorked}
-                        // A5 fix (issue #422): this raw <input type="number"> has no equivalent of
-                        // MoneyInput's own negative clamp -- a typed "-5" reached updateAdjustment
-                        // verbatim and 400'd the whole draft/preview/process PUT with no visible
-                        // error.
+                        // Raw <input type="number"> has no MoneyInput-style negative clamp; a typed
+                        // "-5" would 400 the whole draft/preview/process PUT.
                         onChange={(event) => updateAdjustment('daysWorked', clampNonNegative(event.target.value))}
                         disabled={!canManage}
                       />
@@ -2095,11 +1828,8 @@ export function PayrollPage({ user, showToast }) {
                         <> — ค่าแรงงวดนี้โดยประมาณ {formatMoney(parsePayrollNumber(selectedAdjustment.daysWorked) * Number(selectedLine.dailyRate || 0))} บาท</>
                       )}
                     </small>
-                    {/* Finding 1 fix (Opus review, 2026-07-30): cheap client-side warning mirroring the
-                        server-side guard in PayrollService#requireEveryDailyRateEmployeeHasDaysWorked
-                        -- the UI warning is not the enforcement (it can always be bypassed / this panel
-                        may not even be opened), just an early nudge before HR hits Process, which then
-                        refuses the run server-side regardless. */}
+                    {/* Client-side warning mirroring PayrollService#requireEveryDailyRateEmployeeHasDaysWorked.
+                        Only an early nudge: Process is still refused server-side regardless. */}
                     {!(parsePayrollNumber(selectedAdjustment.daysWorked) > 0) && (
                       <small className="block text-warning">
                         ⚠ ยังไม่ได้ระบุจำนวนวันทำงาน — พนักงานรายวันจะได้รับเงินเดือน ฿0 หากประมวลผลโดยไม่กรอกช่องนี้
@@ -2114,13 +1844,10 @@ export function PayrollPage({ user, showToast }) {
                 defaultOpen
                 headerRight={<span className="collapsible-total">{formatMoney(specialPayKeys.reduce((sum, key) => sum + parsePayrollNumber(selectedAdjustment[key]), 0))}</span>}
               >
-                {/* Defect 2 fix (Opus review, 2026-07-31): same `grid-cols-1 @sm:grid-cols-2` swap
-                    as payroll-detail-grid above -- this is the grid the review measured at 107px
-                    money inputs and 3-line labels with the panel pinned to 2 columns at every
-                    width. At 1 column each label/input gets the panel's full content width, which
-                    is what keeps every money input >=140px and every Thai label to <=2 lines at
-                    the panel's current 310px floor (see the `<section>` grid-cols comment above)
-                    without having to keep growing the panel indefinitely as more fields land here. */}
+                {/* Same `grid-cols-1 @sm:grid-cols-2` as payroll-detail-grid above. One column gives each
+                    label/input the panel's full content width, keeping every money input >=140px and
+                    every Thai label <=2 lines at the 310px panel floor, without growing the panel as
+                    more fields land here. */}
                 <div className="payroll-special-grid grid grid-cols-1 gap-2.5 @sm:grid-cols-2">
                   {specialPayFields.map((field) => {
                     const inputId = `payroll-${field.key}`;
@@ -2164,12 +1891,10 @@ export function PayrollPage({ user, showToast }) {
                     />
                     <MoneyInput id="payroll-per-diem-taxable" value={selectedAdjustment.perDiemTaxable} onChange={(value) => updateAdjustment('perDiemTaxable', value)} disabled={!canManage} />
                   </label>
-                  {/* F2 fix (Opus review, 2026-07-30): shown only once a per-diem amount is actually
-                      entered -- HR classifying a basis for money nobody paid has nothing to classify,
-                      same "only where money is actually moving" principle as tax-treatment classification
-                      elsewhere on this page. Required the moment either amount above is non-zero, or
-                      V97's chk_payroll_line_per_diem_basis_present CHECK rejects Process with a 500 (now
-                      caught earlier server-side too -- see PayrollService#calculateLine). */}
+                  {/* Shown only once a per-diem amount is entered (nothing to classify until money
+                      moves, as with tax-treatment classification elsewhere). Required once either amount
+                      is non-zero, or chk_payroll_line_per_diem_basis_present rejects Process with a 500
+                      (also caught earlier server-side, PayrollService#calculateLine). */}
                   {(parsePayrollNumber(selectedAdjustment.perDiemExempt) > 0 || parsePayrollNumber(selectedAdjustment.perDiemTaxable) > 0) && (
                     <label htmlFor="payroll-per-diem-basis">
                       ฐานเบี้ยเลี้ยง (มาตรา 42)
@@ -2193,10 +1918,8 @@ export function PayrollPage({ user, showToast }) {
                 </FormGrid>
               </CollapsibleSection>
 
-              {/* P1 fix (Opus review, 2026-07-30): bonusPay/otherOneOffPay have existed end-to-end on
-                  the backend since V96 (task 2) with no input anywhere on this page — HR could not pay
-                  a bonus through payroll at all. The spec calls bonusPay "the archetypal
-                  EXTRA_KNOWN_FREQUENCY" component. */}
+              {/* bonusPay/otherOneOffPay: end-to-end on the backend; bonusPay is the archetypal
+                  EXTRA_KNOWN_FREQUENCY component. */}
               <CollapsibleSection
                 title="เงินก้อนพิเศษ (จ่ายครั้งเดียว)"
                 defaultOpen={false}
@@ -2230,8 +1953,7 @@ export function PayrollPage({ user, showToast }) {
                   <label htmlFor="payroll-unpaid-leave-days">
                     วันลาไม่รับค่าจ้าง
                     <InfoTip label="วันลาไม่รับค่าจ้าง" text="ตัวเลขนี้ถูกกรอกล่วงหน้าจากวันลาที่อนุมัติเกินโควตาในเดือนนี้ (ระบบวันลา) สามารถแก้ไขได้ก่อนคำนวณ/ประมวลผล" />
-                    {/* A5 fix (issue #422): same clamp as daysWorked above -- this raw
-                        <input type="number"> has no equivalent of MoneyInput's own negative clamp. */}
+                    {/* Same clamp as daysWorked above: raw <input type="number"> has no MoneyInput clamp. */}
                     <input id="payroll-unpaid-leave-days" type="number" min="0" step="0.25" placeholder="0" value={selectedAdjustment.unpaidLeaveDays} onChange={(event) => updateAdjustment('unpaidLeaveDays', clampNonNegative(event.target.value))} disabled={!canManage} />
                     {Number(selectedLine.leaveRefundDays || 0) > 0 ? (
                       <small className="block text-warning">
@@ -2255,11 +1977,9 @@ export function PayrollPage({ user, showToast }) {
                     <InfoTip label="หักอายัดกรมบังคับคดี" text="รายการหักตามคำสั่งอายัดเงินเดือนจากกรมบังคับคดี หักหลังคำนวณภาษีแล้ว" />
                     <MoneyInput id="payroll-legal-execution-deduction" value={selectedAdjustment.legalExecutionDeduction} onChange={(value) => updateAdjustment('legalExecutionDeduction', value)} disabled={!canManage} />
                   </label>
-                  {/* P1 fix (Opus review, 2026-07-30): never selectable before this fix, so every
-                      garnishment silently used the SALARY cap (backend defaults null to SALARY) —
-                      making the BONUS 50% / OVERTIME 30% / SEVERANCE ฿300,000 rules dead code. Shown
-                      only once an amount is actually requested, same "nothing to classify until money
-                      moves" principle as the per-diem basis selector above. */}
+                  {/* Without a selection every garnishment uses the SALARY cap (backend default), making
+                      the BONUS 50% / OVERTIME 30% / SEVERANCE ฿300,000 rules dead code. Shown only once an
+                      amount is requested, as with the per-diem basis selector above. */}
                   {parsePayrollNumber(selectedAdjustment.legalExecutionDeduction) > 0 && (
                     <label htmlFor="payroll-garnishment-type">
                       ประเภทเงินที่ถูกอายัด
@@ -2312,10 +2032,8 @@ export function PayrollPage({ user, showToast }) {
                     หักลูกค้าคืนสินค้า
                     <MoneyInput id="payroll-customer-return-deduction" value={selectedAdjustment.customerReturnDeduction} onChange={(value) => updateAdjustment('customerReturnDeduction', value)} disabled={!canManage} />
                   </label>
-                  {/* P1 fix (Opus review, 2026-07-30): always false before this fix (never rendered),
-                      so the flag was always the unearned/pre-tax path — the fix for the real June 2026
-                      negative-net incident (handoff section 6) could never actually be selected. Shown
-                      only once a return amount is entered, same principle as the fields above. */}
+                  {/* Selects the earned vs unearned (pre-tax netting) path; the unearned default caused a
+                      negative-net payslip. Shown only once a return amount is entered, as above. */}
                   {parsePayrollNumber(selectedAdjustment.customerReturnDeduction) > 0 && (
                     <label htmlFor="payroll-customer-return-already-earned" className="inline-flex items-center gap-2">
                       <input
@@ -2356,23 +2074,15 @@ export function PayrollPage({ user, showToast }) {
                 )}
               </div>
 
-              {/* ล.ย.01 tax-allowance drill-down (issue #387 screen 3) — surgical addition below
-                  the existing ค่าลดหย่อนรวม line above. Composes the year's declaration register
-                  client-side (no employeeId filter exists on GET /declarations) — see
-                  TaxAllowanceDrilldown.jsx.
+              {/* ล.ย.01 tax-allowance drill-down: composes the year's declaration register client-side
+                  (no employeeId filter exists on GET /declarations); see TaxAllowanceDrilldown.jsx.
 
-                  Title/subtitle (2026-08, "register shows what payroll actually uses"): this used
-                  to be titled "รายละเอียดค่าลดหย่อน" directly under ค่าลดหย่อนรวม, reading as if it
-                  broke that number down. It does not — ค่าลดหย่อนรวม above is computed from
-                  hr.employee_tax_allowance (what PayrollCalculator actually applied this run);
-                  TaxAllowanceDrilldown below reads ONLY hr.tax_allowance_declaration, a separate
-                  table the two can legitimately disagree with (most visibly for a grandfathered
-                  employee, where this section reads "no declaration" under a non-zero total above).
-                  Retitled to name what it actually is, with the relationship stated explicitly
-                  rather than implied by adjacency. Full reconciliation detail (what payroll is
-                  applying vs. what was declared, and whether they agree) lives on the HR register
-                  TaxAllowanceDrilldown already links out to below ("ดูในหน้าตรวจสอบของ HR") — not
-                  duplicated here, per "minimal diff, do not restructure this panel". */}
+                  Titled to say what it is: ค่าลดหย่อนรวม above is computed from
+                  hr.employee_tax_allowance (what PayrollCalculator applied this run), while
+                  TaxAllowanceDrilldown reads ONLY hr.tax_allowance_declaration, a separate table the two
+                  can disagree with (e.g. a grandfathered employee shows "no declaration" under a
+                  non-zero total). The HR register it links out to ("ดูในหน้าตรวจสอบของ HR") holds the
+                  full reconciliation. */}
               <CollapsibleSection
                 title="ประวัติการยื่นแบบ ล.ย.01"
                 subtitle="อาจไม่ตรงกับค่าลดหย่อนรวมด้านบน ซึ่งคำนวณจากข้อมูลที่ใช้จริงในระบบเงินเดือน"
@@ -2424,23 +2134,16 @@ export function PayrollPage({ user, showToast }) {
 }
 
 /**
- * P0 fix (Opus review, 2026-07-30): the tax-treatment matrix screen. HR needs a place to classify
- * every non-SALARY component per employee (spec sections 1 and 10) — before this fix
- * `PayrollRepository#upsertComponentTaxTreatment` had no caller anywhere, backend HTTP surface
- * included, so nothing could satisfy `PayrollCalculator#calculateClassified`'s classification gate
- * beyond the V100 migration's one-time backfill. One `CollapsibleSection` per employee (owner
- * decision, section 9c: "never a shrunken fifteen-column table" — this applies just as much to a
- * 16-component matrix as to the pay-input grid it echoes), each with its own unclassified-count badge
- * so HR can find the outliers without opening every employee.
+ * The tax-treatment matrix screen. HR classifies every non-SALARY component per employee (spec
+ * sections 1 and 10), which is what satisfies `PayrollCalculator#calculateClassified`'s
+ * classification gate. One `CollapsibleSection` per employee ("never a shrunken fifteen-column
+ * table"), each with its own unclassified-count badge so HR can find the outliers.
  *
- * <p>F2 fix (fifth Opus review, 2026-07-30): `item.byComponent` now carries the EFFECTIVE
- * classification (synthesized defaults merged in server-side by `PayrollService#treatmentsFor`),
- * not the raw stored map — a select for a component nobody has classified yet now shows the
- * treatment the engine actually applies, instead of blank. `item.explicitlyClassifiedComponents`
- * says which of those values HR (or a backfill) actually set versus which are synthesized; the
- * "ค่าเริ่มต้นของระบบ" hint below a select renders only for the latter, so HR can tell "the system is
- * defaulting this" from "someone chose this" — the distinction the branch's back-loading-risk
- * mitigation depends on.
+ * `item.byComponent` carries the EFFECTIVE classification (defaults synthesized server-side by
+ * `PayrollService#treatmentsFor`), so a select for an unclassified component shows the treatment the
+ * engine applies instead of blank. `item.explicitlyClassifiedComponents` says which values HR (or a
+ * backfill) actually set; the "ค่าเริ่มต้นของระบบ" hint renders only for the others, so HR can tell
+ * "the system is defaulting this" from "someone chose this".
  */
 function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
   const taxYear = Number(String(payrollMonth || '').slice(0, 4)) || new Date().getFullYear();
@@ -2475,10 +2178,9 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
     return item.byComponent?.[componentKey] || '';
   }
 
-  // F2 fix (fifth Opus review, 2026-07-30): true once HR has an actual stored row for this cell (per
-  // `item.explicitlyClassifiedComponents`, from the effective-classification snapshot) OR is setting
-  // one right now in this unsaved session. False means `valueFor` above is showing a value the
-  // backend synthesized, not one anybody chose.
+  // True once HR has a stored row for this cell (per `item.explicitlyClassifiedComponents`) OR is
+  // setting one now in this unsaved session. False means `valueFor` above shows a backend-synthesized
+  // value, not one anybody chose.
   function isExplicit(item, componentKey) {
     if (edits[item.employeeId]?.[componentKey] !== undefined) return true;
     return item.explicitlyClassifiedComponents?.includes(componentKey) ?? false;
@@ -2562,9 +2264,8 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
                   {TAX_TREATMENT_COMPONENTS.map((field) => {
                     const inputId = `tax-treatment-${item.employeeId}-${field.key}`;
                     const value = valueFor(item, field.key);
-                    // F2 fix (fifth Opus review, 2026-07-30): a non-blank value nobody explicitly set
-                    // is the backend's synthesized default -- flag it so HR does not mistake "the
-                    // system is defaulting this" for "someone already reviewed and chose this".
+                    // A non-blank value nobody explicitly set is the backend's synthesized default; flag it
+                    // so HR does not mistake it for a reviewed choice.
                     const isDefaulted = Boolean(value) && !isExplicit(item, field.key);
                     return (
                       <label key={field.key} htmlFor={inputId}>

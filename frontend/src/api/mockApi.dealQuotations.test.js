@@ -1,20 +1,16 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 
-// Slice 2 (SLICE-2-FLOW-A.md Part 1) changed two things every create below depends on:
-//   S2-B1 — recipientType is REQUIRED on a DEAL_DIRECT create (400 otherwise). None of this file's
-//           cases is about the recipient (mockApi.quotationDealLink.test.js pins that), so each
-//           defaults it to DESIGNER; a payload's own recipientType still wins.
-//   S2-B3 — N6: a deal holds at most ONE live direct quotation. This file predates that rule and
-//           creates on demo ticket 18 again and again — and the seed itself keeps two live rows
-//           there (id 1 DRAFT, id 2 PENDING_APPROVAL) that other cases below work on directly. So:
-//           every test now gets a FRESH mock module (pristine seed, no state leaking between cases),
-//           and a create on 18 first retires whatever is live there — the state a rep reaches by
-//           cancelling it. A test that needs two live quotations on one deal builds the second
-//           through createReorder/createRevision, the only routes N6 leaves open.
-//   One pricing route per deal (owner ruling 2026-09-30) — the reverse lock: a deal with a LIVE
-//           pricing request refuses a direct create (409). Ticket 18's seed carries live คำขอราคา
-//           too, so createOn18 also retires those first (mockApi.quotationDealLink.test.js pins the
-//           rule itself, wrong-way-round included).
+// Two rules every create below depends on:
+//   - recipientType is REQUIRED on a DEAL_DIRECT create (400 otherwise). None of this file's cases
+//     is about the recipient (mockApi.quotationDealLink.test.js pins that), so each defaults it to
+//     DESIGNER; a payload's own recipientType still wins.
+//   - A deal holds at most ONE live direct quotation, and a deal with a LIVE pricing request refuses
+//     a direct create (409). This file creates on demo ticket 18 repeatedly, and the seed keeps two
+//     live rows there (id 1 DRAFT, id 2 PENDING_APPROVAL) plus live คำขอราคา. So every test gets a
+//     FRESH mock module (pristine seed), and createOn18 first retires whatever is live there. A test
+//     needing two live quotations on one deal builds the second through createReorder/
+//     createRevision, the only routes the rule leaves open (mockApi.quotationDealLink.test.js pins
+//     the rules themselves, wrong-way-round included).
 let api;
 let retireLiveDirectQuotationsForTests;
 let retireLivePricingRequestsForTests;
@@ -37,27 +33,24 @@ async function createOn18(payload) {
 const salesUser = { role: 'sales' }; // id 6, owns ticket 18's rows (demoData.js)
 
 // One complete tile row. UpsertDealQuotationRequest.items is `@NotEmpty`, so the real service 400s
-// an empty list — and since quotation v3 the mock does too (buildDealQuotationItems). These fixtures
-// used to create with `items: []`, which only ever worked because the mock was MORE permissive than
-// the service; they now send the smallest body the service would actually accept.
-// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
-// TILE row with neither) -- this fixture backs revision-numbering/needsRework tests that call
-// submit() and have nothing to do with lead time.
+// an empty list, and the mock does too (buildDealQuotationItems); send the smallest body the
+// service would accept. leadTimeMinDays/leadTimeMaxDays are SET because submit refuses a TILE row
+// with neither; this fixture backs revision-numbering/needsRework tests that call submit() and
+// have nothing to do with lead time.
 const ONE_ITEM = {
   model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
   quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850, discountPct: 0,
   leadTimeMinDays: 30, leadTimeMaxDays: 45,
 };
 
-// Sales feedback #1 (2026-10-06, V192.2) — a Thai tile row may state its prices per ตร.ม. including
-// VAT. Mirrors DealQuotationService#withPerPiecePricesFromPerSqm's RULES (what is refused, what is
-// kept, which mode reads what).
+// A Thai tile row may state its prices per ตร.ม. including VAT. Mirrors
+// DealQuotationService#withPerPiecePricesFromPerSqm's RULES (what is refused, what is kept, which
+// mode reads what).
 //
-// ⚠️ The per-แผ่น figures below come from mockNetPerPieceFromSpecialSqm — a labelled, non-
-// authoritative MIRROR of WastageCalculator. These cases prove the mock's plumbing and nothing
-// about the algorithm (CLAUDE.md, "where the mock MIRRORS a backend computation"); the conversion
-// itself is pinned on the real service by WastageCalculatorPerSqmPriceTest and
-// DealQuotationPerSqmPriceIntegrationTest.
+// ⚠️ The per-แผ่น figures come from mockNetPerPieceFromSpecialSqm, a labelled, non-authoritative
+// MIRROR of WastageCalculator. These cases prove the mock's plumbing and nothing about the
+// algorithm (CLAUDE.md, "where the mock MIRRORS a backend computation"); the conversion is pinned
+// on the real service by WastageCalculatorPerSqmPriceTest and DealQuotationPerSqmPriceIntegrationTest.
 describe('mock dealQuotations -- prices typed per ตร.ม. รวม VAT (V192.2)', () => {
   const TILE_60X120 = {
     model: 'Trilogy', color: 'Ivory', texture: 'Lappato', sizeText: '60x120', thicknessMm: 10, sqmPerPiece: 0.72,
@@ -161,15 +154,15 @@ describe('mock dealQuotations -- prices typed per ตร.ม. รวม VAT (V19
   });
 });
 
-// Mixed price modes (V192.5; sales feedback #14, owner 2026-10-06). Mirrors the RULES of
-// DealQuotationService#buildItems / #requirePriceModeAllowed and WastageCalculator#rowPriceMode:
-// which document may be MIXED, that each tile row must then state its own mode, that the row is
-// priced in it, and that none of it touches a single-mode document.
+// Mixed price modes. Mirrors the RULES of DealQuotationService#buildItems / #requirePriceModeAllowed
+// and WastageCalculator#rowPriceMode: which document may be MIXED, that each tile row must then
+// state its own mode, that the row is priced in it, and that none of it touches a single-mode
+// document.
 //
-// ⚠️ Evidence note (CLAUDE.md, "Mock API contract"): these prove the MOCK's plumbing. That the
-// real service prices a mixed document correctly is DealQuotationMixedPriceModeIntegrationTest's;
-// a Thai ราคาพิเศษ row's net is "not computed in mock mode" here, exactly as on a single-mode
-// ราคาพิเศษ document, and that is asserted rather than papered over.
+// ⚠️ Evidence note (CLAUDE.md, "Mock API contract"): these prove the MOCK's plumbing. That the real
+// service prices a mixed document correctly is DealQuotationMixedPriceModeIntegrationTest's; a Thai
+// ราคาพิเศษ row's net is "not computed in mock mode" here, as on a single-mode ราคาพิเศษ document,
+// and that is asserted rather than papered over.
 describe('mock dealQuotations -- mixed price modes (V192.5)', () => {
   const TILE_60X120 = {
     model: 'Trilogy', color: 'Ivory', texture: 'Lappato', sizeText: '60x120', thicknessMm: 10, sqmPerPiece: 0.72,
@@ -312,9 +305,9 @@ describe('mock dealQuotations -- mixed price modes (V192.5)', () => {
   });
 });
 
-// 2026-10-12: any fraction of a piece rounds UP (WastageCalculator#ceilToInt), but the
-// server does it on BigDecimal and the mock on floats, where 100 * (7 / 100) is 7.000000000000001
-// and a bare Math.ceil turns an exact 7 into 8.
+// Any fraction of a piece rounds UP (WastageCalculator#ceilToInt), but the server does it on
+// BigDecimal and the mock on floats, where 100 * (7 / 100) is 7.000000000000001 and a bare
+// Math.ceil turns an exact 7 into 8.
 describe('mock dealQuotations -- rounding up is not fooled by float noise', () => {
   const TILE = {
     model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '40x40', thicknessMm: 10,
@@ -351,9 +344,9 @@ describe('mock dealQuotations -- items are @NotEmpty, as on the service', () => 
 });
 
 describe('mock dealQuotations -- recipient (Round 8)', () => {
-  // Slice 2 (S2-B1) made recipientType REQUIRED on a new direct create, so UNSPECIFIED can no longer
-  // be CREATED — it survives only on a row made before slice 2. Seed row 1 is exactly such a row.
-  // (mockApi.quotationDealLink.test.js pins the new create/update behaviour.)
+  // recipientType is REQUIRED on a new direct create, so UNSPECIFIED can no longer be CREATED; it
+  // survives only on older rows. Seed row 1 is such a row. (mockApi.quotationDealLink.test.js pins
+  // the create/update behaviour.)
   it('a pre-slice-2 DEAL_DIRECT row serves recipientType UNSPECIFIED, as the repository stored it', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await api.dealQuotations.get(1);
@@ -390,10 +383,9 @@ describe('mock dealQuotations -- item lines follow the document language (owner 
   });
 });
 
-// F1 (2026-09-16 review) — the mock's own calc-line builder (computeDealQuotationLine) mirrors
-// DealQuotationLines#calculationLine's phrasing; this pins the same duplicate-suppression fix on
-// the mock side. Wrong-way-round: reverting the mock's default branch to the old unconditional
-// rounding-phrase-plus-echo would turn these red.
+// The mock's calc-line builder (computeDealQuotationLine) mirrors DealQuotationLines#calculationLine's
+// phrasing; this pins the same duplicate-suppression on the mock side. Wrong-way-round: reverting
+// the mock's default branch to the unconditional rounding-phrase-plus-echo turns these red.
 describe('mock dealQuotations -- calculationLine never echoes a piece count with no box/wastage to justify it (F1)', () => {
   it('a row with NO แผ่น/กล่อง and no wastage prints no trailing "=" clause and no rounding wording', async () => {
     await api.auth.login(salesUser);
@@ -429,9 +421,8 @@ describe('mock dealQuotations -- English per-sqm (owner decision 2026-09-13) mir
     expect(tile.lineAmount).toBeNull();
   });
 
-  // Option B (owner decision, 2026-09-16): ตร.ม./กล่อง is now OPTIONAL — a blank box area is
-  // accepted (with or without แผ่น/กล่อง); only a box area PRESENT with แผ่น/กล่อง BLANK (the
-  // partially-filled pair) is still refused.
+  // ตร.ม./กล่อง is OPTIONAL: a blank box area is accepted (with or without แผ่น/กล่อง); only a box
+  // area PRESENT with แผ่น/กล่อง BLANK (the partially-filled pair) is refused.
   it('accepts an English per-sqm row with NO ตร.ม./กล่อง, with or without แผ่น/กล่อง', async () => {
     await api.auth.login(salesUser);
     // ONE_ITEM already carries piecesPerBox: 3 and no sqmPerBox key at all.
@@ -527,29 +518,27 @@ describe('mock dealQuotations.update -- item id upsert (mirrors DealQuotationSer
 });
 
 describe('mock nextMockDealQuotationNumber -- #M10 number FORMAT', () => {
-  // Owner feedback 2026-09-11 ("มีรันเลข -1 -2 ต่อท้ายตี้วแต่แรก" / "ใบแรกเป็น QT-2026-0014-1"): the
-  // FIRST issued document carries the revision suffix too.
+  // The FIRST issued document carries the revision suffix too ("ใบแรกเป็น QT-2026-0014-1").
   //
-  // The suffix is no longer pinned to -1, and that is the owner's 2026-10-17 ruling rather than a
-  // loosened assertion: the base number belongs to the DEAL, so a create on a deal that already
-  // holds documents continues the family. Demo ticket 18 carries seed quotations, AND this module's
-  // mockDealQuotations is shared state that grows as the suite runs — so the exact suffix here is
-  // both correct-as-N and order-dependent. The FORMAT is the contract this test names; the
-  // continuation rule itself is pinned in mockApi.quotationDealLink.test.js against a fresh deal.
+  // The suffix is not pinned to -1: the base number belongs to the DEAL, so a create on a deal that
+  // already holds documents continues the family. Demo ticket 18 carries seed quotations, and this
+  // module's mockDealQuotations is shared state that grows as the suite runs, so the exact suffix
+  // is order-dependent. The FORMAT is the contract here; the continuation rule is pinned in
+  // mockApi.quotationDealLink.test.js against a fresh deal.
   it('produces QT-{year}-{4-digit seq}-{n}, matching nextNumberOnDeal, not a bare QT-{year}-{seq} or QD{BE-year}', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await createOn18({ items: [ONE_ITEM] });
     expect(quotation.number).toMatch(/^QT-\d{4}-\d{4}-\d+$/);
     expect(quotation.revisionNo).toBeGreaterThanOrEqual(1);
-    // The number and the suffix agree — a row whose number says -3 while revisionNo says 1 is the
+    // The number and the suffix agree: a row whose number says -3 while revisionNo says 1 is the
     // defect this pairing exists to catch.
     expect(quotation.number).toBe(`QT-${new Date().getFullYear()}-${
       quotation.number.split('-')[2]}-${quotation.revisionNo}`);
   });
 });
 
-// Suffixes in these tests are relative to the created row, not fixed at 1: per-deal families mean a
-// create on seeded demo ticket 18 continues the family (owner ruling 2026-10-17).
+// Suffixes are relative to the created row, not fixed at 1: per-deal families mean a create on
+// seeded demo ticket 18 continues the family.
 describe('mock dealQuotations revision numbering -- #M10', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -559,11 +548,10 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const rootNumber = created.quotation.number;
-    // Recover the bare base the same way DealQuotationRepository#baseNumber does — by stripping the
-    // row's OWN suffix, not a hardcoded "-1". Since the 2026-10-17 ruling the base belongs to the
-    // deal, so a create on demo ticket 18 (which carries seed quotations) continues the family and
-    // the root here is "{base}-N" for some N. Deriving the base from revisionNo is what makes this
-    // test about SUFFIX STACKING rather than about which number the root happened to get.
+    // Recover the bare base the way DealQuotationRepository#baseNumber does: strip the row's OWN
+    // suffix, not a hardcoded "-1" (the base belongs to the deal, so the root here is "{base}-N"
+    // for some N). Deriving the base from revisionNo keeps this test about SUFFIX STACKING, not
+    // about which number the root got.
     const rootRevisionNo = created.quotation.revisionNo;
     const baseNumber = rootNumber.slice(0, -`-${rootRevisionNo}`.length);
     expect(rootNumber).toBe(`${baseNumber}-${rootRevisionNo}`);
@@ -590,10 +578,10 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
     expect(revision3.quotation.revisionNo).toBe(rootRevisionNo + 2);
   });
 
-  // Legacy row: a quotation issued BEFORE this change (owner feedback 2026-09-11) carries a BARE
-  // number at revisionNo 1 -- seed row id 1 ('QT-2026-0001', ticketId 18) stands in for one.
-  // EXISTING ROWS MUST NOT BREAK (CLAUDE.md): its own number must never be rewritten, and revising
-  // it must not collide with the "-1"-suffixed format new quotations now use.
+  // Legacy row: a quotation issued before the revision-suffix change carries a BARE number at
+  // revisionNo 1; seed row id 1 ('QT-2026-0001', ticketId 18) stands in for one. EXISTING ROWS MUST
+  // NOT BREAK (CLAUDE.md): its own number must never be rewritten, and revising it must not collide
+  // with the "-1"-suffixed format new quotations use.
   it('revising a pre-existing BARE-numbered quotation (issued before 2026-09-11) appends "-2", never rewrites the bare number, and never collides with the new "-1" format', async () => {
     await api.auth.login(salesUser);
     const before = await api.dealQuotations.get(1);
@@ -613,15 +601,13 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
   });
 });
 
-// GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- mirrors DealQuotationService#createReorder.
+// "สร้างจากใบเดิม" / สั่งเหมือนเดิม: mirrors DealQuotationService#createReorder.
 //
-// ⚠️ Owner ruling 2026-09-19 (INVERTS this describe block's own former header comment, which said
-// "the SOURCE stays APPROVED forever, unlike a revision's parent" -- that is now FALSE): a deal
-// may hold only ONE live quotation at a time (origin-agnostic sweep since 2026-10-17). Clone CREATION itself still leaves
-// the source untouched (still APPROVED) -- that half is unchanged -- but once the CLONE ITSELF is
-// approved, DealQuotationService#approve's same-ticket sweep (mirrored here via
-// DealQuotationRepository#supersedeOtherLiveOnTicket) supersedes the source, exactly like
-// approving a revision or a second, wholly independent first-issue quotation would.
+// A deal may hold only ONE live quotation at a time (origin-agnostic sweep). Clone CREATION leaves
+// the source untouched (still APPROVED), but once the CLONE ITSELF is approved,
+// DealQuotationService#approve's same-ticket sweep (mirrored here via
+// DealQuotationRepository#supersedeOtherLiveOnTicket) supersedes the source, like approving a
+// revision or a second, wholly independent first-issue quotation.
 describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -640,8 +626,8 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     const { quotation: reorder } = await api.dealQuotations.createReorder(approved.quotation.id, {});
 
     expect(reorder.docStatus).toBe('DRAFT');
-    // Next suffix after the SOURCE, derived rather than hardcoded — per-deal families mean the
-    // source is not necessarily -1 (owner ruling 2026-10-17).
+    // Next suffix after the SOURCE, derived rather than hardcoded: per-deal families mean the
+    // source is not necessarily -1.
     expect(reorder.number).toBe(`${baseNumber}-${created.quotation.revisionNo + 1}`);
     expect(reorder.derivedFromQuotationId).toBe(approved.quotation.id);
     expect(reorder.parentQuotationId).toBeNull();
@@ -661,15 +647,14 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     expect(reloadedSource.quotation.docStatus).toBe('SUPERSEDED');
   });
 
-  /** Two wholly independent first-issue quotations on the SAME deal (no revision/clone lineage
-   * at all) -- the case the pre-existing ancestor walk could never reach, since neither carries
-   * the other's id anywhere. Approving the second must supersede the first.
+  /** Two wholly independent first-issue quotations on the SAME deal (no revision/clone lineage at
+   * all), a case an ancestor walk could never reach since neither carries the other's id.
+   * Approving the second must supersede the first.
    *
-   * Slice 2's N6 (S2-B3) means `create` can no longer PRODUCE this pair — a second first-issue
-   * create on a deal with a live direct quotation is a 409 now (mockApi.quotationDealLink.test.js).
-   * The pair still exists as LEGACY data, and the demo seed carries exactly one: ids 1 (DRAFT) and 2
-   * (PENDING_APPROVAL) on ticket 18. The sweep must still hold for it, so this now drives the seed
-   * rows instead of two creates. */
+   * `create` can no longer PRODUCE this pair (a second first-issue create on a deal with a live
+   * direct quotation is a 409; mockApi.quotationDealLink.test.js). It still exists as LEGACY data:
+   * the demo seed carries ids 1 (DRAFT) and 2 (PENDING_APPROVAL) on ticket 18. The sweep must hold
+   * for it, so this drives the seed rows instead of two creates. */
   it('two independent first-issue quotations on one deal: approving the second supersedes the first', async () => {
     await api.auth.login({ role: 'sales_manager' });
     const approvedFirst = await api.dealQuotations.approve(2, {});
@@ -785,12 +770,11 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     expect(second.quotation.derivedFromQuotationId).toBe(approved.quotation.id);
   });
 
-  // Regression (Opus review): mintDealQuotationRevision used to spread `...parent` and never
-  // clear derivedFromQuotationId, so a REVISION of a reorder CLONE kept the clone's own
-  // derivedFromQuotationId -- both ids set on the same row, contradicting the mutual-exclusivity
-  // buildDealQuotationDto's own comment asserts. Mirrors DealQuotationService#insertRevisionCopyOf
-  // -> #insertCopyOf(source, actor, source.id(), null): a revision NEVER carries derivedFrom,
-  // even when its own source is itself a clone.
+  // Regression: mintDealQuotationRevision spread `...parent` and never cleared
+  // derivedFromQuotationId, so a REVISION of a reorder CLONE kept the clone's derivedFromQuotationId
+  // (both ids on one row, contradicting the mutual exclusivity buildDealQuotationDto asserts).
+  // Mirrors DealQuotationService#insertRevisionCopyOf -> #insertCopyOf(source, actor, source.id(),
+  // null): a revision NEVER carries derivedFrom, even when its own source is itself a clone.
   it('a revision of an APPROVED reorder clone links via parentQuotationId only, never derivedFromQuotationId', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
@@ -865,10 +849,10 @@ describe('mock dealQuotations.approve -- #M3 Bangkok local quotationDate', () =>
   });
 
   it('records the Bangkok calendar day, not the UTC one, when they disagree', async () => {
-    // 2026-01-01T20:00:00Z is 2026-01-02 03:00 Bangkok (UTC+7) -- UTC and Bangkok disagree on
-    // the calendar day, which is exactly the case `now.slice(0, 10)` gets wrong.
-    // `shouldAdvanceTime` keeps the mock's own internal `delay()` (a real setTimeout) firing on
-    // real wall-clock time while `Date` itself stays pinned.
+    // 2026-01-01T20:00:00Z is 2026-01-02 03:00 Bangkok (UTC+7): UTC and Bangkok disagree on the
+    // calendar day, which is the case `now.slice(0, 10)` gets wrong. `shouldAdvanceTime` keeps the
+    // mock's internal `delay()` (a real setTimeout) firing on wall-clock time while `Date` stays
+    // pinned.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-01-01T20:00:00Z'));
 
@@ -880,16 +864,16 @@ describe('mock dealQuotations.approve -- #M3 Bangkok local quotationDate', () =>
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Owner feedback pass 1, 2026-09-10 — F5 (สถานะ tabs) and F2 (ผู้สั่งซื้อ).
-// ⚠️ AUTHZ CAVEAT: mock authz is NOT authoritative (CLAUDE.md "Mock API contract"). What these
-// tests pin is that list() and counts() read the SAME scoped set as each other — a mock-internal
-// consistency property — never that the scope itself matches DealQuotationService's.
+// F5 (สถานะ tabs) and F2 (ผู้สั่งซื้อ).
+// ⚠️ AUTHZ CAVEAT: mock authz is NOT authoritative (CLAUDE.md "Mock API contract"). These tests pin
+// that list() and counts() read the SAME scoped set as each other (a mock-internal consistency
+// property), never that the scope matches DealQuotationService's.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => {
-  // MED-3: the envelope. DealQuotationController#counts returns the DTO BARE, unlike every
-  // wrapping neighbour; the mock wrapped it, hrApi's comment claimed the wrapper, and the page read
-  // `r?.counts ?? r` so no one of the three could ever be caught disagreeing. Pinned here.
+  // The envelope: DealQuotationController#counts returns the DTO BARE, unlike every wrapping
+  // neighbour. A mock wrapper plus a page reading `r?.counts ?? r` meant no layer could be caught
+  // disagreeing. Pinned here.
   it('counts() returns the BARE DealQuotationCountsDto -- no { counts: ... } envelope', async () => {
     await api.auth.login(salesUser);
     const res = await api.dealQuotations.counts();
@@ -912,7 +896,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     const all = await api.dealQuotations.list();
     const pending = await api.dealQuotations.list({ status: 'PENDING_APPROVAL' });
     const cancelled = await api.dealQuotations.list({ status: 'CANCELLED' });
-    // QA-37: the อนุมัติแล้ว tab is approved-and-beyond, sent as a status ARRAY.
+    // The อนุมัติแล้ว tab is approved-and-beyond, sent as a status ARRAY.
     const approved = await api.dealQuotations.list({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] });
     const rework = await api.dealQuotations.list({ needsRework: true });
 
@@ -927,14 +911,11 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
   });
 
   it('needsRework=true selects a rejected DRAFT permanently -- resubmitting mints a NEW revision, it does not leave แก้', async () => {
-    // Owner clarification (2026-09-15): submit() on a rejected draft now mints a revision of
-    // ITSELF (DealQuotationService#submit's own status-machine comment) instead of resubmitting
-    // the SAME row -- so the rejected row's own approvalNote is no longer cleared "on the next
-    // submit"; it stays a permanent record of why THAT number was retired, and the row stays แก้
-    // until it is finally SUPERSEDED (once its new revision reaches APPROVED, not before). This
-    // test used to pin "cleared on the next submit, leaves แก้ immediately" -- that behaviour is
-    // exactly what this owner clarification supersedes; see `mintDealQuotationRevision` in
-    // mockApi.js.
+    // submit() on a rejected draft mints a revision of ITSELF (DealQuotationService#submit's
+    // status-machine comment; `mintDealQuotationRevision` in mockApi.js) instead of resubmitting the
+    // SAME row, so the rejected row's own approvalNote is a permanent record of why THAT number was
+    // retired, and the row stays แก้ until it is SUPERSEDED (once its new revision reaches APPROVED,
+    // not before).
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
     const id = created.quotation.id;
@@ -1030,12 +1011,12 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(revision3.parentQuotationId).toBe(revision2.id);
   });
 
-  /** Opus review (2026-09-15), REQUIRED, wrong-way-round: mirrors
+  /** Wrong-way-round: mirrors
    * DealQuotationIntegrationTest#cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole.
-   * The ancestry a rejected-and-resubmitted row can grow is a TREE, not a straight line --
-   * cancelling a DRAFT row that itself has an open child used to make that child's GRANDPARENT
-   * look "free" again, letting it mint a SECOND, sibling branch while the first branch was still
-   * alive -- two independently-APPROVED quotations on the same ticket. */
+   * The ancestry a rejected-and-resubmitted row can grow is a TREE, not a straight line: cancelling
+   * a DRAFT row that itself has an open child would make that child's GRANDPARENT look "free",
+   * letting it mint a SECOND, sibling branch while the first was alive (two independently-APPROVED
+   * quotations on the same ticket). */
   it('cancel refuses a draft with an open child, closing the double-approve hole', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
@@ -1053,7 +1034,7 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await api.auth.login(salesUser);
     await api.dealQuotations.submit(revisionB.id); // mints C -- B now has an open child.
 
-    // THE FIX: B cannot be cancelled out from under its own open child.
+    // B cannot be cancelled out from under its own open child.
     await expect(api.dealQuotations.cancel(revisionB.id, {})).rejects.toMatchObject({ status: 409 });
   });
 
@@ -1064,11 +1045,11 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(cancelled.docStatus).toBe('CANCELLED');
   });
 
-  /** Opus review nit (2026-09-15): mintDealQuotationRevision used to compute
-   * `parent.revisionNo + 1` directly -- only correct while `parent` is the HIGHEST revision
-   * minted off this base. Once the middle revision is CANCELLED and the original resubmitted a
-   * SECOND time, that formula recomputes the SAME "-2" the cancelled row already used, instead
-   * of the "-3" DealQuotationRepository#nextRevisionNo's real MAX-based query would mint. */
+  /** mintDealQuotationRevision must not compute `parent.revisionNo + 1` directly: that is only
+   * correct while `parent` is the HIGHEST revision minted off this base. Once the middle revision is
+   * CANCELLED and the original resubmitted a SECOND time, it would recompute the SAME "-2" the
+   * cancelled row used, instead of the "-3" DealQuotationRepository#nextRevisionNo's MAX-based
+   * query mints. */
   it('submit after rejection: a cancelled sibling revision still counts toward the next number', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
@@ -1115,10 +1096,9 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(items.some((q) => q.id === created.quotation.id)).toBe(false);
   });
 
-  // MED-5: the mock's predicate used Boolean(approvalNote); the SQL is `approval_note IS NOT NULL`,
-  // which is TRUE for the empty string. A DRAFT carrying approvalNote '' therefore belonged in แก้
-  // on the real backend and was missing from it here -- a divergence in the direction where the
-  // mock shows FEWER rows than production, so nobody would ever have noticed from the UI.
+  // The mock's predicate must match the SQL `approval_note IS NOT NULL`, which is TRUE for the empty
+  // string: a DRAFT carrying approvalNote '' belongs in แก้ on the real backend. (A Boolean() test
+  // would show FEWER rows than production, which nobody would notice from the UI.)
   it('counts() refuses a caller list() refuses, rather than leaking totals', async () => {
     await api.auth.login({ email: 'warehouse.manager@glr.co.th', password: 'demo1234' });
     await expect(api.dealQuotations.counts()).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
@@ -1126,10 +1106,10 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
 });
 
 describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owner feedback F2', () => {
-  // Ruling 2026-10-18: the ผู้ติดต่อ is picked per quotation -- request contactId, else the row's
-  // own, else none; the deal's contact is NOT a fallback -- and the ผู้สั่งซื้อ signature name
-  // (orderedByName) is that contact's name, written on every DRAFT save; a name typed into the
-  // request is ignored. Mirrors DealQuotationService#resolveContact and its callers.
+  // The ผู้ติดต่อ is picked per quotation: request contactId, else the row's own, else none (the
+  // deal's contact is NOT a fallback). The ผู้สั่งซื้อ signature name (orderedByName) is that
+  // contact's name, written on every DRAFT save; a name typed into the request is ignored. Mirrors
+  // DealQuotationService#resolveContact and its callers.
   const TYPED = 'ชื่อที่พิมพ์เอง';
 
   // Mirrors DealQuotationIntegrationTest#create_withNoContactId_doesNotInheritTheDealsContact.
@@ -1169,8 +1149,8 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
   });
 
   // Mirrors DealQuotationIntegrationTest#update_keepsTheDraftsContactWhenOmitted_andSwitchesOnAnExplicitId.
-  // ล้าง (ruling 2026-10-18): a picked ผู้ติดต่อ may be cleared per quotation -- clearContact on
-  // update blanks the snapshot whatever contactId says; create ignores the flag.
+  // ล้าง: a picked ผู้ติดต่อ may be cleared per quotation: clearContact on update blanks the
+  // snapshot whatever contactId says; create ignores the flag.
   it('update() re-snapshots when the rep changes ผู้ติดต่อ, the signature name follows, and clearContact blanks both', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ contactId: 6, clearContact: true, items: [ONE_ITEM] });
@@ -1204,11 +1184,10 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
     expect(saved).toMatchObject({ contactId: 6, orderedByName: 'ณัฐพงศ์ ศรีวิไล' });
   });
 
-  // ⚠️ Owner-directed reversal of V167/F2 (2026-09-26): create/update/submit used to REFUSE a deal
-  // with no resolvable contact at all ("กรุณาระบุผู้สั่งซื้อ"). A contact is optional, so this
-  // proves the OPPOSITE: a deal ticket with no contact of its own, and no contactId ever sent on
-  // the wire, creates/updates/submits successfully with a blank contact snapshot throughout -- and
-  // with no signature name, a typed one ignored. Mirrors
+  // ⚠️ A contact is OPTIONAL (create/update/submit do not refuse a deal with no resolvable contact,
+  // "กรุณาระบุผู้สั่งซื้อ"). A deal ticket with no contact of its own, and no contactId sent, creates/
+  // updates/submits successfully with a blank contact snapshot throughout, and with no signature
+  // name (a typed one ignored). Mirrors
   // DealQuotationIntegrationTest#submit_succeedsOnARowWithNoContactSnapshot and
   // DealQuotationOrderedByContactIntegrationTest#update_replacesBoth on the Java side.
   it('create/update/submit all succeed with a blank contact snapshot when the deal has no ผู้สั่งซื้อ at all', async () => {
@@ -1257,9 +1236,9 @@ describe('mock catalog.prices originCountryCode -- owner feedback F1', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// V178 (owner ruling 2026-09-14) — remark 7's second กำหนดยืนยันราคา variant (validityMode DATE).
-// Mirrors DealQuotationService's create/update/submit/approve rules exactly, and reuses the SAME
-// hasSpecialPricing (quotationMeta.js) the editor's own toggle hides/shows against.
+// Remark 7's second กำหนดยืนยันราคา variant (validityMode DATE). Mirrors DealQuotationService's
+// create/update/submit/approve rules exactly, and reuses the SAME hasSpecialPricing
+// (quotationMeta.js) the editor's own toggle hides/shows against.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('mock dealQuotations -- V178 validityMode DATE', () => {
@@ -1384,11 +1363,11 @@ describe('mock dealQuotations -- V178 validityMode DATE', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// V179 (owner feedback #4, 2026-09-14) — ผู้พิมพ์/พนักงานขาย print-name override.
+// ผู้พิมพ์/พนักงานขาย print-name override.
 // demoData.js ids used below: 6 = sales@glr.co.th (ticket 18's owner), 9 = sales.manager@glr.co.th,
 // 4 = employee@glr.co.th (canCreateQuotation grant, role `employee`), 7 = import@glr.co.th
 // (neither sales-shaped role nor grant).
-// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): mock authz is NOT authoritative — see
+// ⚠️ AUTHZ CAVEAT (CLAUDE.md "Mock API contract"): mock authz is NOT authoritative; see
 // DealQuotationDisplayNameIntegrationTest for the real-DB evidence.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 describe('mock dealQuotations.displayNameOptions -- V179 eligible union', () => {
@@ -1473,10 +1452,10 @@ describe('mock dealQuotations.create/update -- V179 printedByDisplayId/salesRepD
   });
 });
 
-// Opus review fix (2026-09-14): create() ignored payload.projectName entirely (always derived
-// from the deal's own project) and update() omitted the field from its Object.assign altogether,
-// so editing โครงการ silently never persisted under VITE_USE_MOCKS=true -- exactly CLAUDE.md's
-// "mock omits a field the feature keys on" shape. Mirrors DealQuotationService#create/#update.
+// create() must honour payload.projectName (not always derive it from the deal's project) and
+// update() must persist it, or editing โครงการ silently never persists under VITE_USE_MOCKS=true
+// (CLAUDE.md's "mock omits a field the feature keys on" shape). Mirrors
+// DealQuotationService#create/#update.
 describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-09-14)', () => {
   it('an explicit projectName on create wins over the deal\'s own project', async () => {
     await api.auth.login(salesUser);
@@ -1510,13 +1489,10 @@ describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-
     expect(cleared.projectName).toBeNull();
   });
 
-  // Second Opus follow-up nit (2026-09-14): the first pass's update() wrote
-  // `payload.projectName ?? null`, which stores an explicit ""/whitespace-only string AS-IS
-  // instead of clearing it -- diverging from the real DealQuotationService#update's
-  // `blankToNull(request.projectName())` and from this file's own create() two tests above (which
-  // already trims+blanks). An explicitly-blank string reaches update() from
-  // buildUpsertPayload's `terms.projectName || null` only when the field is whitespace-only (a
-  // plain "" is already caught by `||`), so this exercises exactly that gap.
+  // update() must clear an explicit ""/whitespace-only projectName, not store it as-is: the real
+  // DealQuotationService#update uses `blankToNull(request.projectName())`, matching create() two
+  // tests above (which trims+blanks). Whitespace-only reaches update() from buildUpsertPayload's
+  // `terms.projectName || null` (a plain "" is already caught by `||`), so this exercises that gap.
   it('a whitespace-only projectName on update clears it too, not stored literally', async () => {
     await api.auth.login(salesUser);
     const { quotation: created } = await createOn18({
@@ -1530,9 +1506,8 @@ describe('mock dealQuotations.create/update -- projectName (owner feedback 2026-
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Item 2 (V180, "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ") + Item 4 (V181, "ไม่รับมัดจำ") —
-// owner ruling 2026-09-16. Mirrors DealQuotationService#resolveOmitContactHonorific/
-// #isZeroDeposit/#resolveFullPaymentTerm exactly.
+// "ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ" + "ไม่รับมัดจำ". Mirrors
+// DealQuotationService#resolveOmitContactHonorific/#isZeroDeposit/#resolveFullPaymentTerm exactly.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 describe('mock dealQuotations.create/update -- omitContactHonorific (V180)', () => {
   it('defaults false when the request omits it', async () => {
@@ -1551,8 +1526,8 @@ describe('mock dealQuotations.create/update -- omitContactHonorific (V180)', () 
     expect(reread.omitContactHonorific).toBe(true);
   });
 
-  // Same "no missing-keeps-stored" discipline as projectName/printedByDisplayId above -- the
-  // editor always sends its CURRENT value, so an update that omits it clears a previously-set true.
+  // Same "no missing-keeps-stored" discipline as projectName/printedByDisplayId above: the editor
+  // always sends its CURRENT value, so an update that omits it clears a previously-set true.
   it('an update that omits it clears a previously-set true back to false', async () => {
     await api.auth.login(salesUser);
     const { quotation: created } = await createOn18({
@@ -1577,10 +1552,10 @@ describe('mock dealQuotations.create/update -- omitContactHonorific (V180)', () 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// Sales feedback #5 (2026-10-06, V192.1) — "ไม่แสดงชื่อโครงการในใบเสนอราคา". Mirrors
-// DealQuotationService#create/#update/#insertCopyOf's handling of hideProjectName. This is
-// PLUMBING evidence only (the field survives the mock's own create/update/clone paths); that the
-// printed document really drops the line is proven against the Java renderer, not here.
+// "ไม่แสดงชื่อโครงการในใบเสนอราคา". Mirrors DealQuotationService#create/#update/#insertCopyOf's
+// handling of hideProjectName. PLUMBING evidence only (the field survives the mock's own
+// create/update/clone paths); that the printed document drops the line is proven against the Java
+// renderer, not here.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 describe('mock dealQuotations.create/update -- hideProjectName (V192.1)', () => {
   it('defaults false when the request omits it', async () => {

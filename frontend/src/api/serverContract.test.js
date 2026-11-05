@@ -10,63 +10,46 @@ import {
 } from './apiSurface.js';
 
 /**
- * THE GUARD THIS FILE EXISTS TO ADD — hrApi.js against the SPRING CONTROLLERS.
+ * Guards hrApi.js against the SPRING CONTROLLERS.
  *
- * `contract.test.js` already pins mockApi.js against hrApi.js in both directions. Nothing pinned
- * hrApi.js against the thing that actually answers its requests. A server endpoint added, removed,
- * renamed, or re-verbed had no tripwire at all: the frontend kept calling the old path, every
- * mock-driven test stayed green (the mock answers whatever hrApi asks), and the only place the
- * disagreement showed up was a 404 in production. That is the same unguarded-mirror family this
- * repo has been closing all week — `WIN_PROBABILITY_DEFAULTS` vs `WinProbabilityDefaults.java`,
- * `stageMeta.js` vs `DealStage` — one layer up.
+ * `contract.test.js` pins mockApi.js against hrApi.js in both directions; this file pins hrApi.js
+ * against what actually answers its requests. Without it, a server endpoint added, removed,
+ * renamed, or re-verbed leaves every mock-driven test green (the mock answers whatever hrApi asks)
+ * and shows up only as a 404 in production. Same unguarded-mirror family as
+ * `WIN_PROBABILITY_DEFAULTS` vs `WinProbabilityDefaults.java`, `stageMeta.js` vs `DealStage`.
  *
  * THREE DIRECTIONS, DELIBERATELY ASYMMETRIC:
  *
- *   1. client → server  (`hrApi calls no endpoint that does not exist`)  — HARD FAIL, no allowlist.
- *      A call with no endpoint behind it is already broken. There is no legitimate reason to have
- *      one, so there is no way to excuse one.
+ *   1. client -> server  (`hrApi calls no endpoint that does not exist`): HARD FAIL, no allowlist.
+ *      A call with no endpoint behind it is already broken, so there is no way to excuse one.
  *
- *   2. server → client  (`every endpoint is called, or listed in SERVER_ONLY`) — allowlisted.
- *      An endpoint with no hrApi caller is NOT automatically dead. It may be reached by the Python
- *      scanner agents, a script, the e2e suite, or a documented curl operation; or it may be a
- *      capability built backend-first whose UI has not landed. Deleting one on the strength of "no
- *      hrApi caller" would be a production break. So this direction reports and requires a written
- *      reason rather than assuming litter.
+ *   2. server -> client  (`every endpoint is called, or listed in SERVER_ONLY`): allowlisted. An
+ *      endpoint with no hrApi caller is NOT automatically dead: it may be reached by the Python
+ *      scanner agents, a script, the e2e suite, or a documented curl operation, or be built
+ *      backend-first with the UI not landed. Deleting one on that evidence alone would be a
+ *      production break, so this direction requires a written reason.
  *
- *   3. hrApi → the UI  (`every endpoint is reachable from a screen`) — allowlisted, and NEW.
- *      Directions 1 and 2 both compare DECLARATIONS. An hrApi method no component ever calls still
- *      counted as "reached", so its endpoint looked live when no user could get to it. 39 of
- *      hrApi's 261 methods are in that state. This direction is what makes "reachable" mean
- *      reachable; see UNREACHABLE_FROM_UI, and note that its entries are explicitly NOT verified.
+ *   3. hrApi -> the UI  (`every endpoint is reachable from a screen`): allowlisted. Directions 1 and
+ *      2 compare DECLARATIONS, so an hrApi method no component calls still looked live. This
+ *      direction makes "reachable" mean reachable; see UNREACHABLE_FROM_UI, whose entries are
+ *      explicitly NOT verified.
  *
- * WHY THE CLIENT SIDE IS INSTRUMENTED RATHER THAN PARSED. hrApi.js does not hold paths; it composes
- * them — `withQuery(...)`, `API_ROUTES.tickets.action(id, 'close/confirm')`, template literals with
- * an appended `?reason=`, and a dozen bare `fetch()` calls for blob downloads and multipart uploads.
- * A regex over the source would have to re-implement all of that and would silently under-report the
- * moment someone composed a path a new way — failing GREEN, which is the failure mode this file is
- * here to prevent. Mocking `./client.js` and `globalThis.fetch` and then CALLING every method means
- * the captured set is what the code actually issues. `assertEveryMethodProbed` below then fails if
- * any method produced no observable request at all, so a method this harness cannot drive is a loud
- * error rather than a quiet omission from the comparison.
+ * WHY THE CLIENT SIDE IS INSTRUMENTED, NOT PARSED. hrApi.js composes paths (`withQuery(...)`,
+ * `API_ROUTES.tickets.action(id, 'close/confirm')`, template literals with an appended `?reason=`,
+ * and bare `fetch()` calls for blob downloads and multipart uploads). A regex over the source would
+ * silently under-report when someone composes a path a new way, failing GREEN. Mocking
+ * `./client.js` and `globalThis.fetch` and CALLING every method captures what the code actually
+ * issues; `assertEveryMethodProbed` fails if a method produced no observable request, so a method
+ * this harness cannot drive is a loud error.
  *
- * WHY THE SERVER SIDE IS NO LONGER PARSED HERE. This file used to parse `*Controller.java` with a
- * JS regex, on the reasoning that Spring's own `RequestMappingHandlerMapping` lives in the JVM and
- * the comparison has to happen somewhere. That reasoning was sound and the parse was correct — it
- * agreed exactly with springdoc on all 276 operations. But it was a second implementation of
- * Spring's mapping resolution with nothing checking it against the real dispatcher, which is the
- * same unguarded-mirror shape one level down.
+ * WHY THE SERVER SIDE IS NOT PARSED HERE. The surface comes from `docs/api/api-surface.json`,
+ * generated by the backend's `ApiSurfaceContractTest` from springdoc's `/v3/api-docs` (the JVM
+ * introspecting itself); that test FAILS when the committed digest drifts from the running
+ * application. A JS regex over `*Controller.java` would be a second, unchecked implementation of
+ * Spring's mapping resolution. The digest also carries the `@Deprecated` subset.
  *
- * The surface now comes from `docs/api/api-surface.json`, generated by the backend's
- * `ApiSurfaceContractTest` from springdoc's `/v3/api-docs` — the JVM introspecting itself — and
- * that test FAILS when the committed digest drifts from the running application. So the JSON read
- * here is not a transcription anyone maintains; it is the dispatcher's own answer, with a tripwire.
- * It also carries the `@Deprecated` subset, which the regex could see but which no longer needs a
- * second parser to stay in step.
- *
- * This consolidates two guards that briefly existed side by side — this file (PR #722, parsing
- * Java) and `reconcile.test.js` (PR #726, reading the digest) — which asserted overlapping
- * properties from different sources behind two separate allowlists. One endpoint, one allowlist,
- * one source of truth.
+ * This is the single guard (one endpoint, one allowlist, one source of truth) replacing an earlier
+ * pair that asserted overlapping properties from different sources.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,15 +181,13 @@ const UI_REACHABLE_KEYS = new Set(
 // Endpoints with no hrApi caller
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Same spirit — and the same two-way enforcement — as contract.test.js's KNOWN_GAPS and
-// ARITY_EXEMPTIONS: every entry must name a real, still-uncalled endpoint and carry a written
-// reason. A stale entry is deleted by its own test below, so an endpoint that later gains a caller
-// cannot leave a pre-approved hole behind it.
+// Same two-way enforcement as contract.test.js's KNOWN_GAPS and ARITY_EXEMPTIONS: every entry must
+// name a real, still-uncalled endpoint and carry a written reason. A stale entry is deleted by its
+// own test below, so an endpoint that later gains a caller cannot leave a pre-approved hole.
 //
-// AN ENTRY HERE IS NOT A CLAIM THAT THE ENDPOINT IS DEAD. Read each reason: some are reached by
-// clients this harness cannot see (the Python scanner agents), and some are capabilities built
-// backend-first whose UI has not landed. Whether to surface or retire any of them is a product
-// decision, recorded in the PR that added this file — not something a test should decide.
+// AN ENTRY HERE IS NOT A CLAIM THAT THE ENDPOINT IS DEAD. Some are reached by clients this harness
+// cannot see (the Python scanner agents), some are built backend-first with the UI not landed.
+// Whether to surface or retire any of them is a product decision, not something a test decides.
 const SERVER_ONLY = {
   // ── Live, via a client this harness cannot see ────────────────────────────
   'GET /api/public/brand/logo.png':
@@ -234,70 +215,31 @@ const SERVER_ONLY = {
   'POST /api/deal-quotations/{}/promote-to-deal': 'GLA-136 legacy alias of …/confirm-order (same handler), kept for ONE release so a still-cached frontend bundle keeps working; the frontend now calls …/confirm-order. Pinned by DealQuotationControllerTest. Remove with the controller alias.',
 
 
-  // ── Formerly dormant, now GONE: ProcurementController ─────────────────────
-  // Eight entries stood here — all of ProcurementController's mappings. PR #683 (ebaf6888,
-  // 2026-08-11) had deleted the จัดซื้อ & นำเข้า page and every client layer while keeping the
-  // backend "in place, dormant and with no frontend caller", and predicted this guard would flag
-  // them. Owner ruling 2026-08-18 closed that out the other way: the controller is deleted, so the
-  // eight endpoints no longer exist and need no exemption. There is nothing to re-add here — the
-  // stale-entry assertion below would fail on an entry naming an endpoint the backend does not serve.
-  //
-  // ONLY THE HTTP DOOR WENT. ProcurementService, ProcurementRepository, the DTOs and
-  // FactoryPurchaseOrderStatus all remain, still covered by ProcurementServiceIntegrationTest, and
-  // sales.factory_purchase_order is untouched — TicketRepository#purchaseOrderRollup still reads it
+  // ProcurementController's endpoints are deleted (the controller is gone), so they need no
+  // exemption; the stale-entry assertion below would fail on an entry naming an endpoint the
+  // backend does not serve. Only the HTTP door went: ProcurementService, ProcurementRepository, the
+  // DTOs and FactoryPurchaseOrderStatus remain (ProcurementServiceIntegrationTest), and
+  // sales.factory_purchase_order is untouched: TicketRepository#purchaseOrderRollup still reads it
   // to derive each deal's import-axis fulfilment status.
 
   // ── Built backend-first; the UI pass has not landed ───────────────────────
-  // The four pricing entries that stood here (recalculate-cost, cost-override, and the two
-  // freight-rate rows) went with PR #769, which shipped their CEO costing UI. GET and PUT
-  // /api/payroll/deduction-consents went in the same week — DeductionConsentsPage.jsx now reaches
-  // the read half and DeductionConsentFormModal.jsx the write half (issue #744). The stale-entry
-  // test below is what deletes an entry once its endpoint gains a caller.
-  // POST /api/leave/policy-document was the last entry in this block until 2026-08-14 —
-  // LeavePolicyDocumentPage.jsx now reaches it (issue #744), which also re-wires the GET half's
-  // policyDocumentAvailable/downloadPolicyDocument to a screen for the first time since the PDF was
-  // bundled at frontend/public/policy/ (2026-08-11 owner ruling). That bundled copy is still what
-  // the leave page links; this endpoint is the server-side archive of record, not that reader.
-  // GET /api/deal-quotations/counts and PUT /api/customers/{} stood here until this branch:
-  // both shipped on feat/quotation-feedback-1-backend a day ahead of the UI, and the
-  // ใบเสนอราคา tabs (F5) and the deal card's เลขที่ผู้เสียภาษี / โทร. fields (F7) now call
-  // them, so the stale-entry test below is what required deleting them here.
+  // The stale-entry test below deletes an entry once its endpoint gains a caller.
+  // The bundled leave-policy PDF at frontend/public/policy/ is still what the leave page links;
+  // POST /api/leave/policy-document is the server-side archive of record, reached by
+  // LeavePolicyDocumentPage.jsx.
 
-  // The STORED ใบขอซื้อ aggregate's twelve routes stood here (createDrafts through
-  // required-by-note) between PR-A (#1008, backend-first) and PR-B, which wired every one of them
-  // into DealFulfilmentPanel's per-factory cards and the /fulfilment งานนำเข้า worklist — see
-  // api.storedImportRequests in hrApi.js. They are gone rather than re-worded: the stale-entry
-  // assertion below is what required deleting them here.
 
-  // The three ใบขอซื้อ (F-SM-001) GETs were listed here between #812 and this change, as a
-  // capability built backend-first whose UI had not landed. They are gone rather than re-worded:
-  // DealFulfilmentPanel's IR block now calls all three through api.importRequests, so they are
-  // ordinary called endpoints and this test refuses to keep an exemption for them.
 
-  // GET/PUT /api/catalog/thickness-defaults stood here from #814 until the CEO settings panel
-  // landed. They are gone rather than re-worded: hrApi.js's catalogThicknessDefaults.list/save
-  // call both, so this test's own "is now called by hrApi — delete the entry" assertion fires if
-  // they come back. That assertion is what removed them.
-  //
-  // They moved to UNREACHABLE_FROM_UI below on 2026-09-17, when ThicknessDefaultsPanel — hrApi's
-  // only UI caller for those two methods — was itself removed on request. hrApi.js still calls the
-  // endpoints (so they stay out of this list), but no screen calls hrApi anymore.
 
-  // GET/PUT /api/deal-estimate-markup were the two entries here until 2026-08-14. They are gone
-  // rather than re-worded: issue #748's owner ruling deleted the controller, repository, DTOs, both
-  // backend test classes and — by V145 — the V112 table itself, so there is no longer an endpoint
-  // to exempt. The two frontend tests asserting the multiplier must NOT come back stay where they
-  // are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend, which is
+  // The two frontend tests asserting the deal-estimate-markup multiplier must NOT come back stay
+  // where they are (TicketCreateModal.test.jsx, CeoSettingsPage.test.jsx); they guard the frontend,
   // where the misreading happened.
 
-  // CEO discount-approval workflow, Phase 2 (V155). The task's actual UI requirement — a line
-  // shows sales it needs approval and why it was rejected; the CEO approves/rejects with a
-  // reason — is satisfied per-quotation, on the same PricingRequestDetailPage screen the CEO
-  // already reviews pricing on (listDiscountApprovalsForQuotation/approveDiscountApproval/
-  // rejectDiscountApproval, all called and reachable). This CROSS-quotation queue is a genuinely
-  // separate capability (a CEO dashboard listing every pending discount across every deal) that
-  // was not asked for and would be a new IA surface — built on the backend for when/if it is,
-  // not wired to any screen yet.
+  // CEO discount-approval workflow. The UI requirement (a line shows sales it needs approval and why
+  // it was rejected; the CEO approves/rejects with a reason) is met per-quotation on
+  // PricingRequestDetailPage (listDiscountApprovalsForQuotation/approveDiscountApproval/
+  // rejectDiscountApproval, all called and reachable). This CROSS-quotation queue (a CEO dashboard
+  // of every pending discount) is a separate capability, not wired to any screen.
   'GET /api/discount-approvals/pending':
     'DiscountApprovalService.listPending — a CEO-wide queue across all quotations, not needed for '
     + 'the per-quotation approve/reject flow the task required (see the comment above). Capability '
@@ -309,26 +251,20 @@ const SERVER_ONLY = {
 // hrApi calls that reach a @Deprecated endpoint
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The path-and-verb comparison above cannot see this class of divergence, and it is the one this
-// audit actually found in the wild. V141 (PR #702) moved landed costing from Import to the CEO and
-// SEVERED three write routes rather than deleting them: they are still routed, still match on path
-// and verb, and throw 409 unconditionally. `PricingCostingController`'s own Javadoc says keeping the
-// route shape is deliberate so "the client contract stays stable" while the backend is cleaned
-// first.
+// The path-and-verb comparison above cannot see this class of divergence. Costing moved from
+// Import to the CEO and three write routes were SEVERED rather than deleted: still routed, still
+// matching on path and verb, throwing 409 unconditionally. `PricingCostingController`'s Javadoc
+// says keeping the route shape is deliberate so "the client contract stays stable".
 //
-// NO SCREEN REACHES THEM ANY MORE (2026-08-14). PR #760 took them out of Import's ส่งให้ CEO
-// อนุมัติราคา chain, and #747 deleted the last four controls that drove them — which were
-// unreachable for their whole existence anyway. What still calls them is hrApi.js, and through it
-// mockApi.js: `mockApi.depositNotices.test.js` drives createCosting -> recalculate -> submit to get
-// a request to READY_FOR_CEO_REVIEW, because mockApi's markFactoryQuoteReady does NOT auto-advance
-// the way FactoryQuoteService.markReadyForCosting does. So finishing this migration means teaching
-// the mock the backend's current behaviour first — a change to the default verification surface,
-// not a deletion — and until then these three stay listed here rather than in SERVER_ONLY. The
-// three matching UNREACHABLE_FROM_UI entries record the screen half of the same state.
+// No screen reaches them any more. What still calls them is hrApi.js, and through it mockApi.js:
+// `mockApi.depositNotices.test.js` drives createCosting -> recalculate -> submit to get a request to
+// READY_FOR_CEO_REVIEW, because mockApi's markFactoryQuoteReady does NOT auto-advance the way
+// FactoryQuoteService.markReadyForCosting does. Finishing the migration means teaching the mock the
+// backend's current behaviour first, so these stay listed here rather than in SERVER_ONLY. The
+// three matching UNREACHABLE_FROM_UI entries record the screen half.
 //
-// Listing them as an EXACT expectation, the same shape as api-surface.spec.js's KNOWN_SERVER_ERRORS:
-// a NEW deprecated call site fails this test, and so does finishing the migration without removing
-// the entry. Either direction should require a decision rather than passing quietly.
+// An EXACT expectation, like api-surface.spec.js's KNOWN_SERVER_ERRORS: a NEW deprecated call site
+// fails this test, and so does finishing the migration without removing the entry.
 const CALLS_DEPRECATED = {
   'POST /api/pricing-requests/{}/costings':
     'pricingRequests.createCosting → severed by V141; the CEO equivalent is startPricingDecision. Always 409s.',
@@ -394,10 +330,9 @@ describe('controller surface / hrApi.js contract — harness sanity', () => {
   });
 
   it('the digest carries the @Deprecated subset the backend publishes', () => {
-    // V141 (#702) severed three costing writes IN PLACE — still routed, still the same verb and
-    // path, throwing 409. A surface comparison cannot see that; only this list can, and
-    // CALLS_DEPRECATED below is what reads it. If it ever came back empty the deprecated-call
-    // assertion would pass while every severed route went unwatched.
+    // Three costing writes were severed IN PLACE (same verb and path, throwing 409). A surface
+    // comparison cannot see that; only this list can, and CALLS_DEPRECATED reads it. If it came
+    // back empty the deprecated-call assertion would pass while every severed route went unwatched.
     expect(DEPRECATED_KEYS.size).toBeGreaterThan(0);
     for (const key of DEPRECATED_KEYS) expect(SERVER_KEYS).toContain(key);
   });
@@ -449,21 +384,18 @@ describe('controller surface / hrApi.js contract', () => {
 
   // ── A CALL THAT MATCHES ON PATH AND VERB AND STILL ALWAYS FAILS ───────────
   //
-  // HOW AN ALWAYS-409 ENDPOINT IS CLASSIFIED HERE, stated because getting it wrong both ways is
-  // easy. A severed route is NOT missing: it is still routed, so the two tests above see a normal
-  // match and report nothing. That is correct — answering 409 with a clear message is a deliberate
-  // design in this repo, chosen precisely so a stale caller gets an explanation instead of a 404,
-  // and flagging it as a broken call would be a false positive on an intentional pattern.
+  // A severed route is NOT missing: it is still routed, so the two tests above see a normal match
+  // and report nothing. That is correct: answering 409 with a clear message is deliberate, so a
+  // stale caller gets an explanation instead of a 404, and flagging it would be a false positive.
   //
-  // Note the repo has TWO retirement shapes and only one of them lands here:
-  //   • route DELETED, service method kept @Deprecated — TicketService#submit/#pickup. No mapping
-  //     exists, so these never enter the comparison at all. Nothing to report.
-  //   • route KEPT and severed — the three V141 costing writes below. These do enter it.
+  // The repo has TWO retirement shapes and only one lands here:
+  //   • route DELETED, service method kept @Deprecated (TicketService#submit/#pickup): no mapping
+  //     exists, so these never enter the comparison.
+  //   • route KEPT and severed (the three costing writes below): these do enter it.
   //
-  // So this test asks the narrower question the other two cannot: is a live hrApi method pointed at
-  // a route the backend has already severed? That is not a false positive and not a design choice
-  // — it is an unfinished migration, and it is invisible under VITE_USE_MOCKS=true because mockApi
-  // never learned the route was severed.
+  // So this test asks the narrower question the others cannot: is a live hrApi method pointed at a
+  // route the backend has severed? That is an unfinished migration, invisible under
+  // VITE_USE_MOCKS=true because mockApi never learned the route was severed.
   it('no hrApi method calls a @Deprecated endpoint beyond the documented migration', () => {
     const calling = [...new Set(
       CLIENT_CALLS
@@ -515,52 +447,44 @@ describe('controller surface / hrApi.js contract', () => {
 
 
 /**
- * Endpoints an hrApi method reaches, but which NO SCREEN can reach — the method is declared and
+ * Endpoints an hrApi method reaches, but which NO SCREEN can reach: the method is declared and
  * never called.
  *
- * ⛔ THIS IS NOT A DELETION LIST, and unlike SERVER_ONLY above these entries are NOT individually
- * researched. Every one is a MEASUREMENT: `componentCalledMethods()` found no
- * `api.<namespace>.<method>(` for the method that reaches it, anywhere outside `src/api/` and
- * outside tests. That is evidence the UI cannot reach it. It is NOT evidence the capability is
- * dead, and several here are near-certainly live-by-other-means or half-finished features —
- * the whole `deduction-obligations` cluster is the frontend half of closed issue #373, and
- * `price-import` is a five-endpoint upload flow.
+ * NOT A DELETION LIST, and unlike SERVER_ONLY above these entries are NOT individually researched.
+ * Every one is a MEASUREMENT: `componentCalledMethods()` found no `api.<namespace>.<method>(` for
+ * the method that reaches it, outside `src/api/` and tests. That is evidence the UI cannot reach
+ * it, not that the capability is dead; several are live-by-other-means or half-finished features
+ * (the `deduction-obligations` cluster is the frontend half of a closed issue, and `price-import`
+ * is a five-endpoint upload flow). Only twelve of the client-side methods have been hand-checked.
+ * Nothing should be removed on the strength of this list alone: this repo has been wrong in BOTH
+ * directions (`CommissionStatus.VOID` looked dead and is deliberately unreachable, and
+ * `cancelOpenForPricingRequest` looked like a missing capability and was a duplicate of live
+ * inlined SQL).
  *
- * Verifying them one by one is issue #746's umbrella, which opens with its own "this is not a
- * deletion list" warning and records that only twelve of the client-side methods have been
- * hand-checked. Nothing should be removed on the strength of this list alone. This repo has been
- * wrong in BOTH directions in a single week: `CommissionStatus.VOID` looked dead and is
- * deliberately unreachable, and `cancelOpenForPricingRequest` looked like a missing capability and
- * was a verbatim duplicate of live inlined SQL.
- *
- * What the list IS for: freezing the set so it cannot grow silently. A NEW entry means a screen
- * stopped calling something, or an endpoint shipped behind a method nothing invokes — either way a
- * capability just became unreachable, and that should require a decision rather than a shrug.
- * Shrinking it (wiring a screen up, or retiring the endpoint) is the direction of travel and the
- * stale-entry test below deletes the entry for you.
+ * The list freezes the set so it cannot grow silently. A NEW entry means a screen stopped calling
+ * something, or an endpoint shipped behind a method nothing invokes; either way a capability just
+ * became unreachable, and that should require a decision. Shrinking it (wiring a screen up, or
+ * retiring the endpoint) is the direction of travel and the stale-entry test deletes the entry.
  */
 const UNREACHABLE_FROM_UI = new Set([
-  // Walk 4 (owner ruling 2026-10-29): there is no reserve-from-stock feature, so the จองสินค้าจากสต็อก UI is
-  // gone. The endpoint and hrApi method stay (backend test fixtures and old clients still call it).
+  // There is no reserve-from-stock feature, so the จองสินค้าจากสต็อก UI is gone. The endpoint and
+  // hrApi method stay (backend test fixtures and old clients still call it).
   'POST /api/tickets/{}/reserve-stock',
-  // W3-04 (owner ruling 2026-10-29): the one-click legacy "issue IR" is closed — the endpoint now
-  // answers 409 for every deal and no screen calls it. Retire the endpoint and hrApi method together
-  // in a follow-up.
+  // The one-click legacy "issue IR" is closed: the endpoint answers 409 for every deal and no screen
+  // calls it. Retire the endpoint and hrApi method together in a follow-up.
   'POST /api/tickets/{}/import-request',
-  // GLA-99 step 3 (ใบวางบิล / billing note, V189): the STORED backend + renderer + hrApi/mockApi
-  // wiring landed on GLA-129 step 4 part 1; the /finance ใบวางบิล tab that calls the rest of these
-  // eleven methods is step 4 part 3, a separate branch not yet merged. `GET
-  // /api/customers/{}/billing-notes` (listForCustomer) is back on this list (owner design
-  // 2026-10-31): the deal-page การเงิน tab's ใบวางบิล step that read it left this release. Cancel/
-  // issue/mark-received/mark-settled/revise and the create/update/delete/candidates/file routes are
-  // all still write-side or picker-only, with no screen yet. BillingNoteService/BillingNoteController/
-  // BillingNoteRenderer are already covered by BillingNoteServiceIntegrationTest (real Postgres,
-  // including the wrong-way-round authz suite) and BillingNoteRendererTest. Remove this block once
-  // those screens call the rest through hrApi.js.
+  // ใบวางบิล / billing note: the STORED backend + renderer + hrApi/mockApi wiring exist, but the
+  // /finance ใบวางบิล tab that would call the rest of these eleven methods is not merged. `GET
+  // /api/customers/{}/billing-notes` (listForCustomer) is here because the deal-page การเงิน tab's
+  // ใบวางบิล step that read it is out of this release. Cancel/issue/mark-received/mark-settled/
+  // revise and the create/update/delete/candidates/file routes are write-side or picker-only with no
+  // screen yet. BillingNoteService/Controller/Renderer are covered by
+  // BillingNoteServiceIntegrationTest (real Postgres, including the wrong-way-round authz suite) and
+  // BillingNoteRendererTest. Remove this block once those screens call the rest through hrApi.js.
   'GET /api/customers/{}/billing-notes',
-  // Owner design 2026-10-31: the deal page no longer sets billing dates (วางบิล is out of this
-  // release's scope; /finance keeps its own billing) nor the deposit policy (the มัดจำ card is gone;
-  // the % comes from the accepted quotation).
+  // The deal page no longer sets billing dates (วางบิล is out of this release; /finance keeps its
+  // own billing) nor the deposit policy (the มัดจำ card is gone; the % comes from the accepted
+  // quotation).
   'POST /api/tickets/{}/billing',
   'POST /api/tickets/{}/deposit-policy',
   'DELETE /api/billing-notes/{}',
@@ -576,32 +500,25 @@ const UNREACHABLE_FROM_UI = new Set([
   'PUT /api/billing-notes/{}',
   'DELETE /api/factory-quote-attachments/{}',
   'GET /api/catalog',
-  // GET/PUT /api/catalog/thickness-defaults joined this list on 2026-09-17: the CEO settings
-  // "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel — their only hrApi caller — was removed on request,
-  // frontend-only. See the removal note in CeoSettingsPage.jsx: the endpoint, its controller/
-  // repository, the underlying table, and the pricing engine's dependency on it via
-  // price_catalog.v_priceable_product are all untouched, so this is "UI unreachable", not "dead".
+  // GET/PUT /api/catalog/thickness-defaults: the CEO settings "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)"
+  // panel, their only hrApi caller, was removed (frontend-only; see CeoSettingsPage.jsx). The
+  // endpoint, controller/repository, table, and the pricing engine's dependency via
+  // price_catalog.v_priceable_product are untouched, so this is "UI unreachable", not "dead".
   'GET /api/catalog/thickness-defaults',
   'GET /api/customer-quotations/{}',
-  // "สร้างจากใบเดิม (สั่งเหมือนเดิม)" left the quotation page on 2026-10-12 (owner: too many
-  // CTAs). hrApi.js still carries dealQuotations.createReorder and the endpoint, its service and
-  // tests are untouched, so this is "UI unreachable", not "dead"; drop the endpoint in its own PR
-  // if the action never returns.
+  // "สร้างจากใบเดิม (สั่งเหมือนเดิม)" left the quotation page (too many CTAs). hrApi.js still carries
+  // dealQuotations.createReorder and the endpoint, service and tests are untouched, so this is "UI
+  // unreachable", not "dead"; drop the endpoint in its own PR if the action never returns.
   'POST /api/deal-quotations/{}/reorders',
   'GET /api/deposit-notices/{}',
   'GET /api/factory-configs',
   'GET /api/factory-quotes/{}',
-  // PR-B (import-request-per-factory UI): DealFulfilmentPanel/ImportFulfilmentPage both read the
-  // stored ใบขอซื้อ list (GET .../import-requests, plural, per ticket) and every mutation already
-  // returns its own full row, so this single-row-by-id GET has no screen that needs it separately.
-  // storedImportRequests.get stays in hrApi.js as a faithful mirror of the controller route
-  // (ImportRequestController#getStored) for completeness/future callers, same reasoning as the
-  // other single-row GETs already in this list (deposit-notices, factory-quotes, ...).
+  // DealFulfilmentPanel/ImportFulfilmentPage both read the stored ใบขอซื้อ list (GET
+  // .../import-requests, plural, per ticket) and every mutation returns its own full row, so this
+  // single-row-by-id GET has no screen that needs it. storedImportRequests.get stays in hrApi.js as
+  // a faithful mirror of ImportRequestController#getStored, like the other single-row GETs in this
+  // list (deposit-notices, factory-quotes, ...).
   'GET /api/import-requests/{}',
-  // 'GET /api/leave/policy-document' left this list on 2026-08-14: LeavePolicyDocumentPage.jsx
-  // calls policyDocumentAvailable (the HEAD probe the GET mapping answers) and
-  // downloadPolicyDocument, so a screen reaches it again for the first time since the reader bar
-  // switched to the bundled PDF.
   'GET /api/leave/review-summary',
   'GET /api/payroll/deduction-obligations',
   'GET /api/payroll/deduction-obligations/me',
@@ -611,19 +528,12 @@ const UNREACHABLE_FROM_UI = new Set([
   'GET /api/price-import/staging/{}',
   'GET /api/pricing-costings/{}',
   'GET /api/pricing-decisions/{}',
-  // GET /api/remaining-invoices/{} joined this list with the STORED remaining invoice aggregate
-  // (V188, GLA-99 step 2): RemainingInvoiceDialog reads the full list per ticket
+  // GET /api/remaining-invoices/{}: RemainingInvoiceDialog reads the full list per ticket
   // (storedRemainingInvoices.listForTicket, GET .../tickets/{}/remaining-invoices) and every
-  // mutation already returns its own full row, so this single-row-by-id GET has no screen that
-  // needs it separately — same reasoning as GET /api/deposit-notices/{} and
-  // GET /api/import-requests/{} just above/below. storedRemainingInvoices.get stays in hrApi.js
-  // as a faithful mirror of RemainingInvoiceController#get for completeness/future callers.
+  // mutation returns its own full row, so this single-row-by-id GET has no screen that needs it,
+  // as with GET /api/deposit-notices/{} and GET /api/import-requests/{}. storedRemainingInvoices.get
+  // stays in hrApi.js as a faithful mirror of RemainingInvoiceController#get.
   'GET /api/remaining-invoices/{}',
-  // GET /api/tickets/{}/remaining-invoice/file — REMOVED entirely (owner ruling O1, GLA-99 step 2
-  // review-round-1, 2026-09-20), along with DepositNoticeService#getRemainingInvoiceXlsx and
-  // hrApi's own downloadRemainingInvoice. This entry used to document it as "kept but
-  // unreachable"; that reasoning no longer applies now that the route itself is gone, not merely
-  // uncalled from the UI, so the entry is gone too rather than left stale.
   'PATCH /api/profile-requests/{}',
   'POST /api/attendance/cards/backfill',
   'POST /api/commissions',
@@ -638,32 +548,28 @@ const UNREACHABLE_FROM_UI = new Set([
   'POST /api/price-import/commit/{}',
   'POST /api/price-import/upload',
   'POST /api/price-import/validate/{}',
-  // The three V141-severed costing writes. These arrived here on 2026-08-14 by DELETION, not by
-  // drift: #747's four controls were the only screen call sites and the owner ruled them out. They
-  // are also the three CALLS_DEPRECATED entries — see that block for why hrApi still declares them
-  // (mockApi.depositNotices.test.js needs the chain until the mock learns markReadyForCosting's
-  // auto-advance) and why that is a separate change from this one.
+  // The three severed costing writes. They are unreachable by DELETION of the screen controls, not
+  // by drift. They are also the three CALLS_DEPRECATED entries; see that block for why hrApi still
+  // declares them (mockApi.depositNotices.test.js needs the chain until the mock learns
+  // markReadyForCosting's auto-advance).
   'POST /api/pricing-costings/{}/recalculate',
   'POST /api/pricing-costings/{}/submit',
   'POST /api/pricing-requests/{}/costings',
-  // POST /api/tickets/{}/entry-channel left this list at #740 (DealStagePanel's ช่องทางรับงาน
-  // control), came back on 2026-09-30 when GLA-156 removed that control, and LEFT AGAIN the same day:
-  // the route gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน", so a remedy has to exist.
-  // EntryChannelFix (the stepper's off-route rows + UpdateStageModal's blocked list) calls it via
-  // TicketDetailPage's onSetEntryChannel. Pinned by the explicit test in the reachability block below.
-  // 'POST /api/tickets/{}/factory-emails/send' left this list on 2026-09-06: the endpoint itself
-  // is DELETED (manual-RFQ redesign — factory email is a human-copies-and-sends flow now, see
-  // FactoryQuoteService.send), not merely wired up, so it is gone from SERVER_KEYS entirely and
-  // the "every UNREACHABLE_FROM_UI entry is real" test would flag a stale entry left here.
-  // PUT /api/catalog/thickness-defaults — see the GET entry above for the reason (same removal).
+  // POST /api/tickets/{}/entry-channel is reachable: the route gate refuses an off-route stage with
+  // "… — แก้ช่องทางดีลก่อน", so a remedy has to exist. EntryChannelFix (the stepper's off-route rows +
+  // UpdateStageModal's blocked list) calls it via TicketDetailPage's onSetEntryChannel. Pinned by the
+  // explicit test in the reachability block below.
+  // The factory-emails/send endpoint is DELETED (factory email is a human-copies-and-sends flow, see
+  // FactoryQuoteService.send), so it is gone from SERVER_KEYS and a stale entry here would be
+  // flagged by the "every UNREACHABLE_FROM_UI entry is real" test.
   'PUT /api/catalog/thickness-defaults',
   'PUT /api/payroll/deduction-obligations/{}',
   'PUT /api/payroll/tax-allowances',
   'PUT /api/payroll/ytd-seed',
   'PUT /api/price-import/profile/{}',
-  // GLA-152 (owner ruling 2026-10-01): the CEO product-type select was removed from the pricing
-  // cards; the endpoint stays server-side (TILE default, duty rate) and hrApi keeps the method for
-  // a future admin surface. Backend untouched — "UI unreachable", not "dead".
+  // The CEO product-type select was removed from the pricing cards; the endpoint stays server-side
+  // (TILE default, duty rate) and hrApi keeps the method for a future admin surface. Backend
+  // untouched: "UI unreachable", not "dead".
   'PUT /api/pricing-decisions/{}/items/{}/product-type-override',
 ]);
 
@@ -677,10 +583,10 @@ describe('controller surface / hrApi.js contract — UI reachability', () => {
   });
 
   it('POST /api/tickets/{}/entry-channel is UI-reachable: the "แก้ช่องทางดีล" control calls it', () => {
-    // The route gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน". GLA-156 had removed the
-    // only control that could do that, leaving the refusal with no remedy. EntryChannelFix (mounted
-    // from the stepper's off-route rows and UpdateStageModal's blocked list) restores it, and this
-    // pins that a screen really invokes it — so the endpoint must NOT sit in UNREACHABLE_FROM_UI.
+    // The route gate refuses an off-route stage with "… — แก้ช่องทางดีลก่อน". EntryChannelFix
+    // (mounted from the stepper's off-route rows and UpdateStageModal's blocked list) is the remedy,
+    // and this pins that a screen really invokes it, so the endpoint must NOT sit in
+    // UNREACHABLE_FROM_UI.
     expect(UI_REACHABLE_KEYS.has('POST /api/tickets/{}/entry-channel')).toBe(true);
     expect(UNREACHABLE_FROM_UI.has('POST /api/tickets/{}/entry-channel')).toBe(false);
   });
@@ -705,15 +611,15 @@ describe('controller surface / hrApi.js contract — UI reachability', () => {
       if (!SERVER_KEYS.has(key)) stale.push(`${key} — no longer served; drop this entry`);
       else if (UI_REACHABLE_KEYS.has(key)) stale.push(`${key} — a screen now calls it; drop this entry`);
     }
-    // Without this the list rots into an excuse for endpoints someone already fixed, and the
-    // count stops meaning anything.
+    // Without this the list rots into an excuse for endpoints someone already fixed, and the count
+    // stops meaning anything.
     expect(stale).toEqual([]);
   });
 
   it('the published reachable set matches what the scan computes', () => {
-    // docs/api/ui-reachable.json is consumed by the backend's ResponseFieldContractTest (#727) to
-    // stop pinning response fields on schemas no screen can reach. Publishing it without a drift
-    // guard would hand that test a stale input and quietly re-introduce the over-pin it fixes.
+    // docs/api/ui-reachable.json is consumed by the backend's ResponseFieldContractTest to stop
+    // pinning response fields on schemas no screen can reach. Publishing it without a drift guard
+    // would hand that test a stale input and re-introduce the over-pin.
     //
     // Raw form, not normalised, so it intersects directly with api-surface.json.
     const reachable = SERVER_ENDPOINTS

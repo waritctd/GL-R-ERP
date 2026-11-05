@@ -97,22 +97,19 @@ export const API_ROUTES = {
     employees: '/api/leave/employees',
     types: '/api/leave/types',
     balances: '/api/leave/balances',
-    // Manager team-quota summary (2026-09): per-direct-report remaining balances, TeamLeaveTab.jsx.
-    // See LeaveService#teamBalances's Javadoc for why this reuses findEmployeeOptions's scope
-    // (self OR reports_to_employee_id = actor, or every active employee for hr/ceo) rather than a
-    // new predicate.
+    // Manager team-quota summary (TeamLeaveTab.jsx): per-direct-report remaining balances. See
+    // LeaveService#teamBalances for why this reuses findEmployeeOptions's scope.
     teamBalances: '/api/leave/balances/team',
     contactDefaults: '/api/leave/contact-defaults',
     approve: (id) => `/api/leave/${id}/approve`,
     reject: (id) => `/api/leave/${id}/reject`,
     cancel: (id) => `/api/leave/${id}/cancel`,
-    // Leave-surface IA rebuild, Phase A0 (not yet landed): per-manager summary of requests
-    // awaiting THIS user's decision, backing the "รอพิจารณา" tab. Wired into routes/hrApi/mockApi/
-    // queryKeys now (Phase A1) only so contract.test.js's method-surface parity check stays green
-    // ahead of A0 -- no UI in this phase calls it yet. See mockApi.js's own comment on this route.
+    // Per-manager summary of requests awaiting THIS user's decision ("รอพิจารณา" tab). No UI calls it
+    // yet; it is wired through routes/hrApi/mockApi/queryKeys so contract.test.js's method-surface
+    // parity check stays green. See mockApi.js's comment on this route.
     reviewSummary: '/api/leave/review-summary',
-    // Leave-request composer (Phase A2, #485): dry-run gate-chain preview, writes nothing --
-    // see LeaveService#preview's Javadoc for the FULL vs QUICK depth and nullable-dates contract.
+    // Leave-request composer: dry-run gate-chain preview, writes nothing. See LeaveService#preview
+    // for the FULL vs QUICK depth and nullable-dates contract.
     preview: '/api/leave/preview',
     // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF the "กฎการลา" tab links to. Same
     // path serves both GET (download) and HEAD (LeavePolicyBar.jsx's availability probe) -- see
@@ -129,11 +126,10 @@ export const API_ROUTES = {
     // LeaveController#calendarContext's Javadoc for why this is deliberately not
     // HolidayController/WorkScheduleController (both stay hr/ceo-gated, untouched).
     calendarContext: '/api/leave/calendar-context',
-    // Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): an employee's own history for a
-    // chosen year/optional month, or a manager's ONE grouped PDF covering every direct report for
-    // the same period. Neither takes an employeeId param -- see LeaveService#ownLeaveReport /
-    // #teamLeaveReport's Javadoc for why the scope is entirely server-derived. `year`/`month` are
-    // appended as a query string by hrApi.js's withQuery, same shape as balances/teamBalances above.
+    // Printable leave-records report (รายงานสรุปใบลางาน): an employee's own history for a year/optional
+    // month, or a manager's ONE grouped PDF for every direct report. Neither takes an employeeId:
+    // the scope is entirely server-derived (LeaveService#ownLeaveReport / #teamLeaveReport).
+    // `year`/`month` go in the query string via hrApi.js's withQuery, like balances/teamBalances.
     reportMe: '/api/leave/reports/me.pdf',
     reportTeam: '/api/leave/reports/team.pdf',
   },
@@ -159,11 +155,11 @@ export const API_ROUTES = {
     createDocDraft: (id) => `/api/tickets/${id}/deposit-notice/draft`,
     listDocs: (id) => `/api/tickets/${id}/deposit-notices`,
     revision: (id) => `/api/tickets/${id}/revision`,
-    // quotationStatus (mark-sent/accepted/rejected) is retired along with ticket-native
-    // quotation generation — see hrApi.js's tickets block. quotationFile (read/download)
-    // stays: both legacy and PCR-issued quotations render from it.
+    // quotationStatus (mark-sent/accepted/rejected) is retired with ticket-native quotation
+    // generation (see hrApi.js's tickets block). quotationFile (read/download) stays: both legacy and
+    // PCR-issued quotations render from it.
     quotationFile: (id, quotationId, fmt) => `/api/tickets/${id}/quotations/${quotationId}/file?format=${fmt ?? 'xlsx'}`,
-    // Deal tracking + activity (V83, Slice B1/B2 "kill the weekly report" — handoff 103).
+    // Deal tracking + activity.
     activities: (id) => `/api/tickets/${id}/activities`,
     tracking: (id) => `/api/tickets/${id}/tracking`,
     customer: (id) => `/api/tickets/${id}/customer`,
@@ -175,18 +171,16 @@ export const API_ROUTES = {
     issue: (id) => `/api/deposit-notices/${id}/issue`,
     file: (id, fmt) => `/api/deposit-notices/${id}/file?format=${fmt}`,
     noteTemplates: '/api/document-note-templates',
-    // `quotationId` (optional): live-preview a specific qualifying quotation — see
-    // RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc. The sibling
-    // `remainingInvoiceFile` stateless download route builder was REMOVED here (owner ruling O1,
-    // GLA-99 step 2 review-round-1, 2026-09-20) along with the backend route it built a URL for —
-    // GET /api/tickets/{ticketId}/remaining-invoice/file. Only an ISSUED/SUPERSEDED STORED
-    // remaining invoice is downloadable now, via `storedRemainingInvoices.file` below.
+    // `quotationId` (optional): live-preview a specific qualifying quotation (see
+    // RemainingInvoiceOptionsDto's quotationOptions/defaultQuotationId). There is no stateless
+    // remaining-invoice file route; only an ISSUED/SUPERSEDED STORED remaining invoice is
+    // downloadable, via `storedRemainingInvoices.file` below.
     remainingInvoiceOptions: (ticketId, quotationId) =>
       `/api/tickets/${ticketId}/remaining-invoice/options${quotationId != null ? `?quotationId=${quotationId}` : ''}`,
   },
-  // ใบขอซื้อ (F-SM-001) — one form per BRAND on a deal, generated on demand. Read-only: there is no
-  // POST, because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason —
-  // see ImportRequestQueryRepository's Javadoc.
+  // ใบขอซื้อ (F-SM-001): one form per BRAND on a deal, generated on demand. Read-only: there is no
+  // POST because nothing is stored. `ref` and `requiredBy` are caller-supplied for the same reason
+  // (see ImportRequestQueryRepository's Javadoc).
   importRequests: {
     brands: (ticketId) => `/api/tickets/${ticketId}/import-request/brands`,
     pages: (ticketId, brand, requiredBy) => {
@@ -203,10 +197,9 @@ export const API_ROUTES = {
       return `/api/tickets/${ticketId}/import-request${p.toString() ? `?${p}` : ''}`;
     },
   },
-  // The STORED ใบขอซื้อ aggregate (V184, PR-A backend #1008 / PR-B UI) — one row per (deal,
-  // factory), draft/issue/revise/advance-step lifecycle. PLURAL paths throughout, mirroring
-  // ImportRequestController's own singular/plural split — see that class's Javadoc. Distinct from
-  // `importRequests` above, which stays the legacy read-only preview-per-brand family.
+  // The STORED ใบขอซื้อ aggregate: one row per (deal, factory), draft/issue/revise/advance-step
+  // lifecycle. PLURAL paths, mirroring ImportRequestController's singular/plural split. Distinct from
+  // `importRequests` above, the legacy read-only preview-per-brand family.
   storedImportRequests: {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/import-requests`,
     coverage: (ticketId) => `/api/tickets/${ticketId}/import-requests/coverage`,
@@ -228,17 +221,14 @@ export const API_ROUTES = {
   importDeals: {
     get: (ticketId) => `/api/import/deals/${ticketId}`,
   },
-  // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate (V188,
-  // GLA-99 step 2). One row per (deal, issued document), DRAFT -> ISSUED -> SUPERSEDED, minted on
-  // the shared sales.document_sequence (doc_type AR_GLR, format GLR<yy><5-digit seq>-<version>).
-  // The pre-existing STATELESS preview route (depositNotices.remainingInvoiceOptions above) is
-  // unchanged and stays in place as the prefill source a new draft snapshots from — its own
-  // stateless .../file sibling route is GONE (owner ruling O1, GLA-99 step 2 review-round-1,
-  // 2026-09-20; see remainingInvoiceOptions' own comment above); only an ISSUED/SUPERSEDED STORED
-  // document is downloadable now, via `file` below. Authorisation is entirely
-  // DepositNoticeService's own issue-deposit-notice gate (write) / requireTicketViewer (read)
-  // reused verbatim — see RemainingInvoiceService's own Javadoc. These methods carry no gate of
-  // their own.
+  // Mirrors RemainingInvoiceController: the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate. One row per
+  // (deal, issued document), DRAFT -> ISSUED -> SUPERSEDED, minted on the shared
+  // sales.document_sequence (doc_type AR_GLR, format GLR<yy><5-digit seq>-<version>). The stateless
+  // preview route (depositNotices.remainingInvoiceOptions above) stays as the prefill source a new
+  // draft snapshots from; only an ISSUED/SUPERSEDED STORED document is downloadable, via `file`
+  // below. Authorisation is DepositNoticeService's issue-deposit-notice gate (write) /
+  // requireTicketViewer (read), reused verbatim (see RemainingInvoiceService); these methods carry
+  // no gate of their own.
   storedRemainingInvoices: {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/remaining-invoices`,
     get: (id) => `/api/remaining-invoices/${id}`,
@@ -246,11 +236,10 @@ export const API_ROUTES = {
     revise: (id) => `/api/remaining-invoices/${id}/revise`,
     file: (id, fmt = 'pdf') => `/api/remaining-invoices/${id}/file?format=${fmt}`,
   },
-  // Mirrors BillingNoteController — the STORED ใบวางบิล aggregate (V189, GLA-99 step 3 / GLA-129
-  // step 4). Customer-scoped (many deals bill together), DRAFT -> ISSUED -> {SUPERSEDED (revised) |
-  // CANCELLED | SETTLED}, minted on the same shared AR_GLR sequence remaining invoices use.
-  // Authorisation is entirely BillingNoteService's own grant (can_issue_billing_note OR ceo, plus a
-  // wider read set) — these methods carry no gate of their own.
+  // Mirrors BillingNoteController: the STORED ใบวางบิล aggregate. Customer-scoped (many deals bill
+  // together), DRAFT -> ISSUED -> {SUPERSEDED (revised) | CANCELLED | SETTLED}, minted on the same
+  // shared AR_GLR sequence remaining invoices use. Authorisation is BillingNoteService's own grant
+  // (can_issue_billing_note OR ceo, plus a wider read set); these methods carry no gate of their own.
   billingNotes: {
     candidates: (customerId) => `/api/customers/${customerId}/billing-note-candidates`,
     forCustomer: (customerId) => `/api/customers/${customerId}/billing-notes`,
@@ -273,9 +262,9 @@ export const API_ROUTES = {
     },
     pricesBase: '/api/catalog/prices',
     price: (priceId) => `/api/catalog/prices/${priceId}`,
-    // CEO-maintained thickness fallbacks (V153). Both mirror ThicknessDefaultController; PUT is a
-    // BULK save — 244 (factory, collection) pairs cover every gap, and one request per pair would
-    // make a single sitting 244 round trips.
+    // CEO-maintained thickness fallbacks, mirroring ThicknessDefaultController. PUT is a BULK save:
+    // 244 (factory, collection) pairs cover every gap, and one request per pair would be 244 round
+    // trips.
     thicknessDefaults: '/api/catalog/thickness-defaults',
   },
   // Mirrors DesignerController (designer/) — READ-ONLY ผู้ออกแบบ directory, V173. There is no
@@ -283,11 +272,10 @@ export const API_ROUTES = {
   designers: {
     search: (q) => `/api/designers${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     byCode: (code) => `/api/designers/${encodeURIComponent(code)}`,
-    // POST /api/designers — reversal of the original read-only ruling (owner ask relayed
-    // 2026-09-26, task "designer-add-from-ui"). See DesignerController's own Javadoc.
+    // POST /api/designers; see DesignerController's Javadoc.
     create: '/api/designers',
   },
-  // CR-1 (GLA-167): lead-time change requests. Mirrors LeadTimeChangeController.
+  // Lead-time change requests. Mirrors LeadTimeChangeController.
   leadTimeChanges: {
     forFactoryQuote: (factoryQuoteId) => `/api/factory-quotes/${factoryQuoteId}/lead-time-changes`,
     detail: (id) => `/api/lead-time-changes/${id}`,
@@ -301,7 +289,7 @@ export const API_ROUTES = {
     // Names only (id + factoryName), readable by the IR creators (sales) too — see FactoryConfigController#names.
     names: '/api/factory-configs/names',
     // sendEmail (POST /api/tickets/{id}/factory-emails/send) is retired: factory RFQ email is
-    // manual-only now — see priceImport.factories/factory below and pricingRequests.factoryQuoteContacted.
+    // manual-only (see priceImport.factories/factory below and pricingRequests.factoryQuoteContacted).
   },
   locations: {
     provinces: '/api/locations/provinces',
@@ -310,15 +298,14 @@ export const API_ROUTES = {
   },
   customers: {
     create: '/api/customers',
-    // PUT /api/customers/{id} — a PATCH-shaped update on a PUT verb: a field the body omits is
-    // left alone (owner feedback F7, 2026-09-10; see CustomerController#update).
+    // PUT /api/customers/{id}: a PATCH-shaped update on a PUT verb; a field the body omits is left
+    // alone (see CustomerController#update).
     update: (customerId) => `/api/customers/${customerId}`,
     search: (q) => `/api/customers${q ? `?search=${encodeURIComponent(q)}` : ''}`,
     contacts: (customerId) => `/api/customers/${customerId}/contacts`,
     createContact: (customerId) => `/api/customers/${customerId}/contacts`,
-    // PUT /api/customers/{customerId}/contacts/{contactId} — gap fix (prod QT-2026-0041-1): a
-    // contact created without an e-mail could never gain one. PATCH-shaped update, same PATCH
-    // semantics as customers.update above (see CustomerController#updateContact).
+    // PUT /api/customers/{customerId}/contacts/{contactId}: PATCH-shaped, so a contact created
+    // without an e-mail can gain one later (see CustomerController#updateContact).
     updateContact: (customerId, contactId) => `/api/customers/${customerId}/contacts/${contactId}`,
     projects: (customerId) => `/api/customers/${customerId}/projects`,
     createProject: (customerId) => `/api/customers/${customerId}/projects`,
@@ -345,8 +332,8 @@ export const API_ROUTES = {
   pricingFormulaConfig: {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
-    // Per-row freight add/delete (issue #436, PR #455). Both return the WHOLE config as a NEW
-    // version — every freightRateId is reissued. Mirrors PricingFormulaConfigController.
+    // Per-row freight add/delete. Both return the WHOLE config as a NEW version (every freightRateId
+    // is reissued). Mirrors PricingFormulaConfigController.
     freightRates: '/api/pricing-formula-config/freight-rates',
     freightRate: (freightRateId) => `/api/pricing-formula-config/freight-rates/${freightRateId}`,
   },
@@ -363,8 +350,8 @@ export const API_ROUTES = {
   commissions: {
     list: '/api/commissions',
     create: '/api/commissions',
-    // Slice A2: the accountant's auto-create trigger at deal close. Mirrors
-    // CommissionController's POST /api/commissions/from-deal (ACCOUNT-only).
+    // The accountant's auto-create trigger at deal close. Mirrors CommissionController's
+    // POST /api/commissions/from-deal (ACCOUNT-only).
     createFromDeal: '/api/commissions/from-deal',
     // sales_manager/ceo รออนุมัติ view: every SUBMITTED sale record (any payroll month), and the
     // sales_manager-only per-item weight adjustment. Mirrors CommissionController#pendingApproval / #itemWeights.
@@ -377,46 +364,42 @@ export const API_ROUTES = {
     // Manual commission entries (feat/commission-manual-adjustments). Mirrors
     // CommissionController's POST /api/commissions/manual.
     manual: '/api/commissions/manual',
-    // Issue #737: the manual-commission rep picker's data source -- active employees in ฝ่ายขาย,
-    // the same list for sales_manager and ceo alike. Mirrors CommissionController#reps.
+    // The manual-commission rep picker's data source: active employees in ฝ่ายขาย, the same list for
+    // sales_manager and ceo. Mirrors CommissionController#reps.
     reps: '/api/commissions/reps',
     simulator: '/api/commissions/simulator',
     payrollReady: '/api/commissions/payroll-ready',
-    // fix/commission-figures-from-backend: a rep's own live monthly commission estimate, computed
-    // server-side from the same tier/incentive config a real payroll run uses. Mirrors
-    // CommissionController#monthlySummary.
+    // A rep's own live monthly commission estimate, computed server-side from the same tier/incentive
+    // config a real payroll run uses. Mirrors CommissionController#monthlySummary.
     monthlySummary: '/api/commissions/monthly-summary',
   },
   payroll: {
     current: '/api/payroll',
-    // Special-pay carry-forward (2026-07-23): read-only pre-fill suggestions for a brand-new
-    // monthly run, sourced from each employee's most-recent prior processed payroll_line. Mirrors
-    // PayrollController#suggestedInputs.
+    // Read-only pre-fill suggestions for a brand-new monthly run, from each employee's most recent
+    // prior processed payroll_line. Mirrors PayrollController#suggestedInputs.
     suggestedInputs: '/api/payroll/suggested-inputs',
     preview: '/api/payroll/preview',
     process: '/api/payroll/process',
     export: (periodId, kind, effectiveDate) =>
       `/api/payroll/${periodId}/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
-    // Preview-time detail xlsx export (2026-07-30): HR must be able to review a month's full detail
-    // BEFORE processing it (e.g. a live-but-unprocessed month) -- there is no periodId yet, so this
-    // POSTs the same payload /preview does. Only payroll-detail supports this. Mirrors
-    // PayrollController#exportPreview.
+    // Preview-time detail xlsx export: HR reviews a month's full detail BEFORE processing it. There
+    // is no periodId yet, so this POSTs the same payload /preview does. Only payroll-detail supports
+    // this. Mirrors PayrollController#exportPreview.
     exportPreview: (kind, effectiveDate) =>
       `/api/payroll/preview/export/${kind}${effectiveDate ? `?effectiveDate=${effectiveDate}` : ''}`,
     payslip: (periodId, lineId) => `/api/payroll/${periodId}/lines/${lineId}/payslip.pdf`,
     ownPayslip: (periodId) => `/api/payroll/${periodId}/payslip/me`,
-    // Bulk payslip ZIP (2026-07-30): every payslip for a processed period, so HR can review the
-    // whole batch before distribute() emails it to everyone. Mirrors PayrollController#bulkPayslipZip.
+    // Bulk payslip ZIP: every payslip for a processed period, so HR can review the batch before
+    // distribute() emails it. Mirrors PayrollController#bulkPayslipZip.
     payslipsZip: (periodId) => `/api/payroll/${periodId}/payslips.zip`,
     distribute: (periodId) => `/api/payroll/${periodId}/distribute`,
     taxAllowances: '/api/payroll/tax-allowances',
-    // Tax-allowance DECLARATION workflow (PR A, 2026-08-01): staged separately from the legacy
-    // bulk editor above -- a declaration never touches hr.employee_tax_allowance until HR applies
-    // it. Mirrors TaxAllowanceDeclarationController.
+    // Tax-allowance DECLARATION workflow, staged separately from the legacy bulk editor above: a
+    // declaration never touches hr.employee_tax_allowance until HR applies it. Mirrors
+    // TaxAllowanceDeclarationController.
     taxAllowanceDeclarations: {
       me: '/api/payroll/tax-allowances/declarations/me',
-      // Tax-effect estimate (decision #4, 2026-08-01). Reuses the SAME body shape as `me` (POST) --
-      // no employeeId field anywhere, same self-scoping idiom.
+      // Tax-effect estimate. Same body shape as `me` (POST): no employeeId field, same self-scoping.
       estimate: '/api/payroll/tax-allowances/declarations/me/estimate',
       // แบบ ล.ย.01 as a printable PDF. `form` renders a SAVED declaration; `formDraft` renders
       // unsaved values, because the employee must sign the sheet before a declaration exists.
@@ -428,10 +411,10 @@ export const API_ROUTES = {
       approve: (id) => `/api/payroll/tax-allowances/declarations/${id}/approve`,
       reject: (id) => `/api/payroll/tax-allowances/declarations/${id}/reject`,
       apply: (id) => `/api/payroll/tax-allowances/declarations/${id}/apply`,
-      // Yearly expiry (decision #10, 2026-08-01): the mirror of the scheduled expiry sweep.
+      // Yearly expiry: the mirror of the scheduled expiry sweep.
       reverify: (id) => `/api/payroll/tax-allowances/declarations/${id}/reverify`,
-      // Evidence attachments (decision #5, 2026-08-01). Nested POST/GET, mirrors
-      // PricingRequestController's own `.../{id}/attachments` shape.
+      // Evidence attachments. Nested POST/GET, mirrors PricingRequestController's
+      // `.../{id}/attachments` shape.
       attachments: (id) => `/api/payroll/tax-allowances/declarations/${id}/attachments`,
     },
     taxAllowanceCaps: '/api/payroll/tax-allowances/caps',
@@ -441,14 +424,14 @@ export const API_ROUTES = {
     taxAllowanceAttachmentFile: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}/file`,
     taxAllowanceAttachment: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}`,
     ytdSeed: '/api/payroll/ytd-seed',
-    // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix. Mirrors
-    // PayrollController's component-tax-treatments mapping.
+    // The withholding-tax classification matrix. Mirrors PayrollController's
+    // component-tax-treatments mapping.
     componentTaxTreatments: '/api/payroll/component-tax-treatments',
-    // Payroll input draft (2026-07-30): HR's in-progress, not-yet-processed inputs, persisted so a
-    // browser reload restores exactly what was typed. Mirrors PayrollController's input-draft mapping.
+    // HR's in-progress, not-yet-processed inputs, persisted so a reload restores what was typed.
+    // Mirrors PayrollController's input-draft mapping.
     inputDraft: '/api/payroll/input-draft',
-    // Deduction obligation tracking (issue #373): กยศ / กรมบังคับคดี obligation record + remittance
-    // ledger. Mirrors DeductionObligationController.
+    // Deduction obligation tracking: กยศ / กรมบังคับคดี obligation record + remittance ledger.
+    // Mirrors DeductionObligationController.
     deductionObligations: {
       me: '/api/payroll/deduction-obligations/me',
       list: '/api/payroll/deduction-obligations',
@@ -460,16 +443,15 @@ export const API_ROUTES = {
       overrideContinue: (id) => `/api/payroll/deduction-obligations/${id}/override-continue`,
       clearOverride: (id) => `/api/payroll/deduction-obligations/${id}/clear-override`,
     },
-    // Read-only garnishment shortfall ledger (issue #376). Mirrors
-    // PayrollDeductionShortfallController. Optional employeeId / kind query params.
+    // Read-only garnishment shortfall ledger. Mirrors PayrollDeductionShortfallController.
+    // Optional employeeId / kind query params.
     deductionShortfalls: '/api/payroll/deduction-shortfalls',
-    // Written-consent register (issue #376, exposed for #744). ONE path, two verbs — mirrors
-    // DeductionWrittenConsentController, whose @GetMapping and @PutMapping both sit on the bare
-    // class-level @RequestMapping. GET takes optional employeeId / kind query params; PUT takes a
-    // JSON body and upserts one (employee, kind) row.
+    // Written-consent register. ONE path, two verbs, mirroring DeductionWrittenConsentController
+    // (@GetMapping and @PutMapping both on the bare class-level @RequestMapping). GET takes optional
+    // employeeId / kind query params; PUT takes a JSON body and upserts one (employee, kind) row.
     //
-    // A RECORD, NOT A GATE: nothing in PayrollCalculator reads the row this writes — see
-    // DeductionWrittenConsentService's own javadoc and V107's COMMENT ON TABLE.
+    // A RECORD, NOT A GATE: nothing in PayrollCalculator reads the row this writes (see
+    // DeductionWrittenConsentService's javadoc).
     deductionConsents: '/api/payroll/deduction-consents',
   },
   priceImport: {
@@ -477,9 +459,9 @@ export const API_ROUTES = {
     // PUT counterpart of factories above — updates one factory's master data (name/country/
     // currency/email/unit). Mirrors PriceImportController.updateFactory.
     factory: (factoryId) => `/api/price-import/factories/${factoryId}`,
-    // Country picker for the factory add/edit form — see PriceImportController.countries and
-    // PriceImportService.listCountries. Replaces the old free-text 2-letter country input, which
-    // was the direct cause of createFactory's 500 on a typo'd/unseeded code.
+    // Country picker for the factory add/edit form (PriceImportController.countries,
+    // PriceImportService.listCountries); replaces a free-text 2-letter input that 500'd on a
+    // typo'd/unseeded code.
     countries: '/api/price-import/countries',
     versions: (factoryId) => `/api/price-import/versions?factoryId=${factoryId}`,
     upload: '/api/price-import/upload',
@@ -509,7 +491,7 @@ export const API_ROUTES = {
     factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
     factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
     factoryQuote: (id) => `/api/factory-quotes/${id}`,
-    // CR-1 (GLA-167): "ติดต่อโรงงานแล้ว" — replaces the retired POST .../send.
+    // "ติดต่อโรงงานแล้ว" (replaces the retired POST .../send).
     factoryQuoteContacted: (id) => `/api/factory-quotes/${id}/contacted`,
     factoryQuoteReceive: (id) => `/api/factory-quotes/${id}/receive`,
     factoryQuoteStartNegotiation: (id) => `/api/factory-quotes/${id}/start-negotiation`,
@@ -528,8 +510,8 @@ export const API_ROUTES = {
     pricingDecision: (id) => `/api/pricing-decisions/${id}`,
     pricingDecisionApprove: (id) => `/api/pricing-decisions/${id}/approve`,
     pricingDecisionReturnToImport: (id) => `/api/pricing-decisions/${id}/return-to-import`,
-    // V141 "CEO owns costing" (PR #702). recalculate-cost is the CEO-side successor to the
-    // severed /pricing-costings/{}/recalculate; cost-override is genuinely new per-line behaviour.
+    // CEO owns costing: recalculate-cost is the CEO-side successor to the severed
+    // /pricing-costings/{}/recalculate; cost-override is genuinely new per-line behaviour.
     pricingDecisionRecalculateCost: (id) => `/api/pricing-decisions/${id}/recalculate-cost`,
     pricingDecisionItemCostOverride: (decisionId, itemId) =>
       `/api/pricing-decisions/${decisionId}/items/${itemId}/cost-override`,
@@ -547,11 +529,10 @@ export const API_ROUTES = {
     customerQuotationFile: (id, format) => `/api/customer-quotations/${id}/file?format=${format}`,
     // Step 5: Customer Decision and Commercial Revisions.
     customerQuotationOutcome: (id) => `/api/customer-quotations/${id}/outcome`,
-    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). Mirrors
-    // DiscountApprovalController — a distinct controller/id-space from customer-quotation ids
-    // above (a discount-approval id, not a quotation id), grouped here anyway since every other
-    // sub-resource of the quotation surface lives in this same JS namespace regardless of its
-    // actual REST path prefix (see customerQuotation vs customerQuotations just above).
+    // CEO discount-approval workflow. Mirrors DiscountApprovalController: a distinct controller and
+    // id-space from customer-quotation ids above, grouped here because every other sub-resource of
+    // the quotation surface lives in this JS namespace regardless of REST path prefix (see
+    // customerQuotation vs customerQuotations just above).
     discountApprovalsForQuotation: (quotationId) => `/api/customer-quotations/${quotationId}/discount-approvals`,
     discountApprovalApprove: (id) => `/api/discount-approvals/${id}/approve`,
     discountApprovalReject: (id) => `/api/discount-approvals/${id}/reject`,
@@ -569,35 +550,30 @@ export const API_ROUTES = {
     attachment: (id) => `/api/pricing-request-attachments/${id}`,
     attachmentIncludeInFactoryEmail: (id) => `/api/pricing-request-attachments/${id}/include-in-factory-email`,
   },
-  // Quotation v2 — direct deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09). Bypasses
-  // the PricingRequest -> factory-quote -> CEO-costing chain entirely: sales adds items straight
-  // onto a quotation, types unit price + discount, sales_manager/ceo approves. Mirrors
-  // th.co.glr.hr.dealquotation.DealQuotationController — a SIBLING package to pricingrequest/ and
-  // customerquotation/, not a replacement for either. `sales.quotation.origin = 'DEAL_DIRECT'`
-  // rows never overlap the PCR-chain's `pricing_request_id IS NOT NULL` rows (V166's own header).
+  // Direct deal quotation. Bypasses the PricingRequest -> factory-quote -> CEO-costing chain: sales
+  // adds items straight onto a quotation, types unit price + discount, sales_manager/ceo approves.
+  // Mirrors th.co.glr.hr.dealquotation.DealQuotationController, a SIBLING package to pricingrequest/
+  // and customerquotation/. `sales.quotation.origin = 'DEAL_DIRECT'` rows never overlap the
+  // PCR-chain's `pricing_request_id IS NOT NULL` rows.
   dealQuotations: {
     listForTicket: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
     create: (ticketId) => `/api/tickets/${ticketId}/deal-quotations`,
-    // GLA-123 slice S1 — "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin
-    // quotation on this SAME engine, prefilled from an approved pricing request's CEO decision.
-    // Mirrors DealQuotationController#createFromPricingRequest. NOT
-    // `/pricing-requests/{id}/quotations` -- that exact path is already
-    // customerQuotations.create (the legacy path this sits beside, not inside).
+    // "เขียนใบเสนอราคาจากคำขอราคา": creates a PRICING_REQUEST-origin quotation on this SAME engine,
+    // prefilled from an approved pricing request's CEO decision. Mirrors
+    // DealQuotationController#createFromPricingRequest. NOT `/pricing-requests/{id}/quotations`:
+    // that exact path is already customerQuotations.create (the legacy path).
     createFromPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/deal-quotations`,
-    // M1 fix (Opus review, 2026-09-20) — read-only counterpart of the POST above: no create side
-    // effect, just "does this PR already have a new-engine quotation". Mirrors
-    // DealQuotationController#findForPricingRequest. Same path, GET instead of POST.
+    // Read-only counterpart of the POST above: no create side effect, just "does this PR already
+    // have a new-engine quotation". Mirrors DealQuotationController#findForPricingRequest.
     findForPricingRequest: (pricingRequestId) => `/api/pricing-requests/${pricingRequestId}/deal-quotations`,
     // Approver queue / role-scoped list. `status` filters by docStatus; sales is scoped to its own
     // deals server-side.
     //
-    // `needsRework=true` (owner feedback F5, 2026-09-10) is the list page's "แก้" tab and is NOT a
-    // docStatus: it is DRAFT rows sent back with a reason (`approvalNote`) OR DRAFT revisions in
-    // progress (`parentQuotationId`). It exists as a SERVER-side filter on purpose -- the two
-    // senses live in different columns, so expressing it client-side would mean fetching a list
-    // the server may have truncated and then filtering a different set of rows than the count
-    // says. Mutually exclusive with `status` in practice; both are sent if both are passed, and
-    // the server ANDs them.
+    // `needsRework=true` is the list page's "แก้" tab and is NOT a docStatus: it is DRAFT rows sent
+    // back with a reason (`approvalNote`) OR DRAFT revisions in progress (`parentQuotationId`). It is
+    // a SERVER-side filter because the two senses live in different columns; client-side filtering
+    // would run over a list the server may have truncated. Mutually exclusive with `status` in
+    // practice; if both are passed the server ANDs them.
     list: (params = {}) => {
       const p = new URLSearchParams();
       if (params.status) p.set('status', params.status);
@@ -607,31 +583,29 @@ export const API_ROUTES = {
     // Per-status counts for the caller's OWN list scope, for the tab labels (F5). One request for
     // all five numbers rather than five list fetches.
     counts: '/api/deal-quotations/counts',
-    // V179 (owner feedback #4, 2026-09-14) — options list for the ผู้พิมพ์/พนักงานขาย print-name
-    // selectors: the union of active sales-division employees and can_create_quotation grant
-    // holders. Mirrors DealQuotationController#displayNameOptions.
+    // Options for the ผู้พิมพ์/พนักงานขาย print-name selectors: the union of active sales-division
+    // employees and can_create_quotation grant holders. Mirrors DealQuotationController#displayNameOptions.
     displayNameOptions: '/api/deal-quotations/display-name-options',
     detail: (id) => `/api/deal-quotations/${id}`,
     calculateLine: '/api/deal-quotations/calculate-line',
     submit: (id) => `/api/deal-quotations/${id}/submit`,
     approve: (id) => `/api/deal-quotations/${id}/approve`,
     reject: (id) => `/api/deal-quotations/${id}/reject`,
-    // GLA-123 slice S3 (R9) — records what the customer said about an ISSUED
-    // PRICING_REQUEST-origin quotation. Mirrors DealQuotationController#recordOutcome.
+    // Records what the customer said about an ISSUED PRICING_REQUEST-origin quotation. Mirrors
+    // DealQuotationController#recordOutcome.
     outcome: (id) => `/api/deal-quotations/${id}/outcome`,
     revisions: (id) => `/api/deal-quotations/${id}/revisions`,
-    // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม) -- clone an APPROVED quotation into a new,
-    // independent DRAFT. Mirrors DealQuotationController#createReorder. Plural, sibling to
-    // `revisions` above, for the same reason: one source may be cloned any number of times.
+    // "สร้างจากใบเดิม" / สั่งเหมือนเดิม: clone an APPROVED quotation into a new, independent DRAFT.
+    // Mirrors DealQuotationController#createReorder. Plural, sibling to `revisions` above: one source
+    // may be cloned any number of times.
     reorders: (id) => `/api/deal-quotations/${id}/reorders`,
-    // GLA-136 (owner ruling 2026-09-30) -- "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct
-    // quotation's quotation-only container ticket into the pipeline at ORDER_RECEIVED. Mirrors
-    // DealQuotationController#promoteToDeal.
+    // "สร้างดีลจากใบเสนอราคา": promote an APPROVED direct quotation's quotation-only container ticket
+    // into the pipeline at ORDER_RECEIVED. Mirrors DealQuotationController#promoteToDeal.
     promoteToDeal: (id) => `/api/deal-quotations/${id}/confirm-order`,
     cancel: (id) => `/api/deal-quotations/${id}/cancel`,
     file: (id, format) => `/api/deal-quotations/${id}/file?format=${format}`,
-    // M4(d) fix (Opus review, 2026-09-20) — "คืนรายการ": re-adds a CEO-linked line a prior save
-    // dropped. Mirrors DealQuotationController#restoreRemovedItem.
+    // "คืนรายการ": re-adds a CEO-linked line a prior save dropped. Mirrors
+    // DealQuotationController#restoreRemovedItem.
     restoreRemovedItem: (id, pricingDecisionItemId) => `/api/deal-quotations/${id}/items/${pricingDecisionItemId}/restore`,
     // เอกสารแนบ of a quotation. Mirrors DealQuotationAttachmentController. The list and the upload
     // are addressed by the quotation, and one stored file by its own id.
@@ -642,9 +616,9 @@ export const API_ROUTES = {
 };
 
 export const ROLE_PERMISSIONS = {
-  // warehouse (WH-คลังสินค้า) and qc (QC&ISO) are new roles that, for now, get the same
-  // self-service experience as a plain employee — no งานขาย / sales access yet. Their scoped
-  // warehouse/QC involvement is a separate, later change (see DivisionAccessPolicy).
+  // warehouse (WH-คลังสินค้า) and qc (QC&ISO) get the same self-service experience as a plain
+  // employee, with no งานขาย / sales access. Their scoped involvement is separate (see
+  // DivisionAccessPolicy).
   canUseEmployeeExperience: ['employee', 'warehouse', 'qc'],
   canViewEmployees: ['hr'],
   canManageEmployees: ['hr'],
@@ -664,7 +638,7 @@ export const ROLE_PERMISSIONS = {
   // request; everyone else is scoped to self + managed employees, same shape as overtime.
   canViewAllSpecialMoney: ['hr', 'ceo'],
   canViewAllLeave: ['hr', 'ceo'],
-  // CEO leave-approval reach (2026-09-01), mirrors LeaveService.REVIEW_ALL_ROLES gaining "ceo".
+  // CEO leave-approval reach; mirrors LeaveService.REVIEW_ALL_ROLES containing "ceo".
   canReviewLeave: ['hr', 'ceo'],
   // Sales module
   // sales_manager is read+comment oversight ONLY (a project-manager-style
@@ -673,10 +647,10 @@ export const ROLE_PERMISSIONS = {
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Which roles may OPEN the whole-deal page (`/tickets/:id`, GET /api/tickets/{id}). `import` is
-  // deliberately absent: the backend refuses it the whole-deal read (it carries the customer price
-  // and the quotation chain) and serves it GET /api/import/deals/{id} instead — rendered by
-  // ImportDealPage at `/import/deals/:id`. canViewTickets above is left as it was because it still
-  // mirrors TicketService.VIEWER_ROLES for the list and the other import-readable sub-paths.
+  // absent: the backend refuses it the whole-deal read (customer price and quotation chain) and
+  // serves GET /api/import/deals/{id} instead, rendered by ImportDealPage at `/import/deals/:id`.
+  // canViewTickets above still mirrors TicketService.VIEWER_ROLES for the list and the
+  // import-readable sub-paths.
   canViewWholeDeal: ['sales', 'ceo', 'account', 'sales_manager'],
   // Import's OWN per-deal page (ImportDealController: import + ceo). Presentation only — the
   // endpoint enforces the real gate and the row scope.
@@ -691,17 +665,13 @@ export const ROLE_PERMISSIONS = {
   // Frontend-only presentation split; never narrows what
   // TicketService.VIEWER_ROLES actually allows a read of.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
-  // Sales/CRM tool — which roles get the catalog SCREENS, scoped to the same
-  // audience as canViewTickets.
+  // Sales/CRM tool: which roles get the catalog SCREENS, scoped to the same audience as
+  // canViewTickets.
   //
-  // This is a FRONTEND UX CHOICE, deliberately narrower than the API, and it is
-  // NOT a security boundary — do not read it as one (#388 did, and filed the
-  // divergence as a vulnerability). GET /api/catalog and GET /api/catalog/prices
-  // are open to any authenticated user on the real backend, by product decision:
-  // #205 (product owner, 2026-07-16) for browsing, and the owner's 2026-08-01
-  // ruling closing #388 confirming that "browsable by any logged-in user" covers
-  // the supplier purchase price too. Narrowing this list hides a screen; it does
-  // not protect the data, and nothing about the data is meant to be protected.
+  // This is a FRONTEND UX CHOICE, narrower than the API, and NOT a security boundary. GET
+  // /api/catalog and GET /api/catalog/prices are open to any authenticated user on the real backend
+  // by product decision (including the supplier purchase price). Narrowing this list hides a
+  // screen; it does not protect the data, and the data is not meant to be protected.
   canViewCatalog: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
   // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
@@ -714,15 +684,15 @@ export const ROLE_PERMISSIONS = {
   // the approved customer price, which salesViewScope already hides from import and which the
   // backend refuses it on the quotation file, the payment ledger and deposit notices.
   canViewTicketDocuments: ['ceo', 'account', 'sales_manager'],
-  // Who may ATTACH or REMOVE a deal's documents without being one of its participants
-  // (the deal's own rep or whoever picked it up keep the ability regardless of role).
-  // Mirrors TicketAccessPolicy.DOCUMENT_WRITER_ROLES — strictly narrower than reading a
-  // document, which now follows canViewTickets exactly (issue #389).
+  // Who may ATTACH or REMOVE a deal's documents without being one of its participants (the deal's
+  // own rep or whoever picked it up keep the ability regardless of role). Mirrors
+  // TicketAccessPolicy.DOCUMENT_WRITER_ROLES, strictly narrower than reading a document, which
+  // follows canViewTickets exactly.
   //
-  // account is deliberately absent even though it READS every deal document: the closing tax
-  // invoice has exactly one entry point (POST /api/commissions/from-deal), which dual-writes
-  // the INVOICE attachment AND the rep's commission. A second upload path would satisfy the
-  // close gate's invoiceOnFile check while the rep silently loses their commission.
+  // account is absent even though it READS every deal document: the closing tax invoice has exactly
+  // one entry point (POST /api/commissions/from-deal), which dual-writes the INVOICE attachment AND
+  // the rep's commission. A second upload path would satisfy the close gate's invoiceOnFile check
+  // while the rep silently loses their commission.
   canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
@@ -740,20 +710,17 @@ export const ROLE_PERMISSIONS = {
   canProposePrices: ['import'],
   canApproveReject: ['ceo'],
   canGenerateQuotation: ['sales'],
-  // Slice A3 (commission redesign): sales is read-only on commissions now — it may reach the
-  // /commissions route to see its own records + calc detail, but has no list()/submit access on
-  // the real backend beyond that read. account is included here purely so the route guard lets
-  // it in for the createFromDeal ("record invoice") flow; account has NO route to
-  // GET /api/commissions (list()) on the real backend — see canListCommissionRecords below,
-  // which intentionally excludes it.
+  // Sales is read-only on commissions: it may reach the /commissions route to see its own records +
+  // calc detail, but has no list()/submit access on the real backend beyond that read. account is
+  // here only so the route guard lets it in for the createFromDeal ("record invoice") flow; account
+  // has NO route to GET /api/commissions (list()), see canListCommissionRecords below.
   canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'account'],
   // Mirrors CommissionController's GET /api/commissions PreAuthorize exactly (SALES,
   // SALES_MANAGER, CEO only — NOT account, NOT hr). hr reads via canViewPayrollCommissions
   // (payroll-ready) instead; account has no list access at all, only createFromDeal.
   canListCommissionRecords: ['sales', 'sales_manager', 'ceo'],
-  // Slice A2 (AUTHZ CHANGE): sales removed — commission creation is now the accountant's
-  // auto-create trigger (POST /api/commissions/from-deal) at deal close. Mirrors
-  // CommissionService.CREATE_FROM_DEAL_ROLES exactly.
+  // Commission creation is the accountant's auto-create trigger (POST /api/commissions/from-deal)
+  // at deal close; sales cannot. Mirrors CommissionService.CREATE_FROM_DEAL_ROLES exactly.
   canCreateCommissionFromDeal: ['account'],
   canApproveCommissions: ['sales_manager', 'ceo'],
   // Manual commission entries (feat/commission-manual-adjustments): a hand-typed ADJUSTMENT/
@@ -763,21 +730,17 @@ export const ROLE_PERMISSIONS = {
   // its own key since the two gates are defined independently server-side.
   canCreateManualCommission: ['sales_manager', 'ceo'],
   canViewPayrollCommissions: ['hr'],
-  // Split (issue #390): the SPA used to conflate view and manage under one key, which is why the
-  // CEO's deliberate backend read grant (PayrollController: every GET, plus the non-persisting
-  // POST /preview and /preview/export/{kind}, is hasAnyRole('HR','CEO')) was unreachable -- the
-  // route and every mutating control gated on the single `canManagePayroll` key, which is
-  // HR-only. canViewPayroll now gates the /payroll route and the read affordances (period
-  // summary, lines, exports, payslip downloads, preview); canManagePayroll stays HR-only and
-  // gates every write (process, input-draft PUT, tax-allowances PUT, ytd-seed PUT,
+  // View and manage are separate keys because the CEO has a deliberate backend read grant
+  // (PayrollController: every GET, plus the non-persisting POST /preview and /preview/export/{kind},
+  // is hasAnyRole('HR','CEO')). canViewPayroll gates the /payroll route and the read affordances
+  // (period summary, lines, exports, payslip downloads, preview); canManagePayroll stays HR-only
+  // and gates every write (process, input-draft PUT, tax-allowances PUT, ytd-seed PUT,
   // component-tax-treatments PUT, distribute). See PayrollPage.jsx's `canManage`.
   canViewPayroll: ['hr', 'ceo'],
   canManagePayroll: ['hr'],
-  // Tax-allowance declaration (ล.ย.01) HR review screen (issue #387). Mirrors
-  // TaxAllowanceDeclarationService: the register read (GET /declarations) is
-  // hasAnyRole('HR','CEO'), while every mutation (approve/reject/apply/reverify/
-  // on-behalf) is hasRole('HR') only — CEO gets read-only visibility into who has
-  // declared what, never the reviewer actions.
+  // Tax-allowance declaration (ล.ย.01) HR review screen. Mirrors TaxAllowanceDeclarationService:
+  // the register read (GET /declarations) is hasAnyRole('HR','CEO'), while every mutation
+  // (approve/reject/apply/reverify/on-behalf) is hasRole('HR') only; CEO gets read-only visibility.
   canViewTaxAllowanceRegister: ['hr', 'ceo'],
   canReviewTaxAllowances: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
@@ -788,27 +751,24 @@ export const ROLE_PERMISSIONS = {
   // pricing request (sales still sees its own deal's requests via
   // PricingRequestPanel, gated by ticket ownership, not this key).
   canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
-  // Quotation v2 direct-deal quotation (QUOTATION-V2-PLAN.md, owner ruling 2026-09-09) — the
-  // pricing-chain-BYPASS quotation. Route guard only, for `/quotations`: mirrors the plan's Authz
-  // section's "view/list/download" role set exactly (sales scoped to its own deals server-side,
-  // sales_manager/ceo oversight, import/account read-only). create/edit/submit/cancel/revise and
-  // approve/reject are NARROWER than this — see quotationMeta.js's own predicates, which mirror
-  // the plan's authz table one gate at a time rather than living in this flat list.
+  // Direct-deal quotation, the pricing-chain-BYPASS quotation. Route guard only, for `/quotations`:
+  // mirrors the plan's Authz "view/list/download" role set exactly (sales scoped to its own deals
+  // server-side, sales_manager/ceo oversight, import/account read-only). create/edit/submit/cancel/
+  // revise and approve/reject are NARROWER; see quotationMeta.js's predicates, which mirror the
+  // authz table one gate at a time.
   canViewDealQuotations: ['sales', 'sales_manager', 'ceo', 'import', 'account'],
-  // Attendance calendar admin UI (/settings/attendance-calendar — PR #480 shipped the write API
-  // with no UI at all). Mirrors HolidayController / WorkScheduleController /
-  // WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo") exactly. FRONTEND GATING
-  // ONLY: the backend already enforces this role check independently on every endpoint — this key
-  // decides who sees the SCREEN, it grants nothing itself. See CLAUDE.md's "Mock API contract" on
-  // why a frontend permission key is never itself evidence of a backend authorization change.
+  // Attendance calendar admin UI (/settings/attendance-calendar). Mirrors HolidayController /
+  // WorkScheduleController / WorkScheduleAssignmentController's requireAnyRole(user, "hr", "ceo")
+  // exactly. FRONTEND GATING ONLY: the backend enforces this role check on every endpoint; this key
+  // decides who sees the SCREEN. See CLAUDE.md's "Mock API contract" on why a frontend permission
+  // key is never itself evidence of a backend authorization change.
   canManageAttendanceCalendar: ['hr', 'ceo'],
-  // §5 announcement PDF upload (/settings/leave-policy — PR #494 shipped the write API with no UI
-  // at all, issue #744). Mirrors LeaveController#uploadPolicyDocument's `requireAnyRole(user, "hr",
-  // "ceo")` exactly. Deliberately NOT the same question as reading the document: the GET is open to
-  // every authenticated employee (`sessions.requireUser` only), because the rules that bind you are
-  // yours to read — replacing them is not. FRONTEND GATING ONLY: LeaveController enforces this
-  // independently, and this key decides who sees the SCREEN; it grants nothing on its own. See
-  // CLAUDE.md's "Mock API contract" on why a frontend permission key is never itself evidence of a
-  // backend authorization change.
+  // §5 announcement PDF upload (/settings/leave-policy). Mirrors LeaveController#uploadPolicyDocument's
+  // `requireAnyRole(user, "hr", "ceo")` exactly. Not the same question as reading the document: the
+  // GET is open to every authenticated employee (`sessions.requireUser` only), because the rules
+  // that bind you are yours to read; replacing them is not. FRONTEND GATING ONLY: LeaveController
+  // enforces this independently; this key decides who sees the SCREEN. See CLAUDE.md's "Mock API
+  // contract" on why a frontend permission key is never itself evidence of a backend authorization
+  // change.
   canManageLeavePolicyDocument: ['hr', 'ceo'],
 };
