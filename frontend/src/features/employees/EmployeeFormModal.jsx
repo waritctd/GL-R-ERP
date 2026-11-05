@@ -11,7 +11,7 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { divisions, statuses } from '../../data/referenceData.js';
 import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
-function uniqueOptions(rows, valueKey, labelKey) {
+export function uniqueOptions(rows, valueKey, labelKey) {
   const options = new Map();
   rows.forEach((row) => {
     const value = row[valueKey];
