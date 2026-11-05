@@ -434,11 +434,6 @@ public class RemainingInvoiceService {
             .toList();
     }
 
-    private BigDecimal sumAmounts(List<RemainingInvoiceItemDto> items) {
-        return items.stream().map(it -> it.amount() != null ? it.amount() : BigDecimal.ZERO)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
     private BigDecimal nz(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
     }

@@ -46,7 +46,6 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.ItemInput;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 import th.co.glr.hr.notification.DealNoticeText;
-import th.co.glr.hr.notification.EmailRecipient;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
@@ -1717,15 +1716,7 @@ public class DealQuotationService {
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
-        // Owner request (2026-09-15): this used to ALSO fire #sendApprovalEmail below — a second,
-        // plain-text email with the PDF attached, from a completely separate mailer
-        // (approvalMailer/Mailer#sendWithAttachment) than the one notifyRepAndCreator uses
-        // (salesMailer -> NotificationEmailService#send, the branded HTML template). Two emails
-        // landed for one approval. Keep only the HTML one; #sendApprovalEmail/
-        // #sendToEmployeeIfPossible are left in place (dead) rather than deleted outright, since
-        // several integration tests still construct a mailer fake around them -- removing the
-        // call is the actual fix, not a reason to also cascade a constructor-signature change
-        // through every test file in the same pass.
+        // In-app + branded HTML email only; no second plain-text email with the PDF.
         notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message);
         notifyOtherApprover(approved, actor, "อนุมัติใบเสนอราคา " + approved.number() + " แล้ว");
         return approved;
@@ -2882,39 +2873,6 @@ public class DealQuotationService {
             salesRepSignaturePng, salesRepSignatureMime);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Approval email — Thai body, PDF attached, sent to the rep AND the creator (deduped),
-    // after the approving transaction actually commits (mail cannot be un-sent).
-    // ─────────────────────────────────────────────────────────────────────────────────────
-
-    private void sendApprovalEmail(DealQuotationDto approved) {
-        byte[] pdf;
-        try {
-            pdf = renderer.toPdf(toRenderModel(approved));
-        } catch (Exception e) {
-            // H1: was logged WITHOUT the exception itself (only e.getMessage()), so a render
-            // failure here -- e.g. the underlineCache-across-workbooks bug this PDF render is a
-            // second render THROUGH -- left no stack trace anywhere, and the approval email
-            // silently never sent with no way to diagnose why. Passing the exception as the last
-            // varargs argument (unmatched by a `{}` placeholder) makes SLF4J log the full stack
-            // trace. The in-app notification above already fired unconditionally before this
-            // deferred call ever runs, so the rep/creator are still told the quotation was
-            // approved even when the PDF (and therefore the email) fails.
-            log.error("Deal quotation approval PDF render failed: quotationId={}", approved.id(), e);
-            return;
-        }
-        String subject = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
-        String link = appBaseUrl + "/quotations/" + approved.id();
-        String body = "ใบเสนอราคา " + approved.number() + " ได้รับการอนุมัติแล้วโดย "
-            + (approved.approvedByName() != null ? approved.approvedByName() : "ผู้อนุมัติ")
-            + "\nยอดรวมทั้งสิ้น " + money(approved.grandTotal()) + " บาท"
-            + "\nดูรายละเอียด: " + link;
-        String filename = approved.number() + ".pdf";
-        Set<String> sentTo = new HashSet<>();
-        sendToEmployeeIfPossible(approved.salesRepId(), subject, body, filename, pdf, sentTo);
-        sendToEmployeeIfPossible(approved.createdById(), subject, body, filename, pdf, sentTo);
-    }
-
     /** In-app notification to the rep AND the creator, deduped when they are the same employee
      * (a rep who created their own deal). */
     private void notifyRepAndCreator(DealQuotationDto quotation, String kind, String message) {
@@ -2922,24 +2880,6 @@ public class DealQuotationService {
         notifications.notifyEmployeeAtLink(quotation.salesRepId(), kind, message, link);
         if (quotation.createdById() != quotation.salesRepId()) {
             notifications.notifyEmployeeAtLink(quotation.createdById(), kind, message, link);
-        }
-    }
-
-    private void sendToEmployeeIfPossible(long employeeId, String subject, String body, String filename,
-                                          byte[] pdf, Set<String> sentTo) {
-        java.util.Optional<EmailRecipient> recipient = notifications.findEmployeeRecipient(employeeId);
-        if (recipient.isEmpty() || recipient.get().email() == null || recipient.get().email().isBlank()) {
-            log.warn("Deal quotation approval email skipped: employee={} has no email on file", employeeId);
-            return;
-        }
-        String email = recipient.get().email();
-        if (!sentTo.add(email)) {
-            return; // dedupe: rep and creator are the same employee, or share an address
-        }
-        try {
-            approvalMailer.sendWithAttachment(email, subject, body, filename, pdf);
-        } catch (Exception e) {
-            log.error("Deal quotation approval email failed: to={}", email, e);
         }
     }
 
@@ -4453,9 +4393,5 @@ public class DealQuotationService {
 
     private BigDecimal money2(BigDecimal value) {
         return value.setScale(2, RoundingMode.HALF_UP);
-    }
-
-    private String money(BigDecimal value) {
-        return value == null ? "0" : value.setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 }

@@ -961,12 +961,6 @@ public class OvertimeService {
         );
     }
 
-    private void requireStatus(OvertimeRequestDto request, OvertimeStatus status) {
-        if (!status.name().equals(request.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
-        }
-    }
-
     private boolean canViewAll(UserPrincipal user) {
         return user != null && VIEW_ALL_ROLES.contains(user.role());
     }

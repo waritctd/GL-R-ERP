@@ -38,13 +38,11 @@ import th.co.glr.hr.payroll.export.PayrollDetailExporter;
 import th.co.glr.hr.payroll.export.PayrollDetailIdentityDto;
 import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
-import th.co.glr.hr.payroll.export.PayrollExportRow;
 import th.co.glr.hr.payroll.export.Pnd1Exporter;
 import th.co.glr.hr.payroll.export.SsoExporter;
 import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpsertRequest;
 import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculation;
 import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput;
-import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceDto;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceBulkUpsertRequest;
 import th.co.glr.hr.payroll.PayrollReconciliationDtos.TaxAllowanceListResponse;
@@ -1452,26 +1450,6 @@ public class PayrollService {
     }
 
     /**
-     * จำนวนคราวที่ต้องจ่าย remaining in this tax year, INCLUDING this period — คำชี้แจง ภ.ง.ด.1 ข้อ 2.1.
-     *
-     * <p>Monthly payroll, so this is {@code 13 - month}: 12 in January, 1 in December. A mid-year
-     * JOINER needs no special handling — their year-to-date is empty, so January..March simply never
-     * enter the projection and an April start naturally projects over 9 periods, which is the RD's own
-     * worked example in ข้อ 2.1.
-     *
-     * <p>A mid-year LEAVER is NOT handled, so ข้อ 2.10's final-period true-up does not happen. It WAS
-     * implemented against {@code hr.resignation} and then removed (2026-07-29): the owner confirms
-     * resignations are not recorded in this platform at all — they live in another system — so nothing
-     * ever populates that table, and {@code findActiveEmployees} filters on {@code is_active} anyway,
-     * which drops a leaver out of payroll before any of it could apply. Code that cannot execute is
-     * worse than an acknowledged gap, because it reads as a compliance feature that works. ข้อ 2.10 is
-     * on the known-gaps list pending resignation data from the other platform.
-     */
-    private int remainingPayPeriods(LocalDate payrollMonth) {
-        return Math.max(1, 13 - payrollMonth.getMonthValue());
-    }
-
-    /**
      * C1: merges the standing stored declaration with this run's request body, field by field. A
      * non-null field on the request is an explicit in-run correction and wins; a null field falls back
      * to the stored standing declaration.
@@ -1551,22 +1529,6 @@ public class PayrollService {
         return runBodyAmount
             .divide(new BigDecimal(perHead), 0, java.math.RoundingMode.CEILING)
             .intValueExact();
-    }
-
-    /**
-     * The employee's age in the payroll month's TAX YEAR, for the ยกเว้นเงินได้ 190,000 available from
-     * 65 (กฎกระทรวง ฉบับที่ 126).
-     *
-     * <p>Measured at 31 December of the tax year, not at the payroll month: the exemption belongs to
-     * the tax year as a whole, so someone turning 65 in November is 65 for that year's withholding
-     * from January. Returns 0 when the date of birth is unknown, which the calculator treats as
-     * "do not grant the exemption on an assumption".
-     */
-    private int taxpayerAge(LocalDate dateOfBirth, LocalDate payrollMonth) {
-        if (dateOfBirth == null) {
-            return 0;
-        }
-        return Math.max(0, payrollMonth.getYear() - dateOfBirth.getYear());
     }
 
     private BigDecimal firstNonNull(BigDecimal requested, BigDecimal stored) {
@@ -1733,7 +1695,7 @@ public class PayrollService {
 
     /**
      * Approved overtime payable this month, rounded to whole baht per employee (owner decision,
-     * 2026-08-28) — the same house convention {@link #commissionWholeBaht} applies to commission,
+     * 2026-08-28) — the same whole-baht house convention commission follows (HALF_UP, no statutory basis),
      * and for the same reason: the accountant's workbook and the bank transfer file both carry
      * whole baht, and a satang here is what forces a manual reconciliation pass every month.
      *
@@ -1754,36 +1716,10 @@ public class PayrollService {
     }
 
     /**
-     * Rounds a month's commission payable to whole baht, {@link RoundingMode#HALF_UP} (owner
-     * decision, 2026-08-25).
-     *
-     * <p>Unlike the SSO rounding in {@code PayrollCalculator#wholeBaht}, this has <b>no statutory
-     * basis</b> — commission is ordinary wages and มาตรา 46 does not reach it. It is the
-     * accountant's house convention, and it is applied here so the ERP stops disagreeing with the
-     * payroll workbook every month. All eight July 2026 commission figures in
-     * {@code GLR salary 7-2026 (fixed).xlsx} are exactly HALF_UP of the tier feed
-     * (11,230.33 -> 11,230 · 2,322.84 -> 2,323 · 140,433.75 -> 140,434 · …), and reconciling them by
-     * hand is what that month cost.
-     *
-     * <p><b>Rounded HERE, at the boundary into payroll, deliberately.</b> Commission reaches
-     * {@code gross_taxable_income}, the ป.96 cumulative limb, the SSO wage base and net pay; if it
-     * were rounded only on the way out, the stored gross would no longer be the base the withholding
-     * was actually computed from. Rounding once, before any of that, keeps every downstream figure
-     * derived from a single number. The consequence is intended: withholding now moves by a few
-     * satang against the July 2026 stored lines, because the tax base itself moved.
-     *
-     * <p>Applied PER EMPLOYEE, before any total accumulates — summing raw and rounding once is a
-     * different number, the same trap {@code SsoExporter#wholeBaht} documents.
-     */
-    private BigDecimal commissionWholeBaht(BigDecimal value) {
-        return payrollWholeBaht(value);
-    }
-
-    /**
      * Rounds a money figure to whole baht, {@link RoundingMode#HALF_UP}, restoring the 2dp money
      * scale so callers and the stored columns keep their shape. The shared primitive behind
-     * {@link #commissionWholeBaht} and {@link #overtimePayByEmployee}; see those for the
-     * why-here-and-not-elsewhere reasoning, which differs between the two.
+     * commission and {@link #overtimePayByEmployee}. Both round HERE, at the boundary into payroll
+     * and per employee before any total accumulates, so every downstream figure derives from one number.
      */
     private BigDecimal payrollWholeBaht(BigDecimal value) {
         return (value == null ? BigDecimal.ZERO : value)

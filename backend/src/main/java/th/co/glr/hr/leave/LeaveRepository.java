@@ -1618,7 +1618,7 @@ public class LeaveRepository {
     }
 
     boolean hasActiveManager(ResultSet rs) throws SQLException {
-        long managerId = rs.getLong("reports_to_employee_id");
+        rs.getLong("reports_to_employee_id");
         return !rs.wasNull() && rs.getBoolean("manager_is_active");
     }
 

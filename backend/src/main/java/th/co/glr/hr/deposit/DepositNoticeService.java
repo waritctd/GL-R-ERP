@@ -1076,25 +1076,6 @@ public class DepositNoticeService {
             .toList();
     }
 
-    /** {@code noteIds == null} → the templates' own defaultSelected set (same default createDraft
-     * uses); present-but-empty → no notes at all; otherwise exactly the requested ids, in the
-     * templates' own sortOrder (never the caller-supplied order — this is a curated official list,
-     * not free text). Never truncates — {@code sales.document_note_template} currently seeds
-     * THREE rows (V16), not five/six, and the caller may select any subset; whether the selection
-     * the printed sheet carries only the template's own หมายเหตุ block, so stored notes are never printed. */
-    private List<String> resolveNotes(List<Long> noteIds) {
-        List<DocumentNoteTemplateDto> templates = docs.findNoteTemplates();
-        if (noteIds == null) {
-            return templates.stream().filter(DocumentNoteTemplateDto::defaultSelected)
-                .map(DocumentNoteTemplateDto::text).toList();
-        } else if (noteIds.isEmpty()) {
-            return List.of();
-        }
-        Set<Long> wanted = new LinkedHashSet<>(noteIds);
-        return templates.stream().filter(t -> wanted.contains(t.id()))
-            .map(DocumentNoteTemplateDto::text).toList();
-    }
-
     private String nullSafe(String s) { return s != null ? s : ""; }
 
     // Revision flow (Part A of plan)
