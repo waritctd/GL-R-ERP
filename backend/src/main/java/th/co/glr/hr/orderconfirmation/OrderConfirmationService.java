@@ -195,7 +195,7 @@ public class OrderConfirmationService {
             }
         }
 
-        // Step 8: reconcile sales.ticket_item.qty (the delivery machinery's own quantity source
+        // Reconcile sales.ticket_item.qty (the delivery machinery's own quantity source
         // — TicketService.reserveStock/completeDelivery) to whatever THIS pricing request
         // actually settled on, before any of that machinery becomes reachable. See
         // reconcileTicketItems's own Javadoc for the full "why".
@@ -259,7 +259,7 @@ public class OrderConfirmationService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // 1a. Step 8: ticket_item <-> pricing-request-chain quantity reconciliation.
+    // ticket_item <-> pricing-request-chain quantity reconciliation.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -337,8 +337,8 @@ public class OrderConfirmationService {
         for (PricingRequestItemDto item : items) {
             String unitBasis = mapUnitBasisToTicketItem(item.requestedUnitBasis());
             // The customer ACCEPTED this quantity on the quotation, not necessarily what the PR
-            // was authored with (S1 explicitly lets sales edit qty/เผื่อ on a PRICING_REQUEST-origin
-            // quotation without CEO re-approval — see requireCeoApprovalIfChanged's own exclusion).
+            // was authored with (sales may edit qty/เผื่อ on a PRICING_REQUEST-origin quotation
+            // without CEO re-approval — see requireCeoApprovalIfChanged's own exclusion).
             th.co.glr.hr.dealquotation.DealQuotationRepository.AcceptedItemQty accepted =
                 acceptedByPrItemId.get(item.id());
             BigDecimal reconciledQty = accepted != null ? accepted.qty() : item.requestedQty();

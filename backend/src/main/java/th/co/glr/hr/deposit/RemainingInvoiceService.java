@@ -254,7 +254,7 @@ public class RemainingInvoiceService {
         TicketSummaryDto s = requireTicketSummary(draft.ticketId());
         depositNoticeService.requireActiveLifecycle(s);
 
-        // O3: refresh the snapshot from the current live state before freezing anything.
+        // Refresh the snapshot from the current live state before freezing anything.
         DepositNoticeService.RemainingInvoiceSnapshot snap = depositNoticeService.resolveRemainingInvoiceSnapshot(
             draft.ticketId(), draft.customerQuotationId(), actor);
         DepositNoticeService.ResolvedRemainingInvoice resolved = snap.resolved();
@@ -285,7 +285,7 @@ public class RemainingInvoiceService {
         // Number is minted/carried INSIDE this transaction — same "a refused issue rolls the
         // number back, never wastes it" property DepositNoticeRepository#nextDocNumber documents.
         // lockIssuedPredecessor is scoped to THIS chain (same customer_quotation_id) — it answers
-        // "is this a revision", not "is there any other live sibling" (that is O2's separate
+        // "is this a revision", not "is there any other live sibling" (that is the separate
         // supersede-everyone-else pass below).
         Optional<RemainingInvoiceRepository.PredecessorNumber> predecessor =
             stored.lockIssuedPredecessor(draft.ticketId(), draft.customerQuotationId());
@@ -300,7 +300,7 @@ public class RemainingInvoiceService {
         }
         String docNumber = baseNumber + "-" + version;
 
-        // O2: supersede EVERY other currently-ISSUED remaining invoice on this ticket, whatever
+        // Supersede EVERY other currently-ISSUED remaining invoice on this ticket, whatever
         // chain it belongs to — not just this chain's own predecessor. Done BEFORE this row's own
         // compare-and-set (same forced ordering V154's own Javadoc explains at length for the
         // same-chain case: two rows must never both read ISSUED, not even for the instant between
@@ -321,7 +321,7 @@ public class RemainingInvoiceService {
             s.status(), s.status(), "ใบแจ้งหนี้ส่วนที่เหลือ " + docNumber + " ออกแล้ว");
 
         RemainingInvoiceDocumentDto issued = requireStored(id);
-        // P1 hand-off: account collects the balance against this invoice; an EN invoice has no VAT to mention.
+        // Account collects the balance against this invoice; an EN invoice has no VAT to mention.
         boolean noVat = issued.vatAmount() != null && issued.vatAmount().signum() == 0;
         notifications.notifyByRoleAtLink("account", TicketEventKind.REMAINING_INVOICE_ISSUED,
             actor.name() + " ออกใบแจ้งหนี้ " + docNumber + (version > 1 ? " (ฉบับแก้ไข)" : "") + " แล้ว\n"
@@ -358,8 +358,8 @@ public class RemainingInvoiceService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีร่างฉบับแก้ไขของใบแจ้งหนี้ส่วนที่เหลือนี้อยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
         }
-        // P3: cross-chain DRAFT refusal, mirroring createDraft's own anotherDraftLive check — O2 is
-        // ONE live remaining invoice per DEAL, not per chain.
+        // Cross-chain DRAFT refusal, mirroring createDraft's own anotherDraftLive check: ONE live
+        // remaining invoice per DEAL, not per chain.
         boolean anotherDraftLive = existingForTicket.stream()
             .anyMatch(d -> "DRAFT".equals(d.status()) && !Objects.equals(d.customerQuotationId(), issued.customerQuotationId()));
         if (anotherDraftLive) {

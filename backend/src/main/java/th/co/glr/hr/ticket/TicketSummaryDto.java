@@ -338,7 +338,7 @@ public record TicketSummaryDto(
 
     /**
      * Copy with only {@code customerName}/{@code projectName} overridden — every other field
-     * unchanged. Used to render a document (e.g. a Step 4 customer quotation) against a FROZEN
+     * unchanged. Used to render a document (e.g. a customer quotation) against a FROZEN
      * customer/project header snapshot instead of the ticket's current live values, the same
      * substitution {@code TicketService.loadQuotationContext}'s own private
      * {@code withCustomerAndProject} already performs for the legacy quotation flow — exposed
