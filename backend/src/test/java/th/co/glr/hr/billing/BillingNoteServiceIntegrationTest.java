@@ -83,15 +83,15 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-Postgres coverage for the STORED ใบวางบิล (billing note, GLA-99 step 3): the candidate
+ * Real-Postgres coverage for the STORED ใบวางบิล (billing note): the candidate
  * pool + outstanding computation, DRAFT/ISSUED/SUPERSEDED/CANCELLED lifecycle, the shared {@code
- * AR_GLR} numbering, the DB-level "no double billing" invariant (V189's own {@code
+ * AR_GLR} numbering, the DB-level "no double billing" invariant ({@code
  * ux_billing_note_line_source_live}), and — per CLAUDE.md's "permission changes must ship
  * evidence" requirement — the write/read authz gate written WRONG-WAY-ROUND: a sales rep with no
  * grant, import, hr, and a plain employee with no grant must all be refused and write nothing;
  * a grant holder in ANY role (including plain {@code employee}) and the CEO must succeed.
  *
- * <p>Drives real deals through the REAL Steps 1-6 services to an ACCEPTED quotation + ISSUED
+ * <p>Drives real deals through the REAL upstream services to an ACCEPTED quotation + ISSUED
  * deposit notice (+ optionally an ISSUED remaining invoice), the same fixture-building approach
  * {@code RemainingInvoiceServiceIntegrationTest} uses, because a mocked repository could not prove
  * the candidate query's own SQL — the JOIN across {@code remaining_invoice}/{@code deposit_notice}/
@@ -322,7 +322,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         // A direct payment_receipt row for the notice's own FULL VAT-inclusive total_payable —
         // bypassing TicketService#confirmDepositPaid deliberately: that path records only the
         // pre-VAT depositAmount, not the VAT-inclusive figure this candidate query's own
-        // "outstanding" is scoped to (GLA-107 answer 1). This is a direct-JDBC fixture write, the
+        // "outstanding" is scoped to. This is a direct-JDBC fixture write, the
         // same technique RemainingInvoiceServiceIntegrationTest already uses to set up a precise
         // money scenario, not a claim about what confirmDepositPaid itself records.
         jdbc.update("""
@@ -462,8 +462,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             "DEPOSIT_NOTICE", deal.depositNoticeId(), deal.ticketId(), "DN-1", LocalDate.now(), null,
             new BigDecimal("100.00"), null)));
 
-        // A second, independent brand-new note (B1: several brand-new drafts of the same
-        // customer+type may now coexist, so this need not even be a different type) trying to
+        // A second, independent brand-new note (several brand-new drafts of the same
+        // customer+type may coexist, so this need not even be a different type) trying to
         // claim the exact same source document — refused by the DB itself, entirely bypassing
         // BillingNoteService's own application-level candidate-claim check.
         long noteBId = billingNoteRepository.insertDraft(customer.id(), "FREIGHT", null, LocalDate.now(), null, null,
@@ -477,7 +477,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // B1 (owner ruling 2026-09-20) — MANY issued notes per customer+type, one per credit cycle;
+    // MANY issued notes per customer+type, one per credit cycle;
     // live-uniqueness is per REVISION CHAIN, not (customer_id, type).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -487,9 +487,9 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         DealFixture dealA = buildAcceptedDeal(customer, salesActor, "B1CoexistA");
         DealFixture dealB = buildAcceptedDeal(customer, salesActor, "B1CoexistB");
 
-        // Two brand-new (non-correction) GOODS notes for the SAME customer, one per deal — under
-        // the pre-B1 model the second createDraft would have been refused outright ("has an
-        // ISSUED note, revise instead"). Both must now issue independently.
+        // Two brand-new (non-correction) GOODS notes for the SAME customer, one per deal — the
+        // second createDraft must not be refused ("has an ISSUED note, revise instead").
+        // Both must issue independently.
         BillingNoteDocumentDto cycle1 = billingNoteService.issue(billingNoteService.createDraft(customer.id(),
             new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null,
                 List.of(lineFor("DEPOSIT_NOTICE", dealA.depositNoticeId()))), employeeWithGrantActor).id(),
@@ -513,7 +513,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         CustomerDto customer = createCustomer("B1TwoDrafts");
         BillingNoteDraftRequest req = new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null, List.of());
 
-        // The pre-B1 model refused a second live DRAFT of the same (customer, type) outright.
+        // A second live DRAFT of the same (customer, type) is NOT refused outright.
         BillingNoteDocumentDto draftA = billingNoteService.createDraft(customer.id(), req, employeeWithGrantActor);
         BillingNoteDocumentDto draftB = billingNoteService.createDraft(customer.id(), req, employeeWithGrantActor);
 
@@ -523,8 +523,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void b1_revise_stillRefusesASecondConcurrentCorrectionOfTheSamePredecessor() {
-        // Per-chain uniqueness is NOT unlimited — B1 keeps "at most one live correction DRAFT per
-        // predecessor", just re-scoped from (customer, type) to revisionOfId.
+        // Per-chain uniqueness is NOT unlimited — "at most one live correction DRAFT per
+        // predecessor", scoped by revisionOfId rather than (customer, type).
         CustomerDto customer = createCustomer("B1OneRevisionAtATime");
         DealFixture deal = buildAcceptedDeal(customer, salesActor, "B1OneRevisionAtATime");
         BillingNoteDocumentDto issued = billingNoteService.issue(billingNoteService.createDraft(customer.id(),
@@ -539,11 +539,10 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // B2/C1 (owner rulings 2026-09-20; C1 NARROWS B2's original "MANUAL lines never block
-    // settlement" rule before it ever shipped) — automatic ISSUED -> SETTLED once the note has at
+    // Automatic ISSUED -> SETTLED once the note has at
     // least one non-MANUAL line AND every non-MANUAL line's source is fully paid; settling
     // releases lines for a later cycle to reclaim. An ALL-MANUAL note can never satisfy "at least
-    // one non-MANUAL line", so it stays ISSUED until markSettled (C1's own tests are below, after
+    // one non-MANUAL line", so it stays ISSUED until markSettled (those tests are below, after
     // this block).
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -561,13 +560,13 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         payOffDepositNoticeInFull(dealA, noticeA);
 
-        // The next READ is what recomputes settlement (B2: recompute-on-read) — no separate
+        // The next READ is what recomputes settlement (recompute-on-read) — no separate
         // "settle" action exists.
         BillingNoteDocumentDto reread = billingNoteService.get(cycle1.id(), accountActor);
         assertThat(reread.status()).isEqualTo("SETTLED");
 
         // Cycle 2, same customer+type, referencing a DIFFERENT (unpaid) deal — issuable while
-        // cycle 1 is now SETTLED, exactly as it already is while cycle 1 is still ISSUED (B1).
+        // cycle 1 is now SETTLED, exactly as it already is while cycle 1 is still ISSUED.
         BillingNoteDocumentDto cycle2 = billingNoteService.issue(billingNoteService.createDraft(customer.id(),
             new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null,
                 List.of(lineFor("DEPOSIT_NOTICE", dealB.depositNoticeId()))), employeeWithGrantActor).id(),
@@ -591,7 +590,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         // A payment REVERSAL (an ADJUSTMENT receipt equal to what was paid) makes the same
         // document outstanding again — plausible real-world case (a bounced cheque, a correction).
-        // Without B2's "settling releases lines" behaviour, BN1's own (SETTLED, but still
+        // Without the "settling releases lines" behaviour, BN1's own (SETTLED, but still
         // note_status='ISSUED') line would keep permanently blocking this document.
         jdbc.update("""
             INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, deposit_notice_id)
@@ -612,8 +611,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void c1_mixedNote_stillAutoSettlesOnceItsOnlyNonManualLineIsPaid() {
-        // C1's OTHER half: a MIXED note (at least one non-MANUAL line, plus any number of MANUAL
-        // ones) still auto-settles exactly like before — C1 narrows the ALL-MANUAL case only.
+        // A MIXED note (at least one non-MANUAL line, plus any number of MANUAL
+        // ones) still auto-settles — only the ALL-MANUAL case is excluded.
         CustomerDto customer = createCustomer("C1Mixed");
         DealFixture deal = buildAcceptedDeal(customer, salesActor, "C1Mixed");
         DepositNoticeDto notice = depositNoticeService.getById(deal.depositNoticeId(), salesActor);
@@ -630,10 +629,10 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         // Settles even though the MANUAL line's own "payment" can never be verified — the
         // deliberate choice (see BillingNoteRepository#reconcileSettlementForCustomer's own
         // Javadoc): a MANUAL line never blocks settlement AS LONG AS the note has at least one
-        // non-MANUAL line (C1) — which this note does.
+        // non-MANUAL line — which this note does.
         BillingNoteDocumentDto reread = billingNoteService.get(issued.id(), accountActor);
         assertThat(reread.status()).isEqualTo("SETTLED");
-        // Automatic settlement never records who/when (C1) — that is markSettled's own signature.
+        // Automatic settlement never records who/when — that is markSettled's own signature.
         assertThat(reread.settledById()).isNull();
         assertThat(reread.settledByName()).isNull();
         assertThat(reread.settledAt()).isNull();
@@ -659,7 +658,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // C1 (owner ruling 2026-09-20, FIX FIRST per the Opus round-2 review) — an ALL-MANUAL note
+    // An ALL-MANUAL note
     // can NEVER auto-settle; it stays ISSUED until a human calls markSettled, which records
     // who/when and is gated behind the SAME write grant as every other mutation.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -674,7 +673,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 employeeWithGrantActor).id(), employeeWithGrantActor);
 
         assertThat(issued.status()).isEqualTo("ISSUED");
-        // Before the C1 fix, the ORIGINAL rule settled an all-MANUAL note on its very next read —
+        // A naive rule would settle an all-MANUAL note on its very next read —
         // bool_and over zero non-MANUAL lines is vacuously true. Any number of reads must now
         // leave it exactly ISSUED.
         for (int i = 0; i < 3; i++) {
@@ -716,8 +715,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void c1_allManualNote_staysMarkReceivedRevisableAndCancellableWhileIssued() {
-        // The OTHER half of C1's own ruling: an all-MANUAL note must stay markReceived/revise/
-        // cancel-able WHILE still ISSUED (i.e. C1 must not have accidentally blocked those on it).
+        // The OTHER half of the all-MANUAL rule: an all-MANUAL note must stay markReceived/revise/
+        // cancel-able WHILE still ISSUED (i.e. not accidentally blocked).
         CustomerDto customer = createCustomer("C1StillActionable");
         BillingNoteDocumentDto issued = billingNoteService.issue(billingNoteService.createDraft(customer.id(),
             new BillingNoteDraftRequest("FREIGHT", LocalDate.now(), null, null,
@@ -752,7 +751,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // S3 (round 2) — a MISSING source row (no FK by design) must NOT count as "paid": it must
+    // A MISSING source row (no FK by design) must NOT count as "paid": it must
     // block settlement of the WHOLE note, protecting a paid SIBLING line from being released into
     // a double-billing window.
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -789,16 +788,16 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // B2f (BLOCKER, round 2) — settle() must be ONE atomic, status-guarded statement: a concurrent
-    // cancel landing between reconcile's own SELECT and the old unconditional two-statement update
-    // must never stomp CANCELLED -> SETTLED (which used to turn a later plain GET into an
+    // settle() must be ONE atomic, status-guarded statement: a concurrent
+    // cancel landing between reconcile's own SELECT and the update
+    // must never stomp CANCELLED -> SETTLED (which would turn a later plain GET into an
     // unhandled 500 via chk_billing_note_cancel_fields). Tested deterministically (CAS-style) by
     // forcing the cancel to land BEFORE a direct call to the exact guarded statement, rather than
     // with real threads — see BillingNoteRepository#settle's own Javadoc for why a genuine
     // multi-threaded test here would add flakiness without adding coverage: Postgres serializes
     // the two writers on the same row under read-committed regardless, so the only externally
     // observable outcomes are "guard sees ISSUED, applies" or "guard sees non-ISSUED, no-ops" —
-    // exactly the two cases this test and the rest of the B2/C1 suite already exercise.
+    // exactly the two cases this test and the rest of the settlement suite already exercise.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -828,7 +827,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
      * insert — the same fixture technique {@code candidates_excludesAFullyPaidDepositNotice}
      * already documents and uses (bypassing {@code TicketService#confirmDepositPaid} deliberately,
      * since that path records only the pre-VAT {@code depositAmount}, not the VAT-inclusive figure
-     * this candidate/settlement computation is scoped to, GLA-107 answer 1). */
+     * this candidate/settlement computation is scoped to). */
     private void payOffDepositNoticeInFull(DealFixture deal, DepositNoticeDto notice) {
         jdbc.update("""
             INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, deposit_notice_id)
@@ -905,7 +904,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(v1Reread.status()).isEqualTo("ISSUED");
     }
 
-    /** F3 (Opus review, GLA-99 step 3 round 1): restoring the predecessor's lines on
+    /** Restoring the predecessor's lines on
      * {@code deleteDraft} can itself lose a race if some OTHER note grabbed the exact same
      * now-released source in the window between {@link BillingNoteService#revise}'s own release
      * and this delete — {@code restoreLinesToIssued} then trips {@code
@@ -939,7 +938,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 List.of(lineFor("DEPOSIT_NOTICE", dealA.depositNoticeId()))), employeeWithGrantActor);
         assertThat(trimmed.lines()).hasSize(1);
 
-        // A completely independent brand-new note (B1: several brand-new drafts of the same
+        // A completely independent brand-new note (several brand-new drafts of the same
         // customer+type may coexist) legitimately grabs dealB's now-free document.
         BillingNoteDocumentDto rival = billingNoteService.createDraft(customer.id(),
             new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null,
@@ -953,7 +952,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /** S4 (Opus review, GLA-99 step 3 round 2): {@link BillingNoteService#cancel} allows cancelling
+    /** {@link BillingNoteService#cancel} allows cancelling
      * an ISSUED note while a correction draft on it is still open (no guard against that, by
      * design). deleteDraft must NOT blindly restore that now-CANCELLED predecessor's lines to a
      * live ISSUED claim when the abandoned correction is deleted — doing so would permanently lock
@@ -989,7 +988,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // S6 (round 2) — the DataIntegrityViolationException catches must be NARROWED to the real
+    // The DataIntegrityViolationException catches must be NARROWED to the real
     // double-billing constraint, so a DIFFERENT DB error (e.g. a value too long for a column) is
     // never misreported as "another note already claimed this document".
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -998,7 +997,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     void s6_dataIntegrityViolationCatchIsNarrowed_aValueTooLongErrorIsNotMisreportedAsDoubleBilling() {
         CustomerDto customer = createCustomer("S6Narrow");
         // Bypasses @Valid (HTTP-layer only — see BillingNoteDraftRequestValidationTest for that
-        // half of S6) by calling the service directly, proving the CATCH ITSELF is narrowed, not
+        // half) by calling the service directly, proving the CATCH ITSELF is narrowed, not
         // merely that validation now blocks this case before it reaches the DB.
         String tooLong = "X".repeat(40); // billing_note_line.doc_number is VARCHAR(30)
         BillingNoteDraftRequest req = new BillingNoteDraftRequest("FREIGHT", LocalDate.now(), null, null,
@@ -1016,8 +1015,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // S7 (round 2) — list()/candidates() must gate role-only authz BEFORE requireCustomer, the
-    // SAME existence-oracle fix F2 (round 1) made for every write method: a caller with NO
+    // list()/candidates() must gate role-only authz BEFORE requireCustomer, the
+    // SAME existence-oracle rule that applies to every write method: a caller with NO
     // possible access to this endpoint must not be able to tell "customer does not exist" (404)
     // apart from "customer exists but I cannot see it" (403).
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -1140,11 +1139,11 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // F2 (Opus review, GLA-99 step 3 round 1): requireWriteAccess must run BEFORE requireDraft/
+    // requireWriteAccess must run BEFORE requireDraft/
     // requireIssued in every write method — otherwise an unauthorized caller can tell "no such
     // note" (404) or "wrong state" (409) apart from "not authorized" (403) without ever passing
     // the write gate, an existence/state oracle. Each case below targets a note that IS in the
-    // "wrong" state for that op (which would 409 today if the ordering bug were still present)
+    // "wrong" state for that op (which would 409 if the ordering were wrong)
     // and asserts FORBIDDEN instead, with the note's own state unchanged afterwards.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -1353,8 +1352,6 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         return new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Actor " + employeeId, role, employeeId,
             true, LocalDate.now(), false, null, false);
     }
-
-    // ══════ TEMPORARY REVIEW PROBES (round 3) — removed by copy-back ══════
 
     private String rawStatus(long id) {
         return jdbc.queryForObject("SELECT status FROM sales.billing_note WHERE id = :id",

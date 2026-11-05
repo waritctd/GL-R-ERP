@@ -39,9 +39,9 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Issue #388 — five read endpoints in the pricing/catalog domain authenticated the caller
- * ({@code sessions.requireUser}) but never checked their ROLE, while the WRITE paths on the same
- * resources were correctly gated. Any authenticated session — {@code employee}, {@code warehouse},
+ * Five read endpoints in the pricing/catalog domain authenticate the caller
+ * ({@code sessions.requireUser}); their ROLE checks matter because the WRITE paths on the same
+ * resources are gated too. Without them any authenticated session — {@code employee}, {@code warehouse},
  * {@code qc}, all of which {@code DivisionAccessPolicy} hands to ordinary staff — could read the
  * supplier purchase prices, the FX rates, and the margin/duty policy, i.e. reconstruct from outside
  * exactly the cost→price model {@code PricingCostingService} (RAW_COSTING_ROLES = import/ceo) and
@@ -60,19 +60,17 @@ import tools.jackson.databind.json.JsonMapper;
  * empty table — and, for the two open endpoints, so the pin proves real data is genuinely reachable
  * rather than merely un-403'd.
  *
- * <p>Final state after the product owner's rulings (see each controller for the reasoning):
+ * <p>State per the product owner's rulings (see each controller for the reasoning):
  * <ul>
- *   <li>{@code GET /api/catalog} → <b>open</b> to any authenticated user, per #205
- *       (2026-07-16).</li>
- *   <li>{@code GET /api/catalog/prices} → <b>open</b> to any authenticated user, per the owner's
- *       2026-08-01 ruling closing #388: #205's "browsable" covers the supplier purchase price.</li>
+ *   <li>{@code GET /api/catalog} → <b>open</b> to any authenticated user.</li>
+ *   <li>{@code GET /api/catalog/prices} → <b>open</b> to any authenticated user: the catalog's
+ *       "browsable" covers the supplier purchase price.</li>
  *   <li>{@code GET /api/fx-rates} → {@code ceo}/{@code import}/<b>{@code sales}</b>/
- *       <b>{@code sales_manager}</b>, per the owner's 2026-08-02 ruling (sales) and 2026-10-29
- *       ruling RC-01 (sales_manager) — see {@code FxRateController.READ_ROLES}: an FX rate only
+ *       <b>{@code sales_manager}</b>, per the owner's rulings — see {@code FxRateController.READ_ROLES}: an FX rate only
  *       converts a number already visible via the open catalog-prices read, and reveals nothing
  *       about landed cost or margin on its own. NOT open to every authenticated session.</li>
  *   <li>{@code GET /api/price-calc-configs}, {@code GET /api/factory-configs} → ceo/import
- *       ({@code RAW_COSTING_ROLES}), unchanged. The FX widening does not extend to the margin
+ *       ({@code RAW_COSTING_ROLES}). The FX widening does not extend to the margin
  *       policy or this supplier-directory endpoint.</li>
  * </ul>
  */
@@ -136,11 +134,11 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     // ── what stays deliberately open, pinned against the real SQL ────────────────────────────
 
     /**
-     * PINS ISSUE #205 (product owner, 2026-07-16): "The catalog stays browsable by any logged-in
+     * PINS THE PRODUCT-OWNER RULE: "The catalog stays browsable by any logged-in
      * user." Ordinary staff reach real catalog rows through the real repository query.
      * {@code CatalogDto} carries no price field, so nothing commercially sensitive is returned.
      *
-     * <p>A failure here means someone gated {@code CatalogController.search} — reopen #205 with the
+     * <p>A failure here means someone gated {@code CatalogController.search} — reopen the rule with the
      * product owner rather than editing this test.
      */
     @Test
@@ -155,13 +153,13 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * PINS THE PRODUCT-OWNER RULING OF 2026-08-01 that closed issue #388: #205's "browsable by any
+     * PINS THE PRODUCT-OWNER RULING that the catalog's "browsable by any
      * logged-in user" extends to the supplier PURCHASE price.
      *
      * <p>What this asserts, deliberately and against a real row in real Postgres: <strong>an
      * {@code employee}, {@code warehouse}, {@code qc} or {@code hr} session reads
      * {@code factoryName}, {@code price} and {@code currency} out of the live price catalog.</strong>
-     * #388 reported that as a HIGH-severity exposure; the owner ruled it an accepted business
+     * That was reported as a HIGH-severity exposure; the owner ruled it an accepted business
      * exposure. Accepted is not the same as safe — an authenticated account is the only control in
      * front of this data — and pinning it is what keeps the acceptance visible instead of looking
      * like a missing gate the next audit re-files.
@@ -196,11 +194,11 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * PINS THE OWNER'S RULING OF 2026-08-02 (see {@code FxRateController.READ_ROLES}): the FX read
-     * widened from {@code RAW_COSTING_ROLES} by exactly one role, to {@code sales}, so the
+     * PINS THE OWNER'S RULE (see {@code FxRateController.READ_ROLES}): the FX read
+     * is wider than {@code RAW_COSTING_ROLES} by {@code sales}, so the
      * deal-create modal's estimate can convert a catalog price to THB for a plain rep. Asserted
-     * against a real row in real Postgres, exactly like the two #388 "stays open" pins above — a
-     * failure here means someone re-narrowed the gate; reopen the ruling with the product owner
+     * against a real row in real Postgres, exactly like the two "stays open" pins above — a
+     * failure here means someone re-narrowed the gate; reopen the rule with the product owner
      * rather than editing this test.
      */
     @Test
@@ -211,7 +209,7 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * Owner ruling 2026-10-29 (role check RC-01): the deal page converts SM's foreign-currency
+     * The deal page converts SM's foreign-currency
      * prices to THB, so the FX read widens to {@code sales_manager}. Writes stay CEO-only.
      */
     @Test
@@ -222,13 +220,12 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * THE OTHER HALF OF THE SAME RULING, and the half that actually catches a regression. The
-     * ruling was "should only be to sale" — it did NOT open the rate to every authenticated
+     * THE OTHER HALF OF THE SAME RULE, and the half that actually catches a regression. The
+     * rule is "should only be to sale" — it does NOT open the rate to every authenticated
      * session. Without this case the suite stays green with the gate wide open, which is precisely
      * the failure mode a read-gate widening has: you find out in production.
      *
-     * <p>{@code sales_manager} left this list by the owner's ruling of 2026-10-29 (role check
-     * RC-01) and is pinned by {@link #salesManagerCanReadFxRatesPerOwnerRuling20261029}.
+     * <p>{@code sales_manager} is not in this list; it can read FX rates and is pinned by {@link #salesManagerCanReadFxRatesPerOwnerRuling20261029}.
      */
     @Test
     void everyRoleOutsideTheRulingIsStillRefusedTheFxRead() throws Exception {
@@ -255,7 +252,7 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     }
 
     /**
-     * {@code POST /api/fx-rates/fetch-now} (added 2026-09-24, commit 94e258c9 — CEO console
+     * {@code POST /api/fx-rates/fetch-now} (CEO console
      * "ดึงเรตจาก BOT ตอนนี้" button) is gated exactly like {@link
      * FxRateController#upsert}: CEO-only, because it writes rates too. Written wrong-way-round
      * per CLAUDE.md: {@code sales} and {@code import} — both members of {@code
