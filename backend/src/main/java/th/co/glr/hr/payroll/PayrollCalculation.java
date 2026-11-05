@@ -67,8 +67,8 @@ public record PayrollCalculation(
     BigDecimal variableAnnualTax,
     // จำนวนคราวที่ต้องจ่าย remaining this tax year including this one (ข้อ 2.1). 1 in December, which is
     // what turns the ordinary formula into the ข้อ 2.9 true-up. NOT 1 in a leaver's final period --
-    // ข้อ 2.10 is a known gap (PayrollService resolves it as 13 - month), so nothing in production ever
-    // supplies a 1 for that reason.
+    // ข้อ 2.10 is a known gap (no production caller supplies it; the calculator uses 13 - month), so
+    // nothing in production ever lands on 1 for that reason.
     int remainingPayPeriods,
     // Withholding already remitted this tax year IN EXCESS of the year's assessed liability, as at
     // this period. Normally zero. Non-zero means an earlier period over-withheld and payroll cannot

@@ -202,7 +202,7 @@ public class LeadTimeChangeService {
         return changes.findByPricingRequest(pricingRequestId);
     }
 
-    // ── notices (bell AND email; Ploy 11-03) ─────────────────────────────────────────────────
+    // ── notices (bell AND email) ─────────────────────────────────────────────────
 
     public static String notice(PricingRequestSummaryDto summary, String what, String thirdLine) {
         return what + "\nคำขอราคา " + summary.requestCode() + " · "

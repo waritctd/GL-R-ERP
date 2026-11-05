@@ -50,7 +50,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
  *
  * <p><b>Authorisation is a NEW, standalone gate — not reused from
  * any existing sales-shaped role set</b>, because this grant must work for a caller in ANY role,
- * including plain {@code employee} (ภิญญดา, QC&amp;ISO):
+ * including plain {@code employee} (e.g. a QC&amp;ISO employee):
  * <ul>
  *   <li><b>Write</b> (create/update/issue/revise/cancel/mark-received): {@code ceo}, or any
  *       employee holding the live {@link EmployeeAuthRepository#canIssueBillingNote} grant. No

@@ -1689,6 +1689,12 @@ public class PayrollService {
      * scale so callers and the stored columns keep their shape. The shared primitive behind
      * commission and {@link #overtimePayByEmployee}. Both round HERE, at the boundary into payroll
      * and per employee before any total accumulates, so every downstream figure derives from one number.
+     *
+     * <p>No statutory basis (unlike SSO's มาตรา 46 rounding): it is the accountant's house convention,
+     * matching the payroll workbook, whose July 2026 commission figures are all exactly HALF_UP of the
+     * tier feed. Rounding before tax is intended: withholding moves by a few satang against lines
+     * stored before this rule, because the tax base itself moved. Summing raw and rounding once gives
+     * a different number -- the same trap {@code SsoExporter#wholeBaht} documents.
      */
     private BigDecimal payrollWholeBaht(BigDecimal value) {
         return (value == null ? BigDecimal.ZERO : value)

@@ -1535,7 +1535,7 @@ public class DealQuotationRepository {
      * employees in the sales division ({@code DivisionAccessPolicy.SALES_DIVISION_CODE}, the SAME
      * population {@code CommissionRepository#findActiveSalesRepOptions} already queries) and (b)
      * any active employee holding the {@code hr.employee.can_create_quotation} grant (e.g.
-     * ภิญญดา, who is {@code qc} role, not sales division).
+     * a {@code qc}-role employee outside the sales division).
      *
      * <p>The predicate itself lives in
      * {@link th.co.glr.hr.commission.QuotationDisplayNameEligibility}, shared with

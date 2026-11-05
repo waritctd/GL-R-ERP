@@ -1702,7 +1702,7 @@ public class LeaveService {
      * .requested_at}, which is not yet known until after {@link #submit}'s {@code INSERT}.
      *
      * <p><b>Working-day counting caveat:</b> {@link LeaveDayMath#addWorkingDays} counts Mon-Fri only,
-     * with no holiday calendar -- a known, separately-owned limitation (see CLAUDE.md and
+     * with no holiday calendar -- a known, separately-owned DEFECT, not fixed here (see CLAUDE.md and
      * {@link LeaveDayMath}'s class Javadoc). Unlike {@code advanceNoticeDays}
      * elsewhere in this file (deliberately CALENDAR-day, to sidestep this exact dependency), the
      * filing window is genuinely working-day per the announcement's own "วันทำการ" wording and

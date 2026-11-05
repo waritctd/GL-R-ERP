@@ -29,7 +29,7 @@ import th.co.glr.hr.support.RecordingSalesMailer;
  * <p>Fixture: one request with THREE Factory A lines (lead times 30-45, 60-90, 10-20) and one
  * Factory B line (5-8), every quote already contacted (status forced to REQUESTED).
  *
- * <p>Notices (Ploy 11-03: bell AND email, reverses GLA-167 bell-only): the service is re-wired with a
+ * <p>Notices (bell AND email, not bell-only): the service is re-wired with a
  * {@link RecordingSalesMailer}. The owning rep and the fixture sales manager are both given a
  * ผู้จัดการ position so they sit in the {@code sales_manager} fan-out — that is what makes "excluding
  * the rep" and "never the actor" observable. {@code otherSm} is a second sales manager.

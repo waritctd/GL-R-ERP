@@ -139,7 +139,11 @@ public class DealQuotationService {
     /** The per-employee "can create quotations" gate, read LIVE via {@link EmployeeAuthRepository#canCreateQuotation},
      * never from {@code actor}: a {@link UserPrincipal} is captured at login and goes stale when a grant changes. */
     private final EmployeeAuthRepository employeeAuth;
-    /** Tests wire a real {@link NotificationEmailService} with a no-op or capturing {@code Mailer}. */
+    /**
+     * Unused since the plain-text approval email was retired (approval sends only the in-app
+     * notification + branded HTML email). Kept so the constructor shape the tests build stays
+     * stable; do NOT route a second approval email through it -- that is the double-email bug.
+     */
     private final NotificationEmailService approvalMailer;
     private final th.co.glr.hr.ticket.QuotationRenderer renderer;
     private final EmployeeSignatureRepository signatures;

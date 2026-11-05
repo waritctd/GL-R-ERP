@@ -47,10 +47,9 @@ public record PayrollCalculationInput(
     // year. Zero means "unknown"; the calculator then applies no year-scoped restriction.
     int taxYear,
     // remainingPayPeriods: จำนวนคราวที่ต้องจ่าย remaining in this tax year INCLUDING this one, per
-    // คำชี้แจง ภ.ง.ด.1 ข้อ 2.1. PayrollService resolves it as 13 - month. It is NOT capped at a
-    // leaver's final period: ข้อ 2.10 is a known gap because resignations are not recorded in this
-    // platform at all.
-    // Zero means "not supplied"; the calculator falls back to 13 - payrollMonthValue.
+    // คำชี้แจง ภ.ง.ด.1 ข้อ 2.1. No production caller supplies it (all pass zero), so the calculator
+    // falls back to 13 - payrollMonthValue. It is NOT capped at a leaver's final period: ข้อ 2.10 is
+    // a known gap because resignations are not recorded in this platform at all.
     int remainingPayPeriods,
     // taxpayerAge: the employee's age in this tax year, from hr.employee.date_of_birth. Drives the
     // ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (กฎกระทรวง ฉบับที่ 126); the disability-card route

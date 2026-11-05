@@ -262,7 +262,7 @@ public class SpecialMoneyPolicyEvaluator {
      *
      * <p>The May receipt date applies to the SELF_BUY route ONLY. The document ties May to the
      * self-buy case ("ซื้อ...ในเดือนพฤษภาคม...แล้วนำใบเสร็จมาเบิก...ในเดือนมิถุนายน") and says nothing
-     * about when the tailor bills for the ร้านคุณลำพอง route, so requiring May of both would refuse a
+     * about when the tailor bills for the tailor-shop route, so requiring May of both would refuse a
      * perfectly valid tailored claim receipted in June.
      */
     private BigDecimal evaluateUniformAnnual(

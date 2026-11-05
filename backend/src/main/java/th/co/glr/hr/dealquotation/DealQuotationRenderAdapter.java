@@ -156,7 +156,7 @@ public final class DealQuotationRenderAdapter {
             // surviving contact name does not itself look like an organisation (a company recorded
             // as its OWN contact, distinct from the customer name, still should not read "คุณ").
             //
-            // A contact name that already carries its own honorific (e.g. "คุณปิยพร เมืองจีน")
+            // A contact name that already carries its own honorific (e.g. "คุณสมหญิง ใจดี")
             // must not get a second one ("คุณคุณ..."): #hasThaiHonorificPrefix is the same
             // "already has one" check #looksLikeOrganisation does for a company name.
             // The ไม่เติม “คุณ” หน้าชื่อผู้สั่งซื้อ option (V180) is the ONE
@@ -1257,8 +1257,8 @@ public final class DealQuotationRenderAdapter {
     };
 
     /** {@code true} when {@code name} (whitespace-normalised) already OPENS with one of {@link
-     * #THAI_HONORIFIC_PREFIXES} -- contact_name = "คุณปิยพร เมืองจีน" would otherwise print
-     * "เรียน คุณคุณปิยพร เมืองจีน" because the stored value already carries its own
+     * #THAI_HONORIFIC_PREFIXES} -- contact_name = "คุณสมหญิง ใจดี" would otherwise print
+     * "เรียน คุณคุณสมหญิง ใจดี" because the stored value already carries its own
      * honorific and the attn-line builder would prefix a second one. Checked as a PREFIX only,
      * exactly like {@link #ORG_NAME_PREFIXES} -- a name that merely contains "นาง" mid-word does
      * not count.
@@ -1269,7 +1269,7 @@ public final class DealQuotationRenderAdapter {
      * print "เรียน คุณากร ใจดี" with no "คุณ" at all. {@link #isThaiHonorificBoundary} is the
      * guard: a prefix only counts when the very next character is NOT a Thai FOLLOWING vowel/tone
      * mark (one that attaches to the preceding consonant rather than opening a new syllable) --
-     * the same signal that tells "คุณ" + "ปิยพร" (a genuine honorific + name, next char a plain
+     * the same signal that tells "คุณ" + "สมหญิง" (a genuine honorific + name, next char a plain
      * consonant) apart from "คุณ" + "ากร" (one word, next char a following vowel). A leading vowel
      * (เ/แ/โ/ใ/ไ) always starts a new syllable and so is still a valid boundary -- "คุณเอก" is
      * "คุณ" + "เอก", not a longer word. */
@@ -1348,7 +1348,7 @@ public final class DealQuotationRenderAdapter {
      * blanket data migration over it would be the riskier change, and this keeps the document
      * correct for anything typed that way in future too.
      *
-     * <p>Only a LEADING label is touched. "คุณเจี๊ยบ โทร 081-927-9010" is a genuine free-text note,
+     * <p>Only a LEADING label is touched. "คุณสมชาย โทร 08x-xxx-xxxx" is a genuine free-text note,
      * not a mislabelled number, and prints as recorded. */
     static String stripPhoneLabel(String phone) {
         if (blank(phone)) {

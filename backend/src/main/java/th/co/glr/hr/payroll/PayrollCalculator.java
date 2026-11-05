@@ -227,8 +227,8 @@ public class PayrollCalculator {
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
 
         // จำนวนคราวที่ต้องจ่าย remaining this tax year, INCLUDING this period (คำชี้แจง ภ.ง.ด.1 ข้อ 2.1).
-        // PayrollService supplies it so a leaver's final period lands on 1; falling back to
-        // 13 - month reproduces the pre-ป.96 behaviour for any call site that does not.
+        // No production caller supplies it today, so this falls back to 13 - month (the pre-ป.96
+        // behaviour); a leaver's final period therefore does NOT land on 1 (ข้อ 2.10 gap).
         int monthsRemaining = input.remainingPayPeriods() > 0
             ? input.remainingPayPeriods()
             : Math.max(1, 13 - input.payrollMonthValue());

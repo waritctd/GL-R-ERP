@@ -1432,14 +1432,13 @@ public class TicketService {
      * DELIVERY_SCHEDULING}, which in turn blocks {@link #issueImportRequest}), a declaration is
      * refused below {@link DealStage#ORDER_RECEIVED} — see {@link #stockCoverageStageReached}.
      *
-     * <p><strong>Authorisation: "Sales declares, Import can correct."</strong> Gating this to
-     * {@link #FULFILMENT_ROLES} alone would leave the one person whose money depends on the
-     * number unable to supply it: {@code
+     * <p><strong>Authorisation: "Sales declares, CEO may correct/override."</strong> Import is NOT
+     * allowed (see {@link #STOCK_DECLARATION_ROLES}). Gating this to {@link #FULFILMENT_ROLES}
+     * would leave the one person whose money depends on the number unable to supply it: {@code
      * CommissionRepository#sumActiveStockActualReceived} computes the rep's STOCK_BONUS input as
-     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}, i.e. entirely from what another
-     * department typed in. The deal owner may declare what they know about their own deal;
-     * import and ceo have the identical ability and can correct a rep's figure afterwards, since
-     * they are the ones who know what is actually on the shelf.
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}. The deal owner declares what
+     * they know about their own deal; ceo has the same ability and can correct a rep's figure
+     * afterwards.
      *
      * <p><strong>Only the gate differs.</strong> The commission formula is unaffected — the gate
      * decides who may supply its input, never how it is computed. Everything below the gate is
@@ -1454,11 +1453,11 @@ public class TicketService {
      * employee, account, sales_manager) still gets 403 without a row being read.
      * {@link #canDeclareStockCoverage} then applies the per-row rule.
      *
-     * <p><strong>Supervision.</strong> "Import can correct it" is the
-     * stated mitigation for an uncorroborated declaration, so someone must be told to look. A rep
+     * <p><strong>Supervision.</strong> A CEO correction is the only check on an uncorroborated
+     * declaration, so someone must be told to look. A rep
      * declaring on their own deal notifies ฝ่ายขาย's ผู้จัดการ — see {@link
      * #notifySalesManagerOfRepDeclaration} for who that resolves to, why it is the manager rather
-     * than Import, and why an import/ceo correction deliberately raises nothing.
+     * than Import, and why a ceo correction deliberately raises nothing.
      */
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
@@ -1503,19 +1502,19 @@ public class TicketService {
 
     /**
      * Tells ฝ่ายขาย's ผู้จัดการ that one of their reps just declared stock coverage on their own
-     * deal (the supervision half of "Sales declares, Import can correct").
+     * deal (the supervision half of "Sales declares, CEO may correct/override").
      *
-     * <p><strong>Why the manager and not Import.</strong> The declaration's stated mitigation is
-     * "Import can correct it", and nothing else tells anyone to look. The number is a
+     * <p><strong>Why the manager.</strong> Nothing corroborates the declaration and only the CEO
+     * can correct it, so the manager must be told to look. The number is a
      * <em>supervision</em> problem rather than a logistics one: {@link #reserveStock} lets the rep
      * supply {@code qty_from_stock}, which is the {@code stockShare} half of that same rep's own
      * STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived}), and nothing in this
      * codebase corroborates it against real stock. Someone stating an input to their own pay is
      * their manager's business.
      *
-     * <p><strong>Only when the REP declares.</strong> {@code import}/{@code ceo} hold the identical
-     * ability and are the correction path — them declaring is the control working, not the risk, so
-     * it raises nothing. The trigger is exactly "the declarer's own money moves", i.e. the {@link
+     * <p><strong>Only when the REP declares.</strong> {@code ceo} holds the same ability and is the
+     * correction path — a ceo declaring is the control working, not the risk, so it raises
+     * nothing. The trigger is exactly "the declarer's own money moves", i.e. the {@link
      * #SALES_ROLES} branch of {@link #canDeclareStockCoverage}, which by that same predicate can
      * only be the deal owner. Widening this to every declarer is a one-line change if the owner
      * later wants it; it is left narrow so the notification stays a signal.

@@ -184,7 +184,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         long accountUserId = createEmployee(employees, "บัญชี BN", "account-bn1@glr.co.th", "ACCT", "บัญชี", false);
         long salesManagerUserId = createEmployee(employees, "ผจก.ขาย BN", "sales-mgr-bn1@glr.co.th", "SALESMGR", "แผนกขาย", false);
         long employeeNoGrantId = createEmployee(employees, "พนักงานทั่วไป BN", "emp-bn1@glr.co.th", "GEN", "ทั่วไป", false);
-        // The grant must work for a PLAIN employee role — ภิญญดา (QC&ISO) is the real-world shape
+        // The grant must work for a PLAIN employee role — a QC&ISO employee is the real-world shape
         // this pins (see EmployeeAuthRepository#canIssueBillingNote's own Javadoc).
         long employeeWithGrantId = createEmployee(employees, "ผู้มีสิทธิ์วางบิล BN", "emp-grant-bn1@glr.co.th", "QC", "QC&ISO", true);
 
@@ -1087,7 +1087,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void write_grantHolderInAPlainEmployeeRole_succeeds() {
-        // ภิญญดา's real-world shape: role `employee`, grant TRUE.
+        // The real-world shape (a QC&ISO employee): role `employee`, grant TRUE.
         CustomerDto customer = createCustomer("AuthzGrant");
         BillingNoteDraftRequest req = new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null, List.of());
         BillingNoteDocumentDto draft = billingNoteService.createDraft(customer.id(), req, employeeWithGrantActor);

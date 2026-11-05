@@ -899,7 +899,7 @@ public class PricingRequestService {
         String metadataJson = toDeadDealMetadataJson(reason);
         int cancelledCount = 0;
         List<Long> abandonedIds = new ArrayList<>();
-        // A deal with an ISSUED IR already tells import via DEAL_LOST / DEAL_CANCELLED: one notice, not two (Ploy 11-03).
+        // A deal with an ISSUED IR already tells import via DEAL_LOST / DEAL_CANCELLED: one notice, not two.
         boolean importToldByDealNotice = tickets.hasIssuedImportRequest(ticketId);
         for (Long id : openIds) {
             boolean settled = false;
