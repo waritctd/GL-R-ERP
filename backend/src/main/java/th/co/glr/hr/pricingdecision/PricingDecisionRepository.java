@@ -18,7 +18,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesItem
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 
 /**
- * Persistence for the Step 3 aggregate (V72): {@code sales.pricing_decision},
+ * Persistence for the Step 3 aggregate: {@code sales.pricing_decision},
  * {@code sales.pricing_decision_item}. Persistence only — no permission checks, no workflow
  * validation, no margin/price arithmetic; see {@link PricingDecisionService} for all of that.
  */
@@ -102,7 +102,7 @@ public class PricingDecisionRepository {
         BigDecimal requestedQuantity, BigDecimal normalizedQuantityPieces,
         BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
         String currency, BigDecimal proposedMarginPct, BigDecimal proposedSellingPrice,
-        // Phase 2 (owner ruling A, 2026-09-19, V187): the auto-calculated formula price is a REAL
+        // The auto-calculated formula price is a REAL
         // stored value from the moment the item is created, not a UI placeholder — it becomes
         // list_unit_price's starting value (the NET mode's ราคาตั้ง) so a CEO who picks NET and
         // never types anything still has a real, storable price to approve. Same figure as
@@ -164,10 +164,9 @@ public class PricingDecisionRepository {
     }
 
     /**
-     * Phase 2 (V187) price-mode fields -- {@code listUnitPrice}/{@code discountPct} (NET),
-     * {@code specialPriceSqm} (SPECIAL_SQM), {@code directNetPrice} (DIRECT_NET). Review finding
-     * #6 (2026-09-19): each needs the SAME tri-state (set / clear / leave untouched) the legacy
-     * {@code sellingPriceOverride} already has, not a plain COALESCE -- a blanked input (the CEO
+     * Price-mode fields -- {@code listUnitPrice}/{@code discountPct} (NET),
+     * {@code specialPriceSqm} (SPECIAL_SQM), {@code directNetPrice} (DIRECT_NET). Each needs the SAME
+     * tri-state (set / clear / leave untouched) the legacy {@code sellingPriceOverride} already has, not a plain COALESCE -- a blanked input (the CEO
      * clears a field back to empty) must actually clear the stored value, not silently leave the
      * old one in place because a null parameter is indistinguishable from "omitted". The paired
      * {@code clearXxx} boolean is that explicit "yes, really clear this" signal.
@@ -176,7 +175,7 @@ public class PricingDecisionRepository {
      * always decides this column's value (never client input), so the tri-state here is "the
      * caller computed a definitive value (write it, even NULL)" vs. "this call did not touch net
      * at all (leave it alone)" -- {@code netUnitPriceComputed} is that second signal. Reused by
-     * {@code PricingDecisionService}'s mode-switch recompute (review finding #2): a pure
+     * {@code PricingDecisionService}'s mode-switch recompute: a pure
      * net-only write, every other field left null/false/untouched.
      */
     public record ItemUpdate(
@@ -188,7 +187,7 @@ public class PricingDecisionRepository {
         BigDecimal specialPriceSqm, boolean clearSpecialPriceSqm,
         BigDecimal directNetPrice, boolean clearDirectNetPrice,
         BigDecimal netUnitPrice, boolean netUnitPriceComputed) {
-        /** The pre-finding-#6/#2 shape (plain COALESCE, no clear/compute signals) -- kept so the
+        /** The plain-COALESCE shape (no clear/compute signals) -- kept so the
          * few call sites that only ever SET (never clear) these fields, and never touch net
          * unilaterally, stay simple. */
         public ItemUpdate(long itemId, BigDecimal marginPct, BigDecimal sellingPrice,
@@ -290,22 +289,21 @@ public class PricingDecisionRepository {
     }
 
     /**
-     * V141 ("CEO owns costing"): re-derives a DRAFT decision item's FROZEN cost columns —
-     * previously write-once at {@code insertItems} time, never touched again by any repository
-     * method. Now needed twice: {@code PricingDecisionService#recalculateCost} (the bound costing
-     * was just recomputed) and {@code #overrideItemCost} (one line's effective cost just changed).
+     * Re-derives a DRAFT decision item's FROZEN cost columns (CEO owns costing), which
+     * {@code insertItems} writes first. Needed twice: {@code PricingDecisionService#recalculateCost}
+     * (the bound costing was just recomputed) and {@code #overrideItemCost} (one line's effective
+     * cost just changed).
      * Deliberately does NOT touch {@code proposed_margin_pct}/{@code approved_*} — a cost-driven
      * recompute never overwrites a margin the CEO already set, or anything {@code approve()} froze.
      * Same DRAFT-only guard shape as {@link #updateItems}.
      *
-     * <p>{@code listUnitPrice}/{@code netUnitPrice} (owner correction, 2026-09-19): whenever
-     * {@code proposedSellingPrice} (the formula reference) changes here, Phase 2's NET-mode list
-     * price must move WITH it — {@code list_unit_price} is never a client input (ruling A: the CEO
+     * <p>{@code listUnitPrice}/{@code netUnitPrice}: whenever
+     * {@code proposedSellingPrice} (the formula reference) changes here, the NET-mode list
+     * price must move WITH it — {@code list_unit_price} is never a client input (the CEO
      * never types it), so the ONLY way it can stay correct after a cost-driven recompute is for
-     * this exact write path to carry it. Freezing it at {@code insertItems} time only (the
-     * original, wrong design) left an item that starts uncostable permanently unable to reach a
-     * NET approval even after {@code overrideItemCost} made it costable — reintroducing review
-     * finding #1's deadlock through a second door. Both fields are UNCONDITIONAL overwrites here
+     * this exact write path to carry it. Freezing it at {@code insertItems} time only would
+     * leave an item that starts uncostable permanently unable to reach a NET approval even after
+     * {@code overrideItemCost} made it costable. Both fields are UNCONDITIONAL overwrites here
      * (always {@code money2(proposedSellingPrice)}/the freshly recomputed net, including to NULL
      * when the item just became uncostable again) — never tri-state, because neither is ever
      * client-supplied on this path; see {@code PricingDecisionService#deriveListAndNet}. */
@@ -510,8 +508,7 @@ public class PricingDecisionRepository {
     /** Design correction 2's sales-facing projection — see {@link PricingDecisionDtos.PricingDecisionSalesViewDto}. */
     public Optional<PricingDecisionSalesViewDto> findApprovedSalesView(long pricingRequestId) {
         try {
-            // MINOR-1 fix (owner ruling, confirmed 2026-09-20) — `price_mode IS NOT NULL` computed
-            // IN SQL, as a boolean, rather than fetching the raw price_mode string into Java at
+            // `price_mode IS NOT NULL` is computed IN SQL, as a boolean, rather than fetching the raw price_mode string into Java at
             // all: there is then no string value in this method for a future caller to
             // accidentally forward, only the yes/no fact PricingDecisionSalesViewDto#newFormPricing
             // documents itself as being.
@@ -523,9 +520,9 @@ public class PricingDecisionRepository {
                 (rs, rowNum) -> new PricingDecisionSalesViewDto(pricingRequestId, rs.getLong("pricing_decision_id"),
                     rs.getString("currency"), rs.getTimestamp("approved_at").toInstant(), List.of(),
                     rs.getBoolean("new_form_pricing")));
-            // color/texture/size added here (sales-view only — findItems() above is the OTHER
-            // query, feeding the cost-bearing PricingDecisionItemDto, and is deliberately left
-            // untouched) so Step 4's CustomerQuotationService#buildItem has them to snapshot
+            // color/texture/size are selected here (sales-view only — findItems() above is the
+            // OTHER query, feeding the cost-bearing PricingDecisionItemDto) so Step 4's
+            // CustomerQuotationService#buildItem has them to snapshot
             // onto sales.quotation_item's legacy render columns — see
             // PricingDecisionSalesItemDto's own field comment for the full chain.
             List<PricingDecisionSalesItemDto> items = jdbc.query("""
