@@ -84,9 +84,9 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * Real-DB acceptance + authz + concurrency coverage for Step 3 (CEO Selling Price Decision).
- * Builds directly on Step 2's fixtures/style
- * ({@code PricingFactoryQuoteCostingIntegrationTest}) — a fresh SUBMITTED costing is the
+ * Real-DB acceptance + authz + concurrency coverage for the CEO Selling Price Decision.
+ * Builds directly on the fixtures/style of
+ * {@code PricingFactoryQuoteCostingIntegrationTest} — a fresh SUBMITTED costing is the
  * precondition every test starts from.
  */
 class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
@@ -345,18 +345,16 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(perPieceTotal).isEqualByComparingTo("91537.0200");
         assertThat(perBoxTotal).isEqualByComparingTo(perPieceTotal);
 
-        // V152 (V109 engine wiring): the SELLING price total is no longer basis-invariant, and
-        // that is now CORRECT, not a regression — see LandedCostCalculatorFormulaIntegrationTest
+        // The SELLING price total is not basis-invariant, and
+        // that is CORRECT — see LandedCostCalculatorFormulaIntegrationTest
         // and CustomerQuotationIntegrationTest's identical scenario for the full explanation.
-        // Owner ruling 2026-09-19 (Phase 2 CEO pricing): SP now rounds HALF_UP to 2dp instead of
-        // RoundUp to the nearest ฿10 — the figures below are the NEW rule's own hand-verified
-        // values, replacing the old RoundUp ones. The rounding still happens at the
+        // SP rounds HALF_UP to 2dp; the figures below are hand-verified values for that rule.
+        // The rounding happens at the
         // PER-REQUESTED-UNIT level BEFORE multiplying by quantity, so the same underlying landed
-        // cost (91537.0200 total either way) still rounds by a different RELATIVE amount
+        // cost (91537.0200 total either way) rounds by a different RELATIVE amount
         // depending on how large the per-unit price is, and that per-unit slop is multiplied by a
-        // different quantity (10 boxes vs 200 pieces) on each side — basis-invariance is still the
-        // wrong intuition for the SELLING total, just via a different (now HALF_UP 2dp) rounding
-        // step. Hand-verified at margin=0.10 (this test's own default), sellingBuffer=1.07:
+        // different quantity (10 boxes vs 200 pieces) on each side — basis-invariance is the
+        // wrong intuition for the SELLING total. Hand-verified at margin=0.10 (this test's own default), sellingBuffer=1.07:
         //   per-box:   9153.7020 x 1.10 x 1.07 = 10773.907254 -> HALF_UP 2dp -> ฿10,773.91/box
         //              x 10 boxes   = ฿107,739.10
         //   per-piece:  457.6851 x 1.10 x 1.07 =   538.6953827 -> HALF_UP 2dp -> ฿538.70/piece
@@ -655,9 +653,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * Was {@code approve_rejectsWhenAnyItemLacksMinimumSellingPriceOrMargin} — ราคาขั้นต่ำ is no
-     * longer a CEO input (Phase 1 UI simplification, owner ruling 2026-08-16), so a null minimum
-     * can no longer block approval; it auto-populates instead. Margin is still required. The
+     * ราคาขั้นต่ำ is not a CEO input, so a null minimum
+     * does not block approval; it auto-populates instead. Margin is still required. The
      * wrong-way-round proof that the auto-populated minimum still refuses a discount lives in
      * {@code PricingDecisionMinimumPriceAutoPopulationIntegrationTest}.
      */
@@ -1025,22 +1022,21 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // V141 ("CEO owns costing"): CEO cost override + staleness (owner's explicit requirement).
+    // "CEO owns costing": CEO cost override + staleness (owner's explicit requirement).
     // A cost override is an INPUT to price = cost x margin, so it must not silently outlive the
     // FX rate or calc-config version that justified it — see PricingDecisionService#approve's own
     // stale-override guard and PricingCostingRepository#mapItem's overrideStale derivation.
     //
     // recalculateCost itself is covered first: PricingCostingRepository
-    // #replaceItemsPreservingOverrides used to unconditionally DELETE-then-INSERT every
-    // sales.pricing_costing_item row for the costing, which violated the NOT NULL ... ON DELETE
-    // RESTRICT FK from sales.pricing_decision_item (V72 L110) into those exact rows the moment a
+    // #replaceItemsPreservingOverrides must not DELETE-then-INSERT every
+    // sales.pricing_costing_item row for the costing, which would violate the NOT NULL ... ON DELETE
+    // RESTRICT FK from sales.pricing_decision_item into those exact rows the moment a
     // decision existed — i.e. on literally every real call (a DRAFT decision only ever comes to
-    // exist via startReview, which is what wrote that FK in the first place). That method is now
-    // an UPSERT keyed on the V62 unique index uq_pricing_costing_item_request_item, so every
+    // exist via startReview, which is what wrote that FK in the first place). That method is
+    // an UPSERT keyed on the unique index uq_pricing_costing_item_request_item, so every
     // pricing_costing_item_id PRIMARY KEY stays stable across a recalculation and the FK never
     // breaks — see PricingCostingRepository#replaceItemsPreservingOverrides's own javadoc for the
-    // full account. Every test below now drives the real, fixed recalculateCost path — none of
-    // them route around it any more.
+    // full account. Every test below drives the real recalculateCost path.
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
@@ -1180,8 +1176,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(costingItemA.overrideStale())
             .as("fx_rate moved since the override snapshotted the OLD rate — must read stale")
             .isTrue();
-        // The override is PRESERVED (owner ruling: never clear it on a cost-affecting change) and
-        // the COMPUTED figure is REFRESHED, not destroyed — it now reflects the new fx_rate,
+        // The override is PRESERVED (rule: never clear it on a cost-affecting change) and
+        // the COMPUTED figure is REFRESHED, not destroyed — it reflects the new fx_rate,
         // sitting BESIDE the (unchanged) override.
         assertThat(costingItemA.manualLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
         assertThat(costingItemA.landedCostPerUnitThb()).isNotNull();
@@ -1217,9 +1213,8 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * Isolates the PRESERVATION contract itself, now driven through the REAL {@link
-     * PricingDecisionService#recalculateCost} (the FK bug that used to force this test to
-     * construct a standalone, decision-less costing via direct repository calls is fixed — see
+     * Isolates the PRESERVATION contract itself, driven through the REAL {@link
+     * PricingDecisionService#recalculateCost} (no standalone, decision-less costing is needed — see
      * {@link PricingCostingRepository#replaceItemsPreservingOverrides}'s own javadoc): a SECOND
      * write to the SAME costing (the "recalculate" shape) must carry an existing override
      * forward, never destroy the computed figure sitting beside it, and — because NOTHING in the
@@ -1247,7 +1242,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
         PricingCostingItemDto afterRecalc = costingItemFor(
             costingService.get(decision.pricingCostingId(), ceoActor), itemA.pricingRequestItemId());
-        // The override is PRESERVED (owner ruling: never clear on recalculate).
+        // The override is PRESERVED (rule: never clear on recalculate).
         assertThat(afterRecalc.manualLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
         assertThat(afterRecalc.effectiveLandedCostPerUnitThb()).isEqualByComparingTo(manualCost);
         // The COMPUTED figure is never destroyed — it is still present beside the override.
@@ -1287,9 +1282,9 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
         return decisionService.approve(decision.id(), new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
     }
 
-    /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW (Step 2's own flow), the
-     * precondition every Step 3 operation starts from. V141 ("CEO owns costing"): unlike the
-     * pre-V141 name, this no longer creates any {@code sales.pricing_costing} row itself —
+    /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW (the factory-quote flow), the
+     * precondition every CEO pricing-decision operation starts from. The CEO owns costing: this
+     * does not create any {@code sales.pricing_costing} row itself —
      * markReadyForCosting's auto-advance (once the LAST factory quote resolves) is what gets the
      * request here; {@code decisionService.startReview}, called separately by every test below,
      * is what computes and persists the costing. */
@@ -1314,7 +1309,7 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** Single-item, single-factory (zero-cost-config "Factory C3") scenario driven to
      * READY_FOR_CEO_REVIEW, mirroring {@code PricingFactoryQuoteCostingIntegrationTest
-     * #singleItemCosting}. V141: no standalone costing is created here either — see
+     * #singleItemCosting}. No standalone costing is created here either — see
      * {@link #twoItemSubmittedCosting()}'s own javadoc. */
     private long singleItemSubmittedCosting(
         BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis, BigDecimal quotedQuantity,
@@ -1355,13 +1350,12 @@ class PricingDecisionIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * V109 selling-price formula (V152) hand-reimplemented independently of
+     * Selling-price formula hand-reimplemented independently of
      * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#sellingPrice}: {@code cost x
-     * (1+margin) x selling_buffer}, rounded HALF_UP to 2dp — owner ruling 2026-09-19 (Phase 2 CEO
-     * pricing) replaced the old "round UP to the nearest selling_price_round_up_to" rule this
-     * helper used to reimplement. Buffer (1.07) matches V109's seeded default, which every fixture
+     * (1+margin) x selling_buffer}, rounded HALF_UP to 2dp.
+     * Buffer (1.07) matches the seeded default, which every fixture
      * in this class relies on being current (nothing here mutates
-     * {@code sales.pricing_formula_config}); {@code selling_price_round_up_to} is no longer
+     * {@code sales.pricing_formula_config}); {@code selling_price_round_up_to} is not
      * consulted at all.
      */
     private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct) {
