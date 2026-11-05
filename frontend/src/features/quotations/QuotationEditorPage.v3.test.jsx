@@ -14,10 +14,9 @@ globalThis.React = React;
 // beyond the page's own 300 ms / 2 s debounces.
 vi.setConfig({ testTimeout: 15000 });
 
-// Quotation v3 / v3b controls and the owner's 2026-09-11 requests (customer address, repeat-customer
-// autofill, the "ข้อมูลที่ยังไม่ครบ" checklist), driven through the WHOLE editor page. A separate file
-// from QuotationEditorPage.test.jsx only to keep that one's fixtures (pre-v3 DTOs, no address) as
-// the regression net they already are.
+// Quotation v3 / v3b controls (customer address, repeat-customer autofill, the "ข้อมูลที่ยังไม่ครบ"
+// checklist), driven through the WHOLE editor page. Separate from QuotationEditorPage.test.jsx only
+// to keep that file's fixtures (pre-v3 DTOs, no address) as the regression net they are.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -30,10 +29,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
-      // Consumed by DesignerPicker.jsx (owner ask 2026-09-12, "D.Co. auto-fill from a
-      // ผู้ออกแบบ pick") -- getByCode default-resolves to undefined so the picker's own
-      // resolved-name hint effect just finds nothing rather than throwing when a test
-      // never sets a unitCode.
+      // Consumed by DesignerPicker.jsx. getByCode default-resolves to undefined so the picker's
+      // resolved-name hint effect finds nothing rather than throwing when a test never sets a unitCode.
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
         search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
@@ -53,10 +50,9 @@ const CONTACTS = [
 ];
 
 // A COMPLETE stored tile row (validateQuotationItem finds nothing missing) in the full v3 DTO shape.
-// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
-// TILE row with neither) -- this shared fixture backs most of this file's ส่งขออนุมัติ-enabled
-// assertions, which have nothing to do with lead time; the dedicated describe block below is
-// where a row with NO lead time is exercised on purpose.
+// leadTimeMinDays/leadTimeMaxDays are SET because submit refuses a TILE row with neither; this
+// fixture backs most ส่งขออนุมัติ-enabled assertions, which are unrelated to lead time. The dedicated
+// describe block below exercises a row with NO lead time.
 const TILE_ITEM = {
   id: 101, seq: 1, lineType: 'TILE', locationLabel: null, catalogPriceId: null, productCode: null,
   brand: 'Marazzi', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
@@ -76,10 +72,9 @@ function draft(overrides = {}) {
     approvalNote: null, quotationDate: '2026-09-11',
     customerName: CUSTOMER.name, customerAddress: null, customerTaxId: CUSTOMER.taxId, customerPhone: CUSTOMER.phone,
     contactId: 6, contactName: 'ณัฐพงศ์ ศรีวิไล', contactPhone: '086-222-3333', contactEmail: 'nattapong@fashionisland.co.th',
-    // unitCode non-blank in the SHARED fixture (owner ruling 2026-09-14: designer is NOT
-    // required, but its checklist warning renders from the very first commit -- unlike the
-    // address warning, it does not wait on the ticket/quotation queries to resolve). Per-test
-    // overrides still exercise the blank-designer path where that matters.
+    // unitCode is non-blank in the SHARED fixture: designer is NOT required, but its checklist
+    // warning renders from the first commit (unlike the address warning, it does not wait on the
+    // ticket/quotation queries). Per-test overrides exercise the blank-designer path.
     projectName: 'โครงการ A', deptCode: null, unitCode: 'A001', offerDate: '2026-09-01', depositPercent: 30,
     remainderMode: 'ON_DELIVERY', creditDays: null, validityDays: 30, validityDate: null, customerNotes: null,
     priceMode: 'NET', documentLanguage: 'TH', subtotalAmount: 48450, vatAmount: 3391.5, grandTotal: 51841.5,
@@ -128,7 +123,7 @@ beforeEach(() => {
 });
 
 describe('v3/v3b document settings', () => {
-  // ── owner ruling 2026-09-13: "Clear all prices on switch" ───────────────────────────────────
+  // ── "Clear all prices on switch" ──
   const PLAIN_ITEM = {
     id: 102, seq: 2, lineType: 'PLAIN', locationLabel: null, descriptionLine: 'ค่าขนส่ง', quantity: 1, unit: 'งาน',
     unitPrice: 800, discountPct: 0, netUnitPrice: 800, lineAmount: 800, piecesFinal: 0,
@@ -234,26 +229,20 @@ describe('v3/v3b document settings', () => {
     for (const stale of ['1350', '850', '800']) expect(inputValues()).not.toContain(stale);
   }, 20000);
 
-  // Review fix F1 (2026-09-16): a row ticked "ขายแผ่นไม่เต็มกล่อง" under Thai ราคาพิเศษ used to
-  // become PERMANENTLY un-submittable the moment the document switched to English per-sqm — the
-  // checkbox goes disabled AND renders unchecked in that mode (roundToFullBoxDisabledReason), so
-  // there was no on-screen control left to clear the stale stored `roundToFullBox: false`, and
-  // validateQuotationItem's own checklist branch blocked บันทึกร่าง/ส่งขออนุมัติ forever (only
-  // deleting and re-adding the row escaped it). Fixed by resetting the stored flag back to `true`
-  // in `applyPriceMode` the moment the document reaches this mode.
+  // A row ticked "ขายแผ่นไม่เต็มกล่อง" under Thai ราคาพิเศษ must not become PERMANENTLY un-submittable
+  // after switching to English per-sqm. The checkbox goes disabled AND renders unchecked in that mode
+  // (roundToFullBoxDisabledReason), so a stale stored `roundToFullBox: false` could not be cleared and
+  // validateQuotationItem's checklist branch would block save/submit forever. `applyPriceMode`
+  // resets the stored flag to `true` on reaching this mode.
   //
-  // The checkbox already RENDERS unchecked in English per-sqm regardless of the underlying flag
-  // (disabled ⇒ roundLooseChecked is forced false), and the SAVE payload already forced
-  // `roundToFullBox: true` in this mode even before this fix (itemInputFromRow) — so neither the
-  // checkbox's own `checked` state nor a payload assertion taken while STILL in per-sqm mode can
-  // tell a real reset from a merely-masked one. What actually proves the stored flag was cleared,
-  // not just hidden, is switching BACK to a mode where the checkbox re-enables (Thai ราคาพิเศษ):
-  // if the flag lingered, it re-appears CHECKED with no re-entry from the rep, exactly the "silent
-  // resurrection" the owner's "Clear all prices on switch" ruling forbids for prices.
-  // Option B (owner decision, 2026-09-16): the reset below only fires when the row already carries
-  // a box area (sqmPerBox) — without one, English per-sqm now honours roundToFullBox normally (see
-  // quotationItemInput.test.jsx's own "WITHOUT a box area" coverage), so this scenario is scoped to
-  // a row WITH one to keep testing what it always tested: the flag must not survive hidden-but-set.
+  // The checkbox renders unchecked regardless of the flag, and the SAVE payload already forces
+  // `roundToFullBox: true` in this mode (itemInputFromRow), so neither the checkbox state nor a
+  // payload assertion taken while still in per-sqm mode can tell a real reset from a masked one.
+  // Switching BACK to a mode where the checkbox re-enables (Thai ราคาพิเศษ) does: a lingering flag
+  // would re-appear CHECKED, the "silent resurrection" the "Clear all prices on switch" rule forbids.
+  // The reset only fires when the row carries a box area (sqmPerBox); without one, English per-sqm
+  // honours roundToFullBox normally (see quotationItemInput.test.jsx), so this scenario uses a row
+  // WITH one.
   it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with a box area survives a switch to English per-sqm — no permanent block, flag reset, submit possible', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
@@ -269,10 +258,9 @@ describe('v3/v3b document settings', () => {
 
     fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
 
-    // English per-sqm: the checkbox goes disabled and renders UNCHECKED (as before this fix). The
-    // checklist DOES block now — the switch cleared ราคาพิเศษ and English per-sqm needs its own
-    // ตร.ม./กล่อง — but that is the unrelated, expected "re-enter your prices" block, not a
-    // roundToFullBox one; the assertion that matters is the round-trip below.
+    // English per-sqm: the checkbox goes disabled and renders UNCHECKED. The checklist DOES block
+    // (the switch cleared ราคาพิเศษ and English per-sqm needs its own ตร.ม./กล่อง), but that is the
+    // expected "re-enter your prices" block, not a roundToFullBox one; the round-trip below is what matters.
     await waitFor(() => expect(byId('round-loose-0').disabled).toBe(true));
     expect(byId('round-loose-0').checked).toBe(false);
 
@@ -283,8 +271,8 @@ describe('v3/v3b document settings', () => {
     await waitFor(() => expect(byId('round-loose-0').disabled).toBe(false));
     expect(byId('round-loose-0').checked).toBe(false);
 
-    // The language switch also clears every price (owner ruling, unrelated to this fix) -- re-enter
-    // what Thai ราคาพิเศษ needs (list price + ราคาพิเศษ) to prove the row is fully submittable.
+    // The language switch also clears every price; re-enter what Thai ราคาพิเศษ needs (list price +
+    // ราคาพิเศษ) to prove the row is fully submittable.
     fireEvent.change(byId('price-0'), { target: { value: '2000' } });
     fireEvent.change(byId('special-0'), { target: { value: '1350' } });
 
@@ -294,14 +282,14 @@ describe('v3/v3b document settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled());
     const [, payload] = api.dealQuotations.update.mock.calls[0];
-    // The stored flag saves as `true` — the reset survived the round-trip, not merely the moment
-    // the mode was per-sqm.
+    // The stored flag saves as `true`: the reset survived the round-trip, not merely the moment the
+    // mode was per-sqm.
     expect(payload.items[0]).toMatchObject({ roundToFullBox: true });
   }, 20000);
 
-  // Option B (owner decision, 2026-09-16): the opposite of the test above — a row with NO box area
-  // is legitimately loose-pieces-capable in English per-sqm now, so switching INTO that mode must
-  // NOT reset it, and the checkbox must stay enabled so the rep can still change their mind.
+  // The opposite of the test above: a row with NO box area is legitimately loose-pieces-capable in
+  // English per-sqm, so switching INTO that mode must NOT reset it, and the checkbox must stay
+  // enabled.
   it('a ticked "ขายแผ่นไม่เต็มกล่อง" row with NO box area keeps it after switching to English per-sqm', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
@@ -356,10 +344,9 @@ describe('v3/v3b document settings', () => {
     fireEvent.click(within(group('วิธีกรอกราคากระเบื้อง')).getByRole('button', { name: 'ราคาพิเศษ บาท/ตร.ม.' }));
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
     // The Thai ราคาพิเศษ needs its list price as well (DealQuotationService#requirePriceValidForType
-    // refuses a TILE row without one); until both are typed the editor previews nothing at all —
-    // quotationMeta#rowHasPriceForPreview — rather than a figure priced under another mode.
-    // Both are per ตร.ม. including VAT since sales feedback #1 (2026-10-06), so the row needs its
-    // แผ่น/ตร.ม. before either can be previewed.
+    // refuses a TILE row without one); until both are typed the editor previews nothing
+    // (quotationMeta#rowHasPriceForPreview) rather than a figure priced under another mode. Both are
+    // per ตร.ม. including VAT, so the row needs its แผ่น/ตร.ม. before either can be previewed.
     fireEvent.change(screen.getByLabelText(/^แผ่น\/ตร\.ม\./), { target: { value: '2.78' } });
     fireEvent.change(screen.getByLabelText(/^ราคาตั้ง\/ตร\.ม\. \(รวม VAT\)/), { target: { value: '2000' } });
     fireEvent.change(screen.getByLabelText(/^ราคาพิเศษ\/ตร\.ม\./), { target: { value: '1350' } });
@@ -372,9 +359,8 @@ describe('v3/v3b document settings', () => {
   });
 });
 
-// Owner feedback #7 (2026-09-14): submit now requires a lead time on every TILE row — a deliberate
-// sales-workflow rule change, SUBMIT only (a draft still saves with none). Mirrors
-// DealQuotationService#requireEveryTileItemHasALeadTime.
+// Submit requires a lead time on every TILE row (SUBMIT only; a draft still saves with none).
+// Mirrors DealQuotationService#requireEveryTileItemHasALeadTime.
 describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
   const byId = (id) => document.getElementById(id);
 
@@ -481,13 +467,11 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
   });
 });
 
-// Opus review fix (2026-09-16, F2): "typing 0 as a custom deposit %" used to be only VISUALLY
-// refused — depositZeroError showed a message but nothing blocked the save, so a rep could reach
-// depositPercent = 0 with no fullPaymentTerm two ways (the "ไม่รับมัดจำ" checkbox, already handled,
-// OR typing "0" into the custom "อื่นๆ" input while unticked, which was NOT) and only discover the
-// problem at ส่งขออนุมัติ's server-side 400. Mirrors DealQuotationService#submit's own gate
-// (isZeroDeposit(depositPercent) && isBlank(fullPaymentTerm)) — SUBMIT only, exactly like "lead
-// time required to submit" above: a draft with this same shape still saves.
+// Typing 0 as a custom deposit % must block ส่งขออนุมัติ, not just show depositZeroError: depositPercent
+// = 0 with no fullPaymentTerm is reachable two ways (the "ไม่รับมัดจำ" checkbox, OR typing "0" into the
+// custom "อื่นๆ" input while unticked) and would otherwise only surface as the server's 400 at submit.
+// Mirrors DealQuotationService#submit's gate (isZeroDeposit(depositPercent) && isBlank(fullPaymentTerm)).
+// SUBMIT only, like "lead time required to submit" above: a draft with this shape still saves.
 describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-16)', () => {
   it('typing "0" into the custom "อื่นๆ" input (checkbox left UNticked) BLOCKS ส่งขออนุมัติ, but บันทึกร่าง stays enabled', async () => {
     renderEditor('/quotations/5'); // draft() default: depositPercent 30, checkbox unticked
@@ -509,7 +493,7 @@ describe('0% deposit requires a payment term to submit (Opus review F2, 2026-09-
     fireEvent.click(screen.getByRole('button', { name: 'อื่นๆ' }));
     fireEvent.change(screen.getByLabelText('มัดจำ %'), { target: { value: '0' } });
 
-    // QA-34: it blocks ส่งขออนุมัติ, so it sits in the submit-blocking group, not under ควรกรอก.
+    // It blocks ส่งขออนุมัติ, so it sits in the submit-blocking group, not under ควรกรอก.
     const submitBlocking = await screen.findByTestId('checklist-submit-blocking');
     expect(within(submitBlocking).getByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).not.toBeNull();
     expect(within(screen.getByTestId('checklist-warnings')).queryByText('มัดจำ 0% กรุณาเลือกเงื่อนไขการชำระเงิน')).toBeNull();
@@ -586,9 +570,8 @@ describe('"ข้อมูลที่ยังไม่ครบ" checklist (ow
     expect(screen.getByRole('button', { name: 'ส่งขออนุมัติ' }).disabled).toBe(false);
   });
 
-  // Owner-directed reversal of F2/V167 (2026-09-26): a missing ผู้สั่งซื้อ used to BLOCK
-  // ส่งขออนุมัติ here — it no longer produces any checklist entry, blocking or otherwise, and
-  // ส่งขออนุมัติ stays enabled.
+  // A missing ผู้สั่งซื้อ produces no checklist entry, blocking or otherwise, and ส่งขออนุมัติ stays
+  // enabled.
   it('a missing ผู้สั่งซื้อ no longer blocks ส่งขออนุมัติ, or appears in the checklist at all', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: draft({ contactId: null, contactName: null, contactPhone: null, contactEmail: null }) });
     api.tickets.get.mockResolvedValue({
@@ -641,11 +624,9 @@ describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () =
     await waitFor(() => expect(document.getElementById('deal-customer-address')?.value).toBe('201 ซอยสุขุมวิท 63'));
     expect(document.getElementById('deal-customer-tax-id').value).toBe('0105551234567');
     expect(document.getElementById('deal-customer-phone').value).toBe('02-000-0000');
-    // Owner-directed reversal of F2/V167 (2026-09-26): the ผู้สั่งซื้อ contact-picker (and its
-    // editable โทร./อีเมล fields, gap fix QT-2026-0041-1) is gone from this editor entirely —
-    // ผู้สั่งซื้อ is now a single optional free-text input, unaffected by the customer/ticket data
-    // this test seeds. Resolving the customer autofill is not an edit: the pristine page stays
-    // quiet either way.
+    // ผู้สั่งซื้อ is a single optional free-text input (no contact picker, no editable โทร./อีเมล),
+    // unaffected by the customer/ticket data this test seeds. Resolving the customer autofill is not
+    // an edit: the pristine page stays quiet either way.
     expect(screen.queryByTestId('quotation-checklist')).toBeNull();
   });
 
@@ -713,8 +694,8 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
     // The days select is gone from the DOM while DATE mode shows, but its VALUE (30, from the
     // draft) must still be sent on save — see #buildUpsertPayload's own comment.
     expect(screen.queryByLabelText('validityDays')).toBeNull();
-    // The rep types the date in พ.ศ.; the API still receives ค.ศ. ISO (PDF adds 543 itself) —
-    // the 31/01/2570 → "31/01/3113" bug was a พ.ศ. year landing in a ค.ศ. field.
+    // The rep types the date in พ.ศ.; the API still receives ค.ศ. ISO (PDF adds 543 itself). A พ.ศ.
+    // year landing in a ค.ศ. field would turn 31/01/2570 into "31/01/3113".
     fireEvent.change(dateInput, { target: { value: '31/12/2569' } });
     fireEvent.blur(dateInput);
     expect(dateInput.value).toBe('31/12/2569');
@@ -747,9 +728,9 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
   });
 });
 
-// Sales feedback #1 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06, V192.2) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ",
-// driven through the whole editor: what a typed price asks the server, what comes back onto the
-// row, and what a save carries. quotationPerSqmPrice.test.jsx pins the row and the pure helpers.
+// What a typed per-ตร.ม. (incl. VAT) price asks the server, what comes back onto the row, and what a
+// save carries, driven through the whole editor. quotationPerSqmPrice.test.jsx pins the row and the
+// pure helpers.
 describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedback #1, 2026-10-06, V192.2)', () => {
   const byId = (id) => document.getElementById(id);
   const lastPreviewed = () => api.dealQuotations.calculateLine.mock.calls.at(-1)[0];
