@@ -52,7 +52,7 @@ class TicketServiceTest {
         // about an abandoned row override this per-test.
         when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new CancelOpenForTicketResult(0, List.of()));
-        // Slice B1 gate default (handoff 103): the manual forward-updateStage gate needs
+        // Gate default: the manual forward-updateStage gate needs
         // hasActivitySinceLastStageChange() to be true, or every stubDeal-backed forward
         // updateStage call in this Mockito-only file 400s on the missing-tracking-fields
         // message. The gate's real enforcement (including this exact repository call
@@ -112,8 +112,8 @@ class TicketServiceTest {
         verify(ticketRepo).findSummaries(null, null, null, "ceo", null);
     }
 
-    // Phase B (role-scoped views): the createdBy filter stays null for import/account
-    // (they are not ticket owners) but the actor's role now passes through so the
+    // Role-scoped views: the createdBy filter stays null for import/account
+    // (they are not ticket owners) but the actor's role passes through so the
     // repository can apply its own list-scoping predicate — see
     // TicketRepositoryIntegrationTest / TicketScopeIntegrationTest for the actual
     // WHERE-clause enforcement this unit test cannot reach (Mockito never runs SQL).
@@ -164,7 +164,7 @@ class TicketServiceTest {
         assertThat(seen.quotations()).containsExactly(quotation);
     }
 
-    // ── B5 fix: read-path fallback to the deal's live quotation items when
+    // ── read-path fallback to the deal's live quotation items when
     //    sales.ticket_item is still empty (pre-order-confirmation) ──────────
 
     @Test
@@ -255,8 +255,8 @@ class TicketServiceTest {
         assertForbidden(() -> service.listPayments(10L, importActor));
     }
 
-    // H1 lockdown: account no longer reads the payment ledger through /tickets (it reads it inside the
-    // finance deal view, GET /api/finance/deals/{id}); ceo is unchanged. This used to assert BOTH allowed.
+    // account does not read the payment ledger through /tickets (it reads it inside the
+    // finance deal view, GET /api/finance/deals/{id}); ceo can.
     @Test
     void listPayments_ceoAllowed_accountRefused() {
         stubTicket(10L, 99L, TicketStatus.QUOTATION_ISSUED);
@@ -281,8 +281,7 @@ class TicketServiceTest {
         assertForbidden(() -> service.get(10L, employeeActor));
     }
 
-    // H1 lockdown: account used to read ANY ticket through GET /tickets/{id}; it now reads deals only
-    // through the finance view, so the ticket read refuses it -- even on a deal inside its list scope.
+    // account reads deals only through the finance view, not GET /tickets/{id}, so the ticket read refuses it -- even on a deal inside its list scope.
     @Test
     void get_accountRoleIsRefused_evenWhenTheDealIsInAccountScope() {
         stubTicket(10L, 1L, TicketStatus.QUOTATION_ISSUED);
@@ -389,7 +388,7 @@ class TicketServiceTest {
             // buildDesc() renders the item's model, not its brand (brand is never shown).
             assertThat(itemDesc).contains("IssueTimeModel");
             assertThat(itemDesc).doesNotContain("EditedModel");
-            // B5 (row 4, col 1) is "{contactPart}{customerName}{taxIdPart}" — contactName is
+            // Cell B5 (row 4, col 1) is "{contactPart}{customerName}{taxIdPart}" — contactName is
             // null on this fixture and the snapshot supplies a taxId, so the cell also carries
             // the tax-id suffix; assert the frozen customer name is present, not an exact match.
             assertThat(sheet.getRow(4).getCell(1).getStringCellValue())
@@ -681,9 +680,8 @@ class TicketServiceTest {
 
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
             eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        // Part B, written wrong-way-round: an OWNER quotation must land on QUOTE_OWNER (S5) and
-        // must NOT land on QUOTE_DESIGN_SIDE (S4), which is where this assertion pointed while the
-        // two recipients shared one stage.
+        // Wrong-way-round: an OWNER quotation must land on QUOTE_OWNER (S5) and
+        // must NOT land on QUOTE_DESIGN_SIDE (S4); the two recipients no longer share one stage.
         verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_OWNER);
         verify(ticketRepo, never()).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
     }
@@ -790,7 +788,7 @@ class TicketServiceTest {
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
 
-        // Fidelity rule (Opus review): the frozen NAME is the ticket's display name —
+        // Fidelity rule: the frozen NAME is the ticket's display name —
         // that's what toXlsx/toPdf have always printed — so the snapshot must capture
         // it, not the master record's name. Address/taxId/phone DO come from the master
         // record because that's what the live render pulls from CustomerDto.
@@ -889,7 +887,7 @@ class TicketServiceTest {
     void close_isNoLongerAvailableToSales() {
         // A deal counts as closed only when goods are delivered, the balance is paid,
         // the invoice is on file, ฝ่ายบัญชี has confirmed and the CEO has verified.
-        // The sales owner is not part of that sequence any more.
+        // The sales owner is not part of that sequence.
         stubReadyToConfirm(10L);
         assertForbidden(() -> service.confirmCloseReady(10L, salesActor));
         assertForbidden(() -> service.verifyClose(10L, salesActor));
@@ -1008,8 +1006,8 @@ class TicketServiceTest {
 
     @Test
     void confirmCustomer_rejectsNonOwnerSales() {
-        // Dual-track transitions had role checks but no ownership checks — any sales
-        // rep could advance a colleague's payment track.
+        // Dual-track transitions need ownership checks as well as role checks — otherwise any
+        // sales rep could advance a colleague's payment track.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, null, null);
         assertForbidden(() -> service.confirmCustomer(10L, otherSales));
     }
@@ -1062,8 +1060,7 @@ class TicketServiceTest {
 
     @Test
     void confirmDepositPaid_rejectsCeoRole() {
-        // GLA-118 (owner ruling 2026-09-17): the CEO fallback ACCOUNT_ROLES used to grant here
-        // (see the removed confirmDepositPaid_byCeoFallback_isAllowed) is gone — account ONLY now.
+        // No CEO fallback grants here — account ONLY.
         assertForbidden(() -> service.confirmDepositPaid(10L, ceoActor));
     }
 
@@ -1111,7 +1108,7 @@ class TicketServiceTest {
 
     @Test
     void issueImportRequest_fromDepositNoticeIssued_isRefused_perFactoryIrOnly() {
-        // W3-04 (owner ruling 2026-10-29): the one-click IR is closed for every deal.
+        // The one-click IR is closed for every deal.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_NOTICE_ISSUED", null);
 
         assertConflict(() -> service.issueImportRequest(10L, importActor));
@@ -1184,7 +1181,7 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        // S18 owner decision 2026-09-28: stock coverage is the owning rep's (or CEO's), not import's.
+        // Stock coverage is the owning rep's (or CEO's), not import's.
         // This is a routing test, so it declares as salesActor (id 1L, this deal's owner).
         service.reserveStock(10L, new StockReservationRequest(List.of(
             new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), salesActor);
@@ -1206,13 +1203,13 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        // S18 owner decision 2026-09-28: import can no longer declare, so this actor-agnostic
+        // Import cannot declare, so this actor-agnostic
         // quantity-validation case declares as the owning rep (salesActor, id 1L).
         assertBadRequest(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
             new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), salesActor));
     }
 
-    // ── who may declare stock coverage (owner ruling 2026-08-13) ──────────────
+    // ── who may declare stock coverage ────────────────────────────────────────
     //
     // Requirement 1 of CLAUDE.md's "permission changes must ship evidence": these pin which
     // BRANCH of canDeclareStockCoverage is taken per role. They are NOT the evidence — a mocked
@@ -1282,7 +1279,7 @@ class TicketServiceTest {
         for (String stage : DealStage.ORDER.subList(0, DealStage.indexOf(DealStage.ORDER_RECEIVED))) {
             stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
             // The two roles that CAN declare (owning rep + CEO) hit the stage floor with a 409.
-            // import is no longer a declarer at all (owner decision 2026-09-28) — its refusal is a
+            // import is not a declarer at all — its refusal is a
             // 403 before this floor, pinned in StockDeclarationAuthzIntegrationTest, not here.
             assertConflict(() -> service.reserveStock(10L, request, salesActor));
             assertConflict(() -> service.reserveStock(10L, request, ceoActor));
@@ -1310,9 +1307,8 @@ class TicketServiceTest {
     }
 
     /**
-     * Walk 4 (owner ruling 2026-10-29): there is no reserve-from-stock feature, so {@code
-     * RESERVE_STOCK} is advertised to nobody at any stage - not the owning rep, not the CEO, not
-     * import - even where it used to be offered (ORDER_RECEIVED and later). The endpoint and
+     * There is no reserve-from-stock feature, so {@code RESERVE_STOCK} is advertised to nobody
+     * at any stage - not the owning rep, not the CEO, not import. The endpoint and
      * {@code reserveStock} itself stay (suites use them as a fixture); only the advert goes.
      */
     @Test
@@ -1338,8 +1334,8 @@ class TicketServiceTest {
             FulfilmentStatus.GOODS_RECEIVED);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
 
-        // V184: canWriteDelivery transferred stages 13-14 to {ceo, owning-rep} only, so this
-        // business-logic (not authz) test now uses salesActor (id 1, this deal's owner) rather
+        // canWriteDelivery gives stages 13-14 to {ceo, owning-rep} only, so this
+        // business-logic (not authz) test uses salesActor (id 1, this deal's owner) rather
         // than importActor (id 3) -- see DeliveryAuthzIntegrationTest for the authz pin itself.
         service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", "ส่งบางส่วน",
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), salesActor);
@@ -1386,15 +1382,13 @@ class TicketServiceTest {
 
         RecordDeliveryRequest over = new RecordDeliveryRequest("WAREHOUSE", null,
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("70.00"))), null);
-        // V184 update: import USED to get past the gate (the 2026-08-17 widening kept import/CEO
-        // alongside the newly-added owning rep) and land on the over-delivery CONFLICT below, same
-        // as salesActor still does. The later 2026-09/V184 transfer (canWriteDelivery — see
-        // TicketService's own Javadoc) removed import from the gate entirely, so it is now a
-        // FORBIDDEN, never reaching the over-delivery rule at all. See
+        // canWriteDelivery (see TicketService's own Javadoc) excludes import from the gate
+        // entirely, so import gets a FORBIDDEN, never reaching the over-delivery rule at all
+        // (unlike salesActor, which lands on the over-delivery CONFLICT below). See
         // DeliveryAuthzIntegrationTest#import_noLongerRecordsDelivery... for the dedicated pin.
         assertForbidden(() -> service.recordPartialDelivery(10L, over, importActor));
         // salesActor is id 1 and this deal's createdById is 1, so it OWNS the deal. Stages 13-14
-        // (ส่งมอบสินค้า) are Sales's as of 2026-08-17, so the owning rep gets past the gate and is
+        // (ส่งมอบสินค้า) are Sales's, so the owning rep gets past the gate and is
         // stopped by the over-delivery rule instead — a CONFLICT, not a FORBIDDEN. `otherSales`
         // below is the refusal that stays (never owned the deal, never had a path in).
         assertConflict(() -> service.recordPartialDelivery(10L, over, salesActor));
@@ -1491,9 +1485,8 @@ class TicketServiceTest {
 
     @Test
     void confirmFinalPayment_rejectsCeoRole() {
-        // GLA-118 (owner ruling 2026-09-20, part A): the CEO fallback ACCOUNT_ROLES used to grant
-        // here (see the removed confirmFinalPayment_byCeoFallback_isAllowed) is gone — recording
-        // ANY payment, including the final one, is account ONLY now.
+        // There is no CEO fallback here — recording ANY payment, including the final one, is
+        // account ONLY.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
         assertForbidden(() -> service.confirmFinalPayment(10L, ceoActor));
     }
@@ -1589,9 +1582,8 @@ class TicketServiceTest {
 
     @Test
     void recordPayment_rejectsCeoRole() {
-        // GLA-118 (owner ruling 2026-09-20, part A): the CEO fallback ACCOUNT_ROLES used to grant
-        // here is gone — recording a payment (deposit or balance alike) is account ONLY now, no
-        // CEO fallback, no owning-rep exception.
+        // Recording a payment (deposit or balance alike) is account ONLY — no CEO fallback, no
+        // owning-rep exception.
         assertForbidden(() -> service.recordPayment(10L,
             new RecordPaymentRequest("DEPOSIT", new BigDecimal("100.00"), null, null, null, null, false),
             ceoActor));
@@ -1602,7 +1594,7 @@ class TicketServiceTest {
 
     @Test
     void recordPayment_rejectsOwningSalesRep() {
-        // GLA-118 part A: recording money received was never a sales-side action, and the owning
+        // Recording money received is not a sales-side action, and the owning
         // rep gets no special exception — unlike deposit-policy Rule B, this gate has no ownership
         // clause at all.
         assertForbidden(() -> service.recordPayment(10L,
@@ -1676,7 +1668,7 @@ class TicketServiceTest {
 
     @Test
     void create_rejectsInvalidPriority() {
-        // F2: an unvalidated priority reaches chk_ticket_priority in the repository and
+        // An unvalidated priority reaches chk_ticket_priority in the repository and
         // fails closed (500). The service must reject it up front as a 400 and never write.
         var request = new CreateTicketRequest("Test deal", "urgent", "ลูกค้า", null, 77L, null, null, null, List.of());
         assertBadRequest(() -> service.create(request, salesActor));
@@ -1695,7 +1687,7 @@ class TicketServiceTest {
         verify(ticketRepo).create(request, "PR-2026-0001", 1L, "sales");
     }
 
-    // ── create: a NEW deal must state a real ช่องทางดีล (owner ruling 2026-09-30) ───────────
+    // ── create: a NEW deal must state a real ช่องทางดีล ──────────────────────────────────────
     // The channel decides the deal's route (DealRoute), so UNSPECIFIED -- valid as STORED, see
     // EntryChannel -- is refused as a create INPUT. The "absent/blank" half of the rule is enforced
     // at the API boundary by @NotBlank on CreateTicketRequest.entryChannel
@@ -1764,7 +1756,7 @@ class TicketServiceTest {
     }
 
     // ── create: stock-sourced deal lines ─────────────────────────────────────
-    // Walk 4 (W4-09, owner ruling 2026-10-29): the deal line no longer carries a sales-typed price
+    // The deal line carries no sales-typed price
     // for stock goods - the deal shows the CEO-approved price. Ticking "from stock" is just a flag;
     // the price is not required and a price that is sent is stored as NULL (the NULL itself is proved
     // against real Postgres in TicketRepositoryIntegrationTest).
@@ -1881,8 +1873,8 @@ class TicketServiceTest {
     }
 
     /**
-     * Rewritten with Part C: this move used to demand a note purely because the index gap exceeded
-     * 1. PRESENTATION (S2) -> OWNER_SIGNOFF (S6) steps over SPEC_APPROVED, QUOTE_DESIGN_SIDE and
+     * This move must not demand a note merely because the index gap exceeds 1.
+     * PRESENTATION (S2) -> OWNER_SIGNOFF (S6) steps over SPEC_APPROVED, QUOTE_DESIGN_SIDE and
      * QUOTE_OWNER — all route-dependent, and skipping exactly those three IS the owner-buys-direct
      * route (Case B). Demanding a written justification for it was friction on a normal path.
      */
@@ -1917,8 +1909,8 @@ class TicketServiceTest {
     // from running against a real row. That is StageFactGateIntegrationTest's job.
 
     /**
-     * The headline hole this closes, at unit level: one call from S1 to S20 used to cost a note
-     * and nothing else. The note is supplied here deliberately — a refusal that only happened
+     * The headline hole this closes, at unit level: one call from S1 to S20 must not cost just a
+     * note and nothing else. The note is supplied here deliberately — a refusal that only happened
      * without a note would be the pre-existing justification rule, not a new gate.
      */
     @Test
@@ -2163,11 +2155,9 @@ class TicketServiceTest {
 
     @Test
     void waiveDeposit_ownerOrSalesManagerOnlyAndIssueImportRequestCanBypassNotice() {
-        // GLA-118: deposit policy is set by the OWNING sales rep, or sales_manager as a backup
-        // (owner ruling 2026-09-20, part B). salesActor (id 1L) owns ticket 10L (stubDeal's
-        // createdById), so it grants here where the old ACCOUNT_ROLES gate (account/ceo) used to.
-        // This used to be named waiveDeposit_ownerOnlyAndIssueImportRequestCanBypassNotice, from
-        // when the 2026-09-17 ruling was owner-only with no sales_manager backup.
+        // Deposit policy is set by the OWNING sales rep, or sales_manager as a backup.
+        // salesActor (id 1L) owns ticket 10L (stubDeal's createdById), so it grants here; the
+        // account/ceo roles do not.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null);
 
@@ -2178,15 +2168,15 @@ class TicketServiceTest {
             eq(TicketEventKind.POLICY_CHANGED), eq(DealStage.ORDER_RECEIVED), eq(DealStage.ORDER_RECEIVED),
             eq("deposit_policy → WAIVED — ลูกค้าเครดิตดี"));
         // account, ceo, and a non-owning sales rep are still refused. sales_manager is NOT in
-        // this list any more — see waiveDeposit_grantsSalesManagerAsBackupOwner below.
+        // this list — see waiveDeposit_grantsSalesManagerAsBackupOwner below.
         assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "account ขอเอง", accountActor));
         assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "ceo ขอเอง", ceoActor));
         assertForbidden(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, "sales อื่นขอเอง", otherSales));
         assertBadRequest(() -> service.waiveDeposit(10L, DepositPolicy.WAIVED, " ", salesActor));
 
-        // Rule 5 (payment-track state machine): null no longer qualifies as "deposit bypassed" on
+        // Rule 5 (payment-track state machine): null does not qualify as "deposit bypassed" on
         // its own — a bypass-policy deal must have actually reached CUSTOMER_CONFIRMED first (via
-        // confirmCustomer). This used to succeed straight from null; it is now refused, and the
+        // confirmCustomer). Straight from null it is refused, and the
         // CUSTOMER_CONFIRMED case below is what still proves the issuable gate (shared with the
         // per-factory issue) lets a WAIVED/NOT_REQUIRED/CREDIT_CUSTOMER deal bypass the notice.
         TicketDto nullWaived = stubDeal(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
@@ -2204,7 +2194,7 @@ class TicketServiceTest {
 
     @Test
     void waiveDeposit_grantsSalesManagerAsBackupOwner() {
-        // GLA-118 owner ruling 2026-09-20, part B: sales_manager may set deposit policy as a
+        // sales_manager may set deposit policy as a
         // backup to the owning rep. The clause reused is EXACTLY requireDealOwnership's /
         // canDealOwnership's bare "sales_manager".equals(role) check — global, not scoped to
         // whichever team owns this deal — so salesManagerActor (id 8L) grants here even though it
@@ -2222,7 +2212,7 @@ class TicketServiceTest {
 
     @Test
     void waiveDeposit_sameIdAsOriginalOwnerButRoleNoLongerSales_decidesByRoleNotId() {
-        // Nit case: a user whose id equals createdById but whose CURRENT role is no longer
+        // A user whose id equals createdById but whose CURRENT role is no longer
         // "sales" (e.g. promoted to sales_manager, or moved to another department entirely) must
         // be judged by canSetDepositPolicy's role-based clauses, never by the id match alone —
         // SALES_ROLES.contains(role) is false for "sales_manager"/"account", so the ownership
@@ -2294,9 +2284,9 @@ class TicketServiceTest {
         assertThat(paused).contains("RESUME", "MARK_DORMANT");
         assertThat(paused).doesNotContain("SUBMIT", "UPDATE_STAGE");
 
-        // Slice S1 "engine collapse": MARK_QUOTATION_SENT/ACCEPTED/REJECTED are gone from
+        // MARK_QUOTATION_SENT/ACCEPTED/REJECTED are absent from
         // actions() entirely (both owner and manager) — the routes behind them
-        // (/{id}/quotations/{quotationId}/{sent,accepted,rejected}) were retired, so
+        // (/{id}/quotations/{quotationId}/{sent,accepted,rejected}) are retired, so
         // advertising the verb would point a client at a 404. See
         // actions_neverOffersRetiredLegacyPricingVerbs for the full negative-space proof.
         stubDealWithQuotations(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
@@ -2331,9 +2321,9 @@ class TicketServiceTest {
     }
 
     /**
-     * Walk 4: {@code RESERVE_STOCK} is no longer advertised to the deal owner or the CEO (it was the
-     * "never advertise a dead action" pairing with reserveStock's own gate; the owner removed the
-     * จองสินค้าจากสต็อก UI), and still not to anyone else. {@code reserveStock} itself keeps its gate -
+     * {@code RESERVE_STOCK} is not advertised to the deal owner or the CEO (the "never advertise
+     * a dead action" pairing with reserveStock's own gate; the จองสินค้าจากสต็อก UI is gone),
+     * nor to anyone else. {@code reserveStock} itself keeps its gate -
      * see StageFactGateIntegrationTest for the endpoint staying callable.
      */
     @Test
@@ -2358,15 +2348,13 @@ class TicketServiceTest {
     }
 
     /**
-     * Review fix: {@code WAIVE_DEPOSIT} must not be offered once a deposit notice exists, matching
+     * {@code WAIVE_DEPOSIT} must not be offered once a deposit notice exists, matching
      * Rule 4 — {@link TicketService#waiveDeposit} 409s past that point (see
      * {@code depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner} in
      * {@code DepositPolicyAuthzIntegrationTest}), so advertising it here would offer a button that
      * dies on click, the same discipline {@link #actions_neverOffersReserveStock_toAnyRole}
-     * documents for RESERVE_STOCK. This used to be named
-     * actions_offersWaiveDepositToOwnerOnly_andDepositPaidToAccountOnly and asserted the OPPOSITE
-     * for {@code salesActor} — that assertion was wrong; see canSetDepositPolicy's own Javadoc for
-     * why the advertisement and the write gate are deliberately NOT the same predicate.
+     * documents for RESERVE_STOCK. See canSetDepositPolicy's own Javadoc for why the
+     * advertisement and the write gate are deliberately NOT the same predicate.
      * {@code otherSales} is left out — a non-owning sales rep cannot even call {@code actions()} on
      * someone else's deal (requireViewAccess is owner-scoped for sales).
      */
@@ -2399,9 +2387,8 @@ class TicketServiceTest {
     }
 
     /**
-     * GLA-118 (owner ruling 2026-09-20, part A): FINAL_PAYMENT must not be advertised to the CEO
-     * any more — the old ACCOUNT_ROLES-based advertisement used to offer it, and offering a button
-     * that now 403s on click is exactly what {@link #canIssueImportRequest}'s "never advertise a
+     * FINAL_PAYMENT must not be advertised to the CEO — offering a button
+     * that 403s on click is exactly what {@link #canIssueImportRequest}'s "never advertise a
      * dead action" discipline exists to prevent. (RECORD_PAYMENT's own advertisement,
      * {@code canRecordPayment}, additionally requires {@code amountPayable > 0}, which the stub
      * infra here always zeroes — that half of the gate is pinned by
@@ -2418,16 +2405,13 @@ class TicketServiceTest {
 
     @Test
     void actions_neverOffersRetiredLegacyPricingVerbs() {
-        // Slice S1 "engine collapse" (feat/deal-workspace-unification): PICKUP/PROPOSE_PRICE/
-        // APPROVE/REJECT/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/GENERATE_QUOTATION must never be
-        // advertised by actions() — TicketController no longer exposes the routes behind them
-        // (see TicketService.pickup/proposePrice/approve/reject/overrideItemPrice/
-        // generateQuotation's own @Deprecated Javadoc; calculatePrices itself was deleted as
-        // provably dead — no controller route, no caller, zero test coverage besides this
-        // verb-suppression check). Exercised against
+        // PICKUP/PROPOSE_PRICE/APPROVE/REJECT/CALCULATE_PRICES/OVERRIDE_ITEM_PRICE/
+        // GENERATE_QUOTATION must never be advertised by actions() — TicketController does not
+        // expose the routes behind them (see TicketService.pickup/proposePrice/approve/reject/
+        // overrideItemPrice/generateQuotation's own @Deprecated Javadoc). Exercised against
         // the 3 real stranded pre-redesign statuses (submitted/in_review/price_proposed) —
-        // the only statuses that could ever have surfaced these verbs — for both the role
-        // that used to see them (import/ceo) and the deal owner (sales).
+        // the only statuses that could ever have surfaced these verbs — for both the roles
+        // that once saw them (import/ceo) and the deal owner (sales).
         stubTicket(30L, 1L, TicketStatus.SUBMITTED);
         List<String> submitted = service.actions(30L, importActor)
             .availableActions().stream().map(TicketResponses.TicketActionDto::action).toList();
@@ -2579,10 +2563,9 @@ class TicketServiceTest {
     @Test
     void close_dualTrackAtGoodsReceived_isRefused() {
         // GOODS_RECEIVED means the goods reached GLR's own warehouse (S17) — the
-        // customer has received nothing. A fully-paid deal in that state used to
-        // close to COMPLETED with zero delivered units, because the manual gate
-        // accepted GOODS_RECEIVED-with-no-deliveries while the auto-advance gate
-        // (maybeAdvanceClosedPaid) refused it. Both now require FULLY_DELIVERED.
+        // customer has received nothing. A fully-paid deal in that state must not
+        // close to COMPLETED with zero delivered units: the manual gate and the auto-advance gate
+        // (maybeAdvanceClosedPaid) both require FULLY_DELIVERED.
         stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID", "GOODS_RECEIVED", null, true);
 
         assertConflict(() -> service.confirmCloseReady(10L, accountActor));
@@ -2675,7 +2658,7 @@ class TicketServiceTest {
     }
 
     // ── editItems ─────────────────────────────────────────────────────────
-    // 2026-07-16 pricing-integrity audit, finding #4: sales editing descriptive fields
+    // Sales editing descriptive fields
     // must never silently discard import's proposed price or CEO's approved/manual price.
 
     @Test
@@ -2780,7 +2763,7 @@ class TicketServiceTest {
     // ── editItems: stock-sourced deal lines ─────────────────────────────────
     // sourcedFromStock is LEGITIMATELY sales-writable (unlike proposedPrice/approvedPrice/calcedCost/
     // manualPrice, which stay guarded to `prior`) - see mergeEditedItemsPreservingPricing's own
-    // comment. Walk 4 (W4-09): stockSalePrice is no longer sales-writable at all - the merged row never
+    // comment. stockSalePrice is not sales-writable at all - the merged row never
     // carries one, whatever the request (or the prior row) said. Cases: (a) a flagged line with no price
     // is accepted, (b) a sent price is dropped, (c) sourcedFromStock=false still clears it, (d) a request
     // that omits the flag preserves the prior row's FLAG (but not a price).
@@ -2890,8 +2873,7 @@ class TicketServiceTest {
     }
 
     // ── overrideItemPrice ────────────────────────────────────────────────
-    // 2026-07-16 pricing-integrity audit, finding #3: overriding a price previously left
-    // no audit trail at all.
+    // Overriding a price must leave an audit trail.
 
     @Test
     void overrideItemPrice_logsPriceOverriddenEventWithItemIdManualPriceAndReason() {
@@ -2934,7 +2916,7 @@ class TicketServiceTest {
             eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ช่วยตรวจราคาใหม่ด้วย"));
     }
 
-    /** Leak B (2026-09-30): import's comment path is row-scoped; out of scope -> 403 and NO write. */
+    /** import's comment path is row-scoped; out of scope -> 403 and NO write. */
     @Test
     void comment_importOutOfScopeIsForbidden_andWritesNothing() {
         stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
@@ -2955,10 +2937,9 @@ class TicketServiceTest {
     }
 
     // ── sales_manager oversight (read + comment only, zero write actions) ──
-    // Product decision (2026-07-16): sales_manager acts like a project manager for the
-    // sales team — follow up / check up, but never perform the actual work. It was
-    // added to VIEWER_ROLES only; SALES_ROLES/IMPORT_ROLES/CEO_ROLES/ACCOUNT_ROLES are
-    // untouched. Every write test below asserts 403.
+    // sales_manager acts like a project manager for the sales team — follow up / check up, but
+    // never perform the actual work. It is in VIEWER_ROLES only, not
+    // SALES_ROLES/IMPORT_ROLES/CEO_ROLES/ACCOUNT_ROLES. Every write test below asserts 403.
 
     @Test
     void list_salesManagerSeesAllTicketsUnfiltered() {
@@ -3034,9 +3015,9 @@ class TicketServiceTest {
     // 'import' write access while the ticket sits IN_REVIEW/PRICE_PROPOSED (a KNOWN mock ->
     // production divergence, commented at that call site) — but the real salesCanEdit check
     // above is `SALES_ROLES.contains(actor.role()) && isOwner`, with no import branch at all, so
-    // import gets a real 403 here regardless of status or ownership. Covers a V183 payload
-    // specifically (sourcedFromStock/stockSalePrice) so this new field pair does not accidentally
-    // open a path around the existing role gate.
+    // import gets a real 403 here regardless of status or ownership. Covers a
+    // sourcedFromStock/stockSalePrice payload specifically so that field pair cannot
+    // open a path around the role gate.
     @Test
     void editItems_rejectsImportRole() {
         // createdById=1L (salesActor's id, not importActor's 3L) so this is unambiguously the
@@ -3189,7 +3170,7 @@ class TicketServiceTest {
             salesStage, lostReason, lostReason == null ? null : Instant.now(), Instant.now(),
             lifecycle, TenderRequirement.UNKNOWN, depositPolicy, null, EntryChannel.DESIGNER_LED,
             null, null, null, null,
-            // Slice B1 gate default (handoff 103): a non-null nextFollowUpAt so the manual
+            // Gate default: a non-null nextFollowUpAt so the manual
             // forward-updateStage gate's other half is satisfied — see the class-level stub
             // of hasActivitySinceLastStageChange() above for the same reasoning.
             LocalDate.now(),
