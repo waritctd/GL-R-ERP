@@ -45,9 +45,9 @@ const ROUTES = [
   '/leave',
   '/leave/new',
   '/payroll',
-  '/payroll/deduction-shortfalls', // Garnishment shortfall ledger (issue #376 read surface)
-  '/payroll/deduction-consents', // Written-consent register (issue #376 read + write surface)
-  '/settings/leave-policy', // §5 announcement PDF upload (issue #744)
+  '/payroll/deduction-shortfalls', // Garnishment shortfall ledger (read surface)
+  '/payroll/deduction-consents', // Written-consent register (read + write surface)
+  '/settings/leave-policy', // §5 announcement PDF upload
   '/settings/attendance-calendar',
   '/attendance',
   '/tickets',
@@ -55,7 +55,7 @@ const ROUTES = [
   '/tickets/1/deposit',
   '/pricing-requests',
   '/pricing-requests/1',
-  // Quotation v2 (direct deal quotation, PR #907/#908). '/quotations/1' is deliberately a
+  // Direct deal quotation. '/quotations/1' is deliberately a
   // placeholder: the demo seed has no sales.quotation row with origin='DEAL_DIRECT', so this
   // asserts the detail page handles "no such record" with its error panel rather than an error
   // boundary — the case the header calls out as worth asserting in its own right.
@@ -86,8 +86,8 @@ const EXCLUDED_ROUTE_PATTERNS = [
   // ⚠️ Seeding an admin persona to close this is NOT the fix, and would be actively harmful.
   // The personas live in db/migration-demo, and render.yaml pins
   // SPRING_FLYWAY_LOCATIONS=classpath:db/migration,classpath:db/migration-demo on the service
-  // that serves REAL production — that is how V139's demo accounts came to exist in the prod
-  // database on 2026-08-14. A demo admin persona would therefore grant is_admin on production.
+  // that serves REAL production, so the demo accounts exist in the prod database too. A demo
+  // admin persona would therefore grant is_admin on production.
   //
   // The gate itself is covered where it belongs: ActivityLogAuthzIntegrationTest drives the real
   // service and repository against real Postgres, twelve cases, all wrong-way-round.

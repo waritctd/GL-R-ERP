@@ -29,7 +29,7 @@ import {
 } from './helpers/sales.js';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// SLICE 5 — the four sales-pipeline JOURNEY specs (Cases A-D), proving the four real routes named
+// The four sales-pipeline JOURNEY specs (Cases A-D), proving the four real routes named
 // in DealStage.java:78-100 are what a deal ACTUALLY WALKS, not merely a stage it happens to end
 // on:
 //
@@ -44,15 +44,14 @@ import {
 // skipped that should not have been, an extra hop, two hops swapped, or the TEST itself clicking
 // a stage into place the system was supposed to reach on its own. Every case below instead reads
 // the full STAGE_CHANGED chain (stageHistory) and runs it through expectRoute/expectNeverEntered
-// (helpers/sales.js — read that file's own "Slice 5" header for the exact four-part contract:
+// (helpers/sales.js — see expectRoute's doc there for the exact four-part contract:
 // chain continuity, exact walk, no stage twice, and per-hop provenance).
 //
-// ── Reuses slice 3/4 wholesale ───────────────────────────────────────────────────────────────
-// Every hop below is one of: createDeal (slice 2), advanceStage (slice 4), or a slice-3 pricing-
-// request primitive via the new runPricingChainToIssue/runPricingChainToOrder composites (slice 5,
-// helpers/sales.js). Nothing here talks to the API directly — a route this suite cannot express
-// through the SAME helpers slices 1-4 already prove correct would not be trustworthy evidence
-// about the route itself.
+// ── Reuses the shared helpers wholesale ──────────────────────────────────────────────────────
+// Every hop below is one of: createDeal, advanceStage, or a pricing-request primitive (including
+// the runPricingChainToIssue/runPricingChainToOrder composites, helpers/sales.js). Nothing here
+// talks to the API directly — a route this suite cannot express through the SAME helpers the
+// other journey specs already rely on would not be trustworthy evidence about the route itself.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
@@ -68,8 +67,8 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
   });
 
   test.afterAll(async () => {
-    // Hooks carry their own timeout and test.setTimeout() on a TEST does not extend it — see
-    // slices 3/4's identical comment. Five deals total across four cases (Case C alone creates
+    // Hooks carry their own timeout and test.setTimeout() on a TEST does not extend it.
+    // Five deals total across four cases (Case C alone creates
     // two), cancelled one at a time against a Render `starter` instance.
     test.setTimeout(180_000);
     for (const ticketId of created) {
@@ -80,8 +79,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
 
   // ── Case A — DESIGNER_LED, the full route ─────────────────────────────────────────────────
   test('Case A — DESIGNER_LED, the full route through all five phases', async () => {
-    // Three full pricing-request chains (~50s each on a Render `starter` instance — see slice 3's
-    // own timing note) plus a six-call fulfilment tail. Realistically ~200-250s; budgeted well
+    // Three full pricing-request chains (~50s each on a Render `starter` instance) plus a six-call fulfilment tail. Realistically ~200-250s; budgeted well
     // above that.
     test.setTimeout(720_000);
 
@@ -165,9 +163,9 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       });
     });
 
-    // W3-04: the one-click issueImportRequest / ir-sent / shipping / goods-received chain is closed (409).
+    // The one-click issueImportRequest / ir-sent / shipping / goods-received chain is closed (409).
     // Case A's import goes through the per-factory ใบขอซื้อ. NOTE: this spec cannot be run locally —
-    // it is written against the controllers (ImportRequestController) and has not been executed.
+    // it is written against the controllers (ImportRequestController).
     let importRequests;
     await test.step('S10 -> S12 (-> PROCUREMENT): auto, the first per-factory ใบขอซื้อ is issued — S11 (DEPOSIT_RECEIVED) is a real, structural skip here, not an oversight', async () => {
       // Create ISSUES one ใบขอซื้อ per factory in the same call (10-29): nothing left to issue.
@@ -401,9 +399,8 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       const baseline = await stageHistory(sessions, 'sales', deal.id);
       expect(baseline, 'a freshly created deal must have no STAGE_CHANGED history').toEqual([]);
 
-      // Until 2026-10-16 this hop went through with note: null — six stages stepped over, none
-      // MANDATORY, so the note rule had nothing to say. The owner's D-3 ruling
-      // (.design/quote-stage-gates) now closes the hand move into a quote stage altogether:
+      // A hand move into a quote stage is closed altogether (.design/quote-stage-gates), however
+      // many non-mandatory stages it steps over, so the note rule has nothing to say:
       // QUOTE_BUYER claims "the buyer has been quoted", and TicketService.requireStageFactsHold
       // refuses the move with 409 until a quotation addressed to ผู้ซื้อ / ผู้รับเหมา exists on the
       // deal. The note rule is never reached, which is the point: deal 1 above is the ONLY way onto
