@@ -30,13 +30,13 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 /**
- * Real-Postgres coverage of the partial-day-span feature (V166, owner-approved 2026-09-10): a
- * TIMED leave request (start_time/end_time set) may now cross more than one calendar day, e.g. an
+ * Real-Postgres coverage of the partial-day-span feature: a
+ * TIMED leave request (start_time/end_time set) may cross more than one calendar day, e.g. an
  * afternoon-only first day continuing through a full second day. Wires the REAL {@link
  * TieredWorkScheduleResolver} and {@link DbHolidayCalendar} against real Postgres -- Mockito cannot
  * verify this: the day-fraction arithmetic depends on the actually-resolved {@code WorkSchedule}
  * (workStart/workEnd) reaching {@code LeaveDayMath#spanDayFractions} through the real repository,
- * and the relaxed {@code chk_leave_time_order}/dropped {@code chk_leave_time_single_day} constraints
+ * and the relaxed {@code chk_leave_time_order} constraint (no single-day constraint)
  * are exercised through a REAL INSERT, not a mocked one. Mirrors {@link
  * LeaveScheduleHolidayAwareIntegrationTest}'s wiring exactly.
  */
@@ -75,18 +75,17 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
-    // --- The owner's exact motivating case -----------------------------------------------------
+    // --- The motivating case -----------------------------------------------------
 
     @Test
     void halfDayAfternoonFirstDayPlusFullSecondDayTotalsOnePointFive() {
-        // The owner's own literal motivating case (task brief): "ลาพักร้อน 11 ก.ย. 2569 บ่าย
+        // The motivating case: "ลาพักร้อน 11 ก.ย. 2569 บ่าย
         // (13:30-17:30) ต่อเนื่องถึง 12 ก.ย. 2569 เต็มวัน = 1.50 วัน in ONE request". 11 Sep 2026 is a
         // Friday and 12 Sep 2026 is a Saturday -- for that Saturday to count at all (rather than the
         // request silently dropping to 0.50), the employee must be on a six-day schedule, so this
-        // test doubles as the required "six-day-division employee whose Saturday is a workday"
-        // coverage using the EXACT dates from the brief, not stand-in ones (V160 already put ฝ่ายขาย
-        // on a six-day week from 2026-09-01, so an OPS_6D employee on 12 Sep 2026 is realistic, not
-        // synthetic). First day: 13:30-17:30 = 240 clock-minutes, ZERO overlap with the 12:30-13:30
+        // test doubles as the "six-day-division employee whose Saturday is a workday"
+        // coverage (ฝ่ายขาย is on a six-day week from 2026-09-01, so an OPS_6D employee on
+        // 12 Sep 2026 is realistic, not synthetic). First day: 13:30-17:30 = 240 clock-minutes, ZERO overlap with the 12:30-13:30
         // break (starts exactly as the break ends) -> 240/480 = 0.50. Second day: full 08:30-17:30 =
         // (540 clock - 60 break) / 480 = 480/480 = 1.00 EXACTLY. Total 1.50. VACATION, not
         // LEAVE_WITHOUT_PAY, to prove the quota-split machinery (computeQuotaSplit) also survives a
@@ -176,13 +175,13 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void singleDayTimedRequestUsesTheFixedEightHourBreakAwareDivisorNotTheScheduleSpan() {
-        // FINAL rule (owner 2026-09-10): 08:30-12:30 = 240 clock-minutes, ZERO overlap with the
+        // Rule: 08:30-12:30 = 240 clock-minutes, ZERO overlap with the
         // 12:30-13:30 company-wide break (the segment ends exactly as the break starts) -> 240
-        // worked minutes / 480 = 0.50 HALF_UP. An intermediate draft of this feature divided by the
-        // day's own resolved WorkSchedule span instead (240min/540min = 0.4444... -> 0.44) -- WRONG,
-        // superseded (see LeaveDayMath's "Partial-day span" section header) -- asserted
-        // wrong-way-round below, mirroring PayrollLeaveUnpaidDeductionSeamIntegrationTest's own
-        // pinned regression on the exact same arithmetic.
+        // worked minutes / 480 = 0.50 HALF_UP. Dividing by the day's own resolved WorkSchedule
+        // span instead (240min/540min = 0.4444... -> 0.44) is WRONG (see LeaveDayMath's
+        // "Partial-day span" section header) -- asserted wrong-way-round below, mirroring
+        // PayrollLeaveUnpaidDeductionSeamIntegrationTest's own pinned regression on the exact
+        // same arithmetic.
         long officeDept = insertDepartmentOnSchedule("OFC-PDS3", "OFFICE_5D");
         long employeeId = insertEmployee("PDS-SNGL", officeDept);
 
@@ -199,11 +198,11 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aSpanCrossingTheLunchBreakSubtractsOnlyTheOverlapNotAFlatHour() {
-        // FINAL rule's own differentiator (owner ruling table, task brief): 11:00-14:00 = 180
+        // The rule's differentiator: 11:00-14:00 = 180
         // clock-minutes, of which 60 overlap the 12:30-13:30 break -> 120 worked minutes / 480 =
-        // 0.25 HALF_UP. This is the case that tells apart every earlier draft: the pre-V166
-        // hours/8 divisor (no break subtraction at all) would give 180/480 = 0.375, and the
-        // superseded schedule-span-divisor draft would give 180/540 = 0.33 -- both asserted
+        // 0.25 HALF_UP. This tells apart the wrong alternatives: an
+        // hours/8 divisor (no break subtraction at all) would give 180/480 = 0.375, and a
+        // schedule-span divisor would give 180/540 = 0.33 -- both asserted
         // wrong-way-round below.
         long officeDept = insertDepartmentOnSchedule("OFC-PDS8", "OFFICE_5D");
         long employeeId = insertEmployee("PDS-BRK", officeDept);
@@ -224,8 +223,8 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
     void aTimedSpanCrossingAWeekendSkipsSaturdayAndSundayForAFiveDayEmployee() {
         // Fri 2026-08-07 13:00 (afternoon, 0.50) -> Mon 2026-08-10 17:30 (full day, represented by
         // endTime == that day's workEnd, 1.00). Sat 8/8 + Sun 8/9 are non-working for OFFICE_5D and
-        // contribute nothing -- proves the interior-day walk still skips weekends for a five-day
-        // employee exactly as the whole-day path always has.
+        // contribute nothing -- proves the interior-day walk skips weekends for a five-day
+        // employee exactly as the whole-day path does.
         long officeDept = insertDepartmentOnSchedule("OFC-PDS4", "OFFICE_5D");
         long employeeId = insertEmployee("PDS-WKND", officeDept);
 
@@ -243,8 +242,8 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
     void aTimedSpanCrossingASeededHolidayExcludesItForEveryEmployee() {
         // Mon 2026-08-03 13:00 (0.50) -> Wed 2026-08-05 17:30 (1.00, last day), with Tue 8/4 seeded
         // as a company holiday -- the interior day contributes NOTHING, mirroring
-        // LeaveScheduleHolidayAwareIntegrationTest's own holiday-beats-schedule rule, now proven for
-        // the NEW fraction-ledger interior-day branch specifically (not just the whole-day path).
+        // LeaveScheduleHolidayAwareIntegrationTest's own holiday-beats-schedule rule, proven for
+        // the fraction-ledger interior-day branch specifically (not just the whole-day path).
         long officeDept = insertDepartmentOnSchedule("OFC-PDS5", "OFFICE_5D");
         long employeeId = insertEmployee("PDS-HOLI", officeDept);
         insertHoliday("2026-08-04", "ทดสอบวันหยุด");
@@ -264,8 +263,8 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
     @Test
     void aSixDayDivisionEmployeesSaturdayCountsAsAFullWorkingDayInATimedSpan() {
         // Fri 2026-08-07 13:00 (0.50) -> Sat 2026-08-08 17:30 (1.00) -- Saturday is a WORKING day
-        // for an OPS_6D employee (V115/V117/V160), unlike the five-day-employee weekend case above
-        // (same calendar range, opposite outcome), proving the new boundary-fraction branch is
+        // for an OPS_6D employee, unlike the five-day-employee weekend case above
+        // (same calendar range, opposite outcome), proving the boundary-fraction branch is
         // genuinely schedule-aware, not hardcoded Mon-Fri.
         long warehouseDept = insertDepartmentOnSchedule("WH-PDS6", "OPS_6D");
         long employeeId = insertEmployee("PDS-SAT", warehouseDept);
@@ -284,11 +283,11 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void aTimedSpanCrossingAPayrollMonthBoundaryAttributesUnpaidDaysToEachMonthSeparately() {
-        // LEAVE_WITHOUT_PAY (0-day statutory quota, always fully unpaid, V116 -- no quota gate to
+        // LEAVE_WITHOUT_PAY (0-day statutory quota, always fully unpaid -- no quota gate to
         // isolate away): Thu 2026-07-30 13:00 (0.50, July) -> Fri 2026-07-31 full day (1.00, July)
         // -> [Sat 8/1, Sun 8/2 excluded] -> Mon 2026-08-03 17:30 (1.00, August). Total 2.50, split
         // 1.50 July / 1.00 August -- proves LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth's
-        // NEW fraction-aware branch (spanDayFractions filtered to the clipped year, then
+        // fraction-aware branch (spanDayFractions filtered to the clipped year, then
         // unpaidByMonthFromFractions) attributes a timed span's fractional boundary days to the
         // correct payroll MONTH, not just the correct total.
         long officeDept = insertDepartmentOnSchedule("OFC-PDS7", "OFFICE_5D");
@@ -303,7 +302,7 @@ class LeavePartialDaySpanIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(result.totalDays()).isEqualByComparingTo("2.50");
         assertThat(result.unpaidDays()).isEqualByComparingTo("2.50");
 
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered to
+        // Leave requires approval: findUnpaidLeaveDaysByEmployeeForMonth is filtered to
         // APPROVED requests.
         leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
 

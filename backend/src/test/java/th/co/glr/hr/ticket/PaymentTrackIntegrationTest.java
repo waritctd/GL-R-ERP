@@ -148,9 +148,8 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        // V141 ("CEO owns costing"): the landed-cost calculation is a shared LandedCostCalculator
-        // that FactoryQuoteService and PricingDecisionService both take, and PricingCostingService
-        // no longer owns the repositories it used to compute from.
+        // The CEO owns costing: the landed-cost calculation is a shared LandedCostCalculator
+        // that FactoryQuoteService and PricingDecisionService both take.
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
@@ -237,7 +236,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         // the remaining ~50% is still outstanding): AWAITING_FINAL_PAYMENT -> FULLY_PAID.
         ticketService.confirmFinalPayment(deal.ticketId(), accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.FULLY_PAID);
-        // QA-01: the DEPOSIT receipt is the notice's VAT-inclusive totalPayable, not pre-VAT.
+        // The DEPOSIT receipt is the notice's VAT-inclusive totalPayable, not pre-VAT.
         assertThat(jdbc.queryForObject(
             "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id AND kind = 'DEPOSIT'",
             java.util.Map.of("id", deal.ticketId()), BigDecimal.class))
@@ -249,7 +248,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         Deal deal = buildDealToQuotationAccepted("bypass");
         // waiveDeposit while paymentStatus is still null — legal (rule 4's guard only fires once
         // paymentStatus is non-null and not CUSTOMER_CONFIRMED).
-        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now -- salesActor owns
+        // Deposit policy is set by the OWNING sales rep (or a sales_manager) -- salesActor owns
         // this deal (buildDealToQuotationAccepted creates it under salesRepId).
         ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ bypass path", salesActor);
         assertThat(depositPolicyOf(deal.ticketId())).isEqualTo(DepositPolicy.WAIVED);
@@ -288,9 +287,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         DepositNoticeDto firstIssued = depositNoticeService.issue(firstDraft.id(), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
-        // Owner ruling 2026-10-23: one deposit notice per deal. The create routes refuse a draft
+        // One deposit notice per deal. The create routes refuse a draft
         // while a notice is ISSUED; a second draft that exists anyway (written by the repository,
-        // as a concurrent or pre-ruling draft would be) is refused at issue(), so the
+        // as a concurrent draft would be) is refused at issue(), so the
         // DEPOSIT_NOTICE_ISSUED self-loop is not reachable through this service.
         assertThatThrownBy(() -> depositNoticeService.createDraft(deal.ticketId(), bareDraftRequest(), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
@@ -315,16 +314,16 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void bypassDeal_partiallyPaid_isVisibleToAccountRoleListScope_beforeAndAfter() {
         Deal deal = buildDealToQuotationAccepted("authz");
-        // GLA-118: owning rep only -- see the note on the bypass-path test above.
+        // Owning rep only -- see the note on the bypass-path test above.
         ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบ authz visibility", salesActor);
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
 
-        // BEFORE (H1, S10 floor): confirmOrder puts the deal at ORDER_RECEIVED (S10), and every live
+        // BEFORE (S10 floor): confirmOrder puts the deal at ORDER_RECEIVED (S10), and every live
         // order from S10 on is in account's list by STAGE alone -- so a bypass deal sitting at
         // CUSTOMER_CONFIRMED is already visible, even though CUSTOMER_CONFIRMED is not in
-        // ACCOUNT_PENDING_PAYMENT_STATUSES and no due_date is set. This used to assert the opposite.
+        // ACCOUNT_PENDING_PAYMENT_STATUSES and no due_date is set.
         assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
 
         BigDecimal payable = tickets.payableAmount(deal.ticketId());
@@ -340,27 +339,27 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // AFTER: the real repository list query through the real service (TicketService.listPage
         // -> TicketRepository.findSummaries -> appendRoleScope), never a mock — the deal stays
-        // visible once the partial payment lands (now via BOTH the S10 stage disjunct and
+        // visible once the partial payment lands (via BOTH the S10 stage disjunct and
         // ACCOUNT_PENDING_PAYMENT_STATUSES's AWAITING_FINAL_PAYMENT entry).
         assertThat(accountVisibleTicketIds()).contains(deal.ticketId());
     }
 
     /**
-     * Regression for the blocker adversarial review found: a SECOND partial payment on a
-     * bypass-policy deal used to throw. reconcilePaymentStatus gated its idempotency check on the
-     * hardcoded DEPOSIT_PAID literal while the write target had become policy-dependent, so on a
-     * bypass deal the guard never matched, the block re-entered, and PaymentTrack was asked for an
-     * AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop it correctly refuses. Because
-     * recordPayment is @Transactional the receipt insert rolled back too, so the instalment could
-     * not be recorded at all — an outright regression, surfacing as HTTP 500.
+     * A SECOND partial payment on a
+     * bypass-policy deal must not throw. reconcilePaymentStatus must not gate its idempotency check on the
+     * its idempotency check on the hardcoded DEPOSIT_PAID literal while the write target is
+     * policy-dependent: on a bypass deal the guard would never match, the block would re-enter,
+     * and PaymentTrack would be asked for an AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT
+     * self-loop it correctly refuses. Because recordPayment is @Transactional the receipt insert
+     * would roll back too, so the instalment could not be recorded at all (HTTP 500).
      *
-     * The pre-existing bypassDeal_partiallyPaid test records exactly ONE payment, which is why the
-     * whole suite stayed green. This one records TWO. It fails without the fix.
+     * The bypassDeal_partiallyPaid test records exactly ONE payment, which cannot catch this.
+     * This one records TWO.
      */
     @Test
     void bypassDeal_secondPartialPayment_isRecorded_andPaymentStatusStaysOnPath() {
         Deal deal = buildDealToQuotationAccepted("twopay");
-        // GLA-118: owning rep only -- see the note on the bypass-path test above.
+        // Owning rep only -- see the note on the bypass-path test above.
         ticketService.waiveDeposit(deal.ticketId(), DepositPolicy.WAIVED, "ทดสอบชำระสองงวด", salesActor);
         orderConfirmation.confirmOrder(
             deal.pricingRequestId(), new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -374,7 +373,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
             accountActor);
         assertThat(paymentStatusOf(deal.ticketId())).isEqualTo(PaymentTrack.AWAITING_FINAL_PAYMENT);
 
-        // The second instalment is the one that used to blow up.
+        // The second instalment is the one that would blow up.
         ticketService.recordPayment(deal.ticketId(),
             new RecordPaymentRequest("BALANCE", instalment, null, "งวดที่ 2", null, null, false),
             accountActor);
@@ -389,7 +388,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * Owner ruling: a multi-hop advance must WALK, and the intermediate state must SHOW. A
+     * A multi-hop advance must WALK, and the intermediate state must SHOW. A
      * REQUIRED deal paying in full from DEPOSIT_PAID goes DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT
      * -> FULLY_PAID. The column ends at FULLY_PAID either way, so asserting only the end state
      * cannot tell a walk from a jump — this asserts the AWAITING_FINAL_PAYMENT ticket_event,
@@ -527,10 +526,10 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         long ticketId = createBareTicket();
         tickets.updatePaymentStatusUnchecked(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
 
-        // GLA-118: driven as salesActor (the deal's owner, createBareTicket's salesRepId) rather
-        // than accountActor as before -- accountActor is no longer allowed to touch the deposit
-        // policy at all, so it would now 403 on the ownership gate before ever reaching this
-        // guard. salesActor IS the owner, so this still isolates guard c (FR-A-05) on its own.
+        // Driven as salesActor (the deal's owner, createBareTicket's salesRepId) rather
+        // than accountActor -- accountActor is not allowed to touch the deposit
+        // policy at all, so it would 403 on the ownership gate before ever reaching this
+        // guard. salesActor IS the owner, so this isolates guard c (FR-A-05) on its own.
         assertThatThrownBy(() -> ticketService.waiveDeposit(
                 ticketId, DepositPolicy.WAIVED, "สายเกินไป", salesActor))
             .isInstanceOfSatisfying(ApiException.class,
@@ -610,7 +609,7 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
-    // P1 hand-off notification (A7b): a no-deposit order tells account there will be no deposit
+    // Hand-off notification: a no-deposit order tells account there will be no deposit
     // notice. Fires on the FIRST confirmation only, on any confirm path (here: the PCR path).
     // ═══════════════════════════════════════════════════════════════════════════════════════
 
@@ -754,9 +753,9 @@ class PaymentTrackIntegrationTest extends AbstractPostgresIntegrationTest {
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
 
-        // V141: Import's last act is markReadyForCosting above. The three costing write calls
-        // that used to sit here are severed (@Deprecated, 409) — startReview computes the
-        // landed cost itself when the CEO opens the review.
+        // Import's last act is markReadyForCosting above. The costing write calls are severed
+        // (@Deprecated, 409) — startReview computes the landed cost itself when the CEO opens the
+        // review.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
