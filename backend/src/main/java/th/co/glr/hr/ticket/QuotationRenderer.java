@@ -971,20 +971,15 @@ public class QuotationRenderer {
         for (int c = 2; c <= 8; c++) clearCell(sh, r, c);
     }
 
-    // H1: underlineCache used to be a FIELD on this class — and this class is a Spring
-    // @Component, i.e. a SINGLETON reused across every render. A CellStyle is tied to the
-    // Workbook instance that created it (workbook.createCellStyle()), and every render opens a
-    // FRESH Workbook from the template (see #toXls). So a second render onto a heading-bearing
-    // model, through the SAME renderer instance, hit a style CACHED from the FIRST render's
-    // workbook — and POI throws "This Style does not belong to the supplied Workbook" the moment
-    // that stale style is applied to a cell in the new one. #approve's own PDF re-render
-    // (DealQuotationService#sendApprovalEmail) is exactly a second render on the same instance,
-    // deferred to run after the approving transaction commits — so this silently killed the
-    // approval email on every quotation whose SECOND item onward carried a location heading,
-    // with the failure swallowed by that method's own (now-fixed, see its Javadoc) catch block.
-    // The cache must live for exactly ONE render call — passed in from #fillItems, which creates
-    // a fresh one every time #toXls runs — never on `this`. #closeItemTableBorders already got
-    // this right; this method was the one holdout on the class.
+    // The underline-style cache must live for exactly one render call, never on this class. This
+    // class is a Spring @Component, i.e. a singleton reused across every render, and a CellStyle
+    // belongs to the Workbook that created it (workbook.createCellStyle()). Every render opens a
+    // fresh Workbook from the template (see #toXls), so a cache held on the instance would hand a
+    // second render a style from the first render's workbook, and POI throws "This Style does not
+    // belong to the supplied Workbook" as soon as it is applied. This matters because the approval
+    // email re-renders the quotation PDF on the same renderer instance after the approving
+    // transaction commits. The cache is created in #fillItems on every #toXls run and passed in
+    // here; #closeItemTableBorders follows the same rule.
     private CellStyle underlinedStyle(Workbook wb, CellStyle base, Map<Short, CellStyle> underlineCache) {
         CellStyle cached = underlineCache.get(base.getIndex());
         if (cached != null) return cached;

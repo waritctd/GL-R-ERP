@@ -445,7 +445,7 @@ class QuotationRendererTest {
      * class, holding {@link org.apache.poi.ss.usermodel.CellStyle}s bound to whichever
      * {@code Workbook} the FIRST render happened to open. A second render on a heading-bearing
      * model, through the SAME renderer instance (exactly what happens in production —
-     * {@code DealQuotationService#sendApprovalEmail} re-renders the PDF through the SAME injected
+     * the quotation approval email re-renders the PDF through the SAME injected
      * singleton after the approving transaction commits), threw "This Style does not belong to
      * the supplied Workbook" the moment the stale style touched the second workbook. Renders
      * TWICE, deliberately reusing {@code renderer} (never constructing a fresh

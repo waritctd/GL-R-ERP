@@ -79,7 +79,7 @@ public record TicketSummaryDto(
      * CommissionRepository.hasActiveCommissionForTicket}), served here so the accountant's
      * worklist ({@code accountActions.js#nextAccountAction}) stops guessing whether a {@code
      * CLOSED_PAID} deal still needs its commission recorded and permanently over-counting its
-     * backlog (issue #736).
+     * backlog.
      *
      * <p>Deliberate disclosure decision: this exposes only the EXISTENCE of a commission to any
      * ticket reader, never an amount — amounts stay behind {@code CommissionController's}
@@ -96,8 +96,7 @@ public record TicketSummaryDto(
      * reopen instead of nulling it out, so {@code lostReason != null} no longer means "currently
      * lost". {@code reopenedAt != null} (equivalently {@code reopenCount > 0}) is what actually
      * distinguishes a live reopened deal from one still sitting CLOSED_LOST; {@link #lifecycle} is
-     * the authoritative current state either way. The column existed since V58 but was never
-     * serialized until issue #757 gave it a DTO component.
+     * the authoritative current state either way.
      */
     Instant reopenedAt,
     /**
@@ -107,23 +106,22 @@ public record TicketSummaryDto(
      */
     int reopenCount,
     /**
-     * V193 {@code sales.ticket.quotation_only} — PROVENANCE ONLY since quotation ↔ deal linking
-     * slice 1 (IA §7, 2026-09-30): {@code true} when the deal was created from {@code
-     * /quotations/new} (quotation first). GLA-136 used it to hide the deal from the pipeline; that
-     * was reversed — the deal is listed, counted and movable like any other, and nothing in the
-     * backend reads this flag any more. Cleared best-effort when the order is confirmed from a direct
-     * quotation ({@code DealQuotationService#confirmOrderFromDirectQuotation}).
+     * V193 {@code sales.ticket.quotation_only} — PROVENANCE ONLY: {@code true} when the deal was
+     * created from {@code /quotations/new} (quotation first). It does not hide the deal from the
+     * pipeline — the deal is listed, counted and movable like any other, and nothing in the backend
+     * reads this flag. Cleared best-effort when the order is confirmed from a direct quotation
+     * ({@code DealQuotationService#confirmOrderFromDirectQuotation}).
      */
     boolean quotationOnly,
     /**
-     * The date the balance is DUE, derived from the payable quotation's own terms (owner ruling
-     * 2026-09-30) — NOT the stored billing {@link #dueDate} column, which stays as the CEO's
-     * billing-tab value. {@code null} when there is no structured term (legacy / PCR / no quotation)
-     * OR the deal has not been fully delivered yet (then {@link #paymentDueBasis} still says which
-     * term applies, so a UI can say "waiting for delivery"). Basis: credit N days counted from the date
-     * the deal became FULLY delivered, or that delivery date itself for "ชำระเมื่อ/ก่อนส่งมอบ". Bangkok
-     * calendar date. {@link #overdue} is computed from this, never from {@link #dueDate}; an unpaid
-     * deposit is never overdue.
+     * The date the balance is DUE, derived from the payable quotation's own terms — NOT the stored
+     * billing {@link #dueDate} column, which stays as the CEO's billing-tab value. {@code null}
+     * when there is no structured term (legacy / PCR / no quotation) OR the deal has not been fully
+     * delivered yet (then {@link #paymentDueBasis} still says which term applies, so a UI can say
+     * "waiting for delivery"). Basis: credit N days counted from the date the deal became FULLY
+     * delivered, or that delivery date itself for "ชำระเมื่อ/ก่อนส่งมอบ". Bangkok calendar date.
+     * {@link #overdue} is computed from this, never from {@link #dueDate}; an unpaid deposit is
+     * never overdue.
      */
     LocalDate paymentDueDate,
     /** {@code CREDIT_FROM_DELIVERY} or {@code ON_DELIVERY}; {@code null} exactly when the quotation has no structured term. */
@@ -131,10 +129,10 @@ public record TicketSummaryDto(
     /** The N of {@code CREDIT_FROM_DELIVERY}; {@code null} for any other basis. */
     Integer paymentDueCreditDays,
     /**
-     * Quotation ↔ deal linking slice 2 (S2-B4): the NEWEST live {@code DEAL_DIRECT} quotation on
-     * this deal ({@code {id, number, docStatus, recipientType}}), or {@code null} when there is none.
-     * Filled by {@code TicketRepository#enrichSummaries} for list rows AND the single-deal read — the
-     * deal page's CTA cascade and the {@code /quotations/new} deal picker key on it. See
+     * The NEWEST live {@code DEAL_DIRECT} quotation on this deal ({@code {id, number, docStatus,
+     * recipientType}}), or {@code null} when there is none. Filled by {@code
+     * TicketRepository#enrichSummaries} for list rows AND the single-deal read — the deal page's CTA
+     * cascade and the {@code /quotations/new} deal picker key on it. See
      * {@link LiveDirectQuotationDto} for the one "live" definition.
      */
     LiveDirectQuotationDto liveDirectQuotation,
@@ -143,12 +141,12 @@ public record TicketSummaryDto(
      * {@code QuotationRecipient.ADDRESSABLE}, plus legacy {@code UNSPECIFIED}); never null, empty
      * when nobody has been quoted. Filled by {@code TicketRepository#enrichSummaries}.
      *
-     * <p>The fact behind the three quote stages (owner ruling 2026-10-16). It rides on the summary
-     * rather than being read inside the gate because {@code TicketService#stageDecisions} loops
-     * every gate over all fifteen stages — a repository call in a gate turns one query into fifteen,
-     * which {@code TicketActionsQueryCountIntegrationTest}'s statement budget catches. Carried by
-     * the statement that already fetches {@link #commissionRecorded} and
-     * {@link #liveDirectQuotation}, so it costs no extra round trip.
+     * <p>The fact behind the three quote stages. It rides on the summary rather than being read
+     * inside the gate because {@code TicketService#stageDecisions} loops every gate over all
+     * fifteen stages — a repository call in a gate turns one query into fifteen, which {@code
+     * TicketActionsQueryCountIntegrationTest}'s statement budget catches. Carried by the statement
+     * that already fetches {@link #commissionRecorded} and {@link #liveDirectQuotation}, so it costs
+     * no extra round trip.
      *
      * <p>Server-side fact only, hidden from JSON: un-ignore it when a screen needs it and mirror it
      * in {@code mockApi.js}'s ticket summary at the same time.
@@ -229,10 +227,10 @@ public record TicketSummaryDto(
     }
 
     /**
-     * The pre-slice-2 canonical shape — the payment-due fields but no {@link #liveDirectQuotation}
-     * (rebase onto #1095, 2026-10-01: both appended to this record) — kept so every call site that
-     * builds the full pre-slice-2 shape compiles unchanged. {@code liveDirectQuotation} defaults to
-     * {@code null}; only {@code TicketRepository#enrichSummaries} computes the real value.
+     * The canonical shape with the payment-due fields but no {@link #liveDirectQuotation}, kept so
+     * every call site that builds that shape compiles unchanged. {@code liveDirectQuotation}
+     * defaults to {@code null}; only {@code TicketRepository#enrichSummaries} computes the real
+     * value.
      */
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
@@ -266,9 +264,9 @@ public record TicketSummaryDto(
     }
 
     /**
-     * The pre-GLA-136 full-arity shape, kept so every existing {@code new TicketSummaryDto(...)}
-     * call site (mostly test fixtures) keeps compiling unchanged — they all describe ordinary
-     * pipeline deals, so {@link #quotationOnly} defaults to {@code false}. Only
+     * The full-arity shape without {@link #quotationOnly}, kept so every existing {@code new
+     * TicketSummaryDto(...)} call site (mostly test fixtures) keeps compiling unchanged — they all
+     * describe ordinary pipeline deals, so {@link #quotationOnly} defaults to {@code false}. Only
      * {@code TicketRepository#mapSummary} reads the real column.
      */
     public TicketSummaryDto(
@@ -304,12 +302,10 @@ public record TicketSummaryDto(
      *
      * <p><b>{@code @JsonProperty} is what makes this reach the client, and it is the point.</b>
      * Jackson serializes a record's COMPONENTS; an extra method is invisible to it unless
-     * annotated. So this number was computed here and never sent, and the frontend re-derived it
-     * from a hand-copied table (`features/tickets/dealTrackingMeta.js`) to render the win-weighted
-     * pipeline forecast — the last surviving instance of the pattern #712 (commission tiers) and
-     * #713 (stage rules) removed, and #714 was a live example of it going wrong: V143 inserted
-     * QUOTE_OWNER, the copy was not updated, and every S5 deal quietly contributed 0% to a
-     * money-shaped forecast. See issue #738.
+     * annotated. Without it the number would be computed here and never sent, and the frontend
+     * would re-derive it from a hand-copied table (`features/tickets/dealTrackingMeta.js`) to
+     * render the win-weighted pipeline forecast, which silently goes wrong when a stage is added
+     * (a new stage missing from the copy contributes 0% to a money-shaped forecast).
      *
      * <p>{@code READ_ONLY} because there is no matching record component to deserialize into:
      * this record is serialize-only on the wire, and the access mode says so rather than relying
@@ -366,9 +362,9 @@ public record TicketSummaryDto(
     /**
      * Copy with the customer money totals ({@code amountPayable}, {@code amountPaid},
      * {@code amountOutstanding}) nulled — every other field unchanged. Applied for the {@code
-     * import} role wherever it receives a summary (owner ruling 2026-09-30: import must not be
-     * handed pricing, and the deal's payable/received totals are the customer price). Null rather
-     * than zero, so a client cannot mistake "not disclosed" for "nothing owed".
+     * import} role wherever it receives a summary (import must not be handed pricing, and the
+     * deal's payable/received totals are the customer price). Null rather than zero, so a client
+     * cannot mistake "not disclosed" for "nothing owed".
      */
     public TicketSummaryDto withoutMoney() {
         return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
