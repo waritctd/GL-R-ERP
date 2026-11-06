@@ -1720,3 +1720,74 @@ describe('mock dealQuotations.create/update -- fullPaymentTerm (V181, "ไม่
     expect(revision.fullPaymentTerm).toBe('ON_DELIVERY');
   });
 });
+
+// DealQuotationService: a DEAL_DIRECT TILE row may be ticked จากสต็อก ('IN_THAILAND' only), and a confirmed
+// order covers such a line in full so an all-stock 0%-deposit deal skips the import path. Plumbing only;
+// DealQuotationConfirmOrderIntegrationTest is the authority.
+describe('mock dealQuotations -- จากสต็อก on a direct quotation', () => {
+  const STOCK_ITEM = { ...ONE_ITEM, stockSource: 'IN_THAILAND' };
+  const zeroDeposit = { depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY' };
+
+  // A fresh deal still in `draft`: the seeded ticket 18 is already past it, which promoteToDeal refuses.
+  async function freshDraftDeal() {
+    await api.auth.login(salesUser);
+    const { customer } = await api.customers.create({
+      name: `บริษัท จากสต็อก ${crypto.randomUUID()}`, taxId: '0100000000555', address: '1 ถนนทดสอบ', phone: '02-111-1555',
+    });
+    const { project } = await api.customers.createProject(customer.id, { name: 'โครงการจากสต็อก' });
+    const { contact } = await api.customers.createContact(customer.id, {
+      firstName: 'สมศรี', lastName: 'ทดสอบ', phone: '081-000-0555', email: 'stock-line@example.com',
+    });
+    const { ticket } = await api.tickets.create({
+      entryChannel: 'DESIGNER_LED', title: 'ดีลจากสต็อก', priority: 'NORMAL', customerName: customer.name,
+      customerId: customer.id, projectId: project.id, contactId: contact.id, items: [{ brand: 'SCG', model: 'Seed', qty: 1, currency: 'THB' }],
+    });
+    return ticket.summary.id;
+  }
+
+  async function approvedDeal(items, terms = zeroDeposit) {
+    const ticketId = await freshDraftDeal();
+    const { quotation } = await api.dealQuotations.create(ticketId, { recipientType: 'DESIGNER', ...terms, items });
+    await api.dealQuotations.submit(quotation.id);
+    await api.auth.login({ role: 'sales_manager' });
+    await api.dealQuotations.approve(quotation.id, {});
+    await api.auth.login(salesUser);
+    return { ticketId, quotation };
+  }
+
+  it('stores IN_THAILAND on create, clears it on update, and refuses to store anything else', async () => {
+    const ticketId = await freshDraftDeal();
+    const { quotation } = await api.dealQuotations.create(ticketId,
+      { recipientType: 'DESIGNER', items: [STOCK_ITEM, { ...ONE_ITEM, stockSource: 'IN_TRANSIT' }] });
+    expect(quotation.items.map((i) => i.stockSource ?? null)).toEqual(['IN_THAILAND', null]);
+
+    const { quotation: cleared } = await api.dealQuotations.update(quotation.id, {
+      ...quotation, items: [{ ...STOCK_ITEM, id: quotation.items[0].id, stockSource: null }],
+    });
+    expect(cleared.items[0].stockSource ?? null).toBeNull();
+  });
+
+  it('an all-stock 0%-deposit order confirms onto FROM_STOCK / DELIVERY_SCHEDULING with every line covered', async () => {
+    const { ticketId, quotation } = await approvedDeal([STOCK_ITEM, { ...STOCK_ITEM, model: 'Second' }]);
+
+    const { result } = await api.dealQuotations.promoteToDeal(quotation.id);
+
+    expect(result.ticket).toMatchObject({ fulfillmentStatus: 'FROM_STOCK', salesStage: 'DELIVERY_SCHEDULING' });
+    const { ticket: { items } } = await api.tickets.get(ticketId);
+    expect(items).toHaveLength(2);
+    items.forEach((it) => {
+      expect(it.sourcedFromStock).toBe(true);
+      expect(Number(it.qtyFromStock)).toBe(Number(it.qty));
+    });
+  });
+
+  it('a mixed order covers only the stock line and stays on the import path', async () => {
+    const { ticketId, quotation } = await approvedDeal([STOCK_ITEM, { ...ONE_ITEM, model: 'Import line' }]);
+
+    const { result } = await api.dealQuotations.promoteToDeal(quotation.id);
+
+    expect(result.ticket.fulfillmentStatus ?? null).toBeNull();
+    const { ticket: { items } } = await api.tickets.get(ticketId);
+    expect(items.map((it) => Number(it.qtyFromStock ?? 0) === Number(it.qty))).toEqual([true, false]);
+  });
+});

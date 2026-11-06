@@ -1080,6 +1080,203 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(item.get("catalog_price_id")).isNull();
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // จากสต็อก on a direct quotation: the declaration reaches the ticket and drives routing exactly as the
+    // pricing-request route does (qty_from_stock = qty on a stock line).
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void directQuotation_stockSource_isStored_clearedAndRestoredOnUpdate() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto created = quotationService.create(deal,
+            stockDraft(50, null, stockTile("Stock A", true)), salesActor);
+        assertThat(storedStockSources(created.id())).containsExactly("IN_THAILAND");
+        assertThat(created.items().get(0).stockSource()).isEqualTo("IN_THAILAND");
+
+        // Reusing the saved item id takes the in-place UPDATE path, not delete + re-insert.
+        long itemId = created.items().get(0).id();
+        quotationService.update(created.id(), stockDraft(50, null, stockTile("Stock A", false, itemId)), salesActor);
+        assertThat(storedStockSources(created.id())).containsExactly((String) null);
+
+        DealQuotationDto restored = quotationService.update(created.id(),
+            stockDraft(50, null, stockTile("Stock A", true, itemId)), salesActor);
+        assertThat(restored.items().get(0).id()).isEqualTo(itemId);
+        assertThat(storedStockSources(created.id())).containsExactly("IN_THAILAND");
+        assertThat(restored.items().get(0).stockSource()).isEqualTo("IN_THAILAND");
+    }
+
+    @Test
+    void zeroDeposit_allStockLines_confirmOntoFromStock_andNoImportRequestIsIssuable() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal,
+            stockDraft(0, "BEFORE_DELIVERY", stockTile("Stock A", true), stockTile("Stock B", true)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        List<Map<String, Object>> rows = ticketStockRows(deal);
+        assertThat(rows).hasSize(2).allSatisfy(r -> {
+            assertThat(r.get("sourced_from_stock")).isEqualTo(true);
+            assertThat((BigDecimal) r.get("qty_from_stock")).isEqualByComparingTo((BigDecimal) r.get("qty"));
+        });
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.fulfillmentStatus()).isEqualTo("FROM_STOCK");
+        assertThat(after.salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+        assertConflict(() -> importRequestService().createDrafts(deal, null, salesActor), "ครอบคลุมจากสต็อกทั้งหมด");
+    }
+
+    @Test
+    void zeroDeposit_mixedLines_coverOnlyTheStockLine_andKeepTheImportPath() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal,
+            stockDraft(0, "BEFORE_DELIVERY", stockTile("Stock A", true), stockTile("Import B", false)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        List<Map<String, Object>> rows = ticketStockRows(deal);
+        assertThat(rows).hasSize(2);
+        assertThat((BigDecimal) rows.get(0).get("qty_from_stock")).isEqualByComparingTo((BigDecimal) rows.get(0).get("qty"));
+        assertThat(rows.get(1).get("sourced_from_stock")).isEqualTo(false);
+        assertThat(rows.get(1).get("qty_from_stock") == null
+            || ((BigDecimal) rows.get(1).get("qty_from_stock")).signum() == 0).isTrue();
+        TicketSummaryDto after = summary(deal);
+        assertThat(after.fulfillmentStatus()).isNull();
+        assertThat(after.salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(new th.co.glr.hr.importrequest.ImportRequestQueryRepository(jdbc).factoryResolutionCandidates(deal))
+            .extracting(th.co.glr.hr.importrequest.ImportRequestQueryRepository.LineFactoryCandidate::model)
+            .containsExactly("Import B");
+    }
+
+    @Test
+    void depositOrder_allStockLines_routeToFromStock_onlyWhenTheDepositIsConfirmed() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal, stockDraft(50, null, stockTile("Stock A", true)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertThat(summary(deal).fulfillmentStatus()).isNull();
+        assertThat(summary(deal).salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
+
+        ticketService.recordPayment(deal, new th.co.glr.hr.ticket.RecordPaymentRequest("DEPOSIT",
+            tickets.payableAmount(deal).multiply(new BigDecimal("0.50")), null, null, null, null, false), accountActor);
+
+        assertThat(summary(deal).fulfillmentStatus()).isEqualTo("FROM_STOCK");
+        assertThat(summary(deal).salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+    }
+
+    @Test
+    void repConfirmsWithAStockLine_theSalesManagerIsToldOnce_withoutClaimingTheWholeDeal() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal,
+            stockDraft(50, null, stockTile("Stock A", true), stockTile("Import B", false)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        List<Map<String, Object>> rows = ticketStockRows(deal);
+        String declared = ((BigDecimal) rows.get(0).get("qty_from_stock")).stripTrailingZeros().toPlainString();
+        String ordered = ((BigDecimal) rows.get(0).get("qty")).add((BigDecimal) rows.get(1).get("qty"))
+            .stripTrailingZeros().toPlainString();
+        TicketSummaryDto s = summary(deal);
+        assertThat(stockReservedMessages(smId)).singleElement().satisfies(m -> assertThat(m)
+            .contains(s.code()).contains(s.customerName()).contains(salesActor.name())
+            .contains(declared + "/" + ordered).contains("STOCK_BONUS").doesNotContain("ครบทั้งดีล"));
+    }
+
+    @Test
+    void repConfirmsAnAllStockZeroDepositDeal_theNoticeSaysTheDealLeavesTheImportAxis() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal,
+            stockDraft(0, "BEFORE_DELIVERY", stockTile("Stock A", true)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertThat(summary(deal).fulfillmentStatus()).isEqualTo("FROM_STOCK");
+        assertThat(stockReservedMessages(smId)).singleElement().satisfies(m -> assertThat(m).contains("ครบทั้งดีล"));
+    }
+
+    @Test
+    void repConfirmsAnAllStockDepositDeal_theNoticeDoesNotClaimTheDealLeftTheImportAxisYet() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal, stockDraft(50, null, stockTile("Stock A", true)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertThat(summary(deal).fulfillmentStatus()).isNull();
+        assertThat(stockReservedMessages(smId)).singleElement()
+            .satisfies(m -> assertThat(m).doesNotContain("ครบทั้งดีล"));
+    }
+
+    @Test
+    void confirmWithNoStockLine_orByANonRep_orOnReplay_sendsNoStockNotice() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long plainDeal = pipelineTicket(salesActor);
+        confirmer.confirmOrderFromDirectQuotation(approvedDirectQuotation(plainDeal, salesActor).id(), salesActor);
+        assertThat(stockReservedMessages(smId)).as("no stock line").isEmpty();
+
+        long managerDeal = pipelineTicket(salesActor);
+        DealQuotationDto stockQuote = approvedQuotation(managerDeal, stockDraft(50, null, stockTile("Stock A", true)));
+        confirmer.confirmOrderFromDirectQuotation(stockQuote.id(), salesManagerActor);
+        assertThat(stockReservedMessages(smId)).as("a non-rep confirming").isEmpty();
+
+        long repDeal = pipelineTicket(salesActor);
+        DealQuotationDto repQuote = approvedQuotation(repDeal, stockDraft(50, null, stockTile("Stock A", true)));
+        confirmer.confirmOrderFromDirectQuotation(repQuote.id(), salesActor);
+        confirmer.confirmOrderFromDirectQuotation(repQuote.id(), salesActor);
+        assertThat(stockReservedMessages(smId)).as("replay adds nothing").hasSize(1);
+    }
+
+    private List<String> stockReservedMessages(long recipientId) {
+        return jdbc.queryForList("""
+            SELECT message FROM hr.notification WHERE type = :type AND employee_id = :id ORDER BY notification_id
+            """, Map.of("type", TicketEventKind.STOCK_RESERVED, "id", recipientId), String.class);
+    }
+
+    private List<String> storedStockSources(long quotationId) {
+        return jdbc.queryForList(
+            "SELECT stock_source FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq",
+            Map.of("id", quotationId), String.class);
+    }
+
+    private List<Map<String, Object>> ticketStockRows(long ticketId) {
+        return jdbc.queryForList("""
+            SELECT qty, qty_from_stock, sourced_from_stock FROM sales.ticket_item
+             WHERE ticket_id = :id ORDER BY sort_order
+            """, Map.of("id", ticketId));
+    }
+
+    private th.co.glr.hr.importrequest.ImportRequestService importRequestService() {
+        return new th.co.glr.hr.importrequest.ImportRequestService(
+            new th.co.glr.hr.importrequest.ImportRequestQueryRepository(jdbc),
+            new th.co.glr.hr.importrequest.ImportRequestRenderer(),
+            new th.co.glr.hr.importrequest.ImportRequestRepository(jdbc),
+            new th.co.glr.hr.factory.FactoryConfigRepository(jdbc), tickets, ticketService,
+            new NotificationRepository(jdbc, mailer));
+    }
+
+    private ItemInput stockTile(String model, boolean stock) {
+        return stockTile(model, stock, null);
+    }
+
+    /** {@code id} non-null is a row the editor already saved, which update rewrites in place. */
+    private ItemInput stockTile(String model, boolean stock, Long id) {
+        return new ItemInput(
+            null, null, null, "SCG", model, "White", "Matte", "60x60", new BigDecimal("10.00"),
+            new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
+            WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO, "ไทย-สต็อก",
+            3, 7, null, WastageCalculator.LINE_TYPE_TILE, null, null, null, null, null, null, null, null,
+            id, null, false).withStockSource(stock ? "IN_THAILAND" : null);
+    }
+
+    private UpsertDealQuotationRequest stockDraft(Integer depositPercent, String fullPaymentTerm, ItemInput... lines) {
+        UpsertDealQuotationRequest d = directDraft();
+        return new UpsertDealQuotationRequest(d.contactId(), d.deptCode(), d.unitCode(), d.offerDate(), depositPercent,
+            d.remainderMode(), d.creditDays(), d.validityDays(), d.validityMode(), d.validityUntil(),
+            d.customerNotes(), d.priceMode(), d.documentLanguage(), d.currency(), null, null, null, null,
+            fullPaymentTerm, null, null, null, null, d.recipientType(), List.of(lines));
+    }
+
     private long quotationOnlyTicket(UserPrincipal creator) {
         return ticketService.create(new CreateTicketRequest(customer.name(), "NORMAL", customer.name(), customer.id(),
             projectId, null, null, null, List.of(), LocalDate.now().plusDays(7), true), creator).summary().id();

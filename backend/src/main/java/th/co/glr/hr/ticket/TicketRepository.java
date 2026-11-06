@@ -1129,6 +1129,12 @@ public class TicketRepository {
             });
     }
 
+    /** Marks every line the sales rep declared จากสต็อก as fully covered from stock (qty_from_stock = qty). */
+    public void coverSourcedFromStockLines(long ticketId) {
+        jdbc.update("UPDATE sales.ticket_item SET qty_from_stock = qty WHERE ticket_id = :ticketId AND sourced_from_stock",
+            Map.of("ticketId", ticketId));
+    }
+
     private void insertItems(long ticketId, List<TicketItemRequest> items) {
         if (items.isEmpty()) {
             return;

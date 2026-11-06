@@ -97,12 +97,13 @@ const pick = (from, keys) => Object.fromEntries(keys.map((key) => [key, from[key
 /** What makes a row the SOURCE's row. A copied row has no server id until its own first save, and
  * a picture is stored against the source's row (this editor has no way to attach one), so the
  * copy has neither — and gets a key of its own, because the source's key IS its server id. */
-// stockSource: the server stamps it from the pricing-request line, so a direct copy has none.
-const SOURCE_ROW_FIELDS = ['id', 'hasPicture', 'picturePlacement', 'pictureUrl', 'stockSource'];
+const SOURCE_ROW_FIELDS = ['id', 'hasPicture', 'picturePlacement', 'pictureUrl'];
 
 function copiedRow(row) {
   const copy = { ...row, clientId: newItemClientId() };
   SOURCE_ROW_FIELDS.forEach((field) => { delete copy[field]; });
+  // A direct copy keeps a จากสต็อก tick; IN_TRANSIT (pricing-request only, needs an ETA) cannot be held here.
+  copy.stockSource = row.stockSource === 'IN_THAILAND' ? 'IN_THAILAND' : null;
   return copy;
 }
 

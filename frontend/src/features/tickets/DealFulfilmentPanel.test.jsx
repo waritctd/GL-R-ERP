@@ -1277,3 +1277,78 @@ describe('DealFulfilmentPanel — ส่งมอบสินค้า shows wor
     ));
   });
 });
+
+describe('DealFulfilmentPanel — ระบุสินค้าจากสต็อก (RESERVE_STOCK)', () => {
+  const stockItems = [
+    { id: 6, brand: 'Brand X', model: 'Model Y', size: '60x60', qty: 500, qtyDelivered: 0, qtyFromStock: 0 },
+    { id: 7, brand: 'Brand X', model: 'Model Z', size: '30x60', qty: 100, qtyDelivered: 0, qtyFromStock: 100 },
+  ];
+
+  afterEach(() => api.tickets.reserveStock.mockReset());
+
+  it('shows a จากสต็อก checkbox per line only when the deal advertises RESERVE_STOCK, checked where fully covered', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: [{ action: 'RESERVE_STOCK' }] });
+    const first = await screen.findByTestId('deal-fulfilment-reserve-stock-6');
+    expect(first.checked).toBe(false);
+    expect(screen.getByTestId('deal-fulfilment-reserve-stock-7').checked).toBe(true);
+  });
+
+  it('shows no checkbox without the action', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: [] });
+    await screen.findByText('Brand X Model Y');
+    expect(screen.queryByTestId('deal-fulfilment-reserve-stock-6')).toBeNull();
+  });
+
+  const ACTIONS = [{ action: 'RESERVE_STOCK' }];
+  const tick = async (id) => fireEvent.click(await screen.findByTestId(`deal-fulfilment-reserve-stock-${id}`));
+
+  it('clicking an unticked line opens the dialog naming the line and does not call reserveStock yet', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(6);
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' });
+    expect(dialog.textContent).toContain('Brand X Model Y');
+    expect(dialog.textContent).toContain('500');
+    expect(dialog.textContent).toContain('ข้ามขั้นสั่งนำเข้า (IR)');
+    expect(dialog.textContent).toContain('ค่าคอมมิชชั่น');
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+  });
+
+  it('confirming declares the whole line from stock once and closes the dialog', async () => {
+    api.tickets.reserveStock.mockResolvedValue({});
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(6);
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยันจากสต็อก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' })).toBeNull());
+    expect(api.tickets.reserveStock).toHaveBeenCalledTimes(1);
+    expect(api.tickets.reserveStock).toHaveBeenCalledWith(1, { lines: [{ itemId: 6, qtyFromStock: 500 }] });
+  });
+
+  it('cancelling calls nothing and the checkbox stays unticked', async () => {
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(6);
+    const dialog = await screen.findByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ยืนยันสินค้าจากสต็อก' })).toBeNull());
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('deal-fulfilment-reserve-stock-6').checked).toBe(false);
+  });
+
+  it('clicking a covered line opens the untick dialog; confirming sends 0', async () => {
+    api.tickets.reserveStock.mockResolvedValue({});
+    renderPanel(OWNER, [], { items: stockItems, availableActions: ACTIONS });
+    await tick(7);
+    const dialog = await screen.findByRole('dialog', { name: 'ยกเลิกสินค้าจากสต็อก' });
+    expect(dialog.textContent).toContain('Brand X Model Z');
+    expect(dialog.textContent).toContain('กลับไปอยู่ในรายการนำเข้า');
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+    // The confirm must not read 'ยกเลิก': that is the back-out button everywhere else in the app.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+    expect(api.tickets.reserveStock).not.toHaveBeenCalled();
+    await tick(7);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'ยกเลิกสินค้าจากสต็อก' })).getByRole('button', { name: 'กลับไปสั่งนำเข้า' }));
+    await waitFor(() => expect(api.tickets.reserveStock).toHaveBeenCalledTimes(1));
+    expect(api.tickets.reserveStock).toHaveBeenCalledWith(1, { lines: [{ itemId: 7, qtyFromStock: 0 }] });
+  });
+
+});

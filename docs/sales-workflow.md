@@ -171,7 +171,7 @@ Lost reasons:
 | `IR_SENT` | `IR_ISSUED` | import or CEO | - | `IR_SENT` |
 | `SHIPPING` | `IR_SENT` | import or CEO | - | `SHIPPING` |
 | `GOODS_RECEIVED` | `SHIPPING` | import or CEO | - | `GOODS_RECEIVED`; may move deposit-paid deals to awaiting final payment |
-| `RESERVE_STOCK` | active, items remain | import or CEO | lines | records manual stock declaration; full coverage sets `FROM_STOCK` |
+| `RESERVE_STOCK` | active, stage 10+, no fulfilment status yet | deal owner or CEO | lines | records a per-line stock declaration (the fulfilment tab asks first); full coverage sets `FROM_STOCK` |
 | `RECORD_PARTIAL_DELIVERY` | goods/stock available, active | import or CEO | source, lines | inserts delivery record and updates delivered quantities |
 | `COMPLETE_DELIVERY` | remaining quantity and goods/stock available | import or CEO | note | delivers the remaining quantity |
 | `UPDATE_STAGE` | active, role allowed for target | sales owner, sales manager, CEO, import/account for owned stages | note for jumps/backward | updates manual stage |
