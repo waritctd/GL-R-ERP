@@ -53,15 +53,14 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
  * factory within the same request share ONE shipment. See {@link #costShipment} for the grouping
  * and per-item allocation this implies.
  *
- * <p>Freight additionally varies by {@code origin_country_code} and {@code thickness_mm} (V151 +
- * V109's own lookup keys, alongside quantity) — physical drivers distinct from the shipment/
- * factory grouping, since a shipment can in principle carry more than one product spec. {@code F}
- * is therefore looked up and allocated at the finer grain of (shipment × origin country ×
- * thickness); {@code S} (clearance fee — the schema keys it on {@code qty_sqm} alone, nothing
- * else) stays at the whole-shipment grain. In the overwhelmingly common case (one factory quote =
- * one product spec = one country = one thickness) both grains coincide with the whole shipment,
- * and the allocation described below collapses to "the item gets the whole flat amount",
- * unchanged from what a single-item shipment would produce on its own.
+ * <p>Freight additionally varies by {@code origin_country_code} (V151, alongside thickness and
+ * quantity in V109's lookup key). {@code F} is therefore looked up and allocated at the grain of
+ * (shipment × origin country); thicknesses inside that group are NOT split — they fill containers
+ * together (CEO 2026-11-06: capacity 800 ตร.ม. under 17 mm, 450 from 17 mm; see {@link
+ * PricingFormulaEngine}), and an item's share is its container space (sqm / capacity) over the
+ * group's. {@code S} (clearance fee — keyed on {@code qty_sqm} alone) stays at the whole-shipment
+ * grain with the same split and share. In the overwhelmingly common case (one factory quote = one
+ * country) the group is the whole shipment, and a single-item shipment gets the whole flat amount.
  *
  * <p><b>Origin country (V151, "one canonical country, so the freight lookup can join"):</b>
  * resolved PER ITEM from the catalog link — {@code price_catalog.factories.country} via {@code
@@ -274,22 +273,25 @@ public class LandedCostCalculator {
             return onlyUncostable;
         }
 
-        // F: grouped by (origin country, thickness) within the shipment (see class Javadoc) —
-        // both are per-item catalog-sourced physical drivers of the freight-table lookup key.
-        Map<FreightGroupKey, BigDecimal> qtySqmByGroup = new LinkedHashMap<>();
+        // F: grouped by origin country within the shipment — thicknesses are NOT split into separate
+        // groups: they fill containers together (PricingFormulaEngine container rule, CEO 2026-11-06).
+        Map<String, List<PricingFormulaEngine.ContainerLine>> linesByGroup = new LinkedHashMap<>();
+        Map<String, BigDecimal> qtySqmByGroup = new LinkedHashMap<>();
+        List<PricingFormulaEngine.ContainerLine> shipmentLines = new ArrayList<>();
         for (ItemPhysicals item : items) {
-            qtySqmByGroup.merge(
-                new FreightGroupKey(item.originCountryCode(), item.thicknessMm()), item.qtySqm(), BigDecimal::add);
+            PricingFormulaEngine.ContainerLine line =
+                new PricingFormulaEngine.ContainerLine(item.thicknessMm(), item.qtySqm());
+            linesByGroup.computeIfAbsent(item.originCountryCode(), k -> new ArrayList<>()).add(line);
+            qtySqmByGroup.merge(item.originCountryCode(), item.qtySqm(), BigDecimal::add);
+            shipmentLines.add(line);
         }
-        // Charged per container (PricingFormulaEngine#containerFreight: 1 ตู้ = 800 ตร.ม.), never
-        // once per shipment — a 7,820 ตร.ม. group pays for 10 containers, not 1.
-        Map<FreightGroupKey, PricingFormulaEngine.ContainerCharge> freightByGroup = new LinkedHashMap<>();
-        for (Map.Entry<FreightGroupKey, BigDecimal> entry : qtySqmByGroup.entrySet()) {
-            FreightGroupKey key = entry.getKey();
-            BigDecimal groupQtySqm = entry.getValue();
-            freightByGroup.put(key, formulaEngine.containerFreight(formulaConfig.freightRates(),
-                key.originCountryCode(), key.thicknessMm(), groupQtySqm,
-                shipmentLabel + " ต้นทาง " + key.originCountryCode() + " หนา " + key.thicknessMm() + " มม."));
+        // Charged per container (capacity 800 ตร.ม. under 17 mm, 450 from 17 mm), never once per shipment.
+        Map<String, PricingFormulaEngine.ContainerCharge> freightByGroup = new LinkedHashMap<>();
+        Map<String, BigDecimal> unitsByGroup = new LinkedHashMap<>();
+        for (Map.Entry<String, List<PricingFormulaEngine.ContainerLine>> entry : linesByGroup.entrySet()) {
+            freightByGroup.put(entry.getKey(), formulaEngine.containerFreight(formulaConfig.freightRates(),
+                entry.getKey(), entry.getValue(), shipmentLabel + " ต้นทาง " + entry.getKey()));
+            unitsByGroup.put(entry.getKey(), PricingFormulaEngine.containerUnits(entry.getValue()));
         }
 
         // S: whole shipment, regardless of country or thickness.
@@ -298,21 +300,26 @@ public class LandedCostCalculator {
             shipmentQtySqm = shipmentQtySqm.add(groupQtySqm);
         }
         PricingFormulaEngine.ContainerCharge clearance = formulaEngine.containerClearance(
-            formulaConfig.clearanceFees(), shipmentQtySqm, shipmentLabel);
+            formulaConfig.clearanceFees(), shipmentLines, shipmentLabel);
+        BigDecimal shipmentUnits = PricingFormulaEngine.containerUnits(shipmentLines);
 
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
         for (ItemPhysicals item : items) {
-            FreightGroupKey key = new FreightGroupKey(item.originCountryCode(), item.thicknessMm());
+            String key = item.originCountryCode();
             BigDecimal freightGroupQtySqm = qtySqmByGroup.get(key);
             PricingFormulaEngine.ContainerCharge freight = freightByGroup.get(key);
             BigDecimal freightAmountForGroup = freight.amountThb();
             // F/S allocation is inherently a TOTAL-for-the-item quantity (a share of a flat,
-            // shipment-level amount, proportional to the item's own share of the group's sqm —
-            // see class Javadoc) — computed once here, in totals, then carried through the
-            // formula's own C/i/F/T/S/TC/UC pipeline (also totals, per V109's own definition: TC
-            // is dimensionally a total, only UC=TC/Q converts it to a per-sqm rate).
-            BigDecimal freightShareTotal = allocate(freightAmountForGroup, item.qtySqm(), freightGroupQtySqm);
-            BigDecimal clearanceShareTotal = allocate(clearance.amountThb(), item.qtySqm(), shipmentQtySqm);
+            // shipment-level amount, proportional to the item's own share of the group's CONTAINER
+            // SPACE — sqm / capacity(thickness), see class Javadoc) — computed once here, in totals,
+            // then carried through the formula's own C/i/F/T/S/TC/UC pipeline (also totals, per
+            // V109's own definition: TC is dimensionally a total, only UC=TC/Q converts it to a
+            // per-sqm rate).
+            BigDecimal itemUnits = item.qtySqm().divide(
+                PricingFormulaEngine.containerCapacitySqm(item.thicknessMm()), 12, RoundingMode.HALF_UP);
+            BigDecimal groupUnits = unitsByGroup.get(key);
+            BigDecimal freightShareTotal = allocate(freightAmountForGroup, itemUnits, groupUnits);
+            BigDecimal clearanceShareTotal = allocate(clearance.amountThb(), itemUnits, shipmentUnits);
 
             PricingDutyRateDto dutyRate = formulaEngine.selectDutyRate(
                 formulaConfig.dutyRates(), item.productType(), itemLabel(item.source().requestItem()));
@@ -344,7 +351,8 @@ public class LandedCostCalculator {
 
             String snapshot = buildSnapshot(item, freightAmountForGroup, freightShareTotal,
                 freightGroupQtySqm, clearance.amountThb(), clearanceShareTotal, shipmentQtySqm,
-                dutyRate.dutyPct(), formulaConfig, calculatedAt, freight, clearance);
+                dutyRate.dutyPct(), formulaConfig, calculatedAt, freight, clearance,
+                itemUnits, groupUnits, shipmentUnits);
 
             ResolvedSource source = item.source();
             writeItems.add(new PricingCostingWriteItem(
@@ -622,14 +630,15 @@ public class LandedCostCalculator {
     }
 
     /**
-     * item's proportional share of a shipment/sub-group-flat amount, by sqm — the literal reading
+     * item's proportional share of a shipment/group-flat amount, by container space (the quantities
+     * passed are sqm / container capacity, CEO 2026-11-06) — the literal reading
      * of "a shipment-flat cost divided across the items that share it". A single-item group has
      * ratio 1 by construction (the item's own qty IS the group's total), so this collapses to "the
      * item gets the whole flat amount" exactly when nothing is actually being shared — the common
      * case, and the only case most existing tests exercise.
      */
-    private BigDecimal allocate(BigDecimal flatAmountThb, BigDecimal itemQtySqm, BigDecimal groupQtySqm) {
-        BigDecimal ratio = itemQtySqm.divide(groupQtySqm, 12, RoundingMode.HALF_UP);
+    private BigDecimal allocate(BigDecimal flatAmountThb, BigDecimal itemUnits, BigDecimal groupUnits) {
+        BigDecimal ratio = itemUnits.divide(groupUnits, 12, RoundingMode.HALF_UP);
         return money4(flatAmountThb.multiply(ratio));
     }
 
@@ -638,7 +647,8 @@ public class LandedCostCalculator {
                                  BigDecimal clearanceShare, BigDecimal shipmentQtySqm, BigDecimal dutyPct,
                                  PricingFormulaConfigDto formulaConfig, Instant calculatedAt,
                                  PricingFormulaEngine.ContainerCharge freight,
-                                 PricingFormulaEngine.ContainerCharge clearance) {
+                                 PricingFormulaEngine.ContainerCharge clearance,
+                                 BigDecimal itemUnits, BigDecimal groupUnits, BigDecimal shipmentUnits) {
         // Every value quoted as a JSON STRING (never a bare number), like requestedUnitBasis and
         // normalizedQuantityPieces, to avoid any BigDecimal-formatting edge case producing a token
         // the jsonb column would reject at insert time.
@@ -656,7 +666,11 @@ public class LandedCostCalculator {
             + ",\"shipmentQtySqm\":\"" + shipmentQtySqm + "\""
             + ",\"clearanceAmountThbForShipment\":\"" + clearanceAmount + "\""
             + ",\"clearanceShareThb\":\"" + clearanceShare + "\""
-            + ",\"containerSqm\":\"" + PricingFormulaEngine.CONTAINER_SQM + "\""
+            + ",\"containerSqm\":\"" + PricingFormulaEngine.containerCapacitySqm(item.thicknessMm()) + "\""
+            + ",\"itemContainerUnits\":\"" + itemUnits + "\""
+            + ",\"freightGroupContainerUnits\":\"" + groupUnits + "\""
+            + ",\"shipmentContainerUnits\":\"" + shipmentUnits + "\""
+            + ",\"freightRoundUpAboveSqm\":\"" + freight.roundUpAboveSqm() + "\""
             + ",\"freightFullContainers\":\"" + freight.fullContainers() + "\""
             + ",\"freightRemainderSqm\":\"" + freight.remainderSqm() + "\""
             + ",\"clearanceFullContainers\":\"" + clearance.fullContainers() + "\""
@@ -910,10 +924,4 @@ public class LandedCostCalculator {
                                  BigDecimal qtySqm, BigDecimal goodsCostPerPiece, BigDecimal goodsCostThb,
                                  BigDecimal insuranceThb, BigDecimal thicknessMm, String originCountryCode,
                                  String productType, FxSnapshot fx) {}
-
-    /** Freight lookup/allocation grain within a shipment — both fields are per-item, catalog-
-     * sourced physical drivers of {@code sales.pricing_freight_rate}'s lookup key (origin country
-     * since V151, thickness since V109) — see the class Javadoc. A plain record gets correct
-     * {@code equals}/{@code hashCode} for free, which is all a {@code Map} key needs here. */
-    private record FreightGroupKey(String originCountryCode, BigDecimal thicknessMm) {}
 }

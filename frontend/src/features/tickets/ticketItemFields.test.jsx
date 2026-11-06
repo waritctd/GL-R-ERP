@@ -8,6 +8,7 @@ import {
   applyDescriptiveFieldEdit,
   CatalogAutocompleteField,
   CatalogOption,
+  hasRealTileCount,
   isRequiredItemField,
   ITEM_FIELD_META,
   missingQtyMessage,
@@ -178,6 +179,31 @@ describe('applyCatalogPick', () => {
     const result = applyCatalogPick({ brand: '', qty: 10 }, mockCatalogProduct({ sqmPerPiece: null }));
     expect(result.sqmPerPiece).toBeNull();
     expect(result.qtySqm).toBe('');
+  });
+});
+
+// A ตร.ม. line's แผ่น count is real only when a tile factor derived it, or the rep typed more than the
+// new-row default 1. Deal 331 read "400.00 ตร.ม. / 1 แผ่น" from a saved placeholder 1.
+describe('hasRealTileCount', () => {
+  it('is false for the placeholder qty 1 and for qty 0 with no tile factor', () => {
+    expect(hasRealTileCount({ qty: 1, sqmPerPiece: null })).toBe(false);
+    expect(hasRealTileCount({ qty: 0, sqmPerPiece: null })).toBe(false);
+    expect(hasRealTileCount({ qty: '', sqmPerPiece: null })).toBe(false);
+  });
+
+  it('is true for a count above 1 with no factor', () => {
+    expect(hasRealTileCount({ qty: 1113, sqmPerPiece: null })).toBe(true);
+    expect(hasRealTileCount({ qty: '1113.00', sqmPerPiece: undefined })).toBe(true);
+  });
+
+  it('is true whenever a tile factor derived it, even 1', () => {
+    expect(hasRealTileCount({ qty: 1, sqmPerPiece: 0.72 })).toBe(true);
+  });
+
+  it('is false for an empty or zero count even with a tile factor', () => {
+    expect(hasRealTileCount({ qty: 0, sqmPerPiece: 0.72 })).toBe(false);
+    expect(hasRealTileCount({ qty: '0', sqmPerPiece: 0.72 })).toBe(false);
+    expect(hasRealTileCount({ qty: '', sqmPerPiece: 0.72 })).toBe(false);
   });
 });
 
