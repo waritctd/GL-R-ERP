@@ -2113,8 +2113,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       {item.size && <small className="text-text-muted">{item.size}</small>}
                     </span>
                     <span data-label="จำนวน">
+                      {/* ตร.ม. line: the แผ่น count is real only when a tile factor derived it, or the rep typed more than the
+                          new-row default 1 (qty 0/1 with no factor is a placeholder; deal 331 read "400.00 ตร.ม. / 1 แผ่น"). */}
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small className="block text-text-muted">{item.qty} แผ่น</small></>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}{(item.sqmPerPiece || Number(item.qty) > 1) && <small className="block text-text-muted">{item.qty} แผ่น</small>}</>
                         : <>{item.qty} แผ่น{item.qtySqm != null && <small className="block text-text-muted">{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>

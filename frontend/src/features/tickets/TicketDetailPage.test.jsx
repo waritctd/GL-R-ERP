@@ -527,6 +527,40 @@ describe('TicketDetailPage', () => {
     expect(within(chip).queryByText('฿0.00')).toBeNull();
   });
 
+  // A ตร.ม. line shows its area; the small "N แผ่น" line is for a count that is real: derived from a tile
+  // factor, or typed above the new-row default 1. Deal 331 read "400.00 ตร.ม. / 1 แผ่น" from a placeholder 1.
+  describe('ตร.ม. line quantity cell', () => {
+    async function cellFor(qty, sqmPerPiece = null) {
+      api.tickets.get.mockResolvedValueOnce({
+        ticket: buildTicket({
+          items: [
+            { id: 70201, brand: 'Padana', model: 'Verde', size: '60x60', qty, qtySqm: 400, unitBasis: 'SQM', sqmPerPiece,
+              qtyDelivered: 0, qtyFromStock: 0, approvedPrice: null, rawPrice: null, rawCurrency: null },
+          ],
+        }),
+      });
+      renderTicketDetailPage();
+      await openTab(/สินค้าและราคา/);
+      return (await screen.findByText('400.00 ตร.ม.')).closest('span');
+    }
+
+    it('hides the แผ่น line for the placeholder qty 1 with no tile factor', async () => {
+      expect((await cellFor(1)).textContent).toBe('400.00 ตร.ม.');
+    });
+
+    it('hides the แผ่น line for qty 0 with no tile factor', async () => {
+      expect((await cellFor(0)).textContent).toBe('400.00 ตร.ม.');
+    });
+
+    it('shows a count typed above 1 with no tile factor', async () => {
+      expect((await cellFor(1113)).textContent).toBe('400.00 ตร.ม.1113 แผ่น');
+    });
+
+    it('shows the count whenever a tile factor derived it, even 1', async () => {
+      expect((await cellFor(1, 0.72)).textContent).toBe('400.00 ตร.ม.1 แผ่น');
+    });
+  });
+
   // The factory price in ราคาโรงงาน carries a plain baht conversion beside it when quoted in a
   // foreign currency (the live catalog is EUR + USD, and sales.fx_rates covers both). There is no
   // ราคาตั้ง (ประมาณการ) estimate column.
