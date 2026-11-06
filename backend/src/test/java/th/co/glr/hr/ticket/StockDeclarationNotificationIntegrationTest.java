@@ -366,6 +366,68 @@ class StockDeclarationNotificationIntegrationTest extends AbstractPostgresIntegr
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("40.00");
     }
 
+    // ── RESERVE_STOCK is advertised exactly where reserveStock would accept the call ─────────────
+
+    @Test
+    void reserveStockIsAdvertisedToTheOwnerAtOrderReceivedBeforeAnyFulfilmentStatus() {
+        long ticketId = createTicketWithOneItem();
+
+        assertThat(advertised(ticketId, owner)).contains("RESERVE_STOCK");
+        assertThat(advertised(ticketId, ceoUser)).contains("RESERVE_STOCK");
+    }
+
+    @Test
+    void reserveStockIsNotAdvertisedBelowOrderReceived() {
+        long ticketId = createTicketWithOneItem();
+        tickets.updateSalesStage(ticketId, DealStage.QUOTE_OWNER);
+
+        assertThat(advertised(ticketId, owner)).doesNotContain("RESERVE_STOCK");
+    }
+
+    /** The sales manager sees the deal but is deliberately outside canDeclareStockCoverage ("Sales declares"). */
+    @Test
+    void reserveStockIsNotAdvertisedToTheSalesManager() {
+        long ticketId = createTicketWithOneItem();
+
+        assertThat(advertised(ticketId, principal(salesManagerId, "ผู้จัดการ ฝ่ายขาย", "sales_manager")))
+            .doesNotContain("RESERVE_STOCK");
+    }
+
+    @Test
+    void reserveStockIsNotAdvertisedOnceTheDealIsOnTheFulfilmentAxis() {
+        long ticketId = createTicketWithOneItem();
+        for (String status : List.of("IR_ISSUED", "FROM_STOCK")) {
+            jdbc.update("UPDATE sales.ticket SET fulfillment_status = :s WHERE ticket_id = :id",
+                Map.of("s", status, "id", ticketId));
+
+            assertThat(advertised(ticketId, owner)).describedAs(status).doesNotContain("RESERVE_STOCK");
+        }
+    }
+
+    @Test
+    void reserveStockIsNotAdvertisedOnANonActiveDeal() {
+        long ticketId = createTicketWithOneItem();
+        for (String lifecycle : List.of("DORMANT", "CLOSED_LOST")) {
+            jdbc.update("UPDATE sales.ticket SET lifecycle = :l WHERE ticket_id = :id",
+                Map.of("l", lifecycle, "id", ticketId));
+
+            assertThat(advertised(ticketId, owner)).describedAs(lifecycle).doesNotContain("RESERVE_STOCK");
+        }
+    }
+
+    @Test
+    void reserveStockIsNotAdvertisedToTheImportRole() {
+        long ticketId = createTicketWithOneItem();
+
+        assertThat(advertised(ticketId, principal(salesManagerId, "ฝ่ายนำเข้า", "import")))
+            .doesNotContain("RESERVE_STOCK");
+    }
+
+    private List<String> advertised(long ticketId, UserPrincipal actor) {
+        return ticketService.actions(ticketId, actor).availableActions().stream()
+            .map(TicketResponses.TicketActionDto::action).toList();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private TicketService newTicketService(TicketRepository ticketRepository,

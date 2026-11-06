@@ -236,7 +236,65 @@ describe('QuotationItemRow — Thai price boxes carry their unit (2026-09-14, pe
       itemNotes: null, lineType: 'TILE', specialPriceSqm: 1932, directNetPrice: null,
       // Present on every tile payload, null until the box is retyped.
       listPriceSqm: null, directNetPriceSqm: null,
+      // Stock declaration: null unless the rep ticks จากสต็อก.
+      stockSource: null,
     });
+  });
+});
+
+describe('QuotationItemRow — จากสต็อก (direct quotation ships from Thai stock)', () => {
+  function renderStockRow(itemOverrides = {}, props = {}) {
+    const onChange = vi.fn();
+    const item = { ...emptyQuotationItem(), ...itemOverrides };
+    render(<QuotationItemRow item={item} index={0} onChange={onChange} onRemove={vi.fn()} showStockOption {...props} />);
+    return { onChange };
+  }
+
+  it('a TILE row offers the checkbox; ticking sets IN_THAILAND and unticking sets null', () => {
+    const { onChange } = renderStockRow();
+    const box = screen.getByLabelText('จากสต็อก');
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    expect(onChange).toHaveBeenLastCalledWith({ stockSource: 'IN_THAILAND' });
+  });
+
+  it('unticking a ticked row sends null', () => {
+    const { onChange } = renderStockRow({ stockSource: 'IN_THAILAND' });
+    const box = screen.getByLabelText('จากสต็อก');
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    expect(onChange).toHaveBeenLastCalledWith({ stockSource: null });
+  });
+
+  it('hides ระยะเวลานำเข้า while ticked and shows it otherwise', () => {
+    renderStockRow({ stockSource: 'IN_THAILAND' });
+    expect(screen.queryByLabelText(/^ระยะเวลานำเข้า/)).toBeNull();
+  });
+
+  it('keeps ระยะเวลานำเข้า on an import row', () => {
+    renderStockRow();
+    expect(screen.getByLabelText(/^ระยะเวลานำเข้า/)).not.toBeNull();
+  });
+
+  it('is disabled when the row is read-only', () => {
+    renderStockRow({ stockSource: 'IN_THAILAND' }, { readOnly: true });
+    expect(screen.getByLabelText('จากสต็อก').disabled).toBe(true);
+  });
+
+  it('is absent unless the page asks for it (the PCR form carries its own checkbox)', () => {
+    renderStockRow({}, { showStockOption: false });
+    expect(screen.queryByLabelText('จากสต็อก')).toBeNull();
+  });
+
+  it('only an IN_THAILAND tick reaches the wire; IN_TRANSIT (a pricing-request value the server refuses) and PLAIN rows send none', () => {
+    expect(itemInputFromRow({ ...emptyQuotationItem(), stockSource: 'IN_TRANSIT' }, 'NET', 'TH').stockSource).toBeNull();
+    expect(itemInputFromRow({ ...emptyPlainItem(), stockSource: 'IN_THAILAND' }, 'NET', 'TH')).not.toHaveProperty('stockSource');
+  });
+
+  it('the saved payload carries the declaration', () => {
+    expect(itemInputFromRow({ ...emptyQuotationItem(), stockSource: 'IN_THAILAND' }, 'NET', 'TH').stockSource)
+      .toBe('IN_THAILAND');
+    expect(itemInputFromRow({ ...emptyQuotationItem(), stockSource: undefined }, 'NET', 'TH').stockSource).toBeNull();
   });
 });
 

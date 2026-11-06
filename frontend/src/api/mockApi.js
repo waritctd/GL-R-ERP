@@ -7139,7 +7139,12 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
   const items = [...products, ...adjustments].map((item, index) => {
     const rowMode = mockRowPriceMode(item, priceMode, index + 1);
     const row = buildDealQuotationItemRow(item, index + 1, rowMode, existingIds, documentLanguage);
-    return { ...row, priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null };
+    return {
+      ...row,
+      priceMode: mixed && dealQuotationLineType(item) === 'TILE' ? rowMode : null,
+      // DealQuotationRequests.ItemInput#stockSource: IN_THAILAND on a TILE row only; IN_TRANSIT is a pricing-request value.
+      stockSource: dealQuotationLineType(item) === 'TILE' && item.stockSource === 'IN_THAILAND' ? 'IN_THAILAND' : null,
+    };
   });
   const known = items.every((it) => it.lineAmount != null);
   if (known && round2(items.reduce((sum, it) => sum + Number(it.lineAmount), 0)) < 0) {
@@ -7779,6 +7784,11 @@ function buildTicketActions(user, ticket) {
     }
     if (isOwnerOrKeyer(ticket, user.id) && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
     if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
+    // TicketService.actions: reserveStock's own gate, offered only before the deal is on the import axis.
+    if ((owner || user.role === 'ceo') && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.fulfillmentStatus == null
+      && dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED')) {
+      add('RESERVE_STOCK', 'operational', 'ระบุสินค้าจากสต็อก');
+    }
     // Mirrors TicketService.addStageActions: derived from the decisions, so the mock can never
     // advertise a stage it would then refuse.
     for (const decision of stageDecisions.filter((d) => d.allowed)) {
@@ -16773,6 +16783,8 @@ export const api = {
       items.forEach((it) => {
         const link = linkByItemId.get(it.id);
         if (link?.pricingDecisionItemId != null) Object.assign(it, link);
+        // A PRICING_REQUEST row's pricing-request line is the truth for stockSource; the client's tick is ignored.
+        if (row.origin === 'PRICING_REQUEST') it.stockSource = row.items.find((x) => x.id === it.id)?.stockSource ?? null;
       });
       // V178: decided from the rows about to be WRITTEN (`items`, post-buildDealQuotationItems),
       // same as DealQuotationService#update — a discount cleared on THIS save already refuses
@@ -17289,7 +17301,10 @@ export const api = {
             qtySqm: tile && sqmPerPiece > 0 ? Math.round(Number(it.quantity) * sqmPerPiece * 100) / 100 : null,
             unitBasis: 'PIECE', rawUnit: it.unit ?? null,
             proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: i,
-            catalogPriceId: null, catalogProductCode: null, sourcedFromStock: false, stockSalePrice: null,
+            catalogPriceId: null, catalogProductCode: null, stockSalePrice: null,
+            // DealQuotationService#ticketItemsFromQuotation + coverSourcedFromStockLines: a จากสต็อก line is covered in full.
+            sourcedFromStock: it.stockSource === 'IN_THAILAND',
+            qtyFromStock: it.stockSource === 'IN_THAILAND' ? Number(it.quantity) : 0,
           };
         });
       // TicketService#confirmCustomerForPromotedQuotation -- the confirmCustomer body.
@@ -17299,6 +17314,8 @@ export const api = {
         followQuotationDepositPolicy(ticket, row, user);
       }
       autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
+      // confirmCustomer's own no-deposit branch routes an all-stock deal; a deposit deal routes when the deposit lands.
+      if (depositBypassesNotice(ticket)) routeAllStockDealToDelivery(ticket, user);
       return result();
     },
 

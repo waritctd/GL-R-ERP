@@ -3342,6 +3342,11 @@ public class TicketService {
         }
         if (canCancel(s, actor)) actions.add(new TicketActionDto("CANCEL", "operational", "ยกเลิก"));
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
+        // reserveStock's own gate, advertised only before the deal is on the import axis (or already FROM_STOCK).
+        // Lifecycle is already ACTIVE here: buildActions only calls this method for an ACTIVE deal.
+        if (canDeclareStockCoverage(s, actor) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null) {
+            actions.add(new TicketActionDto("RESERVE_STOCK", "operational", "ระบุสินค้าจากสต็อก"));
+        }
     }
 
     /**
@@ -3502,7 +3507,7 @@ public class TicketService {
 
     /**
      * The stage floor a stock-coverage declaration must clear: {@link #reserveStock}'s 409 reads it.
-     * ({@code RESERVE_STOCK} is not advertised in {@link #actions}; the endpoint exists.)
+     * ({@code RESERVE_STOCK} is advertised in {@link #actions} to the owner and the CEO from ORDER_RECEIVED while fulfilment is null.)
      *
      * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
      * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes

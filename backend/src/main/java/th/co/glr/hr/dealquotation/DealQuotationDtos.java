@@ -829,8 +829,8 @@ public final class DealQuotationDtos {
         String priceMode,
         /** V194 — "IN_THAILAND" | "IN_TRANSIT" when this row came from a stock-flagged pricing-request
          * line (stock lines skip import, so they carry no import lead time);
-         * null = สั่งนำเข้า, and null on every DEAL_DIRECT row. Read-only: set at insert from the
-         * pricing-request item, never accepted from the client. */
+         * null = สั่งนำเข้า. Accepted from the client on DEAL_DIRECT rows only; on every other row it is
+         * stamped from the pricing-request item. */
         String stockSource
     ) {
         /** The account view -- net unit price and line amount stay; every list-price / discount / CEO pricing field is emptied. */
