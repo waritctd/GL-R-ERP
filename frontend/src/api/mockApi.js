@@ -6196,7 +6196,7 @@ function mockDealQuotationDisplayEmployee(id) {
 // ผู้ติดต่อ resolution + the frozen snapshot. Mirrors DealQuotationService#resolveContact:
 // precedence is the request's `contactId`, else the row's own (`current`, update only), else none.
 // The deal's own `sales.ticket.contact_id` is NOT a fallback — the contact is picked per quotation.
-// Callers write `contactName` to `orderedByName` too (the ผู้สั่งซื้อ signature name). update()
+// Callers write `contactName` to `orderedByName` too (stored only, never printed). update()
 // skips this when `clearContact` is true (ล้าง: a picked ผู้ติดต่อ may be cleared per quotation).
 //
 // Resolving to a contact is not REQUIRED: like the relaxed Java method, nothing resolved returns a
@@ -9079,7 +9079,7 @@ export const api = {
       ticket.contactId = contactId == null ? null : Number(contactId);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       const resnapshotAt = new Date().toISOString();
-      // The request's contact (null clears it), and its name as the signature name.
+      // The request's contact (null clears it), and its name as orderedByName (never printed).
       const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: ticket.contactId });
       mockDealQuotations
         .filter((q) => q.ticketId === ticket.id && q.docStatus === 'DRAFT')
@@ -16514,7 +16514,7 @@ export const api = {
         // "ไม่เติม “คุณ”": UNticked is the only behaviour on CREATE, same device as
         // DealQuotationService#create.
         omitContactHonorific: payload.omitContactHonorific === true,
-        // The ผู้สั่งซื้อ signature name is the picked contact's name (null when none);
+        // orderedByName = the picked contact's name (null when none), stored only, never printed;
         // payload.orderedByName is ignored. Mirrors DealQuotationService#create.
         orderedByName: contactSnapshot.contactName,
         // Validated above; recipient_label carries the Thai role label for a direct row (a

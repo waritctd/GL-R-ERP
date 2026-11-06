@@ -407,7 +407,7 @@ export function QuotationEditorPage({ user, showToast }) {
 
   const [dealForm, setDealForm] = useState(emptyDealForm);
   // ผู้ติดต่อ: a contact OBJECT of the deal's customer, or null (the QuotationContactPicker value
-  // contract). Sent as `contactId`; the server writes the ผู้สั่งซื้อ signature name from it. The ref is
+  // contract). Sent as `contactId`; it prints after "เรียน", never in the ผู้สั่งซื้อ slot. The ref is
   // for flushPendingContactSave (submit and download).
   const [contact, setContact] = useState(null);
   const contactPickerRef = useRef(null);
@@ -1238,8 +1238,8 @@ export function QuotationEditorPage({ user, showToast }) {
   // adjustments, docSettings, terms, groups] dependency list (labelByGroupId is a groups-keyed
   // useMemo).
   const buildUpsertPayload = useCallback(() => ({
-    // ผู้ติดต่อ, picked or null. DealQuotationService#resolveContact snapshots it and writes the
-    // ผู้สั่งซื้อ signature name from it, so no `orderedByName` is sent. A null contactId on an update
+    // ผู้ติดต่อ, picked or null. DealQuotationService#resolveContact snapshots it (and stores its name
+    // in ordered_by_name, never printed), so no `orderedByName` is sent. A null contactId on an update
     // KEEPS the draft's contact, so ล้าง on a draft that had one also says `clearContact: true`;
     // otherwise the key is left out.
     contactId: contact?.id ?? null,

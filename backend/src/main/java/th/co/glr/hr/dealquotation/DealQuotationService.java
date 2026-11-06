@@ -286,8 +286,8 @@ public class DealQuotationService {
             // The rep's ผู้รับ and its Thai label. Still DEAL_DIRECT, no source pricing request/decision.
             DealQuotationRepository.ORIGIN_DEAL_DIRECT, recipientType, QuotationRecipient.thaiLabel(recipientType),
             null, null,
-            // The ผู้สั่งซื้อ signature name is the picked contact's name (null when none), written on every DRAFT save;
-            // request.orderedByName() is ignored.
+            // ordered_by_name = the picked contact's name (null when none), written on every DRAFT save; stored only, never
+            // printed (the ผู้สั่งซื้อ slot is always dotted). request.orderedByName() is ignored.
             contact.name(),
             orderedByPhone, orderedByEmail));
         advanceDealToRecipientStage(ticketId, recipientType, actor);
@@ -475,7 +475,7 @@ public class DealQuotationService {
             subtotal, null, quotationNumber.revisionNo(), null, items,
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
             summary.id(), decision.id(),
-            // The signature name is the recipient contact's name, as #create writes it; no phone or email is carried over.
+            // ordered_by_name = the recipient contact's name, as #create writes it (never printed); no phone or email.
             contact.name(), null, null));
         // The same creation-time advance #create performs, on the recipient carried over from the source คำขอราคา; this
         // is the call that gets a PCR-route deal to ขั้น 4.
@@ -826,7 +826,7 @@ public class DealQuotationService {
             }
         }
         // ล้าง: clearContact stores a blank snapshot whatever contactId says, so updateHeader also writes a null
-        // signature name below.
+        // ordered_by_name below.
         ContactSnapshot contact = Boolean.TRUE.equals(request.clearContact())
             ? new ContactSnapshot(null, null, null, null)
             : resolveContact(request.contactId(), existing.contactId(), ticket);
@@ -1126,8 +1126,8 @@ public class DealQuotationService {
         if (quotation.items().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการก่อนส่งขออนุมัติ");
         }
-        // ผู้สั่งซื้อ is optional: the ผู้ติดต่อ is picked per quotation and the server derives the signature name
-        // (ordered_by_name) from it; the deal's own contact is never inherited (see #resolveContact).
+        // ผู้ติดต่อ is optional: it is picked per quotation (the server stores its name in ordered_by_name, never
+        // printed); the deal's own contact is never inherited (see #resolveContact).
         // A zero-deposit ("ไม่รับมัดจำ") document must name ONE of the three payment terms before an approver sees it:
         // create/update let a DRAFT save with no term, so submit is the gate ("create/update permissive, submit strict",
         // like #requireEveryTileItemHasALeadTime and the DATE-mode check below). Not re-checked for a row whose
@@ -2356,8 +2356,8 @@ public class DealQuotationService {
      * other customers' contacts leaks. The name/phone/email are read NOW and written onto the quotation; a later edit
      * of the contact row never changes the document (V167: an approved, emailed PDF stays frozen).
      *
-     * <p>The snapshot's name is also the ผู้สั่งซื้อ signature name: #create, #update and #createFromPricingRequest
-     * write it to {@code ordered_by_name}; the free-text name is not taken from the request.
+     * <p>#create, #update and #createFromPricingRequest also write the snapshot's name to {@code ordered_by_name}
+     * (stored only, never printed: the ผู้สั่งซื้อ slot is always dotted); the free-text name is not taken from the request.
      */
     private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
         Long contactId = requestedContactId != null ? requestedContactId : existingContactId;
