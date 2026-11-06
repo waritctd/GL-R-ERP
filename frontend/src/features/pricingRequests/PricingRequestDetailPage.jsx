@@ -1963,7 +1963,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     const cost = item.frozenLandedCostPerRequestedUnitThb != null ? Number(item.frozenLandedCostPerRequestedUnitThb) : null;
     const rawDraft = ceoPriceDrafts[item.id] ?? {};
     const {
-      currentList, marginDraftRaw, marginDrives, marginInvalid, impliedMarginFraction, impliedMarginPct, impliedNote, formulaFromMargin, formulaPerPiece, draft,
+      currentList, marginDraftRaw, marginDrives, marginInvalid, impliedMarginFraction, impliedMarginPct, impliedNote, impliedInvalid, formulaFromMargin, formulaPerPiece, draft,
       autoSpecialPending, listDraft, listInvalid, net, netPending, total, profit, qty, invalid, dirty,
     } = ceoRowFigures({
       decision, item, rawDraft, cost, editable,
@@ -2041,11 +2041,16 @@ export function PricingRequestDetailPage({ user, showToast }) {
         derived: impliedMarginPct != null,
         impliedNote,
         loss: impliedMarginFraction != null && impliedMarginFraction < 0,
-        error: MARGIN_RANGE_ERROR_PCT,
+        error: impliedInvalid
+          ? `ราคานี้ทำให้กำไรเป็น ${Number(impliedMarginPct).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}% — เกินช่วงที่รับได้`
+          : MARGIN_RANGE_ERROR_PCT,
         // The saved margin, shown as "เดิม x%" only while an unsaved, different กำไร % is typed.
         savedPct: marginDraftRaw != null && marginDraftRaw !== '' && !marginInvalid
           && cleanNumber(marginDraftRaw) !== cleanNumber(fractionToPct(item.proposedMarginPct))
-          && item.proposedMarginPct != null ? fractionToPct(item.proposedMarginPct) : null,
+          && item.proposedMarginPct != null ? fractionToPct(item.proposedMarginPct)
+          : (impliedMarginPct != null && !marginInvalid && item.proposedMarginPct != null
+            && cleanNumber(impliedMarginPct) !== cleanNumber(fractionToPct(item.proposedMarginPct))
+            ? fractionToPct(item.proposedMarginPct) : null),
         // 0 < n < 1 is legal (a real margin under 1%) but is usually a fraction typed by habit: warn, never block.
         looksLikeFraction: marginDraftRaw != null && marginDraftRaw !== '' && Number(marginDraftRaw) > 0 && Number(marginDraftRaw) < 1,
       },

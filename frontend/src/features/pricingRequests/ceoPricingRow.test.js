@@ -103,6 +103,11 @@ describe('SPECIAL_SQM — a typed ราคาพิเศษ implies กำไ�
     expect(f.marginInvalid).toBe(false);
   });
 
+  it('impliedMarginPct always carries 2 dp, even when it ends in 0 (231.83 on cost 60 / 0.36 ตร.ม. -> 30.00)', () => {
+    const f = figures({ decision: special, item: item({ sqmPerPiece: 0.36, netUnitPrice: null }), cost: 60, sellingBuffer: 1, rawDraft: { specialPriceSqm: '231.83' } });
+    expect(f.impliedMarginPct).toBe('30.00');
+  });
+
   it('round-trips: feeding the implied fraction back into the formula gives the same ราคาพิเศษ', () => {
     const f = sp({ specialPriceSqm: '1400' });
     expect(specialPriceSqmFromFormula({

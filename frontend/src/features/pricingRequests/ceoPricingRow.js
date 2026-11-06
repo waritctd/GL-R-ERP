@@ -167,7 +167,7 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
     && sqmPerPiece > 0 && typedSpecial != null && typedSpecial > 0
     ? typedSpecial / ((Number(cost) / sqmPerPiece) * sellingBuffer * VAT_FACTOR) - 1
     : null;
-  const impliedMarginPct = impliedMarginFraction != null ? String(round2(impliedMarginFraction * 100)) : null;
+  const impliedMarginPct = impliedMarginFraction != null ? (impliedMarginFraction * 100).toFixed(2) : null;
   const fmt2 = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const impliedNote = impliedMarginFraction != null
     ? `= ${fmt2(typedSpecial)} ÷ (${fmt2(round2(Number(cost) / sqmPerPiece))}${
@@ -214,7 +214,7 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
   const dirty = invalid || otherDraftDirty || listChanged;
   return {
     isStockLine, hasPriceOverride, currentList, marginDraftRaw, marginDrives, marginInvalid: marginBad, formulaFromMargin,
-    impliedMarginFraction, impliedMarginPct, impliedNote,
+    impliedMarginFraction, impliedMarginPct, impliedNote, impliedInvalid,
     formulaPerPiece, draft, autoSpecialPending, listDraft, listInvalid, net, netPending, total, profit, qty, invalid, dirty,
   };
 }

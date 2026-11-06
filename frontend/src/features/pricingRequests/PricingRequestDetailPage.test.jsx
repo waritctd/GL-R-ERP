@@ -2153,6 +2153,36 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         expect(saveAllButton().disabled).toBe(false);
       }));
 
+      it('an out-of-range implied margin says what the PRICE did (not the generic range text); a typed bad กำไร % keeps the old text', () => withSpecial(async () => {
+        typeSpecial('100000000');
+        const implied = (1e8 / ((60 / 0.36) * 1.07) - 1) * 100;
+        const pct = implied.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const alert = await within(screen.getByTestId('pcr-ceo-row-8001')).findByRole('alert');
+        expect(alert.textContent).toBe(`ราคานี้ทำให้กำไรเป็น ${pct}% — เกินช่วงที่รับได้`);
+        expect(saveAllButton().disabled).toBe(true);
+        fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '100000' } });
+        await waitFor(() => expect(within(screen.getByTestId('pcr-ceo-row-8001')).getByRole('alert').textContent).toContain('อัตรากำไรต้องอยู่ระหว่าง'));
+      }));
+
+      it('when the price leads and the implied % differs from the saved one, "เดิม 20%" shows', () => withSpecial(async () => {
+        expect(ceoRow(8001).queryByTestId('pcr-ceo-margin-was-8001')).toBeNull();
+        typeSpecial('240');
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-margin-was-8001').textContent).toBe('เดิม 20%'));
+      }));
+
+      it('the implied % input always shows 2 dp: 231.83 -> "30.00"', () => withSpecial(async () => {
+        typeSpecial('231.83');
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').value).toBe('30.00'));
+      }));
+
+      it('on a loss the กำไร % input is red (text-danger); in profit it is not', () => withSpecial(async () => {
+        typeSpecial('240');
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').value).toBe('34.58'));
+        expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').className).not.toContain('text-danger');
+        typeSpecial('150');
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').className).toContain('text-danger'));
+      }));
+
       it('an implied margin out of range blocks the one save', () => withSpecial(async () => {
         typeSpecial('100000000');
         await waitFor(() => expect(saveAllButton().disabled).toBe(true));
