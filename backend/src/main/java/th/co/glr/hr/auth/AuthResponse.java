@@ -20,5 +20,8 @@ package th.co.glr.hr.auth;
  * notes" capability (GLA-99/GLA-129, Ploy 2026-09-19): a hint only, re-checked live by
  * {@code th.co.glr.hr.billing.BillingNoteService.hasWriteGrant}.
  */
-public record AuthResponse(UserPrincipal user, boolean admin, boolean canCreateQuotation, boolean canIssueBillingNote) {
+public record AuthResponse(UserPrincipal user, boolean admin, boolean canCreateQuotation, boolean canIssueBillingNote,
+                           boolean canViewAs, ViewAsInfo viewAs) {
+    /** Who is really behind a read-only "view as" session; null on the response unless viewing. */
+    public record ViewAsInfo(long actorId, String actorName) {}
 }

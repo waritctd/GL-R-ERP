@@ -2376,6 +2376,8 @@ function authResponse(user) {
     admin: Boolean(user?.admin),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
+    canViewAs: false,
+    viewAs: null,
   };
 }
 
@@ -8088,6 +8090,22 @@ export const api = {
   // populated while proving nothing about the real query, the real ORDER BY, or the
   // real admin gate. CLAUDE.md's "fixture supplies what production lacks" shape.
   // The gate itself is authoritative only in the Java service; see ActivityLogAuthzIntegrationTest.
+  // View-as is OFF here, like the backend's default config (no owner code): the gate refuses
+  // everyone. stop has no gate server-side, so it just answers with the current user.
+  viewAs: {
+    async candidates() {
+      requireSession();
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    },
+    async start(employeeId) {
+      void employeeId;
+      requireSession();
+      fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+    },
+    async stop() {
+      return delay(authResponse(requireSession()));
+    },
+  },
   activityLog: {
     async list(params = {}) {
       void params;

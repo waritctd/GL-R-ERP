@@ -50,9 +50,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class SessionSecurityFilter extends OncePerRequestFilter {
 
     private final SessionAccountResolver accounts;
+    private final ViewAsService viewAs;
 
-    public SessionSecurityFilter(SessionAccountResolver accounts) {
+    public SessionSecurityFilter(SessionAccountResolver accounts, ViewAsService viewAs) {
         this.accounts = accounts;
+        this.viewAs = viewAs;
     }
 
     @Override
@@ -64,6 +66,7 @@ public class SessionSecurityFilter extends OncePerRequestFilter {
         try {
             UserPrincipal user = currentPrincipal(request);
             if (user != null) {
+                user = viewAsTarget(request, user);
                 UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                     user,
                     null,
@@ -90,6 +93,9 @@ public class SessionSecurityFilter extends OncePerRequestFilter {
         }
         Optional<UserPrincipal> current = accounts.current(stored.id());
         if (current.isEmpty()) {
+            if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) instanceof UserPrincipal target) {
+                viewAs.recordStopQuietly(stored, target);
+            }
             session.invalidate();
             return null;
         }
@@ -97,6 +103,39 @@ public class SessionSecurityFilter extends OncePerRequestFilter {
             SessionContext.replacePrincipal(session, current.get());
         }
         return current.get();
+    }
+
+    /**
+     * While the owner is viewing as someone, the authentication (and so every {@code @PreAuthorize})
+     * is the TARGET's, refreshed from the database like a real session is. A target who has gone
+     * inactive or been deleted ends the view only — the real actor stays signed in.
+     * {@code mustChangePassword} is forced false: it is the target's flag, not the actor's, and
+     * must not lock the owner out of the exit button.
+     */
+    private UserPrincipal viewAsTarget(HttpServletRequest request, UserPrincipal real) {
+        HttpSession session = request.getSession(false);
+        if (session == null || !(session.getAttribute(SessionContext.VIEW_AS_USER_KEY) instanceof UserPrincipal stored)) {
+            return real;
+        }
+        Optional<UserPrincipal> target = accounts.current(stored.id());
+        // The owner gate is re-checked live: losing it (code changed, deactivated) ends the view too.
+        if (target.isEmpty() || !viewAs.mayViewAs(real.id())) {
+            // The SPA's parallel requests all see the dead view; only the first closes it in the audit.
+            synchronized (org.springframework.web.util.WebUtils.getSessionMutex(session)) {
+                if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) != null) {
+                    viewAs.recordStopQuietly(real, stored);
+                    SessionContext.stopViewAs(session);
+                }
+            }
+            return real;
+        }
+        UserPrincipal t = target.get();
+        UserPrincipal fresh = new UserPrincipal(t.id(), t.email(), t.name(), t.role(), t.employeeId(), t.active(),
+            t.createdAt(), false, t.divisionId(), t.manager());
+        if (!fresh.equals(stored)) {
+            SessionContext.startViewAs(session, fresh);
+        }
+        return fresh;
     }
 
     private String toRoleAuthority(String role) {

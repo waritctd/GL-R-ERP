@@ -56,6 +56,12 @@ public class EmployeeAuthRepository {
         }
     }
 
+    /** Every active employee, for the view-as candidate list. */
+    public java.util.List<EmployeeLoginRecord> findAllActive() {
+        return jdbc.query(LOGIN_SELECT + " WHERE e.is_active ORDER BY display_name, e.employee_id",
+            Map.of(), (rs, rowNum) -> mapEmployee(rs));
+    }
+
     public Optional<EmployeeLoginRecord> findByEmployeeId(long employeeId) {
         try {
             EmployeeLoginRecord employee = jdbc.queryForObject(

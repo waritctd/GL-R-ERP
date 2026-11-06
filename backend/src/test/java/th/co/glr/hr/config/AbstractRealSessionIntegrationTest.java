@@ -97,8 +97,8 @@ abstract class AbstractRealSessionIntegrationTest {
 
         HttpResponse<String> signIn(String email) throws Exception {
             String body = "{\"email\":\"" + email + "\",\"password\":\"" + PASSWORD + "\"}";
-            HttpResponse<String> response = http.send(HttpRequest.newBuilder()
-                .uri(URI.create(base() + "/api/auth/login"))
+            // Like a real browser, a second login sends the cookies it already holds (same session).
+            HttpResponse<String> response = http.send(request("/api/auth/login")
                 .header("Content-Type", "application/json")
                 .POST(BodyPublishers.ofString(body))
                 .build(), BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -119,6 +119,19 @@ abstract class AbstractRealSessionIntegrationTest {
             return http.send(request(path).header("X-XSRF-TOKEN", xsrfToken)
                 .POST(BodyPublishers.noBody()).build(), BodyHandlers.ofString(StandardCharsets.UTF_8));
         }
+
+        /** An unsafe method with a JSON body (or none when {@code json} is null), CSRF pair attached. */
+        HttpResponse<String> send(String method, String path, String json) throws Exception {
+            HttpRequest.Builder builder = request(path).header("X-XSRF-TOKEN", xsrfToken);
+            if (json != null) builder.header("Content-Type", "application/json");
+            builder.method(method, json == null ? BodyPublishers.noBody() : BodyPublishers.ofString(json));
+            return http.send(builder.build(), BodyHandlers.ofString(StandardCharsets.UTF_8));
+        }
+
+        HttpResponse<String> postJson(String path, String json) throws Exception { return send("POST", path, json); }
+        HttpResponse<String> put(String path, String json) throws Exception { return send("PUT", path, json); }
+        HttpResponse<String> patch(String path, String json) throws Exception { return send("PATCH", path, json); }
+        HttpResponse<String> delete(String path) throws Exception { return send("DELETE", path, null); }
 
         private HttpRequest.Builder request(String path) {
             HttpRequest.Builder builder = HttpRequest.newBuilder().uri(URI.create(base() + path));
