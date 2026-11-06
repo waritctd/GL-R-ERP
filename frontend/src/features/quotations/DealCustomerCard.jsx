@@ -136,8 +136,8 @@ function emptyNewCustomer() {
  *
  * This card does not collect the ผู้ติดต่อ: the editor renders the shared QuotationContactPicker
  * itself, next to this card, on both the inline-create and ?ticket= paths. The ผู้ติดต่อ is picked
- * per quotation (`contactId`), the server derives the ผู้สั่งซื้อ signature name
- * (`ordered_by_name`) from it, and the deal's own contact is never inherited.
+ * per quotation (`contactId`) and prints after "เรียน" (never in the ผู้สั่งซื้อ signature slot);
+ * the deal's own contact is never inherited.
  *
  * This card is step 1, "ดีล". With `onModeChange` set (the editor always sets it) it leads with a
  * two-way choice — เลือกดีลที่มีอยู่ (DealPicker, which turns the page into the existing ?ticket=

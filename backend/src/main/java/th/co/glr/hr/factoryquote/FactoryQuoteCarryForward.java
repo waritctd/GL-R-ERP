@@ -109,6 +109,11 @@ public class FactoryQuoteCarryForward {
         return true;
     }
 
+    /** Best-effort cost preview for the CEO notice (null when it cannot be computed); same reason as below. */
+    public LandedCostCalculator.CalculationResult ceoReviewCosts(PricingRequestSummaryDto summary) {
+        return th.co.glr.hr.pricingrequest.CeoReviewNotice.costsOrNull(landedCosts, summary);
+    }
+
     /**
      * Stock lines (V194): {@link LandedCostCalculator#isReadyForCeoReview} - the ONE readiness
      * predicate - exposed to {@code PricingRequestService}, which cannot take a new constructor

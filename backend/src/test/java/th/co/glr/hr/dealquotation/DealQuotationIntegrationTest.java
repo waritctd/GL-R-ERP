@@ -2855,12 +2855,11 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return "วันที่ " + d.getDayOfMonth() + "/" + d.getMonthValue() + "/" + (d.getYear() + 543);
     }
 
-    /** Slot 4 (ผู้สั่งซื้อ) prints the quotation's picked ผู้ติดต่อ, end-to-end
-     * (create -> render) through the real service and repository. {@code ordered_by_name} is
-     * written from the picked contact on every DRAFT save, so a name typed into the request is
-     * ignored. */
+    /** Slot 4 (ผู้สั่งซื้อ) stays dotted end-to-end (create -> render) even with a picked ผู้ติดต่อ
+     * (owner 2026-11-06). {@code ordered_by_name} is still written from the picked contact on
+     * every DRAFT save (a typed name is ignored), but it is never printed. */
     @Test
-    void render_draft_printsThePickedContactNameInSlot4_andIgnoresATypedOrderedByName() throws Exception {
+    void render_draft_leavesSlot4Dotted_evenWithAPickedContact() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequestWithOrderedByName("คุณวิชัย มั่นคง", List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(created.contactName()).as("a contact IS picked on this quotation").isEqualTo("สมหญิง ใจดี");
@@ -2868,9 +2867,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         String[] rows = signatureRows(quotationService.renderXlsx(created.id(), salesActor));
         String names = rows[1];
         String dates = rows[2];
-        assertThat(names).contains("(สมหญิง ใจดี)").doesNotContain("(คุณวิชัย มั่นคง)");
-        // Draft: no approver name yet -- the only dotted name placeholder.
-        assertThat(names.split("\\(\\.{26}\\)", -1)).hasSize(2);
+        assertThat(names).doesNotContain("(สมหญิง ใจดี)").doesNotContain("(คุณวิชัย มั่นคง)");
+        // Draft: no approver name yet, and ผู้สั่งซื้อ is always dotted -- two dotted name placeholders.
+        assertThat(names.split("\\(\\.{26}\\)", -1)).hasSize(3);
         // Dates: ผู้พิมพ์ = created date; the other three slots stay dotted.
         assertThat(dates).contains(thaiShort(created.createdAt()));
         assertThat(dates.split("วันที่........./........./.........", -1)).as("three dotted date slots").hasSize(4);

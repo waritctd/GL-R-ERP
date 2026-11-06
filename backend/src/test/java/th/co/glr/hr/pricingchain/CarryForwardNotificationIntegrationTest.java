@@ -249,6 +249,20 @@ class CarryForwardNotificationIntegrationTest extends AbstractPostgresIntegratio
         assertThat(mailer.sent().subList(mailSentBefore, mailer.sent().size()))
             .as("a carry-forward submit must still mail the CEO, on the hardcoded rarm@glr.co.th mailbox")
             .containsExactly("rarm@glr.co.th");
+
+        // The CEO's bell row is the detailed notice: headline 3, the request + deal line, the item list
+        // with a real per-unit cost (the carry-forward reuses the parent's factory prices).
+        String message = jdbc.queryForObject(
+            "SELECT message FROM hr.notification WHERE employee_id = :id AND type = 'PRICING_COSTING_SUBMITTED'"
+                + " ORDER BY notification_id DESC LIMIT 1",
+            Map.of("id", ceoEmployeeId), String.class);
+        assertThat(message)
+            .startsWith(salesActor.name() + " ส่งคำขอราคาใหม่โดยใช้ราคาโรงงานเดิม — รอ CEO ตั้งราคา\n")
+            .contains("คำขอราคา " + child.summary().requestCode() + " · ดีล ")
+            .contains("\n\nรายการ (1):\n• ")
+            .containsPattern("ต้นทุน \\d[\\d,]*\\.\\d{2} บาท/")
+            .doesNotContain("ต้นทุน -")
+            .endsWith("สิ่งที่ต้องทำต่อ: เปิดคำขอราคา ใส่กำไร % แล้วบันทึกราคาขาย");
     }
 
     // ── fixtures — every precondition driven through the real services, as ReissueThroughCeoChain does ──

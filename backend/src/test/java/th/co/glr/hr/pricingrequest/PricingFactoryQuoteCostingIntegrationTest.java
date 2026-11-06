@@ -69,6 +69,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
+import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.QuotationRenderer;
@@ -406,6 +407,17 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
+
+        // The CEO's bell row is the detailed notice, headline 1 (the importer who marked the last quote).
+        PricingRequestSummaryDto summary = pricingRequestService.get(pricingRequestId, importActor).summary();
+        String expected = CeoReviewNotice.message(
+            "ฝ่ายนำเข้า (" + importActor.name() + ") ได้ราคาโรงงานครบทุกรายการแล้ว — รอ CEO ตั้งราคา",
+            summary, pricingRequests.findItems(pricingRequestId), landedCostCalculator.calculate(summary));
+        String message = jdbc.queryForObject(
+            "SELECT message FROM hr.notification WHERE employee_id = :id AND type = 'PRICING_COSTING_SUBMITTED'"
+                + " AND link = :link ORDER BY notification_id DESC LIMIT 1",
+            Map.of("id", ceoUserId, "link", "/pricing-requests/" + pricingRequestId), String.class);
+        assertThat(message).isEqualTo(expected).contains("ต้นทุนรวม ");
     }
 
     /**

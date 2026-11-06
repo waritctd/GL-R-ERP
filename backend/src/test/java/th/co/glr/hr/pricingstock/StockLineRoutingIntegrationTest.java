@@ -57,6 +57,19 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
             .as("import has nothing to do on an all-in-Thailand request and must NOT be notified")
             .isEqualTo(importBefore);
         assertThat(factoryQuoteCount(id)).as("R3: stock lines are never sent to a factory").isZero();
+
+        // The CEO's bell row is the detailed notice: headline 2, stock source per line, no cost, no total.
+        String message = jdbc.queryForObject(
+            "SELECT message FROM hr.notification WHERE employee_id = :e AND link = :link"
+                + " AND type = 'PRICING_COSTING_SUBMITTED' ORDER BY notification_id DESC LIMIT 1",
+            Map.of("e", ceoUserId, "link", "/pricing-requests/" + id), String.class);
+        assertThat(message)
+            .startsWith(salesActor.name() + " ส่งคำขอราคาสต็อกในไทยทั้งหมด — รอ CEO ตั้งราคา\n")
+            .contains("\n\nรายการ (2):\n")
+            .contains("• SCG Stock TH 1 60x60 — 3.6 ตร.ม. · สต็อกในไทย")
+            .contains("• SCG Stock TH 2 60x60 — 1.8 ตร.ม. · สต็อกในไทย")
+            .doesNotContain("ต้นทุนรวม")
+            .doesNotContain("ต้นทุน -");
     }
 
     @Test

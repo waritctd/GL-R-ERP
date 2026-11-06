@@ -58,8 +58,8 @@ export function editorStateFromQuotation(quotation) {
       salesRepDisplayId: quotation.salesRepDisplayId ?? '',
       projectName: quotation.projectName ?? '',
       // V192.3 — the customer's phone and email. Null, or a DTO with no such key (a backend that
-      // predates the columns), reads as blank. (No orderedByName: since 2026-10-18 the server
-      // writes the signature name from the contact, and the editor neither shows nor sends it.)
+      // predates the columns), reads as blank. (No orderedByName: the server writes it from the
+      // contact, it never prints, and the editor neither shows nor sends it.)
       orderedByPhone: quotation.orderedByPhone ?? '',
       orderedByEmail: quotation.orderedByEmail ?? '',
       // Sales feedback #5 (V192.1) — a DTO with no such key (a row served by a backend that
