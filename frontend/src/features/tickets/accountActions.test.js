@@ -40,7 +40,7 @@ describe('nextAccountAction', () => {
   });
 
   it('awaiting-final-payment -> รับชำระส่วนที่เหลือ', () => {
-    const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' });
+    const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage: 'DELIVERY_SCHEDULING' });
     const action = nextAccountAction(t);
     expect(action.key).toBe('confirmFinalPayment');
     expect(action.label).toBe('รับชำระส่วนที่เหลือ');
@@ -48,12 +48,12 @@ describe('nextAccountAction', () => {
   });
 
   it('deposit-paid also counts as final payment due (mirrors TicketService#canConfirmFinalPaymentNow)', () => {
-    const t = ticket({ paymentStatus: 'DEPOSIT_PAID' });
+    const t = ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage: 'DELIVERY_SCHEDULING' });
     expect(nextAccountAction(t).key).toBe('confirmFinalPayment');
   });
 
   it('a deposit-bypassed deal (WAIVED policy) can go straight to final payment', () => {
-    const t = ticket({ depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' });
+    const t = ticket({ depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'DELIVERY_SCHEDULING' });
     expect(nextAccountAction(t).key).toBe('confirmFinalPayment');
   });
 
@@ -163,6 +163,38 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(t).key).toBe('confirmCloseReady');
   });
 
+  // Owner ruling 2026-11-07: รับชำระส่วนที่เหลือ stays closed until money-milestone 3 (PROCUREMENT) is
+  // done, i.e. the deal reached DELIVERY_SCHEDULING or later. Mirrors TicketService#canConfirmFinalPaymentNow.
+  describe('final payment is gated until the deal reaches DELIVERY_SCHEDULING', () => {
+    const early = ['ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT'];
+    const late = ['DELIVERY_SCHEDULING', 'DELIVERED'];
+    const shapes = [
+      ['DEPOSIT_PAID', { paymentStatus: 'DEPOSIT_PAID' }],
+      ['AWAITING_FINAL_PAYMENT', { paymentStatus: 'AWAITING_FINAL_PAYMENT' }],
+      ['deposit-bypass + CUSTOMER_CONFIRMED', { depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' }],
+    ];
+    const cases = (stages) => stages.flatMap((stage) => shapes.map(([label, o]) => [`${label} @ ${stage}`, { ...o, salesStage: stage }]));
+
+    it.each(cases(early))('%s: no final-payment CTA, no finalPaymentPending bucket', (_n, o) => {
+      const t = ticket(o);
+      expect(nextAccountAction(t, 'account')).toBeNull();
+      expect(nextAccountAction(t)).toBeNull();
+      expect(accountMoneyBucket(t)).toBeNull();
+    });
+
+    it.each(cases(late))('%s: still offered (regression guard)', (_n, o) => {
+      const t = ticket(o);
+      expect(nextAccountAction(t, 'account').key).toBe('confirmFinalPayment');
+      expect(accountMoneyBucket(t)).toBe('finalPaymentPending');
+    });
+
+    it('an early-stage deal with a balance still owed keeps its overdue chase (outstanding is not hidden)', () => {
+      const t = ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage: 'PROCUREMENT', overdue: true, amountOutstanding: 5000 });
+      expect(nextAccountAction(t, 'account').key).toBe('chaseOverdue');
+      expect(accountMoneyBucket(t)).toBe('overdue');
+    });
+  });
+
   // GLA-118 (owner ruling 2026-09-20, part A): recording a payment — confirmDeposit/
   // confirmFinalPayment — is account only now, no CEO fallback. The CEO still reaches /finance
   // (canConfirmPayments is unchanged), so the worklist must stop offering those two CTAs to
@@ -175,7 +207,7 @@ describe('nextAccountAction', () => {
     });
 
     it('awaiting-final-payment: ceo gets no CTA, account still gets รับชำระส่วนที่เหลือ', () => {
-      const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' });
+      const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage: 'DELIVERED' });
       expect(nextAccountAction(t, 'ceo')).toBeNull();
       expect(nextAccountAction(t, 'account').key).toBe('confirmFinalPayment');
     });
