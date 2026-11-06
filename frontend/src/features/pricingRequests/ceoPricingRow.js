@@ -159,7 +159,26 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
   const autoSpecial = specialFromFormula != null
     && (item.specialPriceSqm == null || specialFromFormula !== Number(item.specialPriceSqm))
     ? specialFromFormula : null;
-  const draft = { ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}), ...rawDraft };
+  // The reverse: a typed ราคาพิเศษ (and no typed กำไร %) implies the margin it is the formula price of.
+  const typedSpecial = cleanNumber(rawDraft.specialPriceSqm);
+  const sqmPerPiece = Number(item.sqmPerPiece);
+  const impliedMarginFraction = isSpecial && !isStockLine && editable && decision.currency === 'THB'
+    && !marginDrives && !hasPriceOverride && cost != null && Number(cost) > 0 && sellingBuffer > 0
+    && sqmPerPiece > 0 && typedSpecial != null && typedSpecial > 0
+    ? typedSpecial / ((Number(cost) / sqmPerPiece) * sellingBuffer * VAT_FACTOR) - 1
+    : null;
+  const impliedMarginPct = impliedMarginFraction != null ? (impliedMarginFraction * 100).toFixed(2) : null;
+  const fmt2 = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const impliedNote = impliedMarginFraction != null
+    ? `= ${fmt2(typedSpecial)} ÷ (${fmt2(round2(Number(cost) / sqmPerPiece))}${
+      sellingBuffer !== 1 ? ` × ${sellingBuffer}` : ''} × 1.07) − 1`
+    : null;
+  const impliedInvalid = impliedMarginFraction != null && marginOutOfRange(impliedMarginFraction);
+  const draft = {
+    ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}),
+    ...(impliedMarginFraction != null && !impliedInvalid ? { marginPct: String(impliedMarginFraction * 100) } : {}),
+    ...rawDraft,
+  };
   const listDraft = draft.listUnitPrice;
   const listDraftNumber = cleanNumber(listDraft);
   // Java rejects a non-positive ราคาตั้ง; blank is NOT invalid (on an override line it means "clear").
@@ -190,10 +209,12 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
   const listChanged = listDraft !== undefined && !listInvalid && (listDraft === ''
     ? (!isStockLine && hasPriceOverride)
     : currentList == null || listDraftNumber !== Number(currentList));
-  const invalid = listInvalid || marginInvalid;
+  const marginBad = marginInvalid || impliedInvalid;
+  const invalid = listInvalid || marginBad;
   const dirty = invalid || otherDraftDirty || listChanged;
   return {
-    isStockLine, hasPriceOverride, currentList, marginDraftRaw, marginDrives, marginInvalid, formulaFromMargin,
+    isStockLine, hasPriceOverride, currentList, marginDraftRaw, marginDrives, marginInvalid: marginBad, formulaFromMargin,
+    impliedMarginFraction, impliedMarginPct, impliedNote, impliedInvalid,
     formulaPerPiece, draft, autoSpecialPending, listDraft, listInvalid, net, netPending, total, profit, qty, invalid, dirty,
   };
 }
