@@ -741,12 +741,11 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * RESERVE_STOCK is not advertised at any stage, but the
-     * {@code reserveStock} endpoint keeps its stage floor (fixtures and old clients still call it):
-     * refused below ORDER_RECEIVED, accepted at it.
+     * RESERVE_STOCK is advertised to the owner and the CEO from ORDER_RECEIVED, and the
+     * {@code reserveStock} endpoint keeps the same stage floor: refused below ORDER_RECEIVED, accepted at it.
      */
     @Test
-    void actionsNeverAdvertiseReserveStock_andTheEndpointKeepsItsFloor() {
+    void reserveStockIsAdvertisedFromTheStageFloor_andTheEndpointKeepsIt() {
         long below = createDealWithOneItem();
         tickets.updateSalesStage(below, DealStage.NEGOTIATION);
         assertThat(actionCodes(below, ownerRep)).doesNotContain("RESERVE_STOCK");
@@ -757,8 +756,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         long above = createDealWithOneItem();
         tickets.updateSalesStage(above, DealStage.ORDER_RECEIVED);
-        assertThat(actionCodes(above, ownerRep)).doesNotContain("RESERVE_STOCK");
-        assertThat(actionCodes(above, ceo)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(above, ownerRep)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(above, ceo)).contains("RESERVE_STOCK");
         assertThat(actionCodes(above, importActor)).doesNotContain("RESERVE_STOCK");
         assertThatCode(() ->
             ticketService.reserveStock(above, declare(onlyItemId(above), "100.00"), ownerRep))

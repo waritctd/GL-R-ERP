@@ -1307,19 +1307,22 @@ class TicketServiceTest {
     }
 
     /**
-     * There is no reserve-from-stock feature, so {@code RESERVE_STOCK} is advertised to nobody
-     * at any stage - not the owning rep, not the CEO, not import. The endpoint and
-     * {@code reserveStock} itself stay (suites use them as a fixture); only the advert goes.
+     * {@code RESERVE_STOCK} is advertised to the owning rep and the CEO from ORDER_RECEIVED while the deal has no
+     * fulfilment status, and to nobody earlier or as import.
      */
     @Test
-    void actions_neverAdvertisesReserveStock_atAnyStage() {
+    void actions_advertisesReserveStock_toOwnerAndCeoFromOrderReceivedOnly() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
-        long id = 41L;
-        for (String stage : List.of(DealStage.NEGOTIATION, DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
+        stubDeal(41L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, DealStage.NEGOTIATION, null);
+        assertThat(actionCodes(41L, salesActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(41L, ceoActor)).doesNotContain("RESERVE_STOCK");
+
+        long id = 42L;
+        for (String stage : List.of(DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
                                     DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING)) {
             stubDeal(id, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
-            assertThat(actionCodes(id, salesActor)).as(stage).doesNotContain("RESERVE_STOCK");
-            assertThat(actionCodes(id, ceoActor)).as(stage).doesNotContain("RESERVE_STOCK");
+            assertThat(actionCodes(id, salesActor)).as(stage).contains("RESERVE_STOCK");
+            assertThat(actionCodes(id, ceoActor)).as(stage).contains("RESERVE_STOCK");
             assertThat(actionCodes(id, importActor)).as(stage).doesNotContain("RESERVE_STOCK");
             id++;
         }
@@ -2320,20 +2323,15 @@ class TicketServiceTest {
         assertThat(withoutItems).doesNotContain("SUBMIT");
     }
 
-    /**
-     * {@code RESERVE_STOCK} is not advertised to the deal owner or the CEO (the "never advertise
-     * a dead action" pairing with reserveStock's own gate; the จองสินค้าจากสต็อก UI is gone),
-     * nor to anyone else. {@code reserveStock} itself keeps its gate -
-     * see StageFactGateIntegrationTest for the endpoint staying callable.
-     */
+    /** {@code RESERVE_STOCK} goes to the deal owner and the CEO only, never to import, account or the sales manager. */
     @Test
-    void actions_neverOffersReserveStock_toAnyRole() {
+    void actions_offersReserveStock_toOwnerAndCeoOnly() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(40L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        assertThat(actionCodes(40L, salesActor)).doesNotContain("RESERVE_STOCK");
-        assertThat(actionCodes(40L, ceoActor)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(40L, salesActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(40L, ceoActor)).contains("RESERVE_STOCK");
         assertThat(actionCodes(40L, importActor)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(40L, accountActor)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(40L, salesManagerActor)).doesNotContain("RESERVE_STOCK");
@@ -2352,7 +2350,7 @@ class TicketServiceTest {
      * Rule 4 — {@link TicketService#waiveDeposit} 409s past that point (see
      * {@code depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner} in
      * {@code DepositPolicyAuthzIntegrationTest}), so advertising it here would offer a button that
-     * dies on click, the same discipline {@link #actions_neverOffersReserveStock_toAnyRole}
+     * dies on click, the same discipline {@link #actions_offersReserveStock_toOwnerAndCeoOnly}
      * documents for RESERVE_STOCK. See canSetDepositPolicy's own Javadoc for why the
      * advertisement and the write gate are deliberately NOT the same predicate.
      * {@code otherSales} is left out — a non-owning sales rep cannot even call {@code actions()} on
