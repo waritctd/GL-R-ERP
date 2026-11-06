@@ -16356,7 +16356,10 @@ export const api = {
           && (user.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus)))
         .sort((a, b) => b.id - a.id)
         .map((q) => forDealQuotationViewer(buildDealQuotationDto(q), user));
-      return delay({ items });
+      // DealQuotationService#orderConfirmedQuotationId: the row the order was confirmed from, only when visible.
+      const confirmedId = mockConfirmedQuotationEvent(ticket) ? ticket.orderConfirmedQuotationId ?? null : null;
+      const orderConfirmedQuotationId = items.some((q) => q.id === confirmedId) ? confirmedId : null;
+      return delay({ items, orderConfirmedQuotationId });
     },
 
     // Approver queue / role-scoped list -- `status` is the only server-side filter the plan

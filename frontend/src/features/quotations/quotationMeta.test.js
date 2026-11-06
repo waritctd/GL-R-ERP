@@ -2065,3 +2065,31 @@ describe('splitQuotationChecklist', () => {
     expect(meta.splitQuotationChecklist([])).toEqual({ blocking: [], submitBlocking: [], warnings: [] });
   });
 });
+
+// Mirrors DealQuotationRenderAdapter#depositLine branch for branch (the printed remark 2).
+describe('depositTermsSummary', () => {
+  it('a 50% deposit with the remainder on delivery', () => {
+    expect(meta.depositTermsSummary({ depositPercent: 50, remainderMode: 'ON_DELIVERY' }))
+      .toBe('มัดจำ 50% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
+  });
+  it('a deposit with the remainder on credit names the days', () => {
+    expect(meta.depositTermsSummary({ depositPercent: 30, remainderMode: 'CREDIT', creditDays: 30 }))
+      .toBe('มัดจำ 30% · ส่วนที่เหลือเครดิต 30 วัน');
+  });
+  it('"ไม่รับมัดจำ" names its full-payment term', () => {
+    expect(meta.depositTermsSummary({ depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY' }))
+      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนเมื่อส่งมอบสินค้า');
+    expect(meta.depositTermsSummary({ depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY' }))
+      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนก่อนส่งมอบสินค้า');
+  });
+  it('a legacy zero-deposit row with no term falls back like the PDF does', () => {
+    expect(meta.depositTermsSummary({ depositPercent: 0, remainderMode: 'CREDIT', creditDays: 15 }))
+      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนเป็นเครดิต 15 วัน');
+    expect(meta.depositTermsSummary({ depositPercent: 0 }))
+      .toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า');
+  });
+  it('100% is full payment up front, and a blank percent is the PDF default 30%', () => {
+    expect(meta.depositTermsSummary({ depositPercent: 100 })).toBe('ชำระเต็มจำนวน 100% เมื่อสั่งซื้อสินค้า');
+    expect(meta.depositTermsSummary({ depositPercent: null })).toBe('มัดจำ 30% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
+  });
+});

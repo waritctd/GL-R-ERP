@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   baseNumberOf, dropLegacyDuplicatedByChain, groupChainQuotations,
-  groupDepositNotices, groupDirectQuotations, groupRemainingInvoices,
+  groupDepositNotices, groupDirectQuotations, groupRemainingInvoices, inForceFirst,
 } from './dealDocumentVersions.js';
 
 describe('dealDocumentVersions', () => {
@@ -106,5 +106,49 @@ describe('dealDocumentVersions', () => {
     expect(groups.map((g) => g.key).sort())
       .toEqual(['direct:QT-2026-0014:OWNER', 'direct:QT-2026-0014:UNKNOWN']);
     expect(groups.find((g) => g.key.endsWith(':UNKNOWN')).versions.map((v) => v.id)).toEqual([2, 1]);
+  });
+
+  // ── the head row is the version in force, not merely the newest (PR-2026-0289) ──────────────
+  // Confirming the order from -3 auto-cancelled the open -4 draft; newest-first put the CANCELLED -4 on top.
+  const DEAL_0289 = [
+    { id: 426, number: 'QT-2026-0290-1', revisionNo: 1, docStatus: 'SUPERSEDED', recipientType: 'OWNER' },
+    { id: 429, number: 'QT-2026-0290-2', revisionNo: 2, docStatus: 'SUPERSEDED', recipientType: 'OWNER' },
+    { id: 430, number: 'QT-2026-0290-3', revisionNo: 3, docStatus: 'APPROVED', recipientType: 'OWNER' },
+    { id: 437, number: 'QT-2026-0290-4', revisionNo: 4, docStatus: 'CANCELLED', recipientType: 'OWNER' },
+  ];
+
+  it('direct: the version the order was confirmed from leads, then the rest newest first', () => {
+    const [group] = groupDirectQuotations(DEAL_0289, { orderConfirmedQuotationId: 430 });
+    expect(group.versions.map((v) => v.id)).toEqual([430, 437, 429, 426]);
+  });
+
+  it('direct: with no confirmation yet, an APPROVED version still outranks a newer CANCELLED one', () => {
+    const [group] = groupDirectQuotations(DEAL_0289);
+    expect(group.versions[0].id).toBe(430);
+  });
+
+  it('direct: an APPROVED version leads a newer open draft revision; the draft comes next', () => {
+    const versions = inForceFirst([
+      { id: 3, revisionNo: 3, docStatus: 'DRAFT' },
+      { id: 2, revisionNo: 2, docStatus: 'APPROVED' },
+      { id: 1, revisionNo: 1, docStatus: 'SUPERSEDED' },
+    ]);
+    expect(versions.map((v) => v.id)).toEqual([2, 3, 1]);
+  });
+
+  it('direct: a group of only history keeps newest first', () => {
+    const versions = inForceFirst([
+      { id: 2, revisionNo: 2, docStatus: 'CANCELLED' },
+      { id: 1, revisionNo: 1, docStatus: 'SUPERSEDED' },
+    ]);
+    expect(versions.map((v) => v.id)).toEqual([2, 1]);
+  });
+
+  it('direct: a confirmed id outside the group changes nothing', () => {
+    const versions = inForceFirst([
+      { id: 5, revisionNo: 2, docStatus: 'PENDING_APPROVAL' },
+      { id: 4, revisionNo: 1, docStatus: 'SUPERSEDED' },
+    ], 999);
+    expect(versions.map((v) => v.id)).toEqual([5, 4]);
   });
 });

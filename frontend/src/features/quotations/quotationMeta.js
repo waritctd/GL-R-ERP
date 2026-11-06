@@ -491,6 +491,38 @@ export function fullPaymentTermLabel(value) {
   return FULL_PAYMENT_TERM_OPTIONS.find((o) => o.code === value)?.label ?? value ?? '-';
 }
 
+// Short forms of FULL_PAYMENT_TERM_OPTIONS for one-line summaries (same three codes, same order).
+const FULL_PAYMENT_TERM_SHORT = {
+  BEFORE_DELIVERY: 'ชำระเต็มจำนวนก่อนส่งมอบสินค้า',
+  ON_DELIVERY: 'ชำระเต็มจำนวนเมื่อส่งมอบสินค้า',
+  ON_OR_BEFORE_DELIVERY: 'ชำระเต็มจำนวนเมื่อส่งมอบสินค้าหรือก่อนส่งมอบสินค้า',
+};
+
+/**
+ * One line answering "is there a deposit, and when is the rest paid?" for a direct quotation, e.g.
+ * "มัดจำ 50% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า" or "ไม่รับมัดจำ · ชำระเต็มจำนวนเมื่อส่งมอบสินค้า".
+ *
+ * Follows DealQuotationRenderAdapter#depositLine branch for branch, so a list row never disagrees
+ * with the printed remark 2: a null percent prints the adapter's default 30%; 100% is full payment
+ * up front; 0% names its full-payment term, falling back to the legacy remainderMode text when the
+ * row predates the term; any other percent names CREDIT days or the before/on-delivery remainder.
+ */
+export function depositTermsSummary({ depositPercent, fullPaymentTerm, remainderMode, creditDays } = {}) {
+  const pct = depositPercent ?? 30;
+  if (pct === 100) return 'ชำระเต็มจำนวน 100% เมื่อสั่งซื้อสินค้า';
+  if (pct === 0) {
+    const term = FULL_PAYMENT_TERM_SHORT[fullPaymentTerm]
+      ?? (remainderMode === 'CREDIT'
+        ? `ชำระเต็มจำนวนเป็นเครดิต ${creditDays ?? 0} วัน`
+        : 'ชำระเต็มจำนวนก่อนส่งมอบสินค้าหรือเมื่อส่งมอบสินค้า');
+    return `ไม่รับมัดจำ · ${term}`;
+  }
+  const remainder = remainderMode === 'CREDIT'
+    ? `ส่วนที่เหลือเครดิต ${creditDays ?? 0} วัน`
+    : 'ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า';
+  return `มัดจำ ${pct}% · ${remainder}`;
+}
+
 export const VALIDITY_DAYS_OPTIONS = [15, 30, 45, 60];
 
 /** กำหนดยืนยันราคา (remark 7) as a day count from the document date, or a specific calendar date;
