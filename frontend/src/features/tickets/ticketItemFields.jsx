@@ -57,6 +57,15 @@ export function requiredQtyField(unitBasis) {
   return (unitBasis || 'PIECE') === 'SQM' ? 'qtySqm' : 'qty';
 }
 
+/**
+ * Whether a ตร.ม. line's saved แผ่น count is a real count worth showing: a tile factor derived it, or
+ * the rep typed more than the new-row default 1. Without a factor, qty 0/1 is a placeholder (deal 331
+ * read "400.00 ตร.ม. / 1 แผ่น"). Display only: the saved qty is untouched.
+ */
+export function hasRealTileCount(item) {
+  return Boolean(item.sqmPerPiece) || Number(item.qty) > 1;
+}
+
 /** Mirrors makeItemSchema's two qty/qtySqm messages — kept together so a basis check picks the right one. */
 export function missingQtyMessage(unitBasis, rowNumber) {
   return requiredQtyField(unitBasis) === 'qtySqm'

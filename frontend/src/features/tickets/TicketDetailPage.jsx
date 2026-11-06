@@ -62,6 +62,7 @@ import { isOwnerOrKeyer } from './dealOwnership.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
+  hasRealTileCount,
   CatalogAutocompleteField,
   ITEM_FIELD_META,
   ItemField,
@@ -1947,8 +1948,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
-                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
-                              {item.qty ? `${item.qty} แผ่น` : '—'}
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty && hasRealTileCount(item) ? 'text-icon-muted' : 'text-text-muted')}>
+                              {item.qty && hasRealTileCount(item) ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
                         </>
@@ -2113,10 +2114,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                       {item.size && <small className="text-text-muted">{item.size}</small>}
                     </span>
                     <span data-label="จำนวน">
-                      {/* ตร.ม. line: the แผ่น count is real only when a tile factor derived it, or the rep typed more than the
-                          new-row default 1 (qty 0/1 with no factor is a placeholder; deal 331 read "400.00 ตร.ม. / 1 แผ่น"). */}
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}{(item.sqmPerPiece || Number(item.qty) > 1) && <small className="block text-text-muted">{item.qty} แผ่น</small>}</>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}{hasRealTileCount(item) && <small className="block text-text-muted">{item.qty} แผ่น</small>}</>
                         : <>{item.qty} แผ่น{item.qtySqm != null && <small className="block text-text-muted">{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>

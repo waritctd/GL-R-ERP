@@ -1677,6 +1677,28 @@ describe('TicketDetailPage', () => {
     // checking item.qty. A SQM-basis row with NO ตร.ม./แผ่น factor (qty is a read-only derived display)
     // must not be blocked on a qty=0 it can't fill, and must send exactly what the rep typed into
     // พื้นที่ (ตร.ม.).
+    // The label also heads the table column, so pick the edit form's read-only box by its muted style.
+    const readOnlyPieceBox = () => screen.getAllByText('จำนวน (แผ่น)')
+      .map((el) => el.nextElementSibling)
+      .find((n) => n?.tagName === 'DIV' && n.className.includes('bg-surface-muted'));
+
+    // The read-only จำนวน (แผ่น) box under พื้นที่ must follow the same rule as the table cell: a saved
+    // placeholder qty 1 is not shown as a tile count (deal 331: "1 แผ่น" beside 400 ตร.ม.).
+    it('SQM-basis row with no factor and the placeholder qty 1: the read-only แผ่น box shows —', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: 1, qtySqm: 400, sqmPerPiece: null });
+      expect(readOnlyPieceBox().textContent).toBe('—');
+    });
+
+    it('SQM-basis row with a tile factor but no count yet: the read-only แผ่น box shows —, never a bare แผ่น', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: '', qtySqm: '', sqmPerPiece: 0.72 });
+      expect(readOnlyPieceBox().textContent).toBe('—');
+    });
+
+    it('SQM-basis row with no factor and a real typed count: the read-only แผ่น box shows it', async () => {
+      await openEditMode({ unitBasis: 'SQM', qty: 1113, qtySqm: 400, sqmPerPiece: null });
+      expect(readOnlyPieceBox().textContent).toBe('1113 แผ่น');
+    });
+
     it('SQM-basis row with no ตร.ม./แผ่น factor: qty 0 is not required — save sends the row as typed', async () => {
       await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: 12, sqmPerPiece: null });
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
