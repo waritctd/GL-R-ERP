@@ -529,7 +529,7 @@ function DocumentGroup({ items }) {
         <div className="ml-1.5 flex flex-col gap-1 border-l border-border-subtle pl-6 mobile:pl-3">
           <button type="button" data-testid="document-older-toggle" aria-expanded={open} aria-controls={listId}
             onClick={() => setOpen((v) => !v)}
-            className={cn('inline-flex items-center gap-1 self-start py-1 text-xs font-bold text-link', TOUCH_TARGET)}>
+            className={cn('inline-flex cursor-pointer items-center gap-1 self-start border-0 bg-transparent p-0 py-1 text-xs font-bold text-link', TOUCH_TARGET)}>
             <span aria-hidden="true" className={cn('inline-flex transition-transform duration-150 ease-out motion-reduce:transition-none', !open && '-rotate-90')}>
               <Icon name="chevronDown" size={12} />
             </span>
