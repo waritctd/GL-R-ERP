@@ -202,6 +202,9 @@ export function QuotationItemRow({
   // onOriginChange still writes the origin's default onto the row so import starts pre-filled.
   // The direct-deal editor never sets this.
   hideLeadTime = false,
+  // Direct quotation only: จากสต็อก, this line ships from Thai stock (stockSource 'IN_THAILAND'). The PCR form
+  // keeps its own checkbox (renderTerms) and a pricing-request-origin quotation takes it from the request.
+  showStockOption = false,
   // A duplicated row has no server id, so the save would be refused as a new row on a
   // PRICING_REQUEST-origin quotation (DealQuotationService#update); the control is hidden instead
   // of left as a dead end. Defaults false, so DEAL_DIRECT is unchanged.
@@ -1145,7 +1148,18 @@ export function QuotationItemRow({
               submit-gated: `errors.leadTimeMinDays` arrives as soon as this row is `touched`
               (QuotationEditorPage.jsx's touchedRowIds, set on load for an existing draft or on first
               edit for a new row), like every other field's error here. */}
-          {hideLeadTime ? null : (
+          {showStockOption ? (
+            <label className="flex items-center gap-2 text-sm font-bold text-text-secondary">
+              <input
+                type="checkbox" disabled={readOnly} checked={item.stockSource === 'IN_THAILAND'}
+                onChange={(e) => patch(e.target.checked
+                  ? { stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null }
+                  : { stockSource: null, ...defaultLeadTimeForOrigin(item.originCountry) })}
+              />
+              จากสต็อก
+            </label>
+          ) : null}
+          {hideLeadTime || (showStockOption && item.stockSource === 'IN_THAILAND') ? null : (
           <FormField label="ระยะเวลานำเข้า (วัน)" htmlFor={`lead-${index}`} error={errors.leadTimeMinDays}>
             <div className="flex items-center gap-1.5">
               <input
@@ -1340,6 +1354,8 @@ function tileInputFromRow(item) {
     leadTimeMinDays: item.leadTimeMinDays ?? null,
     leadTimeMaxDays: item.leadTimeMaxDays ?? null,
     itemNotes: item.itemNotes || null,
+    // Only IN_THAILAND is accepted on a direct line: IN_TRANSIT (a pricing-request row's value) would 400.
+    stockSource: item.stockSource === 'IN_THAILAND' ? 'IN_THAILAND' : null,
   };
 }
 

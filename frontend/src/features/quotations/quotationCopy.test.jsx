@@ -241,10 +241,10 @@ describe('copyFromQuotation — nothing of the source survives (wrong way round)
       .toEqual([[false, null], [false, null], [false, null], [false, null]]);
   });
 
-  it('a stock-line source row copies as an ordinary row: stockSource is not carried (the server stamps it null on a direct copy)', () => {
-    const stockSource = { ...SOURCE, items: SOURCE.items.map((it, i) => (i === 0 ? { ...it, stockSource: 'IN_THAILAND' } : it)) };
-    const { items } = copyFromQuotation(stockSource, NEW_QUOTATION_TERMS);
-    expect(items.map((row) => row.stockSource ?? null)).not.toContain('IN_THAILAND');
+  it('a copy keeps a จากสต็อก row (IN_THAILAND) and drops IN_TRANSIT, which a direct quotation cannot hold', () => {
+    const withStock = (value) => ({ ...SOURCE, items: SOURCE.items.map((it, i) => (i === 0 ? { ...it, stockSource: value } : it)) });
+    expect(copyFromQuotation(withStock('IN_THAILAND'), NEW_QUOTATION_TERMS).items[0].stockSource).toBe('IN_THAILAND');
+    expect(copyFromQuotation(withStock('IN_TRANSIT'), NEW_QUOTATION_TERMS).items[0].stockSource).toBeNull();
   });
 
   // The broad one. Whatever the copied state is made of, the source's identity is in none of it —

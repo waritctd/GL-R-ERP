@@ -382,6 +382,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // The country / lead-time popup retries continue this confirmed create and call the mutation
   // directly.
   const [confirmingCreate, setConfirmingCreate] = useState(false);
+  const [pendingStock, setPendingStock] = useState(null); // { item, qtyFromStock } | null
   function requestCreateIrDrafts() {
     if (!depositReady) {
       showToast?.('error', DEPOSIT_HINT);
@@ -568,6 +569,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onSuccess: () => { showToast?.('success', 'บันทึกน้ำหนักคอมมิชชั่นต่อรายการแล้ว'); setWeightOpen(false); invalidateAfterFulfilmentChange(); },
     onError,
   });
+  const reserveStockMutation = useMutation({
+    mutationFn: ({ itemId, qtyFromStock }) => api.tickets.reserveStock(ticketId, { lines: [{ itemId, qtyFromStock }] }),
+    onSuccess: () => { showToast?.('success', 'บันทึกสินค้าจากสต็อกแล้ว'); invalidateAfterFulfilmentChange(); },
+    onError,
+  });
   const recordDeliveryMutation = useMutation({
     mutationFn: (payload) => api.tickets.recordDelivery(ticketId, payload),
     onSuccess: () => { showToast?.('success', 'บันทึกการส่งสินค้าแล้ว'); setDeliveryOpen(false); invalidateAfterFulfilmentChange(); },
@@ -603,6 +609,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     // role set would discard the server's answer, leaving the capability "live but invisible" to
     // the owning rep. hasAction() already carries the ownership rule.
     recordDelivery:     hasAction('RECORD_PARTIAL_DELIVERY'),
+    // Same ownership-aware server answer as recordDelivery (TicketService#canDeclareStockCoverage).
+    reserveStock:       hasAction('RESERVE_STOCK'),
     completeDelivery:   hasAction('COMPLETE_DELIVERY'),
     // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock
     // above, this DOES keep a local role check alongside hasAction(), matching every other entry
@@ -992,6 +1000,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                       จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
                     </span>
                   </div>
+                  {can.reserveStock ? (
+                    <label className="flex shrink-0 items-center gap-1.5 font-bold text-text-secondary">
+                      <input
+                        type="checkbox" data-testid={`deal-fulfilment-reserve-stock-${item.id}`}
+                        checked={Number(item.qtyFromStock || 0) >= ordered}
+                        disabled={reserveStockMutation.isPending}
+                        onChange={(e) => setPendingStock({ item, qtyFromStock: e.target.checked ? ordered : 0 })}
+                      />
+                      จากสต็อก
+                    </label>
+                  ) : null}
                   <strong className="shrink-0">{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
                 </div>
               );
@@ -1123,6 +1142,23 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           </div>
         </Modal>
       ) : null}
+
+      <ConfirmDialog
+        open={pendingStock != null}
+        title={pendingStock?.qtyFromStock ? 'ยืนยันสินค้าจากสต็อก' : 'ยกเลิกสินค้าจากสต็อก'}
+        message={pendingStock?.qtyFromStock
+          ? `${pendingStock.item.brand} ${pendingStock.item.model ?? ''} จำนวน ${Number(pendingStock.qtyFromStock).toLocaleString('en-US')} จะถูกบันทึกว่ามาจากสต็อก เมื่อทุกรายการมาจากสต็อก ดีลจะข้ามขั้นสั่งนำเข้า (IR) และย้ายไปขั้นนัดส่งสินค้าทันที ตัวเลขนี้ใช้คำนวณค่าคอมมิชชั่นส่วนสินค้าจากสต็อก และผู้จัดการฝ่ายขายจะได้รับแจ้งเพื่อตรวจทาน`
+          : `${pendingStock?.item.brand} ${pendingStock?.item.model ?? ''} จะกลับไปอยู่ในรายการนำเข้า`}
+        confirmLabel={pendingStock?.qtyFromStock ? 'ยืนยันจากสต็อก' : 'กลับไปสั่งนำเข้า'}
+        busy={reserveStockMutation.isPending}
+        // Close first: a second click on the open dialog would send twice.
+        onConfirm={() => {
+          const { item, qtyFromStock } = pendingStock;
+          setPendingStock(null);
+          reserveStockMutation.mutate({ itemId: item.id, qtyFromStock });
+        }}
+        onCancel={() => setPendingStock(null)}
+      />
 
       <ConfirmDialog
         open={confirmingCreate}
