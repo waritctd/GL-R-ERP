@@ -73,14 +73,21 @@ become parties, and the three free-text names on the deal tracking panel (V83 `d
    document, `QuotationNumbering`).
 2. **Pipeline counts a deal once.** Pipeline value and forecast use the deal's headline amount:
    the highest live quotation, or the one the rep flags as most likely (`deal_party.is_headline`).
-3. **Award is explicit.** The rep marks one party `AWARDED`. The service copies that party's
-   customer and contact into the ticket's `customer_id` / `contact_id` (the bill-to every
-   downstream step already reads: deposit notice, invoices, commission) and advances the deal to
-   `ORDER_RECEIVED`, exactly what `promoteToDeal` / `confirmOrder` do today.
-4. **Other parties are prompted, not forced.** The award dialog lists every other BUYER party
-   with a default of `NOT_AWARDED` and lets the rep keep one `QUOTED` (still waiting) or mark it
-   `AWARDED_SPLIT`, which forks a child ticket for that contractor's scope. Pre-award: one
-   opportunity per project. Post-award: one contract per paying customer.
+3. **The rep records the bid outcome once, choosing one or more winners.** "บันทึกผลประมูล" on
+   the deal lists every BUYER party with a checkbox. At least one must be ticked. One ticked
+   winner is the common case; several are allowed because a project's scope is sometimes split
+   between contractors (seen in production).
+4. **One deal per paying customer after the outcome.** The first (or rep-chosen) winner is the
+   *primary*: its customer and contact become the ticket's `customer_id` / `contact_id` (the
+   bill-to every downstream step reads: deposit notice, invoices, commission), its party becomes
+   `AWARDED`, and the deal advances to `ORDER_RECEIVED` through the existing
+   `promoteToDeal` / `confirmOrder` path. Every additional winner becomes `AWARDED_SPLIT`: the
+   service forks a child ticket (`DL-<year>-<seq>-A`, `-B`, …) on the same project with that
+   party as its sole `AWARDED` party, moves that party's quotation chain to the child, and
+   advances the child to `ORDER_RECEIVED` the same way. Parties not ticked become `NOT_AWARDED`
+   with the reason the rep picked, or stay `QUOTED` if the rep chose "ยังรอผล" (the primary deal
+   then still accepts a later outcome for them). Pre-outcome: one opportunity per project.
+   Post-outcome: one contract per paying customer, all under one project, counted as one win.
 5. **Outcomes live at the right level.** "Lost to another contractor" is a party outcome
    (`deal_party.status = NOT_AWARDED`, with its own reason). "Project cancelled / on hold" stays a
    deal outcome (`sales.ticket.lost_reason`). Win rate is per deal; bid conversion is per party.
@@ -199,6 +206,27 @@ HAVING COUNT(DISTINCT customer_id) > 1
  ORDER BY bidders DESC;
 ```
 
+### API (new, `dealparty` package)
+
+| Method | Path | Body / result |
+|---|---|---|
+| GET | `/api/deals/{ticketId}/parties` | parties with role, status, customer, contact, latest quotation number and amount, `isHeadline` |
+| POST | `/api/deals/{ticketId}/parties` | `{ customerId, role, contactId? }` → the party; 409 if that customer already holds that role |
+| PATCH | `/api/deals/{ticketId}/parties/{partyId}` | `{ status?, contactId?, isHeadline? }` for pre-outcome edits (NEGOTIATING, WITHDRAWN, headline) |
+| POST | `/api/deals/{ticketId}/bid-outcome` | `{ awardedPartyIds: [≥1], primaryPartyId, othersOutcome: 'NOT_AWARDED' \| 'KEEP_WAITING', notAwardedReason? }` → `{ primaryTicketId, childTicketIds[] }` |
+| GET | `/api/deals/open-for-project?name=&repId=` | the rep's open pre-outcome deal(s) whose project `name_key` matches, for the editor prompt |
+
+`bid-outcome` is a single transaction: parties updated, bill-to copied, child tickets forked,
+quotations repointed, one `BID_OUTCOME_RECORDED` ticket event on the primary and a `CREATED`
+event citing the parent on each child. It refuses (409) when the deal already has an `AWARDED`
+party; a correction goes through the existing `REOPENED` path, which resets parties to `QUOTED`
+and leaves forked children to be cancelled by hand (they may already carry documents).
+
+`DealQuotationService#create` gains an optional `partyId`; when present the quotation snapshots
+that party's customer and contact instead of the ticket's, so sibling bids on one ticket print
+the right company. A ticket with more than one BUYER party and no `AWARDED` party is shown under
+its project name, not its placeholder customer.
+
 ## Delivery: four slices, each shippable alone
 
 1. **Customer and project hygiene.** Customer merge tool; tax ID unique where present; project
@@ -209,7 +237,7 @@ HAVING COUNT(DISTINCT customer_id) > 1
 3. **Change the entry point.** In the quotation editor and the deal form, picking a project that
    already has an open deal for this rep attaches to it and adds a party instead of minting a
    new `quotation_only` ticket. This is the single change that stops the problem growing.
-   `promoteToDeal` becomes `awardParty`. The award dialog ships here.
+   `promoteToDeal` is called by `bid-outcome`. The outcome dialog ships here.
 4. **Reconcile the backlog.** A merge action for the 23 existing groups: a `quotation_only`
    ticket carries nothing but its quotation, so merging moves the quotation and party onto the
    surviving deal and cancels the empty container (`ticket_event` `CANCELLED` with a
@@ -231,7 +259,7 @@ is unchanged.
 ## Calls made here (Ploy to confirm or strike)
 
 1. Bid-level loss lives on the party, not as a new `sales.ticket.lost_reason`.
-2. Split awards fork a child ticket rather than allowing two bill-tos on one ticket.
+2. Several winners are chosen in one outcome dialog; each extra winner forks a child ticket rather than allowing two bill-tos on one ticket.
 3. One deal owner; a second rep is a collaborator through their party.
 4. The three free-text tracking names are replaced by parties, not kept beside them.
 5. Backfill maps `UNSPECIFIED` recipient to `BUYER`.
