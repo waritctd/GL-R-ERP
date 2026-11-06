@@ -1948,8 +1948,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
-                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty && hasRealTileCount(item) ? 'text-icon-muted' : 'text-text-muted')}>
-                              {item.qty && hasRealTileCount(item) ? `${item.qty} แผ่น` : '—'}
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', hasRealTileCount(item) ? 'text-icon-muted' : 'text-text-muted')}>
+                              {hasRealTileCount(item) ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
                         </>

@@ -199,6 +199,12 @@ describe('hasRealTileCount', () => {
   it('is true whenever a tile factor derived it, even 1', () => {
     expect(hasRealTileCount({ qty: 1, sqmPerPiece: 0.72 })).toBe(true);
   });
+
+  it('is false for an empty or zero count even with a tile factor', () => {
+    expect(hasRealTileCount({ qty: 0, sqmPerPiece: 0.72 })).toBe(false);
+    expect(hasRealTileCount({ qty: '0', sqmPerPiece: 0.72 })).toBe(false);
+    expect(hasRealTileCount({ qty: '', sqmPerPiece: 0.72 })).toBe(false);
+  });
 });
 
 describe('applyDescriptiveFieldEdit', () => {
