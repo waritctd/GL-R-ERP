@@ -669,6 +669,17 @@ public class DealQuotationService {
         return visible;
     }
 
+    /**
+     * Which of {@code visible} (one viewer's {@link #listForTicket} result) the deal's order was confirmed from, or
+     * {@code null}. Read from the deal's order-confirmation event, the same fact the payable-quotation rule uses. Only an
+     * id already in {@code visible} is returned, so this never names a quotation the viewer cannot see.
+     */
+    public Long orderConfirmedQuotationId(long ticketId, List<DealQuotationDto> visible) {
+        return tickets.findOrderConfirmedQuotationId(ticketId)
+            .filter(id -> visible.stream().anyMatch(row -> row.id() == id))
+            .orElse(null);
+    }
+
     /** The approver queue: sales_manager/ceo see everything; sales, import, account and any
      * {@code canCreateQuotation}-granted employee see only quotations on deals THEY created (the grant reaches this
      * endpoint but does not widen the LIST scope). */

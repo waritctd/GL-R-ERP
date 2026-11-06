@@ -2366,6 +2366,22 @@ public class TicketRepository {
             """, Map.of("id", ticketId));
     }
 
+    /**
+     * The quotation whose confirm-order made this deal an order: the one the deal's
+     * DEAL_PROMOTED_FROM_QUOTATION event names (the same per-quotation fact {@link #ANSWERED_QUOTATION_SQL} reads).
+     * Empty when the order was never confirmed from a direct quotation.
+     */
+    public Optional<Long> findOrderConfirmedQuotationId(long ticketId) {
+        return jdbc.query("""
+            SELECT related_document_id FROM sales.ticket_event
+             WHERE ticket_id = :ticketId AND kind = :kind
+               AND related_document_type = 'QUOTATION' AND related_document_id IS NOT NULL
+             ORDER BY created_at DESC, event_id DESC
+             LIMIT 1
+            """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION),
+            (rs, n) -> rs.getLong("related_document_id")).stream().findFirst();
+    }
+
     /** The DEAL_PROMOTED_FROM_QUOTATION event names the quotation whose confirm-order made the deal an order. */
     public boolean isOrderConfirmedFromQuotation(long ticketId, long quotationId) {
         Boolean value = jdbc.queryForObject("""

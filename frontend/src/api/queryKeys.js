@@ -177,6 +177,9 @@ export const queryKeys = {
   // Direct deal quotation. A sibling key space to
   // pricingRequests'/customerQuotations' above, never sharing an entry with them.
   dealQuotationsByTicket: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? ''],
+  // The same list WITH `orderConfirmedQuotationId` (DealDocumentRegister): the full response, kept apart from the
+  // items-only entry above so its four readers keep their array. A child of that key, so invalidating it refreshes both.
+  dealQuotationsByTicketWithConfirmed: (ticketId) => ['dealQuotations', 'byTicket', ticketId ?? '', 'withConfirmed'],
   // `needsRework` is part of the key, not just `status`: the "แก้" tab is a DIFFERENT server-side
   // filter at the same empty `status`, so keying on status alone would serve ทั้งหมด's cached
   // rows to แก้ and vice versa.

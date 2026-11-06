@@ -317,6 +317,22 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(eventCount(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isEqualTo(1);
     }
 
+    /** The deal page's document register leads its group with the row the order was confirmed from (PR-2026-0289). */
+    @Test
+    void orderConfirmedQuotationId_namesTheConfirmedRow_onlyAfterConfirmation_andOnlyWhenVisible() {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        List<DealQuotationDto> before = quotationService.listForTicket(deal, salesActor);
+        assertThat(quotationService.orderConfirmedQuotationId(deal, before)).as("not confirmed yet").isNull();
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        List<DealQuotationDto> after = quotationService.listForTicket(deal, salesActor);
+        assertThat(quotationService.orderConfirmedQuotationId(deal, after)).isEqualTo(approved.id());
+        assertThat(quotationService.orderConfirmedQuotationId(deal, List.of()))
+            .as("never names a row the viewer was not shown").isNull();
+    }
+
     @Test
     void salesManagerPromotesARepsQuotation_confirmCustomerOwnerGateDoesNotBlockIt() {
         long ghost = quotationOnlyTicket(salesActor);
