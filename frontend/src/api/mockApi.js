@@ -432,6 +432,8 @@ db.specialMoneyRequests = db.specialMoneyRequests || [];
 // Evidence uploads live only for the life of the mock session -- there is no file store here.
 db.specialMoneyAttachments = db.specialMoneyAttachments || [];
 let sessionUser = null;
+// Mock of the read-only "view as employee" state (ViewAsController): the real actor while viewing.
+let mockViewAsActor = null;
 // Self-service forgot-password (ลืมรหัสผ่าน) — token -> { userId, expiresAt }. In-memory only, for
 // the life of the mock session; see auth.forgotPassword/resetPassword below for what this does
 // and does not mirror from the real backend.
@@ -2376,6 +2378,8 @@ function authResponse(user) {
     admin: Boolean(user?.admin),
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
+    canViewAs: false,
+    viewAs: mockViewAsActor ? { actorId: mockViewAsActor.id, actorName: mockViewAsActor.name } : null,
   };
 }
 
@@ -7990,6 +7994,7 @@ export const api = {
       if (!requestedRole && payload?.password && payload.password !== user.password) fail('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 401);
 
       sessionUser = user;
+      mockViewAsActor = null;
 
       // Fire-and-forget: also create a real backend session so document downloads
       // (quotation XLS/PDF, deposit notice, remaining invoice) return real files.
@@ -8007,6 +8012,7 @@ export const api = {
     },
     async logout() {
       sessionUser = null;
+      mockViewAsActor = null;
       return delay({ ok: true });
     },
     async me() {
@@ -8078,6 +8084,29 @@ export const api = {
   // populated while proving nothing about the real query, the real ORDER BY, or the
   // real admin gate. CLAUDE.md's "fixture supplies what production lacks" shape.
   // The gate itself is authoritative only in the Java service; see ActivityLogAuthzIntegrationTest.
+  viewAs: {
+    async candidates() {
+      const me = requireSession();
+      return delay({
+        candidates: db.users.filter((u) => u.active && u.id !== me.id).map((u) => ({
+          employeeId: u.employeeId ?? u.id, name: u.name, employeeCode: String(u.employeeId ?? u.id), role: u.role, divisionName: null,
+        })),
+      });
+    },
+    async start(employeeId) {
+      const actor = mockViewAsActor ?? requireSession();
+      const target = db.users.find((u) => (u.employeeId ?? u.id) === employeeId && u.active);
+      if (!target) fail('ไม่พบพนักงานที่เลือก', 404);
+      mockViewAsActor = actor;
+      sessionUser = target;
+      return delay(authResponse(target));
+    },
+    async stop() {
+      if (mockViewAsActor) sessionUser = mockViewAsActor;
+      mockViewAsActor = null;
+      return delay(authResponse(requireSession()));
+    },
+  },
   activityLog: {
     async list(params = {}) {
       void params;

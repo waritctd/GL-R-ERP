@@ -9,6 +9,11 @@ export const API_ROUTES = {
     forgotPassword: '/api/auth/forgot-password',
     resetPassword: '/api/auth/reset-password',
   },
+  // Read-only "view as employee" (owner only). Mirrors ViewAsController.
+  viewAs: {
+    candidates: '/api/view-as/candidates',
+    root: '/api/view-as',
+  },
   // Admin-only. Mirrors ActivityLogController.
   activityLog: {
     list: '/api/activity-log',

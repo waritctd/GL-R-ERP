@@ -24,6 +24,12 @@ export const api = {
     // is missing/expired/already used, or when the new password equals the employee's own code.
     resetPassword: (payload) => apiRequest(API_ROUTES.auth.resetPassword, { method: 'POST', body: payload }),
   },
+  // Read-only "view as employee". Mirrors ViewAsController; the owner gate is server-side.
+  viewAs: {
+    candidates: () => apiRequest(API_ROUTES.viewAs.candidates),
+    start: (employeeId) => apiRequest(API_ROUTES.viewAs.root, { method: 'POST', body: { employeeId } }),
+    stop: () => apiRequest(API_ROUTES.viewAs.root, { method: 'DELETE' }),
+  },
   // Admin-only cross-employee activity. Mirrors ActivityLogController; the gate is
   // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request —
   // a client that fakes `admin` on the session gains nothing.

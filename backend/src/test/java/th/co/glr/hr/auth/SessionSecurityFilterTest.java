@@ -172,6 +172,20 @@ class SessionSecurityFilterTest {
         verify(accounts).current(7);
     }
 
+    @Test
+    void viewingAs_authenticatesAsTheRefreshedTarget_withTheTargetsRole() throws Exception {
+        CountingSession session = signedIn(principal(7, "employee", false));
+        SessionContext.startViewAs(session, principal(9, "employee", false));
+        when(accounts.current(7)).thenReturn(Optional.of(principal(7, "employee", false)));
+        when(accounts.current(9)).thenReturn(Optional.of(principal(9, "hr", true)));
+
+        Authentication seen = run(session);
+
+        assertThat(((UserPrincipal) seen.getPrincipal()).id()).isEqualTo(9L);
+        assertThat(((UserPrincipal) seen.getPrincipal()).mustChangePassword()).isFalse();
+        assertThat(seen.getAuthorities()).extracting(Object::toString).containsExactly("ROLE_HR");
+    }
+
     // ── harness ──────────────────────────────────────────────────────────────────────────────
 
     /** Runs the filter and returns the authentication the REST of the chain saw. */

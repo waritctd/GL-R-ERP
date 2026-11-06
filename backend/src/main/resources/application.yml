@@ -254,3 +254,10 @@ logging:
     th.co.glr.hr.audit: INFO
   pattern:
     level: "%5p [%X{correlationId:-}]"   # ':-' -> empty when absent (e.g. startup logs)
+
+# Read-only "view as employee" (th.co.glr.hr.auth.ViewAsService). The employee_code of the ONE
+# account allowed to use it, matched live against hr.employee. Blank (default) = feature off.
+# Set per environment; never put a real code in source.
+glr:
+  view-as:
+    owner-employee-code: ${GLR_VIEW_AS_OWNER_EMPLOYEE_CODE:}

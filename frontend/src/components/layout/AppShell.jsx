@@ -12,6 +12,8 @@ import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
 import { Sidebar } from './Sidebar.jsx';
 import { UserMenu } from './UserMenu.jsx';
+import { ViewAsBanner } from './ViewAsBanner.jsx';
+import { ViewAsPickerModal } from './ViewAsPickerModal.jsx';
 
 // Tailwind port of `.content-scroll`: the gutters are CSS custom properties (not plain
 // utilities) because DepositNoticePage.jsx measures scrollWidth against this same padding,
@@ -57,6 +59,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [activeTopbarPopover, setActiveTopbarPopover] = useState(null);
   const [isContentScrolled, setIsContentScrolled] = useState(false);
+  const [viewAsPickerOpen, setViewAsPickerOpen] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
   // One ref for one element: <main> IS the scroll container (it carries
@@ -365,6 +368,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           stays a `banner`; the flex-none header + flex-1 overflow-auto scroller keeps the topbar
           pinned at every breakpoint. */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {user.viewAs ? <ViewAsBanner user={user} /> : null}
         <header
           className={cn(
             // `topbar`/`topbar-title` carry no CSS of their own; kept as selector hooks.
@@ -413,6 +417,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               canViewProfile={!!user.employeeId}
               onNavigate={(link) => navigate(link)}
               onLogout={onLogout}
+              onViewAs={user.canViewAs && !user.viewAs ? () => setViewAsPickerOpen(true) : undefined}
             />
           </div>
         </header>
@@ -435,6 +440,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
           <ErrorBoundary key={location.pathname}><Suspense fallback={<RouteFallback />}><Outlet /></Suspense></ErrorBoundary>
         </main>
       </div>
+      {viewAsPickerOpen ? <ViewAsPickerModal onClose={() => setViewAsPickerOpen(false)} /> : null}
     </div>
   );
 }

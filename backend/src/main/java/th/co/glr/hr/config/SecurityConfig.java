@@ -20,7 +20,8 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http,
                                             SessionSecurityFilter sessionSecurityFilter,
-                                            MustChangePasswordFilter mustChangePasswordFilter) throws Exception {
+                                            MustChangePasswordFilter mustChangePasswordFilter,
+                                            th.co.glr.hr.auth.ViewAsReadOnlyFilter viewAsReadOnlyFilter) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .httpBasic(AbstractHttpConfigurer::disable)
@@ -53,7 +54,8 @@ public class SecurityConfig {
             // Must sit AFTER sessionSecurityFilter so the principal is already resolved, and
             // inside this chain (not the plain servlet chain) so StrictHttpFirewall has already
             // normalised the path its allowlist matches on. See MustChangePasswordFilter.
-            .addFilterAfter(mustChangePasswordFilter, SessionSecurityFilter.class);
+            .addFilterAfter(mustChangePasswordFilter, SessionSecurityFilter.class)
+            .addFilterAfter(viewAsReadOnlyFilter, MustChangePasswordFilter.class);
         return http.build();
     }
 }

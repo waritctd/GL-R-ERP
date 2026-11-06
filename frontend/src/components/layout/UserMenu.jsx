@@ -13,6 +13,7 @@ export function UserMenu({
   canViewProfile,
   onNavigate,
   onLogout,
+  onViewAs,
   open: controlledOpen,
   onOpenChange,
 }) {
@@ -116,8 +117,21 @@ export function UserMenu({
 
           <div className="border-t border-border" />
 
+          {onViewAs && (
+            <button
+              ref={(node) => { itemRefs.current[1] = node; }}
+              type="button"
+              role="menuitem"
+              className={itemClass}
+              onClick={() => select(onViewAs)}
+            >
+              <Icon name="users" size={17} />
+              ดูในมุมมองพนักงาน
+            </button>
+          )}
+
           <button
-            ref={(node) => { itemRefs.current[1] = node; }}
+            ref={(node) => { itemRefs.current[2] = node; }}
             type="button"
             role="menuitem"
             className={itemClass}

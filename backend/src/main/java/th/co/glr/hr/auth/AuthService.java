@@ -62,7 +62,7 @@ public class AuthService {
         SessionContext.signIn(session, principal);
         recordLogin(principal);
         return new AuthResponse(principal, employees.isAdmin(principal.id()), employees.canCreateQuotation(principal.id()),
-            employees.canIssueBillingNote(principal.id()));
+            employees.canIssueBillingNote(principal.id()), false, null);
     }
 
     /**
@@ -103,12 +103,16 @@ public class AuthService {
     }
 
     public AuthResponse me(HttpSession session) {
-        Object value = session.getAttribute(SessionContext.SESSION_USER_KEY);
+        // The EFFECTIVE user: while the owner is viewing as someone this is the target, with the
+        // target's own flags, so the SPA renders exactly what that employee would see.
+        Object value = session.getAttribute(SessionContext.VIEW_AS_USER_KEY) != null
+            ? session.getAttribute(SessionContext.VIEW_AS_USER_KEY)
+            : session.getAttribute(SessionContext.SESSION_USER_KEY);
         if (value instanceof UserPrincipal user) {
             // Re-read per call rather than trusting the session, so granting or revoking admin
             // shows up on the next page load instead of at the holder's next login.
             return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
-                employees.canIssueBillingNote(user.id()));
+                employees.canIssueBillingNote(user.id()), false, null);
         }
         throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
     }
@@ -138,10 +142,20 @@ public class AuthService {
         // must_change_password flipping to false, which fires once per person and never again.
         recordAuthEvent(refreshed, "CHANGE_PASSWORD");
         return new AuthResponse(refreshed, employees.isAdmin(refreshed.id()), employees.canCreateQuotation(refreshed.id()),
-            employees.canIssueBillingNote(refreshed.id()));
+            employees.canIssueBillingNote(refreshed.id()), false, null);
     }
 
     public void logout(HttpSession session) {
+        if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) instanceof UserPrincipal target
+            && session.getAttribute(SessionContext.SESSION_USER_KEY) instanceof UserPrincipal real) {
+            try {
+                auditService.record(real, "VIEW_AS_STOP", "employee", target.id(), null,
+                    Map.of("targetEmployeeId", target.id(), "targetName", String.valueOf(target.name()),
+                        "targetRole", String.valueOf(target.role())));
+            } catch (RuntimeException e) {
+                log.warn("Could not record VIEW_AS_STOP on logout for employee {}", real.id(), e);
+            }
+        }
         session.invalidate();
     }
 
