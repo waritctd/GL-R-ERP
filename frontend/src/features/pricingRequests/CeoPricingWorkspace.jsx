@@ -72,14 +72,17 @@ function Tags({ row }) {
       {row.hasPriceOverride ? <StatusBadge tone="info">ปรับเอง</StatusBadge> : null}
       {row.saving ? <StatusBadge tone="info">กำลังบันทึก…</StatusBadge> : null}
       {row.dirty && !row.saving ? (
-        <StatusBadge tone="warning">{row.autoSpecialPending ? 'ใช้ราคาตามสูตร — ยังไม่บันทึก' : 'ยังไม่บันทึก'}</StatusBadge>
+        <StatusBadge tone="warning">
+          {row.margin?.savedPct != null ? `กำไร ${row.margin.value}% — ยังไม่บันทึก`
+            : row.autoSpecialPending ? 'ใช้ราคาตามสูตร — ยังไม่บันทึก' : 'ยังไม่บันทึก'}
+        </StatusBadge>
       ) : null}
       {!row.blocker && !row.dirty && row.item.netUnitPrice != null ? <StatusBadge tone="success">มีราคาแล้ว</StatusBadge> : null}
     </div>
   );
 }
 
-function Num({ row, field, label, testid, value, disabled, suffix, card, max }) {
+function Num({ row, field, label, testid, value, disabled, suffix, card, max, derived }) {
   return (
     <span className={cn('inline-flex items-center gap-1', card && 'w-full')}>
       <input
@@ -88,7 +91,7 @@ function Num({ row, field, label, testid, value, disabled, suffix, card, max }) 
         min={field === 'marginPct' ? undefined : '0'}
         max={max}
         inputMode="decimal"
-        className={card ? CARD_INPUT : cn(INPUT, suffix === '%' ? 'w-20' : 'w-28')}
+        className={cn(card ? CARD_INPUT : cn(INPUT, suffix === '%' ? 'w-20' : 'w-28'), derived && 'bg-surface-subtle')}
         aria-label={`${label} ${row.name}`}
         disabled={disabled}
         value={value}
@@ -111,6 +114,7 @@ function priceFields(row, model, card) {
   const margin = row.margin.show
     ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
       {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
+      {row.margin.savedPct != null ? <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-margin-was-${id}`}>{`เดิม ${row.margin.savedPct}%`}</span> : null}
       {row.margin.looksLikeFraction ? (
         <span className="text-2xs text-warning-dark">
           {`= ${row.margin.value}% — ถ้าตั้งใจ ${Number((Number(row.margin.value) * 100).toFixed(6))}% ให้กรอก ${Number((Number(row.margin.value) * 100).toFixed(6))}`}
@@ -153,7 +157,8 @@ function priceFields(row, model, card) {
       : <span className="text-text-muted">–</span>;
     const special = (
       <div className="grid gap-1">
-        {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} />)}
+        {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} derived={row.specialFormulaNote != null} />)}
+        {row.specialFormulaNote ? <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-special-formula-${id}`}>{row.specialFormulaNote}</span> : null}
         <span className="text-2xs text-text-muted">
           {row.item.sqmPerPiece != null ? `รวม VAT · ${row.piecesPerSqm} แผ่น/ตร.ม.` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
         </span>
@@ -167,9 +172,19 @@ function priceFields(row, model, card) {
   return [];
 }
 
+// SPECIAL_SQM is a three-step flow (owner 2026-11-06): ① กำไร % → ② ราคาพิเศษ → ③ กำไร.
+const STEP_OF_HEADER = { 'กำไร %': 1, 'ราคาพิเศษ/ตร.ม.': 2, 'กำไร': 3 };
+function StepNo({ n, final }) {
+  return (
+    <span aria-hidden="true" className={cn('mr-1 inline-grid size-4 place-items-center rounded-full align-[1px] text-2xs font-bold text-white', final ? 'bg-success' : 'bg-info-dot')}>
+      {n}
+    </span>
+  );
+}
+
 function modeHeaders(priceMode) {
   if (priceMode === 'NET') return ['กำไร %', 'ราคาตั้ง/แผ่น', 'ส่วนลด'];
-  if (priceMode === 'SPECIAL_SQM') return ['กำไร %', 'ราคาตั้ง (สูตร)', 'ราคาพิเศษ'];
+  if (priceMode === 'SPECIAL_SQM') return ['กำไร %', 'ราคาตั้ง (สูตร)', 'ราคาพิเศษ/ตร.ม.'];
   if (priceMode === 'DIRECT_NET') return ['ราคาสุทธิ/แผ่น'];
   return [];
 }
@@ -468,7 +483,22 @@ export function CeoPricingWorkspace({ model }) {
               </Button>
             ))}
           </div>
-          <span className="text-xs text-text-muted">{hint}</span>
+          {priceMode !== 'SPECIAL_SQM' ? <span className="text-xs text-text-muted">{hint}</span> : null}
+          {priceMode === 'SPECIAL_SQM' ? (
+            <div className="grid w-full gap-2 rounded-md border border-info-border bg-info-bg-alt p-3 text-sm">
+              <span>{hint}</span>
+              <ol aria-label="ขั้นตอนกรอกราคา" data-testid="pcr-ceo-special-steps" className="m-0 flex list-none flex-wrap items-center gap-1.5 p-0 text-xs">
+                {['กำไร %', 'ราคาพิเศษ/ตร.ม. คำนวณให้', 'ราคาสุทธิ/แผ่น · รวม · กำไร', 'บันทึกราคา'].map((step, i, all) => (
+                  <li key={step} className="flex items-center gap-1.5">
+                    <span className="rounded border border-border-subtle bg-surface px-2 py-0.5">
+                      {i < 3 ? <StepNo n={i + 1} final={i === 2} /> : null}{step}
+                    </span>
+                    {i < all.length - 1 ? <span aria-hidden="true" className="text-text-muted">→</span> : null}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
         </div>
 
         <div data-testid="pcr-ceo-table-wrap" className="mobile:hidden">
@@ -476,7 +506,9 @@ export function CeoPricingWorkspace({ model }) {
             <thead>
               <tr className="border-b border-border-subtle bg-surface-subtle text-left text-xs text-text-muted">
                 {['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', ...hc, 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร'].map((h, i) => (
-                  <th key={`${h}-${i}`} scope="col" className="px-2 py-2 font-bold">{h}</th>
+                  <th key={`${h}-${i}`} scope="col" className="px-2 py-2 font-bold">
+                    {priceMode === 'SPECIAL_SQM' && STEP_OF_HEADER[h] ? <StepNo n={STEP_OF_HEADER[h]} final={h === 'กำไร'} /> : null}{h}
+                  </th>
                 ))}
                 <th scope="col" className="px-2 py-2"><span className="sr-only">รายละเอียด</span></th>
               </tr>

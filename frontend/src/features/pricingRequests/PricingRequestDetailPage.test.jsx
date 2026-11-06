@@ -2091,6 +2091,16 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         // cost 60/แผ่น at 0.36 ตร.ม. = 166.67/ตร.ม.; × 1.30 × 1.07 = 231.83; net = 231.83 / 1.07 / 2.78 = 77.94
         fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '30' } });
         await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('231.83'));
+        expect(ceoRow(8001).getByTestId('pcr-ceo-special-formula-8001').textContent).toBe('= 166.67 × 1.30 × 1.07');
+        expect(within(ceoPricingPanel()).getByTestId('pcr-ceo-special-steps').textContent).toContain('กำไร %');
+        // a hand-typed ราคาพิเศษ is not labelled as the formula's
+        fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '240' } });
+        expect(ceoRow(8001).queryByTestId('pcr-ceo-special-formula-8001')).toBeNull();
+        // a new กำไร % re-derives it again (166.67 × 1.32 × 1.07 = 235.40), then back to 30
+        fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '32' } });
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('235.4'));
+        fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '30' } });
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('231.83'));
         expect(ceoRow(8001).getByTestId('pcr-ceo-net-8001').textContent).toContain('77.94');
         // (77.94 − 60) × 20 แผ่น = 358.80, 29.9% of cost
         expect(ceoRow(8001).getByTestId('pcr-ceo-profit-8001').textContent).toMatch(/฿358\.80.*29\.9%/);
@@ -6389,7 +6399,8 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
 
     it.each([
       ['NET', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', 'กำไร %', 'ราคาตั้ง/แผ่น', 'ส่วนลด', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร', 'รายละเอียด']],
-      ['SPECIAL_SQM', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', 'กำไร %', 'ราคาตั้ง (สูตร)', 'ราคาพิเศษ', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร', 'รายละเอียด']],
+      // SPECIAL_SQM numbers its three steps (① กำไร % → ② ราคาพิเศษ → ③ กำไร) in the header
+      ['SPECIAL_SQM', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', '1กำไร %', 'ราคาตั้ง (สูตร)', '2ราคาพิเศษ/ตร.ม.', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', '3กำไร', 'รายละเอียด']],
       ['DIRECT_NET', ['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', 'ราคาสุทธิ/แผ่น', 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร', 'รายละเอียด']],
     ])('%s: the table columns depend on the mode (always-columns + mode columns), one row per item', async (priceMode, headers) => {
       await renderCeoNewForm({ priceMode, items: [nfItem({ netUnitPrice: 100, listUnitPrice: 100, directNetPrice: 100 })] });
@@ -6952,10 +6963,13 @@ describe('CEO pricing workspace redesign — review round 2', () => {
       await renderCeoNewForm({ items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
       const margin = () => ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001');
       fireEvent.change(margin(), { target: { value: '30' } });
-      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
+      // the tag names the new margin, and the saved one shows under the box
+      expect(ceoRow(8001).getByText('กำไร 30% — ยังไม่บันทึก')).not.toBeNull();
+      expect(ceoRow(8001).getByTestId('pcr-ceo-margin-was-8001').textContent).toBe('เดิม 20%');
       expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
       fireEvent.change(margin(), { target: { value: '20' } });
-      expect(ceoRow(8001).queryByText('ยังไม่บันทึก')).toBeNull();
+      expect(ceoRow(8001).queryByText(/ยังไม่บันทึก/)).toBeNull();
+      expect(ceoRow(8001).queryByTestId('pcr-ceo-margin-was-8001')).toBeNull();
       expect(screen.queryByTestId('pcr-ceo-save-all')).toBeNull();
       expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(false);
     });
@@ -6963,7 +6977,7 @@ describe('CEO pricing workspace redesign — review round 2', () => {
     it('typing a different margin is dirty and blocks approve', async () => {
       await renderCeoNewForm({ items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] });
       fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '25' } });
-      expect(ceoRow(8001).getByText('ยังไม่บันทึก')).not.toBeNull();
+      expect(ceoRow(8001).getByText('กำไร 25% — ยังไม่บันทึก')).not.toBeNull();
       expect(saveAllButton().textContent).toContain('บันทึกราคา (1 รายการ)');
       expect(screen.getByTestId('pcr-ceo-approve').disabled).toBe(true);
     });

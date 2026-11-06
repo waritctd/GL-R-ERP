@@ -61,6 +61,7 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { CeoPricingHeader, CeoPricingWorkspace } from './CeoPricingWorkspace.jsx';
 import {
   ceoRowFigures, cleanNumber, fractionToPct, lineProfitThb, marginOutOfRange, pctToFraction, round2,
+  specialPriceSqmFromFormula,
 } from './ceoPricingRow.js';
 import { landedCostBreakdown } from './landedCostBreakdown.js';
 import { ImportPricingHeader, ImportPricingWorkspace } from './ImportPricingWorkspace.jsx';
@@ -773,6 +774,17 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newFor
 
 const FX_SOURCE_LABEL = { THB: 'บาท', MANUAL: 'กรอกเอง', BOT: 'ธปท.' };
 const fxNote = (decision) => `${FX_SOURCE_LABEL[decision.fxSource] ?? decision.fxSource}, ${formatThaiDate(decision.fxEffectiveDate)}`;
+
+// "= ทุน/ตร.ม. × (1 + กำไร) × 1.07" under a SPECIAL_SQM ราคาพิเศษ — only while the box holds exactly
+// that formula figure, so a hand-typed price is never labelled as if the formula produced it.
+function specialFormulaNote(decision, item, cost, special, marginFraction, sellingBuffer) {
+  if (decision.priceMode !== 'SPECIAL_SQM' || decision.currency !== 'THB' || item.stockSource != null) return null;
+  if (special === '' || special == null || cost == null || marginFraction == null || !(sellingBuffer > 0)) return null;
+  const formula = specialPriceSqmFromFormula({ cost, marginFraction, sellingBuffer, sqmPerPiece: item.sqmPerPiece });
+  if (formula == null || Number(special) !== formula) return null;
+  const fmt2 = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `= ${fmt2(cost / Number(item.sqmPerPiece))} × ${fmt2(1 + Number(marginFraction))} × ${sellingBuffer}`;
+}
 
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
@@ -2007,7 +2019,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       hasDiscount: item.discountPct != null,
       cost,
       costPerSqm: cost != null && sqm > 0 ? round2(cost / sqm) : null,
-      qtyText: `${item.requestedQuantity} แผ่น`,
+      qtyText: `${formatQty(item.requestedQuantity)} แผ่น`,
       sqmText: `${formatQty(round2(qty * sqm))} ตร.ม.`,
       piecesPerSqm: piecesPerSqmFromSqmPerPiece(item.sqmPerPiece),
       // The full step-by-step cost calculation for รายละเอียด; ราคาพิเศษ follows the row's live กำไร %.
@@ -2025,6 +2037,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
         value: rawDraft.marginPct ?? fractionToPct(item.proposedMarginPct),
         invalid: marginInvalid,
         error: MARGIN_RANGE_ERROR_PCT,
+        // The saved margin, shown as "เดิม x%" only while an unsaved, different กำไร % is typed.
+        savedPct: marginDraftRaw != null && marginDraftRaw !== '' && !marginInvalid
+          && cleanNumber(marginDraftRaw) !== cleanNumber(fractionToPct(item.proposedMarginPct))
+          && item.proposedMarginPct != null ? fractionToPct(item.proposedMarginPct) : null,
         // 0 < n < 1 is legal (a real margin under 1%) but is usually a fraction typed by habit: warn, never block.
         looksLikeFraction: marginDraftRaw != null && marginDraftRaw !== '' && Number(marginDraftRaw) > 0 && Number(marginDraftRaw) < 1,
       },
@@ -2036,6 +2052,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       },
       discount: draft.discountPct ?? item.discountPct ?? '',
       special: draft.specialPriceSqm ?? item.specialPriceSqm ?? '',
+      specialFormulaNote: specialFormulaNote(decision, item, cost, draft.specialPriceSqm ?? item.specialPriceSqm,
+        marginDrives && !marginInvalid ? pctToFraction(marginDraftRaw) : item.proposedMarginPct,
+        Number(formulaConfigQuery.data?.sellingBuffer)),
       direct: draft.directNetPrice ?? item.directNetPrice ?? '',
       specialMax: PRICE_INPUT_MAX_12_2,
       directMax: PRICE_INPUT_MAX_14_2,
