@@ -16,7 +16,7 @@ const formulaConfig = { insuranceValueFactor: 1.15, insuranceRate: 0.0045, insur
 
 describe('landedCostBreakdown', () => {
   it('rebuilds every step of the formula to the satang (row 1: ทุน 962.49, ราคาพิเศษ 1,338.83)', () => {
-    const b = landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1.07 });
+    const b = landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1 });
     expect(b.goods).toBe(2121881.928);
     expect(b.insurance).toBe(11749.3907);
     expect(b.cif).toBe(2633632.999);
@@ -24,6 +24,14 @@ describe('landedCostBreakdown', () => {
     expect(b.costPerSqm).toBeCloseTo(962.4946, 4);
     expect(b.specialPerSqm).toBe(1338.83);
     expect(b.freight.fullContainers).toBe(10);
+    // NET's ราคาตั้ง/แผ่น is before VAT: 14.1544 × 1.3 = 18.40
+    expect(b.listPerPiece).toBe(18.4);
+  });
+
+  it('a selling buffer above 1 still multiplies both prices, with VAT on ราคาพิเศษ only', () => {
+    const b = landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1.1 });
+    expect(b.listPerPiece).toBe(20.24); // 14.1544 × 1.3 × 1.1
+    expect(b.specialPerSqm).toBe(1472.71); // 962.4946 × 1.3 × 1.1 × 1.07
   });
 
   it('prefers the insurance rates frozen in the snapshot over today\'s config', () => {
