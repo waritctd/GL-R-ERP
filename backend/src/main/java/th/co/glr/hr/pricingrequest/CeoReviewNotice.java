@@ -2,6 +2,9 @@ package th.co.glr.hr.pricingrequest;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
@@ -11,6 +14,8 @@ import java.util.Locale;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.jdbc.datasource.ConnectionHolder;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import th.co.glr.hr.notification.DealNoticeText;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository.PricingCostingWriteItem;
@@ -81,10 +86,41 @@ public final class CeoReviewNotice {
     /** Best-effort preview: a costing failure must never break the notice or the status change. */
     public static LandedCostCalculator.CalculationResult costsOrNull(LandedCostCalculator calc,
                                                                       PricingRequestSummaryDto s) {
+        // A SQL error inside calculate() aborts the caller's Postgres transaction even though we catch it
+        // here, so the notice INSERT and the commit would fail. Isolate it in a savepoint when one is open.
+        Connection conn = null;
+        Savepoint sp = null;
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            try {
+                for (Object r : TransactionSynchronizationManager.getResourceMap().values()) {
+                    if (r instanceof ConnectionHolder h && h.isSynchronizedWithTransaction()) {
+                        conn = h.getConnection();
+                        break;
+                    }
+                }
+                if (conn != null) {
+                    sp = conn.setSavepoint();
+                }
+            } catch (SQLException | RuntimeException e) {
+                log.warn("CEO review notice: could not set a savepoint: {}", e.toString());
+                sp = null;
+            }
+        }
         try {
-            return calc.calculate(s);
-        } catch (RuntimeException e) {
+            LandedCostCalculator.CalculationResult result = calc.calculate(s);
+            if (sp != null) {
+                conn.releaseSavepoint(sp);
+            }
+            return result;
+        } catch (RuntimeException | SQLException e) {
             log.warn("CEO review notice: cost preview failed for pricing request {}: {}", s.requestCode(), e.toString());
+            if (sp != null) {
+                try {
+                    conn.rollback(sp);
+                } catch (SQLException re) {
+                    log.warn("CEO review notice: savepoint rollback failed: {}", re.toString());
+                }
+            }
             return null;
         }
     }
