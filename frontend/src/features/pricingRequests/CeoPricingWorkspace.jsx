@@ -8,7 +8,7 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { pricingRequestRecipientLabel } from './pricingRequestMeta.js';
 
-// CEO pricing workspace for a NEW-FORM decision (redesign, 2026-11): header, sticky summary bar,
+// CEO pricing workspace for a NEW-FORM decision (redesign, 2026-11): header, summary bar (scrolls with the page — owner 2026-11-06),
 // pricing table (desktop) / cards (mobile), details row, ONE save. Presentational only: the page
 // builds the view-model (`model`) from its drafts and mutations, so no pricing rule lives here.
 // The table AND the cards are both rendered and hidden with Tailwind classes; the card inputs
@@ -16,7 +16,7 @@ import { pricingRequestRecipientLabel } from './pricingRequestMeta.js';
 
 const MODES = [
   ['NET', 'ราคาตั้ง − ส่วนลด %', 'ใส่กำไร % แล้วระบบคำนวณราคาตั้งจากต้นทุน · ส่วนลด % หักจากราคาตั้ง'],
-  ['SPECIAL_SQM', 'ราคาพิเศษ/ตร.ม.', 'ใส่ราคาพิเศษต่อ ตร.ม. (รวม VAT) ระบบคำนวณราคาสุทธิต่อแผ่นให้'],
+  ['SPECIAL_SQM', 'ราคาพิเศษ/ตร.ม.', 'ตั้งกำไร % แล้วระบบคำนวณราคาพิเศษต่อ ตร.ม. (รวม VAT) = ทุน/ตร.ม. × (1 + กำไร) × 1.07 ให้ หรือใส่ราคาพิเศษเอง'],
   ['DIRECT_NET', 'ราคาสุทธิ/แผ่น', 'ใส่ราคาสุทธิต่อแผ่น (ก่อน VAT) ตรง ๆ'],
 ];
 
@@ -72,14 +72,17 @@ function Tags({ row }) {
       {row.hasPriceOverride ? <StatusBadge tone="info">ปรับเอง</StatusBadge> : null}
       {row.saving ? <StatusBadge tone="info">กำลังบันทึก…</StatusBadge> : null}
       {row.dirty && !row.saving ? (
-        <StatusBadge tone="warning">{row.autoSpecialPending ? 'ใช้ราคาตามสูตร — ยังไม่บันทึก' : 'ยังไม่บันทึก'}</StatusBadge>
+        <StatusBadge tone="warning">
+          {row.margin?.savedPct != null ? `กำไร ${row.margin.value}% — ยังไม่บันทึก`
+            : row.autoSpecialPending ? 'ใช้ราคาตามสูตร — ยังไม่บันทึก' : 'ยังไม่บันทึก'}
+        </StatusBadge>
       ) : null}
       {!row.blocker && !row.dirty && row.item.netUnitPrice != null ? <StatusBadge tone="success">มีราคาแล้ว</StatusBadge> : null}
     </div>
   );
 }
 
-function Num({ row, field, label, testid, value, disabled, suffix, card, max }) {
+function Num({ row, field, label, testid, value, disabled, suffix, card, max, derived }) {
   return (
     <span className={cn('inline-flex items-center gap-1', card && 'w-full')}>
       <input
@@ -88,7 +91,7 @@ function Num({ row, field, label, testid, value, disabled, suffix, card, max }) 
         min={field === 'marginPct' ? undefined : '0'}
         max={max}
         inputMode="decimal"
-        className={card ? CARD_INPUT : cn(INPUT, suffix === '%' ? 'w-20' : 'w-28')}
+        className={cn(card ? CARD_INPUT : cn(INPUT, suffix === '%' ? 'w-20' : 'w-28'), derived && 'bg-surface-subtle')}
         aria-label={`${label} ${row.name}`}
         disabled={disabled}
         value={value}
@@ -108,17 +111,18 @@ function priceFields(row, model, card) {
   const lock = model.savingAll;
   const id = row.item.id;
   const lbl = (text, node) => (card ? <label className="grid gap-1 text-sm font-bold">{text}{node}</label> : node);
+  const margin = row.margin.show
+    ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
+      {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
+      {row.margin.savedPct != null ? <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-margin-was-${id}`}>{`เดิม ${row.margin.savedPct}%`}</span> : null}
+      {row.margin.looksLikeFraction ? (
+        <span className="text-2xs text-warning-dark">
+          {`= ${row.margin.value}% — ถ้าตั้งใจ ${Number((Number(row.margin.value) * 100).toFixed(6))}% ให้กรอก ${Number((Number(row.margin.value) * 100).toFixed(6))}`}
+        </span>
+      ) : null}
+    </div>)
+    : <span className="text-text-muted">–</span>;
   if (priceMode === 'NET') {
-    const margin = row.margin.show
-      ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
-        {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
-        {row.margin.looksLikeFraction ? (
-          <span className="text-2xs text-warning-dark">
-            {`= ${row.margin.value}% — ถ้าตั้งใจ ${Number((Number(row.margin.value) * 100).toFixed(6))}% ให้กรอก ${Number((Number(row.margin.value) * 100).toFixed(6))}`}
-          </span>
-        ) : null}
-      </div>)
-      : <span className="text-text-muted">–</span>;
     const list = (
       <div className="grid gap-1">
         {lbl('ราคาตั้ง/แผ่น', <Num row={row} card={card} field="listUnitPrice" label="ราคาตั้ง/แผ่น" disabled={!editable || lock || row.list.disabled} value={row.list.value} testid={`pcr-ceo-list-price-${id}`} max={row.list.max} />)}
@@ -151,15 +155,18 @@ function priceFields(row, model, card) {
     const formula = !row.isStock && row.formulaPerPiece != null
       ? <span className="text-xs" data-testid={`pcr-ceo-formula-list-${id}`}>{fmt(row.formulaPerPiece)}{row.formulaPerSqm != null ? <small className="block text-text-muted">{fmt(row.formulaPerSqm)} / ตร.ม.</small> : null}</span>
       : <span className="text-text-muted">–</span>;
+    // On a card every cell carries its own label (there is no column header to read it from).
+    const formulaCell = card ? <div className="grid gap-1 text-sm"><b>ราคาตั้ง (สูตร)</b>{formula}</div> : formula;
     const special = (
       <div className="grid gap-1">
-        {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} />)}
+        {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} derived={row.specialFormulaNote != null} />)}
+        {row.specialFormulaNote ? <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-special-formula-${id}`}>{row.specialFormulaNote}</span> : null}
         <span className="text-2xs text-text-muted">
           {row.item.sqmPerPiece != null ? `รวม VAT · ${row.piecesPerSqm} แผ่น/ตร.ม.` : 'รายการนี้ไม่มี ตร.ม./แผ่น จึงใช้โหมดนี้ไม่ได้'}
         </span>
       </div>
     );
-    return [formula, special];
+    return [margin, formulaCell, special];
   }
   if (priceMode === 'DIRECT_NET') {
     return [lbl('ราคาสุทธิ/แผ่น', <Num row={row} card={card} field="directNetPrice" label="ราคาสุทธิ/แผ่น" suffix="/แผ่น" disabled={!editable || lock} value={row.direct} max={row.directMax} testid={`pcr-ceo-direct-net-${id}`} />)];
@@ -167,9 +174,19 @@ function priceFields(row, model, card) {
   return [];
 }
 
+// SPECIAL_SQM is a three-step flow (owner 2026-11-06): ① กำไร % → ② ราคาพิเศษ → ③ กำไร.
+const STEP_OF_HEADER = { 'กำไร %': 1, 'ราคาพิเศษ/ตร.ม.': 2, 'กำไร': 3 };
+function StepNo({ n, final }) {
+  return (
+    <span aria-hidden="true" className={cn('mr-1 inline-grid size-4 place-items-center rounded-full align-[1px] text-2xs font-bold text-white', final ? 'bg-success' : 'bg-info-dot')}>
+      {n}
+    </span>
+  );
+}
+
 function modeHeaders(priceMode) {
   if (priceMode === 'NET') return ['กำไร %', 'ราคาตั้ง/แผ่น', 'ส่วนลด'];
-  if (priceMode === 'SPECIAL_SQM') return ['ราคาตั้ง (สูตร)', 'ราคาพิเศษ'];
+  if (priceMode === 'SPECIAL_SQM') return ['กำไร %', 'ราคาตั้ง (สูตร)', 'ราคาพิเศษ/ตร.ม.'];
   if (priceMode === 'DIRECT_NET') return ['ราคาสุทธิ/แผ่น'];
   return [];
 }
@@ -222,6 +239,107 @@ function ProfitCell({ row, model }) {
   );
 }
 
+// Plain numbers for the calculation block: 2dp with thousands separators, no currency sign.
+const n2 = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Factors keep their own precision (1.3, 0.0045, 37.9944), never padded or rounded away.
+const nf = (v) => Number(v).toLocaleString('en-US', { maximumFractionDigits: 6 });
+
+function containerText(part) {
+  if (part.fullContainers == null) return null;
+  const rest = part.remainderSqm > 0 ? ` + ${nf(part.remainderSqm)} ตร.ม.` : '';
+  return `${part.fullContainers} ตู้${rest}`;
+}
+
+function CalcStep({ label, symbol, children, amount, tone }) {
+  return (
+    <div className={cn(
+      'grid gap-x-4 gap-y-0.5 border-b border-border-subtle px-3 py-2.5 last:border-b-0 md:grid-cols-[10rem_1fr_9rem] md:items-baseline',
+      tone === 'total' && 'bg-surface-subtle',
+      tone === 'final' && 'bg-success-bg text-success',
+    )}>
+      <div className="font-bold">{label}{symbol ? <small className="ml-1 font-normal text-text-muted">{symbol}</small> : null}</div>
+      <div className="tabular-nums leading-relaxed [overflow-wrap:anywhere]">{children}</div>
+      <div className={cn('font-bold tabular-nums md:text-right', tone === 'final' && 'text-base')}>{amount}</div>
+    </div>
+  );
+}
+
+const Sub = ({ children }) => <span className="block text-xs text-text-muted">{children}</span>;
+
+// The full landed-cost calculation for one costed line (owner request 2026-11-06), every step with
+// the numbers that went into it, so the CEO can check it against the formula sheet by hand.
+export function CostCalculation({ row, priceMode }) {
+  const b = row.breakdown;
+  const id = row.item.id;
+  if (!b) return null;
+  const share = (part, qty) => (part.groupAmount != null && qty != null
+    ? `${n2(part.groupAmount)} × ${n2(b.qtySqm)} ÷ ${n2(qty)} ตร.ม. (${Math.round((b.qtySqm / qty) * 100)}%)`
+    : null);
+  const perContainer = (part) => (part.fullContainers > 0 && !(part.remainderSqm > 0)
+    ? `${n2(part.groupAmount / part.fullContainers)} × ${part.fullContainers} ตู้ = ` : '');
+  const freightContainers = containerText(b.freight);
+  const fxDate = row.costingItem?.fxEffectiveDate;
+  return (
+    <section aria-label="การคำนวณต้นทุน" className="grid gap-2 border-t border-border-subtle pt-3 text-sm md:col-span-3" data-testid={`pcr-ceo-calc-${id}`}>
+      <h4 className="m-0 flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span>การคำนวณต้นทุน (ตามสูตร)</span>
+        <span className="text-xs font-normal text-text-muted">
+          {[b.fxRate != null ? `อัตราแลกเปลี่ยน ${nf(b.fxRate)}` : null, fxDate ? `ณ ${formatThaiDate(fxDate)}` : null,
+            row.costingItem?.calculationConfigVersion != null ? `สูตรเวอร์ชัน ${row.costingItem.calculationConfigVersion}` : null]
+            .filter(Boolean).join(' · ')}
+        </span>
+      </h4>
+      <div className="overflow-hidden rounded-md border border-border-subtle">
+        <CalcStep label="ค่าสินค้า" symbol="C" amount={n2(b.goods)}>
+          {b.rawUnitPrice != null && b.fxRate != null
+            ? `${nf(b.rawUnitPrice)} ${b.rawCurrency ?? ''}${b.rawUnit ? `/${b.rawUnit}` : ''} × ${nf(b.fxRate)}${b.sqmPerPiece != null && b.rawUnit === 'ตร.ม.' ? ` × ${nf(b.sqmPerPiece)} ตร.ม./แผ่น` : ''} = `
+            : ''}
+          {`${nf(b.goodsPerPiece)} บาท/แผ่น × ${nf(b.pieces)} แผ่น`}
+        </CalcStep>
+        <CalcStep label="ค่าประกัน" symbol="i" amount={n2(b.insurance)}>
+          {b.insFactor != null ? `C × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}` : 'C × อัตราค่าประกันภัย'}
+          {b.insFactor != null ? <Sub>{`= ${n2(b.goods)} × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}`}</Sub> : null}
+        </CalcStep>
+        <CalcStep label="ค่าเรือ" symbol="F" amount={n2(b.freight.share)}>
+          {perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}
+          {freightContainers ? (
+            <Sub>{`${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
+          ) : null}
+        </CalcStep>
+        <CalcStep label="ค่าชิปปิ้ง" symbol="S" amount={n2(b.clearance.share)}>
+          {perContainer(b.clearance)}{share(b.clearance, b.clearance.groupQtySqm) ?? n2(b.clearance.share)}
+        </CalcStep>
+        <CalcStep label="ต้นทุนรวม" symbol="TC" amount={n2(b.totalCost)} tone="total">
+          <span className="block">{`[(C + i + F) × อากร ${nf(1 + b.dutyPct)} × ${nf(b.costBuffer)}] + S`}</span>
+          <span className="block">{`= [(${n2(b.goods)} + ${n2(b.insurance)} + ${n2(b.freight.share)}) × ${nf(1 + b.dutyPct)} × ${nf(b.costBuffer)}] + ${n2(b.clearance.share)}`}</span>
+          <span className="block">{`= [${n2(b.cif)} × ${nf(1 + b.dutyPct)} × ${nf(b.costBuffer)}] + ${n2(b.clearance.share)}`}</span>
+          <span className="block">{`= ${n2(b.beforeClearance)} + ${n2(b.clearance.share)}`}</span>
+        </CalcStep>
+        <CalcStep label="ทุน/ตร.ม." amount={n2(b.costPerSqm)}>
+          {`${n2(b.totalCost)} ÷ ${n2(b.qtySqm)} ตร.ม.`}
+          {b.sqmPerPiece != null ? <Sub>{`= ${(Math.round(b.costPerSqm * b.sqmPerPiece * 1e4) / 1e4).toLocaleString('en-US', { minimumFractionDigits: 4 })} บาท/แผ่น (× ${nf(b.sqmPerPiece)} ตร.ม./แผ่น)`}</Sub> : null}
+        </CalcStep>
+        {/* The last line is the price THIS mode is set from: ราคาพิเศษ (รวม VAT) per ตร.ม., NET's
+            ราคาตั้ง per แผ่น (ก่อน VAT — the quotation adds VAT), and none for DIRECT_NET, where the
+            CEO types the price itself. The selling buffer is shown only when it is not 1. */}
+        {priceMode === 'SPECIAL_SQM' && b.specialPerSqm != null ? (
+          <CalcStep label="ราคาพิเศษ/ตร.ม." amount={n2(b.specialPerSqm)} tone="final">
+            {`${n2(b.costPerSqm)} × กำไร ${nf(1 + b.margin)}${b.sellingBuffer !== 1 ? ` × บัฟเฟอร์ ${nf(b.sellingBuffer)}` : ''} × VAT ${nf(b.vat)}`}
+            <Sub>รวม VAT · กำไรตามที่ตั้งในแถวนี้</Sub>
+          </CalcStep>
+        ) : null}
+        {priceMode === 'NET' && b.listPerPiece != null ? (
+          <CalcStep label="ราคาตั้ง/แผ่น" amount={n2(b.listPerPiece)} tone="final">
+            {`${nf(b.costPerPiece)} × กำไร ${nf(1 + b.margin)}${b.sellingBuffer !== 1 ? ` × บัฟเฟอร์ ${nf(b.sellingBuffer)}` : ''}`}
+            <Sub>ก่อน VAT (ใบเสนอราคาบวก VAT 7%) · ส่วนลด % หักจากราคานี้</Sub>
+          </CalcStep>
+        ) : null}
+      </div>
+      <p className="m-0 text-xs text-text-muted">ทุกบรรทัดคำนวณจากข้อมูลที่ระบบใช้จริงตอนคำนวณต้นทุน (ปัดเศษ 4 ตำแหน่งทุกขั้น แสดง 2 ตำแหน่ง)</p>
+    </section>
+  );
+}
+
 function Details({ row, model }) {
   const id = row.item.id;
   const { fmt, editable } = model;
@@ -267,6 +385,7 @@ function Details({ row, model }) {
         <span>รวม {row.item.requestedQuantity} แผ่น: <b>{fmt(row.total)}</b></span>
         <span>กำไร: {row.profitTotal != null ? `${fmt(row.profitTotal, 'THB')}${row.profitPct != null ? ` (${row.profitPct.toFixed(1)}%)` : ''}` : '–'}</span>
       </section>
+      {!row.isStock && !row.hasCostOverride ? <CostCalculation row={row} priceMode={model.priceMode} /> : null}
     </div>
   );
 }
@@ -296,7 +415,7 @@ export function CeoPricingWorkspace({ model }) {
       <section
         aria-label="สรุปราคาคำขอนี้"
         data-testid="pcr-ceo-summary"
-        className="sticky top-2 z-10 grid gap-2 rounded-md border border-border bg-surface p-3 mobile:static"
+        className="grid gap-2 rounded-md border border-border bg-surface p-3"
       >
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <div data-testid="pcr-ceo-sum-priced"><span className="block text-sm text-text-muted">ตั้งราคาแล้ว</span><b className="text-xl font-extrabold tabular-nums">{summary.priced}/{rows.length} <small className="text-sm font-semibold text-text-muted">รายการ</small></b></div>
@@ -375,7 +494,22 @@ export function CeoPricingWorkspace({ model }) {
               </Button>
             ))}
           </div>
-          <span className="text-xs text-text-muted">{hint}</span>
+          {priceMode !== 'SPECIAL_SQM' ? <span className="text-xs text-text-muted">{hint}</span> : null}
+          {priceMode === 'SPECIAL_SQM' ? (
+            <div className="grid w-full gap-2 rounded-md border border-info-border bg-info-bg-alt p-3 text-sm">
+              <span>{hint}</span>
+              <ol aria-label="ขั้นตอนกรอกราคา" data-testid="pcr-ceo-special-steps" className="m-0 flex list-none flex-wrap items-center gap-1.5 p-0 text-xs">
+                {['กำไร %', 'ราคาพิเศษ/ตร.ม. คำนวณให้', 'ราคาสุทธิ/แผ่น · รวม · กำไร', 'บันทึกราคา'].map((step, i, all) => (
+                  <li key={step} className="flex items-center gap-1.5">
+                    <span className="rounded border border-border-subtle bg-surface px-2 py-0.5">
+                      {i < 3 ? <StepNo n={i + 1} final={i === 2} /> : null}{step}
+                    </span>
+                    {i < all.length - 1 ? <span aria-hidden="true" className="text-text-muted">→</span> : null}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
         </div>
 
         <div data-testid="pcr-ceo-table-wrap" className="mobile:hidden">
@@ -383,7 +517,9 @@ export function CeoPricingWorkspace({ model }) {
             <thead>
               <tr className="border-b border-border-subtle bg-surface-subtle text-left text-xs text-text-muted">
                 {['#', 'สินค้า', 'จำนวน', 'ต้นทุน/แผ่น', ...hc, 'ราคาสุทธิ/แผ่น', 'รวม (ก่อน VAT)', 'กำไร'].map((h, i) => (
-                  <th key={`${h}-${i}`} scope="col" className="px-2 py-2 font-bold">{h}</th>
+                  <th key={`${h}-${i}`} scope="col" className="px-2 py-2 font-bold">
+                    {priceMode === 'SPECIAL_SQM' && STEP_OF_HEADER[h] ? <StepNo n={STEP_OF_HEADER[h]} final={h === 'กำไร'} /> : null}{h}
+                  </th>
                 ))}
                 <th scope="col" className="px-2 py-2"><span className="sr-only">รายละเอียด</span></th>
               </tr>
@@ -443,6 +579,7 @@ export function CeoPricingWorkspace({ model }) {
             const id = row.item.id;
             const open = isOpen(row);
             const edge = edgeClass(row);
+            const cells = priceFields(row, model, true);
             return (
               <div
                 key={id}
@@ -455,13 +592,25 @@ export function CeoPricingWorkspace({ model }) {
                   <span className="text-xs text-text-muted">{`${row.qtyText} · ${row.sqmText} · ต้นทุน ${row.isStock ? 'ไม่มี (สต็อก)' : row.cost == null ? 'ต้องระบุเอง' : `${model.fmt(row.cost, 'THB')}/แผ่น`}`}</span>
                   <Tags row={row} />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {priceFields(row, model, true).map((cell, i) => <div key={i}>{cell}</div>)}
+                <div className="grid grid-cols-2 items-start gap-3">
+                  {cells.map((cell, i) => (
+                    <div key={i} className={cn('min-w-0', cells.length % 2 === 1 && i === cells.length - 1 && 'col-span-2')}>{cell}</div>
+                  ))}
                 </div>
-                <dl className="m-0 grid grid-cols-3 gap-2 text-center">
-                  <div><dt className="text-xs text-text-muted">สุทธิ/แผ่น</dt><dd className="m-0"><NetCell row={row} model={model} /></dd></div>
-                  <div><dt className="text-xs text-text-muted">รวม</dt><dd className="m-0 font-bold" data-testid={`pcr-ceo-total-${id}`}>{row.netPending ? '–' : model.fmt(row.total)}</dd></div>
-                  <div><dt className="text-xs text-text-muted">กำไร</dt><dd className="m-0 font-bold" data-testid={`pcr-ceo-profit-${id}`}>{row.profitPct != null ? `${row.profitPct.toFixed(0)}%` : '–'}</dd></div>
+                {/* Two columns, รวม on its own line: a 3-up strip squeezed ฿4,892,192.00 and the
+                    per-ตร.ม. figure into ~100px each and wrapped them on a 375px phone. */}
+                <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-2 rounded-md bg-surface-subtle p-2 tabular-nums">
+                  <div className="min-w-0"><dt className="text-xs text-text-muted">สุทธิ/แผ่น</dt><dd className="m-0 [&>div]:text-left"><NetCell row={row} model={model} /></dd></div>
+                  <div className="min-w-0 text-right"><dt className="text-xs text-text-muted">กำไร</dt>
+                    <dd className={cn('m-0 font-bold', row.profitTotal != null && (row.profitTotal >= 0 ? 'text-success' : 'text-danger'))} data-testid={`pcr-ceo-profit-${id}`}>
+                      {row.profitTotal != null ? model.fmt(row.profitTotal, 'THB') : '–'}
+                      {row.profitPct != null ? <small className="block font-normal text-text-muted">{`${row.profitPct.toFixed(1)}% ของต้นทุน`}</small> : null}
+                    </dd>
+                  </div>
+                  <div className="col-span-2 flex items-baseline justify-between gap-2 border-t border-border-subtle pt-2">
+                    <dt className="text-xs text-text-muted">รวม</dt>
+                    <dd className="m-0 font-bold" data-testid={`pcr-ceo-total-${id}`}>{row.netPending ? '–' : model.fmt(row.total)}</dd>
+                  </div>
                 </dl>
                 <Button type="button" variant="secondary" size="sm" className="justify-self-start" aria-expanded={open} onClick={() => toggle(row)}>
                   <Icon name={open ? 'chevronUp' : 'chevronDown'} size={14} /> รายละเอียด
@@ -497,8 +646,10 @@ export function CeoPricingWorkspace({ model }) {
         </div>
       </Panel>
 
+      {/* The bar below is fixed: reserve its height so it never covers the last card. */}
+      {editable ? <div aria-hidden="true" data-testid="pcr-ceo-mobile-bar-spacer" className="hidden h-24 mobile:block" /> : null}
       {editable ? (
-        <div data-testid="pcr-ceo-mobile-bar" className="fixed inset-x-0 bottom-0 z-20 hidden gap-2 border-t border-border bg-surface p-3 mobile:flex">
+        <div data-testid="pcr-ceo-mobile-bar" className="fixed inset-x-0 bottom-0 z-20 hidden gap-2 border-t border-border bg-surface p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] mobile:flex">
           {model.dirtyCount > 0 ? (
             <Button type="button" variant="secondary" className="flex-1" disabled={model.saveDisabled} loading={model.savingAll} onClick={model.onSaveAll} data-testid="pcr-ceo-mobile-save">{`บันทึก (${model.dirtyCount})`}</Button>
           ) : model.canReturn ? (

@@ -291,4 +291,50 @@ class PricingFormulaEngineTest {
     private static BigDecimal bd(String value) {
         return new BigDecimal(value);
     }
+
+    // ── Container rule (owner ruling 2026-11-06: 1 ตู้ = 800 ตร.ม., method 2) ─────────────────
+
+    @Test
+    void containerSplit_remainderOver75PctIsAFullContainer() {
+        // 3,910 = 4 × 800 + 710 → 710 is nearly full → 5 containers, nothing left over
+        assertThat(PricingFormulaEngine.containerSplit(bd("3910"))).isEqualTo(new PricingFormulaEngine.ContainerSplit(5, bd("0")));
+        // 3,250 = 4 × 800 + 50 → 4 full + a 50 ตร.ม. part load
+        PricingFormulaEngine.ContainerSplit partLoad = PricingFormulaEngine.containerSplit(bd("3250"));
+        assertThat(partLoad.fullContainers()).isEqualTo(4);
+        assertThat(partLoad.remainderSqm()).isEqualByComparingTo("50");
+        // exactly 800 = 1 container; 600 (75%) alone stays a part load; 601 alone is a full container
+        assertThat(PricingFormulaEngine.containerSplit(bd("800")).fullContainers()).isEqualTo(1);
+        assertThat(PricingFormulaEngine.containerSplit(bd("600")).fullContainers()).isZero();
+        assertThat(PricingFormulaEngine.containerSplit(bd("601")).fullContainers()).isEqualTo(1);
+    }
+
+    @Test
+    void containerFreight_chargesTheFullContainerRatePerContainer_notOncePerShipment() {
+        // DL-2026-0325: 7,820 ตร.ม. (Equipe, 8 มม.) = 9 × 800 + 620 → 10 containers × 100,000
+        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(italyFreightRates(), "IT", bd("8"), bd("7820"), "test");
+        assertThat(freight.fullContainers()).isEqualTo(10);
+        assertThat(freight.amountThb()).isEqualByComparingTo("1000000");
+        PricingFormulaEngine.ContainerCharge clearance = engine.containerClearance(clearanceFees(), bd("7820"), "test");
+        assertThat(clearance.amountThb()).isEqualByComparingTo("200000");
+    }
+
+    @Test
+    void containerFreight_aSmallRemainderPaysItsOwnBand() {
+        // 3,250 = 4 full (4 × 100,000) + 50 ตร.ม. in the 1–100 band (50,000); clearance 4 × 20,000 + 8,000
+        assertThat(engine.containerFreight(italyFreightRates(), "IT", bd("8"), bd("3250"), "test").amountThb())
+            .isEqualByComparingTo("450000");
+        assertThat(engine.containerClearance(clearanceFees(), bd("3250"), "test").amountThb())
+            .isEqualByComparingTo("88000");
+        // a part load alone (300 ตร.ม.) is unchanged: just its band
+        assertThat(engine.containerFreight(italyFreightRates(), "IT", bd("8"), bd("300"), "test").amountThb())
+            .isEqualByComparingTo("80000");
+    }
+
+    @Test
+    void containerFreight_fallsBackToThe800Band_whenTheTableHasNoFullContainerColumn() {
+        List<PricingFreightRateDto> noTopBand = List.of(
+            new PricingFreightRateDto(1L, "IT", "อิตาลี", bd("12"), bd("17"), bd("451"), bd("801"), bd("100000")));
+        assertThat(engine.containerFreight(noTopBand, "IT", bd("12"), bd("1600"), "test").amountThb())
+            .isEqualByComparingTo("200000");
+    }
 }

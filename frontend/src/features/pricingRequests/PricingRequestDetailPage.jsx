@@ -61,7 +61,9 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { CeoPricingHeader, CeoPricingWorkspace } from './CeoPricingWorkspace.jsx';
 import {
   ceoRowFigures, cleanNumber, fractionToPct, lineProfitThb, marginOutOfRange, pctToFraction, round2,
+  specialPriceSqmFromFormula, VAT_FACTOR,
 } from './ceoPricingRow.js';
+import { landedCostBreakdown } from './landedCostBreakdown.js';
 import { ImportPricingHeader, ImportPricingWorkspace } from './ImportPricingWorkspace.jsx';
 import {
   formatOrDash, formatQty, qtyOf, specFor, productCodeOf, variantOf, qtyDetailOf, metaOf, nextStep,
@@ -773,6 +775,18 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newFor
 const FX_SOURCE_LABEL = { THB: 'บาท', MANUAL: 'กรอกเอง', BOT: 'ธปท.' };
 const fxNote = (decision) => `${FX_SOURCE_LABEL[decision.fxSource] ?? decision.fxSource}, ${formatThaiDate(decision.fxEffectiveDate)}`;
 
+// "= ทุน/ตร.ม. × (1 + กำไร) × 1.07 (VAT)" under a SPECIAL_SQM ราคาพิเศษ — only while the box holds exactly
+// that formula figure, so a hand-typed price is never labelled as if the formula produced it.
+function specialFormulaNote(decision, item, cost, special, marginFraction, sellingBuffer) {
+  if (decision.priceMode !== 'SPECIAL_SQM' || decision.currency !== 'THB' || item.stockSource != null) return null;
+  if (special === '' || special == null || cost == null || marginFraction == null || !(sellingBuffer > 0)) return null;
+  const formula = specialPriceSqmFromFormula({ cost, marginFraction, sellingBuffer, sqmPerPiece: item.sqmPerPiece });
+  if (formula == null || Number(special) !== formula) return null;
+  const fmt2 = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const buffer = sellingBuffer !== 1 ? ` × ${sellingBuffer}` : '';
+  return `= ${fmt2(cost / Number(item.sqmPerPiece))} × ${fmt2(1 + Number(marginFraction))}${buffer} × VAT ${VAT_FACTOR}`;
+}
+
 export function PricingRequestDetailPage({ user, showToast }) {
   const { id } = useParams();
   const pricingRequestId = Number(id);
@@ -1213,8 +1227,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // (n รายการ)" sends each dirty row in its own PUT, like the legacy override modal.
   const [ceoPriceDrafts, setCeoPriceDrafts] = useState({});
   const [savingAllCeoRows, setSavingAllCeoRows] = useState(false);
-  function updateCeoPriceDraft(itemId, patch) {
-    setCeoPriceDrafts((prev) => ({ ...prev, [itemId]: { ...prev[itemId], ...patch } }));
+  // `drop` removes draft keys outright (an undefined value would still shadow the formula prefill).
+  function updateCeoPriceDraft(itemId, patch, drop = []) {
+    setCeoPriceDrafts((prev) => {
+      const next = { ...prev[itemId], ...patch };
+      drop.forEach((key) => { delete next[key]; });
+      return { ...prev, [itemId]: next };
+    });
   }
   const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
   // Step 4: Customer Quotation Generation and Issuance.
@@ -1312,10 +1331,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // the override alone. Blanking the input on an import line that has an override clears it.
   const saveCeoItemPriceFn = ({ decision, item, draft, clears = {} }) => {
     const isStockLine = item.stockSource != null;
-    // Per-line margin: under NET a live อัตรากำไร draft is saved as marginPct and the server derives
-    // ราคาตั้ง from it via the formula (no override, no reason). It is mutually exclusive with a
-    // manual ราคาตั้ง override, so when present it is the ONLY list-side field sent.
-    const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
+    // Per-line margin: under NET (and SPECIAL_SQM, where it also derived the ราคาพิเศษ sent below) a
+    // live กำไร % draft is saved as marginPct and the server derives ราคาตั้ง from it via the formula
+    // (no override, no reason). It is mutually exclusive with a manual ราคาตั้ง override, so when
+    // present it is the ONLY list-side field sent.
+    const marginMode = decision.priceMode === 'NET' || decision.priceMode === 'SPECIAL_SQM';
+    const marginValue = marginMode && !isStockLine && !clears.clearSellingPriceOverride
       ? pctToFraction(draft.marginPct) : null;
     const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
     const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
@@ -1999,16 +2020,28 @@ export function PricingRequestDetailPage({ user, showToast }) {
       hasDiscount: item.discountPct != null,
       cost,
       costPerSqm: cost != null && sqm > 0 ? round2(cost / sqm) : null,
-      qtyText: `${item.requestedQuantity} แผ่น`,
+      qtyText: `${formatQty(item.requestedQuantity)} แผ่น`,
       sqmText: `${formatQty(round2(qty * sqm))} ตร.ม.`,
       piecesPerSqm: piecesPerSqmFromSqmPerPiece(item.sqmPerPiece),
+      // The full step-by-step cost calculation for รายละเอียด; ราคาพิเศษ follows the row's live กำไร %.
+      breakdown: isStockLine ? null : landedCostBreakdown({
+        costingItem,
+        formulaConfig: formulaConfigQuery.data,
+        marginFraction: marginDrives && !marginInvalid ? pctToFraction(marginDraftRaw) : item.proposedMarginPct,
+        sellingBuffer: Number(formulaConfigQuery.data?.sellingBuffer),
+      }),
       formulaPerPiece: isStockLine && decision.priceMode !== 'NET' ? null : formulaPerPiece,
       formulaPerSqm: formulaPerPiece != null && sqm > 0 ? round2(Number(formulaPerPiece) / sqm) : null,
       margin: {
-        show: !isStockLine && cost != null && !hasPriceOverride && decision.priceMode === 'NET',
+        show: !isStockLine && cost != null && !hasPriceOverride
+          && (decision.priceMode === 'NET' || (decision.priceMode === 'SPECIAL_SQM' && decision.currency === 'THB')),
         value: rawDraft.marginPct ?? fractionToPct(item.proposedMarginPct),
         invalid: marginInvalid,
         error: MARGIN_RANGE_ERROR_PCT,
+        // The saved margin, shown as "เดิม x%" only while an unsaved, different กำไร % is typed.
+        savedPct: marginDraftRaw != null && marginDraftRaw !== '' && !marginInvalid
+          && cleanNumber(marginDraftRaw) !== cleanNumber(fractionToPct(item.proposedMarginPct))
+          && item.proposedMarginPct != null ? fractionToPct(item.proposedMarginPct) : null,
         // 0 < n < 1 is legal (a real margin under 1%) but is usually a fraction typed by habit: warn, never block.
         looksLikeFraction: marginDraftRaw != null && marginDraftRaw !== '' && Number(marginDraftRaw) > 0 && Number(marginDraftRaw) < 1,
       },
@@ -2020,6 +2053,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       },
       discount: draft.discountPct ?? item.discountPct ?? '',
       special: draft.specialPriceSqm ?? item.specialPriceSqm ?? '',
+      specialFormulaNote: specialFormulaNote(decision, item, cost, draft.specialPriceSqm ?? item.specialPriceSqm,
+        marginDrives && !marginInvalid ? pctToFraction(marginDraftRaw) : item.proposedMarginPct,
+        Number(formulaConfigQuery.data?.sellingBuffer)),
       direct: draft.directNetPrice ?? item.directNetPrice ?? '',
       specialMax: PRICE_INPUT_MAX_12_2,
       directMax: PRICE_INPUT_MAX_14_2,
@@ -2041,7 +2077,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       saving: savingThis,
       clearingDiscount: scopedSaving && Boolean(saveCeoItemPrice.variables?.clears?.clearDiscountPct),
       clearingOverride: scopedSaving && Boolean(saveCeoItemPrice.variables?.clears?.clearSellingPriceOverride),
-      setDraft: (patch) => updateCeoPriceDraft(item.id, patch),
+      // Under SPECIAL_SQM a new กำไร % re-derives ราคาพิเศษ, so it drops any typed ราคาพิเศษ draft.
+      setDraft: (patch) => updateCeoPriceDraft(item.id, patch,
+        decision.priceMode === 'SPECIAL_SQM' && 'marginPct' in patch ? ['specialPriceSqm'] : []),
       openCostOverride: () => setCostOverrideItem({ decision, item, costingItem }),
       // ล้างส่วนลด / ใช้ราคาตามสูตร are scoped actions: each sends ONLY its own clear (an empty draft), so
       // neither can commit another still-unsent edit, and on success only that field's draft is dropped.

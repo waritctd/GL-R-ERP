@@ -156,6 +156,104 @@ public class PricingFormulaEngine {
         return match;
     }
 
+    // ── Container rule (owner ruling 2026-11-06) ─────────────────────────────────────────────
+    // The formula sheet's ค่าขนส่ง / ค่าชิปปิ้ง tables stop at the 801–1,000 ตร.ม. column, i.e. ONE
+    // container. Before this rule the open-ended top band was charged ONCE for any shipment size,
+    // so a 7,820 ตร.ม. shipment paid the same 100,000 + 20,000 as an 801 ตร.ม. one and large
+    // orders came out under-costed. Now, per the owner ("1 ตู้ = 800 ตร.ม.", method 2):
+    //   full containers = floor(Q / 800), each charged the full-container rate (the 801+ column);
+    //   remainder r = Q − 800 × full:
+    //     r > 600 ตร.ม. (over 75% of a container, "เกือบเต็มตู้") → one more full container;
+    //     0 < r ≤ 600 → charged by its own band (1–100 / 101–450 / 451–800), as the sheet prices a part load.
+    // e.g. 3,910 = 4 × 800 + 710 → 5 containers; 3,250 = 4 × 800 + 50 → 4 full + the 1–100 band.
+
+    /** One container holds 800 ตร.ม. (owner ruling 2026-11-06). */
+    public static final BigDecimal CONTAINER_SQM = new BigDecimal("800");
+    /** A remainder above this (75% of a container, owner 2026-11-06) is charged as a full container. */
+    public static final BigDecimal NEARLY_FULL_REMAINDER_SQM = new BigDecimal("600");
+    /** The quantity whose band is the sheet's full-container column (801–1,000 ตร.ม.). */
+    static final BigDecimal FULL_CONTAINER_LOOKUP_SQM = new BigDecimal("801");
+
+    /** How a quantity splits into containers: {@code fullContainers} at the full rate, plus a
+     * part-load {@code remainderSqm} (zero when none) charged by its own band. */
+    public record ContainerSplit(int fullContainers, BigDecimal remainderSqm) {}
+
+    /** A container-rule charge: the total THB amount and the split it was charged on. */
+    public record ContainerCharge(BigDecimal amountThb, int fullContainers, BigDecimal remainderSqm) {}
+
+    public static ContainerSplit containerSplit(BigDecimal qtySqm) {
+        BigDecimal[] divRem = qtySqm.divideAndRemainder(CONTAINER_SQM);
+        int full = divRem[0].intValueExact();
+        BigDecimal remainder = divRem[1];
+        if (remainder.compareTo(NEARLY_FULL_REMAINDER_SQM) > 0) {
+            return new ContainerSplit(full + 1, BigDecimal.ZERO);
+        }
+        return new ContainerSplit(full, remainder);
+    }
+
+    /** F for a freight group under the container rule. */
+    public ContainerCharge containerFreight(List<PricingFreightRateDto> rates, String originCountryCode,
+                                            BigDecimal thicknessMm, BigDecimal qtySqm, String itemLabel) {
+        ContainerSplit split = containerSplit(qtySqm);
+        BigDecimal amount = BigDecimal.ZERO;
+        if (split.fullContainers() > 0) {
+            // The sheet's full-container column; a thickness whose table stops below it (no 801+
+            // band, e.g. 12–16 มม.) falls back to the largest part-load band that holds 800 ตร.ม.
+            PricingFreightRateDto full = findFreightRate(rates, originCountryCode, thicknessMm,
+                FULL_CONTAINER_LOOKUP_SQM, itemLabel);
+            if (full == null) {
+                full = selectFreightRate(rates, originCountryCode, thicknessMm, CONTAINER_SQM, itemLabel);
+            }
+            amount = amount.add(full.amountThb().multiply(BigDecimal.valueOf(split.fullContainers())));
+        }
+        if (split.remainderSqm().signum() > 0) {
+            amount = amount.add(selectFreightRate(rates, originCountryCode, thicknessMm,
+                atLeastOne(split.remainderSqm()), itemLabel).amountThb());
+        }
+        return new ContainerCharge(money4(amount), split.fullContainers(), split.remainderSqm());
+    }
+
+    /** S for a shipment under the container rule. */
+    public ContainerCharge containerClearance(List<PricingClearanceFeeDto> fees, BigDecimal qtySqm,
+                                              String shipmentLabel) {
+        ContainerSplit split = containerSplit(qtySqm);
+        BigDecimal amount = BigDecimal.ZERO;
+        if (split.fullContainers() > 0) {
+            PricingClearanceFeeDto full = findClearanceFee(fees, FULL_CONTAINER_LOOKUP_SQM, shipmentLabel);
+            if (full == null) {
+                full = selectClearanceFee(fees, CONTAINER_SQM, shipmentLabel);
+            }
+            amount = amount.add(full.amountThb().multiply(BigDecimal.valueOf(split.fullContainers())));
+        }
+        if (split.remainderSqm().signum() > 0) {
+            amount = amount.add(selectClearanceFee(fees, atLeastOne(split.remainderSqm()), shipmentLabel).amountThb());
+        }
+        return new ContainerCharge(money4(amount), split.fullContainers(), split.remainderSqm());
+    }
+
+    // The bands start at 1 ตร.ม.; a sliver of a remainder (e.g. 800.5 → 0.5) is priced as the first band.
+    private static BigDecimal atLeastOne(BigDecimal qtySqm) {
+        return qtySqm.max(BigDecimal.ONE);
+    }
+
+    private PricingFreightRateDto findFreightRate(List<PricingFreightRateDto> rates, String originCountryCode,
+                                                  BigDecimal thicknessMm, BigDecimal qtySqm, String itemLabel) {
+        try {
+            return selectFreightRate(rates, originCountryCode, thicknessMm, qtySqm, itemLabel);
+        } catch (ApiException missing) {
+            return null;
+        }
+    }
+
+    private PricingClearanceFeeDto findClearanceFee(List<PricingClearanceFeeDto> fees, BigDecimal qtySqm,
+                                                    String shipmentLabel) {
+        try {
+            return selectClearanceFee(fees, qtySqm, shipmentLabel);
+        } catch (ApiException missing) {
+            return null;
+        }
+    }
+
     /** Exact-match lookup (duty is not banded — one rate per {@code product_type} code). */
     public PricingDutyRateDto selectDutyRate(List<PricingDutyRateDto> rates, String productType, String itemLabel) {
         for (PricingDutyRateDto rate : rates) {
