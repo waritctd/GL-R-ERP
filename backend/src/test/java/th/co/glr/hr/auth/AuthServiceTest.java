@@ -29,7 +29,7 @@ class AuthServiceTest {
     private final EmployeeAuthRepository employees = mock(EmployeeAuthRepository.class);
     private final PasswordEncoder encoder = new BCryptPasswordEncoder();
     private final AuditService audit = mock(AuditService.class);
-    private final AuthService service = new AuthService(employees, encoder, audit);
+    private final AuthService service = new AuthService(employees, encoder, audit, new ViewAsService(employees, audit, ""));
 
     @Test
     void rejectsTheEmployeeCodeAsAPassword() {
@@ -176,6 +176,21 @@ class AuthServiceTest {
         assertThat(response.user().mustChangePassword()).isFalse();
         verify(employees).updatePassword(eq(42L), org.mockito.ArgumentMatchers.argThat(
             hash -> encoder.matches("Br4ndNewPass!", hash)));
+    }
+
+    @Test
+    void meWhileViewing_returnsTheTarget_withTheRealActorBehindIt() {
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+        httpRequest.getSession(true).setAttribute(SessionContext.SESSION_USER_KEY,
+            new UserPrincipal(1L, "owner@example.test", "Owner", "it", 1L, true, LocalDate.now(), false, null, false));
+        httpRequest.getSession().setAttribute(SessionContext.VIEW_AS_USER_KEY,
+            new UserPrincipal(2L, "t@example.test", "Target", "hr", 2L, true, LocalDate.now(), false, null, false));
+
+        AuthResponse me = service.me(httpRequest.getSession());
+
+        assertThat(me.user().id()).isEqualTo(2L);
+        assertThat(me.viewAs()).isNotNull();
+        assertThat(me.viewAs().actorId()).isEqualTo(1L);
     }
 
     @Test

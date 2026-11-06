@@ -97,6 +97,8 @@ function userFromAuthResponse(response) {
     admin: Boolean(response.admin),
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
+    canViewAs: Boolean(response.canViewAs),
+    viewAs: response.viewAs ?? null,
   };
 }
 

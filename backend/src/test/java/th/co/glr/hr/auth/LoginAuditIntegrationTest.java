@@ -46,10 +46,9 @@ class LoginAuditIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @BeforeEach
     void wireRealCollaborators() {
-        service = new AuthService(
-            new EmployeeAuthRepository(jdbc),
-            encoder,
-            new AuditService(new AuditLogRepository(jdbc), new ObjectMapper().findAndRegisterModules()));
+        EmployeeAuthRepository repo = new EmployeeAuthRepository(jdbc);
+        AuditService audit = new AuditService(new AuditLogRepository(jdbc), new ObjectMapper().findAndRegisterModules());
+        service = new AuthService(repo, encoder, audit, new ViewAsService(repo, audit, ""));
 
         long hrDivision = insertDivision("HR", "ฝ่ายบุคคล");
         employeeId = insertEmployee("AUD-001", "audit.login@glr.co.th", encoder.encode(PASSWORD), hrDivision);

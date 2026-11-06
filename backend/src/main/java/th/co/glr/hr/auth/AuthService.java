@@ -20,9 +20,11 @@ public class AuthService {
     private final EmployeeAuthRepository employees;
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
+    private final ViewAsService viewAs;
 
     public AuthService(EmployeeAuthRepository employees, PasswordEncoder passwordEncoder,
-                       AuditService auditService) {
+                       AuditService auditService, ViewAsService viewAs) {
+        this.viewAs = viewAs;
         this.employees = employees;
         this.passwordEncoder = passwordEncoder;
         this.auditService = auditService;
@@ -53,6 +55,11 @@ public class AuthService {
 
         UserPrincipal principal = toPrincipal(employee);
         HttpSession session = httpRequest.getSession(true);
+        // signIn drops a live view silently, so close it in the audit first (as the previous real actor).
+        if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) instanceof UserPrincipal target
+            && session.getAttribute(SessionContext.SESSION_USER_KEY) instanceof UserPrincipal real) {
+            viewAs.recordStopQuietly(real, target);
+        }
         if (httpRequest.getRequestedSessionId() != null) {
             httpRequest.changeSessionId();
         }
@@ -61,8 +68,7 @@ public class AuthService {
         // from now on (owner ruling 2026-10-06 — see SessionAccountResolver).
         SessionContext.signIn(session, principal);
         recordLogin(principal);
-        return new AuthResponse(principal, employees.isAdmin(principal.id()), employees.canCreateQuotation(principal.id()),
-            employees.canIssueBillingNote(principal.id()));
+        return response(principal, session);
     }
 
     /**
@@ -103,12 +109,13 @@ public class AuthService {
     }
 
     public AuthResponse me(HttpSession session) {
-        Object value = session.getAttribute(SessionContext.SESSION_USER_KEY);
-        if (value instanceof UserPrincipal user) {
+        // The EFFECTIVE user: while the owner is viewing as someone this is the target, with the
+        // target's own flags, so the SPA renders exactly what that employee would see.
+        UserPrincipal user = SessionContext.effectiveUser(session);
+        if (user != null) {
             // Re-read per call rather than trusting the session, so granting or revoking admin
             // shows up on the next page load instead of at the holder's next login.
-            return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
-                employees.canIssueBillingNote(user.id()));
+            return response(user, session);
         }
         throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
     }
@@ -137,11 +144,28 @@ public class AuthService {
         // is that this employee set their own password at this moment. Until now the sole trace was
         // must_change_password flipping to false, which fires once per person and never again.
         recordAuthEvent(refreshed, "CHANGE_PASSWORD");
-        return new AuthResponse(refreshed, employees.isAdmin(refreshed.id()), employees.canCreateQuotation(refreshed.id()),
-            employees.canIssueBillingNote(refreshed.id()));
+        return response(refreshed, session);
+    }
+
+    /** Flags for {@code user} plus the view-as gate and, while viewing, who is really behind it. */
+    private AuthResponse response(UserPrincipal user, HttpSession session) {
+        AuthResponse.ViewAsInfo info = null;
+        boolean canViewAs = false;
+        if (session.getAttribute(SessionContext.SESSION_USER_KEY) instanceof UserPrincipal real) {
+            canViewAs = viewAs.mayViewAs(real.id());
+            if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) != null) {
+                info = new AuthResponse.ViewAsInfo(real.id(), real.name());
+            }
+        }
+        return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
+            employees.canIssueBillingNote(user.id()), canViewAs, info);
     }
 
     public void logout(HttpSession session) {
+        if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) instanceof UserPrincipal target
+            && session.getAttribute(SessionContext.SESSION_USER_KEY) instanceof UserPrincipal real) {
+            viewAs.recordStopQuietly(real, target);
+        }
         session.invalidate();
     }
 
