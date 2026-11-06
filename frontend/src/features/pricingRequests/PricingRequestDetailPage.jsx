@@ -1213,8 +1213,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // (n รายการ)" sends each dirty row in its own PUT, like the legacy override modal.
   const [ceoPriceDrafts, setCeoPriceDrafts] = useState({});
   const [savingAllCeoRows, setSavingAllCeoRows] = useState(false);
-  function updateCeoPriceDraft(itemId, patch) {
-    setCeoPriceDrafts((prev) => ({ ...prev, [itemId]: { ...prev[itemId], ...patch } }));
+  // `drop` removes draft keys outright (an undefined value would still shadow the formula prefill).
+  function updateCeoPriceDraft(itemId, patch, drop = []) {
+    setCeoPriceDrafts((prev) => {
+      const next = { ...prev[itemId], ...patch };
+      drop.forEach((key) => { delete next[key]; });
+      return { ...prev, [itemId]: next };
+    });
   }
   const [approveClientRequestId, setApproveClientRequestId] = useState(() => generateClientRequestId());
   // Step 4: Customer Quotation Generation and Issuance.
@@ -1312,10 +1317,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // the override alone. Blanking the input on an import line that has an override clears it.
   const saveCeoItemPriceFn = ({ decision, item, draft, clears = {} }) => {
     const isStockLine = item.stockSource != null;
-    // Per-line margin: under NET a live อัตรากำไร draft is saved as marginPct and the server derives
-    // ราคาตั้ง from it via the formula (no override, no reason). It is mutually exclusive with a
-    // manual ราคาตั้ง override, so when present it is the ONLY list-side field sent.
-    const marginValue = decision.priceMode === 'NET' && !isStockLine && !clears.clearSellingPriceOverride
+    // Per-line margin: under NET (and SPECIAL_SQM, where it also derived the ราคาพิเศษ sent below) a
+    // live กำไร % draft is saved as marginPct and the server derives ราคาตั้ง from it via the formula
+    // (no override, no reason). It is mutually exclusive with a manual ราคาตั้ง override, so when
+    // present it is the ONLY list-side field sent.
+    const marginMode = decision.priceMode === 'NET' || decision.priceMode === 'SPECIAL_SQM';
+    const marginValue = marginMode && !isStockLine && !clears.clearSellingPriceOverride
       ? pctToFraction(draft.marginPct) : null;
     const currentList = item.manualSellingPricePerRequestedUnit ?? item.listUnitPrice;
     const listDraft = decision.priceMode === 'NET' || isStockLine ? draft.listUnitPrice : undefined;
@@ -2005,7 +2012,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
       formulaPerPiece: isStockLine && decision.priceMode !== 'NET' ? null : formulaPerPiece,
       formulaPerSqm: formulaPerPiece != null && sqm > 0 ? round2(Number(formulaPerPiece) / sqm) : null,
       margin: {
-        show: !isStockLine && cost != null && !hasPriceOverride && decision.priceMode === 'NET',
+        show: !isStockLine && cost != null && !hasPriceOverride
+          && (decision.priceMode === 'NET' || (decision.priceMode === 'SPECIAL_SQM' && decision.currency === 'THB')),
         value: rawDraft.marginPct ?? fractionToPct(item.proposedMarginPct),
         invalid: marginInvalid,
         error: MARGIN_RANGE_ERROR_PCT,
@@ -2041,7 +2049,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       saving: savingThis,
       clearingDiscount: scopedSaving && Boolean(saveCeoItemPrice.variables?.clears?.clearDiscountPct),
       clearingOverride: scopedSaving && Boolean(saveCeoItemPrice.variables?.clears?.clearSellingPriceOverride),
-      setDraft: (patch) => updateCeoPriceDraft(item.id, patch),
+      // Under SPECIAL_SQM a new กำไร % re-derives ราคาพิเศษ, so it drops any typed ราคาพิเศษ draft.
+      setDraft: (patch) => updateCeoPriceDraft(item.id, patch,
+        decision.priceMode === 'SPECIAL_SQM' && 'marginPct' in patch ? ['specialPriceSqm'] : []),
       openCostOverride: () => setCostOverrideItem({ decision, item, costingItem }),
       // ล้างส่วนลด / ใช้ราคาตามสูตร are scoped actions: each sends ONLY its own clear (an empty draft), so
       // neither can commit another still-unsent edit, and on success only that field's draft is dropped.

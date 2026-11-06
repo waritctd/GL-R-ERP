@@ -16,7 +16,7 @@ import { pricingRequestRecipientLabel } from './pricingRequestMeta.js';
 
 const MODES = [
   ['NET', 'ราคาตั้ง − ส่วนลด %', 'ใส่กำไร % แล้วระบบคำนวณราคาตั้งจากต้นทุน · ส่วนลด % หักจากราคาตั้ง'],
-  ['SPECIAL_SQM', 'ราคาพิเศษ/ตร.ม.', 'ใส่ราคาพิเศษต่อ ตร.ม. (รวม VAT) ระบบคำนวณราคาสุทธิต่อแผ่นให้'],
+  ['SPECIAL_SQM', 'ราคาพิเศษ/ตร.ม.', 'ตั้งกำไร % แล้วระบบคำนวณราคาพิเศษต่อ ตร.ม. (รวม VAT) = ทุน/ตร.ม. × (1 + กำไร) × 1.07 ให้ หรือใส่ราคาพิเศษเอง'],
   ['DIRECT_NET', 'ราคาสุทธิ/แผ่น', 'ใส่ราคาสุทธิต่อแผ่น (ก่อน VAT) ตรง ๆ'],
 ];
 
@@ -108,17 +108,17 @@ function priceFields(row, model, card) {
   const lock = model.savingAll;
   const id = row.item.id;
   const lbl = (text, node) => (card ? <label className="grid gap-1 text-sm font-bold">{text}{node}</label> : node);
+  const margin = row.margin.show
+    ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
+      {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
+      {row.margin.looksLikeFraction ? (
+        <span className="text-2xs text-warning-dark">
+          {`= ${row.margin.value}% — ถ้าตั้งใจ ${Number((Number(row.margin.value) * 100).toFixed(6))}% ให้กรอก ${Number((Number(row.margin.value) * 100).toFixed(6))}`}
+        </span>
+      ) : null}
+    </div>)
+    : <span className="text-text-muted">–</span>;
   if (priceMode === 'NET') {
-    const margin = row.margin.show
-      ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
-        {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
-        {row.margin.looksLikeFraction ? (
-          <span className="text-2xs text-warning-dark">
-            {`= ${row.margin.value}% — ถ้าตั้งใจ ${Number((Number(row.margin.value) * 100).toFixed(6))}% ให้กรอก ${Number((Number(row.margin.value) * 100).toFixed(6))}`}
-          </span>
-        ) : null}
-      </div>)
-      : <span className="text-text-muted">–</span>;
     const list = (
       <div className="grid gap-1">
         {lbl('ราคาตั้ง/แผ่น', <Num row={row} card={card} field="listUnitPrice" label="ราคาตั้ง/แผ่น" disabled={!editable || lock || row.list.disabled} value={row.list.value} testid={`pcr-ceo-list-price-${id}`} max={row.list.max} />)}
@@ -159,7 +159,7 @@ function priceFields(row, model, card) {
         </span>
       </div>
     );
-    return [formula, special];
+    return [margin, formula, special];
   }
   if (priceMode === 'DIRECT_NET') {
     return [lbl('ราคาสุทธิ/แผ่น', <Num row={row} card={card} field="directNetPrice" label="ราคาสุทธิ/แผ่น" suffix="/แผ่น" disabled={!editable || lock} value={row.direct} max={row.directMax} testid={`pcr-ceo-direct-net-${id}`} />)];
@@ -169,7 +169,7 @@ function priceFields(row, model, card) {
 
 function modeHeaders(priceMode) {
   if (priceMode === 'NET') return ['กำไร %', 'ราคาตั้ง/แผ่น', 'ส่วนลด'];
-  if (priceMode === 'SPECIAL_SQM') return ['ราคาตั้ง (สูตร)', 'ราคาพิเศษ'];
+  if (priceMode === 'SPECIAL_SQM') return ['กำไร %', 'ราคาตั้ง (สูตร)', 'ราคาพิเศษ'];
   if (priceMode === 'DIRECT_NET') return ['ราคาสุทธิ/แผ่น'];
   return [];
 }

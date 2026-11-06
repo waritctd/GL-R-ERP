@@ -48,28 +48,53 @@ export function lineProfitThb(costThb, netPriceInCurrency, fxRate) {
   return { profitPerUnit, pct: cost > 0 ? (profitPerUnit / cost) * 100 : null };
 }
 
+// Half-up to 10dp: the scale WastageCalculator carries its intermediate figures at.
+function round10(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 1e10) / 1e10;
+}
+const VAT_FACTOR = 1.07;
+
 /**
- * ราคาพิเศษ บาท/ตร.ม. (รวม VAT) that reproduces the formula price per แผ่น — the INVERSE of
- * WastageCalculator#netPerPieceFromSpecialSqm (net = round2((special / 1.07) / round2(1 / sqmPerPiece))),
- * using the same 2dp ตร.ม.->แผ่น reciprocal, so saving it gives back the formula price. 7% = the Thai
- * document's VAT. null when either input is missing.
+ * ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula, per the owner's own worked rule (2026-11-06):
+ *   ทุน/ตร.ม. × (1 + กำไร) × 1.07 = ราคาพิเศษ/ตร.ม. รวม VAT
+ * e.g. 953.72 × 1.3 × 1.07 = 1,326.63. The formula's selling_buffer (1.07) IS that VAT, so it is
+ * applied exactly once — the old prefill multiplied the already-buffered formula price by 1.07
+ * AGAIN. Worked per ตร.ม. straight from the cost so no per-แผ่น rounding creeps in. Falls back to
+ * the (already buffered) formula price per แผ่น × แผ่น/ตร.ม. when there is no cost/margin/buffer.
+ * null when there is nothing to derive it from.
  */
-function specialPriceSqmFromFormula(pricePerPiece, sqmPerPiece) {
-  const price = Number(pricePerPiece);
+export function specialPriceSqmFromFormula({ cost, marginFraction, sellingBuffer, pricePerPiece, sqmPerPiece }) {
   const sqm = Number(sqmPerPiece);
-  if (!(price > 0) || !(sqm > 0)) return null;
-  return round2(price * round2(1 / sqm) * 1.07);
+  if (!(sqm > 0)) return null;
+  if (cost != null && marginFraction != null && sellingBuffer > 0 && Number(cost) > 0) {
+    return round2((Number(cost) / sqm) * (1 + Number(marginFraction)) * Number(sellingBuffer));
+  }
+  const price = Number(pricePerPiece);
+  if (pricePerPiece == null || !(price > 0)) return null;
+  return round2(price * round2(1 / sqm));
+}
+
+/**
+ * Mirror of WastageCalculator#netPerPieceFromSpecialSqm, same rounding ORDER:
+ *   piecesPerSqm = round2(round10(1 / sqmPerPiece))
+ *   net          = round2( round10(special / 1.07) / piecesPerSqm )
+ * A preview only — the server recomputes on save and is authoritative.
+ */
+export function netPerPieceFromSpecialSqm(specialPerSqmIncVat, sqmPerPiece) {
+  const special = Number(specialPerSqmIncVat);
+  const sqm = Number(sqmPerPiece);
+  if (specialPerSqmIncVat === '' || specialPerSqmIncVat == null || !(special > 0) || !(sqm > 0)) return null;
+  const piecesPerSqm = round2(round10(1 / sqm));
+  if (!(piecesPerSqm > 0)) return null;
+  return round2(round10(round10(special / VAT_FACTOR) / piecesPerSqm));
 }
 
 /**
  * A CLIENT-SIDE PREVIEW ONLY — the server (PricingDecisionService#computeNetUnitPrice, reusing
  * WastageCalculator) is authoritative and recomputes on every save; this never feeds a stored
- * value. NET's `round2(list × (1 − pct/100))` has no rounding-order subtlety, so it is safe to
- * mirror. SPECIAL_SQM's net-per-piece derivation (`WastageCalculator#netPerPieceFromSpecialSqm`) is
- * deliberately NOT mirrored here — its two-step rounding order IS the algorithm — so this returns
- * `null` for it. The UI shows "คำนวณเมื่อบันทึก" for that mode instead of a number.
+ * value. SPECIAL_SQM mirrors WastageCalculator's two-step rounding (netPerPieceFromSpecialSqm).
  */
-export function previewCeoNetUnitPrice(priceMode, { listUnitPrice, discountPct, directNetPrice } = {}) {
+export function previewCeoNetUnitPrice(priceMode, { listUnitPrice, discountPct, directNetPrice, specialPriceSqm, sqmPerPiece } = {}) {
   if (priceMode === 'NET') {
     if (listUnitPrice === '' || listUnitPrice == null) return null;
     const discount = discountPct === '' || discountPct == null ? 0 : Number(discountPct);
@@ -79,6 +104,7 @@ export function previewCeoNetUnitPrice(priceMode, { listUnitPrice, discountPct, 
     if (directNetPrice === '' || directNetPrice == null) return null;
     return round2(Number(directNetPrice));
   }
+  if (priceMode === 'SPECIAL_SQM') return netPerPieceFromSpecialSqm(specialPriceSqm, sqmPerPiece);
   return null;
 }
 
@@ -103,7 +129,10 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
   const isStockLine = item.stockSource != null;
   const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
   const currentList = hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.listUnitPrice;
-  const marginDraftRaw = (!isStockLine && decision.priceMode === 'NET') ? rawDraft.marginPct : undefined;
+  // กำไร % drives the price under NET (ราคาตั้ง) and SPECIAL_SQM (ราคาพิเศษ, THB only — it is บาท/ตร.ม.).
+  const isSpecial = decision.priceMode === 'SPECIAL_SQM';
+  const marginMode = decision.priceMode === 'NET' || (isSpecial && decision.currency === 'THB');
+  const marginDraftRaw = (!isStockLine && marginMode) ? rawDraft.marginPct : undefined;
   const marginDraftFraction = pctToFraction(marginDraftRaw);
   const marginDrives = marginDraftRaw != null && marginDraftRaw !== '' && !hasPriceOverride && cost != null;
   const marginInvalid = marginDrives && marginOutOfRange(marginDraftFraction);
@@ -112,11 +141,21 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
       / (decision.currency === 'THB' ? 1 : (Number(decision.fxRateUsed) || 1)))
     : null;
   const formulaPerPiece = formulaFromMargin ?? item.proposedSellingPricePerRequestedUnit;
-  // Until a ราคาพิเศษ is saved (or typed), the formula price pre-fills it.
-  const autoSpecial = decision.priceMode === 'SPECIAL_SQM' && !isStockLine && editable
-    && item.specialPriceSqm == null && decision.currency === 'THB'
-    ? specialPriceSqmFromFormula(formulaPerPiece, item.sqmPerPiece)
+  // ราคาพิเศษ from the formula: a typed กำไร % always re-derives it; otherwise it pre-fills only
+  // until a ราคาพิเศษ is saved. A typed ราคาพิเศษ (rawDraft) always wins — typing กำไร % drops it.
+  const specialFromFormula = isSpecial && !isStockLine && editable && decision.currency === 'THB'
+    && (marginDrives ? !marginInvalid : item.specialPriceSqm == null)
+    ? specialPriceSqmFromFormula({
+      cost,
+      marginFraction: marginDrives ? marginDraftFraction : item.proposedMarginPct,
+      sellingBuffer,
+      pricePerPiece: marginDrives ? null : formulaPerPiece, // never a stale formula for a typed margin
+      sqmPerPiece: item.sqmPerPiece,
+    })
     : null;
+  const autoSpecial = specialFromFormula != null
+    && (item.specialPriceSqm == null || specialFromFormula !== Number(item.specialPriceSqm))
+    ? specialFromFormula : null;
   const draft = { ...(autoSpecial != null ? { specialPriceSqm: autoSpecial } : {}), ...rawDraft };
   const listDraft = draft.listUnitPrice;
   const listDraftNumber = cleanNumber(listDraft);
@@ -130,6 +169,8 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
     listUnitPrice: previewList,
     discountPct: draft.discountPct ?? item.discountPct,
     directNetPrice: draft.directNetPrice ?? item.directNetPrice,
+    specialPriceSqm: draft.specialPriceSqm ?? item.specialPriceSqm,
+    sqmPerPiece: item.sqmPerPiece,
   });
   // The formula prefill is a value that must be saved to price the line, so it counts as pending.
   const autoSpecialPending = autoSpecial != null && rawDraft.specialPriceSqm === undefined;
@@ -138,8 +179,8 @@ export function ceoRowFigures({ decision, item, rawDraft = {}, cost, editable, s
   // A pending draft always wins over the last-saved net; a ราคาตั้ง draft only moves the net under NET.
   const hasPendingDraft = otherDraftDirty || (decision.priceMode === 'NET' && 'listUnitPrice' in draft);
   const net = hasPendingDraft ? previewNet : item.netUnitPrice;
-  // SPECIAL_SQM's net is never previewed client-side (two-step rounding IS the algorithm).
-  const netPending = hasPendingDraft && net == null && decision.priceMode === 'SPECIAL_SQM';
+  // Only when there is no ราคาพิเศษ to preview from (e.g. blank, or no ตร.ม./แผ่น).
+  const netPending = hasPendingDraft && net == null && isSpecial;
   const qty = Number(item.requestedQuantity);
   const total = net != null ? round2(qty * net) : null;
   const profit = netPending ? null : lineProfitThb(cost, net ?? item.netUnitPrice, decision.fxRateUsed);
