@@ -23,10 +23,8 @@ import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.pricing.FxRateDto;
 import th.co.glr.hr.pricing.FxRateRepository;
-import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFormulaConfigDto;
-import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingFreightRateDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository.PricingCostingWriteItem;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
@@ -283,14 +281,15 @@ public class LandedCostCalculator {
             qtySqmByGroup.merge(
                 new FreightGroupKey(item.originCountryCode(), item.thicknessMm()), item.qtySqm(), BigDecimal::add);
         }
-        Map<FreightGroupKey, BigDecimal> freightAmountByGroup = new LinkedHashMap<>();
+        // Charged per container (PricingFormulaEngine#containerFreight: 1 ตู้ = 800 ตร.ม.), never
+        // once per shipment — a 7,820 ตร.ม. group pays for 10 containers, not 1.
+        Map<FreightGroupKey, PricingFormulaEngine.ContainerCharge> freightByGroup = new LinkedHashMap<>();
         for (Map.Entry<FreightGroupKey, BigDecimal> entry : qtySqmByGroup.entrySet()) {
             FreightGroupKey key = entry.getKey();
             BigDecimal groupQtySqm = entry.getValue();
-            PricingFreightRateDto freightRate = formulaEngine.selectFreightRate(formulaConfig.freightRates(),
+            freightByGroup.put(key, formulaEngine.containerFreight(formulaConfig.freightRates(),
                 key.originCountryCode(), key.thicknessMm(), groupQtySqm,
-                shipmentLabel + " ต้นทาง " + key.originCountryCode() + " หนา " + key.thicknessMm() + " มม.");
-            freightAmountByGroup.put(key, freightRate.amountThb());
+                shipmentLabel + " ต้นทาง " + key.originCountryCode() + " หนา " + key.thicknessMm() + " มม."));
         }
 
         // S: whole shipment, regardless of country or thickness.
@@ -298,21 +297,22 @@ public class LandedCostCalculator {
         for (BigDecimal groupQtySqm : qtySqmByGroup.values()) {
             shipmentQtySqm = shipmentQtySqm.add(groupQtySqm);
         }
-        PricingClearanceFeeDto clearanceFee = formulaEngine.selectClearanceFee(
+        PricingFormulaEngine.ContainerCharge clearance = formulaEngine.containerClearance(
             formulaConfig.clearanceFees(), shipmentQtySqm, shipmentLabel);
 
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
         for (ItemPhysicals item : items) {
             FreightGroupKey key = new FreightGroupKey(item.originCountryCode(), item.thicknessMm());
             BigDecimal freightGroupQtySqm = qtySqmByGroup.get(key);
-            BigDecimal freightAmountForGroup = freightAmountByGroup.get(key);
+            PricingFormulaEngine.ContainerCharge freight = freightByGroup.get(key);
+            BigDecimal freightAmountForGroup = freight.amountThb();
             // F/S allocation is inherently a TOTAL-for-the-item quantity (a share of a flat,
             // shipment-level amount, proportional to the item's own share of the group's sqm —
             // see class Javadoc) — computed once here, in totals, then carried through the
             // formula's own C/i/F/T/S/TC/UC pipeline (also totals, per V109's own definition: TC
             // is dimensionally a total, only UC=TC/Q converts it to a per-sqm rate).
             BigDecimal freightShareTotal = allocate(freightAmountForGroup, item.qtySqm(), freightGroupQtySqm);
-            BigDecimal clearanceShareTotal = allocate(clearanceFee.amountThb(), item.qtySqm(), shipmentQtySqm);
+            BigDecimal clearanceShareTotal = allocate(clearance.amountThb(), item.qtySqm(), shipmentQtySqm);
 
             PricingDutyRateDto dutyRate = formulaEngine.selectDutyRate(
                 formulaConfig.dutyRates(), item.productType(), itemLabel(item.source().requestItem()));
@@ -343,8 +343,8 @@ public class LandedCostCalculator {
             BigDecimal clearancePerPiece = money4(clearanceShareTotal.divide(item.qtyPieces(), 8, RoundingMode.HALF_UP));
 
             String snapshot = buildSnapshot(item, freightAmountForGroup, freightShareTotal,
-                freightGroupQtySqm, clearanceFee.amountThb(), clearanceShareTotal, shipmentQtySqm,
-                dutyRate.dutyPct(), formulaConfig, calculatedAt);
+                freightGroupQtySqm, clearance.amountThb(), clearanceShareTotal, shipmentQtySqm,
+                dutyRate.dutyPct(), formulaConfig, calculatedAt, freight, clearance);
 
             ResolvedSource source = item.source();
             writeItems.add(new PricingCostingWriteItem(
@@ -636,7 +636,9 @@ public class LandedCostCalculator {
     private String buildSnapshot(ItemPhysicals item, BigDecimal freightAmountForGroup,
                                  BigDecimal freightShare, BigDecimal freightGroupQtySqm, BigDecimal clearanceAmount,
                                  BigDecimal clearanceShare, BigDecimal shipmentQtySqm, BigDecimal dutyPct,
-                                 PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
+                                 PricingFormulaConfigDto formulaConfig, Instant calculatedAt,
+                                 PricingFormulaEngine.ContainerCharge freight,
+                                 PricingFormulaEngine.ContainerCharge clearance) {
         // Every value quoted as a JSON STRING (never a bare number), like requestedUnitBasis and
         // normalizedQuantityPieces, to avoid any BigDecimal-formatting edge case producing a token
         // the jsonb column would reject at insert time.
@@ -654,8 +656,18 @@ public class LandedCostCalculator {
             + ",\"shipmentQtySqm\":\"" + shipmentQtySqm + "\""
             + ",\"clearanceAmountThbForShipment\":\"" + clearanceAmount + "\""
             + ",\"clearanceShareThb\":\"" + clearanceShare + "\""
+            + ",\"containerSqm\":\"" + PricingFormulaEngine.CONTAINER_SQM + "\""
+            + ",\"freightFullContainers\":\"" + freight.fullContainers() + "\""
+            + ",\"freightRemainderSqm\":\"" + freight.remainderSqm() + "\""
+            + ",\"clearanceFullContainers\":\"" + clearance.fullContainers() + "\""
+            + ",\"clearanceRemainderSqm\":\"" + clearance.remainderSqm() + "\""
             + ",\"dutyPct\":\"" + dutyPct + "\""
             + ",\"costBuffer\":\"" + formulaConfig.costBuffer() + "\""
+            + ",\"insuranceValueFactor\":\"" + formulaConfig.insuranceValueFactor() + "\""
+            + ",\"insuranceRate\":\"" + formulaConfig.insuranceRate() + "\""
+            + ",\"insuranceBuffer\":\"" + formulaConfig.insuranceBuffer() + "\""
+            + ",\"insuranceThb\":\"" + item.insuranceThb() + "\""
+            + ",\"goodsCostTotalThb\":\"" + item.goodsCostThb() + "\""
             + ",\"requestedUnitBasis\":\"" + item.source().requestItem().requestedUnitBasis() + "\""
             + ",\"normalizedQuantityPieces\":\"" + item.qtyPieces() + "\"}";
     }
