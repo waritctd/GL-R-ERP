@@ -258,6 +258,8 @@ class ViewAsIntegrationTest extends AbstractRealSessionIntegrationTest {
         JsonNode me = me(browser);
         assertThat(me.path("user").path("id").asLong()).isEqualTo(other.id());
         assertThat(me.path("viewAs").isNull()).isTrue();
+        assertThat(audit("VIEW_AS_STOP", hrTarget.id())).as("dropped view is closed in the audit")
+            .extracting(r -> r.get("actor_user_id")).containsExactly(owner.id());
     }
 
     // ── 10. logout ───────────────────────────────────────────────────────────────────────────
@@ -283,6 +285,21 @@ class ViewAsIntegrationTest extends AbstractRealSessionIntegrationTest {
         assertThat(me.path("user").path("id").asLong()).isEqualTo(owner.id());
         assertThat(me.path("viewAs").isNull()).isTrue();
         assertThat(browser.get(ME).statusCode()).as("owner still signed in").isEqualTo(200);
+        assertThat(audit("VIEW_AS_STOP", plainTarget.id())).as("dropped view is closed in the audit")
+            .extracting(r -> r.get("actor_user_id")).containsExactly(owner.id());
+    }
+
+    @Test
+    void ownerLosingTheGateMidView_dropsTheView_andRecordsStop() throws Exception {
+        Browser browser = viewing(plainTarget);
+        jdbc.update("UPDATE hr.employee SET employee_code = 'VAS-GONE-' || employee_id WHERE employee_id = :id", Map.of("id", owner.id()));
+
+        JsonNode me = me(browser);
+
+        assertThat(me.path("user").path("id").asLong()).isEqualTo(owner.id());
+        assertThat(me.path("viewAs").isNull()).isTrue();
+        assertThat(me.path("canViewAs").asBoolean()).isFalse();
+        assertThat(audit("VIEW_AS_STOP", plainTarget.id())).extracting(r -> r.get("actor_user_id")).containsExactly(owner.id());
     }
 
     // ── 12. stop when not viewing ────────────────────────────────────────────────────────────

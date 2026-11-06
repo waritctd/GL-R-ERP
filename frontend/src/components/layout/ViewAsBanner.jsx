@@ -8,14 +8,20 @@ import { Button } from '../common/Button.jsx';
  */
 export function ViewAsBanner({ user }) {
   const [leaving, setLeaving] = useState(false);
+  const [error, setError] = useState('');
 
   async function leave() {
     setLeaving(true);
+    setError('');
     try {
       await api.viewAs.stop();
-    } finally {
-      window.location.assign('/');
+    } catch (e) {
+      // Reloading now would land straight back in the view with no explanation.
+      setError(e?.message || 'ออกจากมุมมองไม่สำเร็จ ลองอีกครั้ง');
+      setLeaving(false);
+      return;
     }
+    window.location.assign('/');
   }
 
   return (
@@ -24,6 +30,7 @@ export function ViewAsBanner({ user }) {
       className="flex flex-none flex-wrap items-center justify-center gap-3 border-b border-warning-border bg-warning-bg px-4 py-2 text-sm font-semibold text-warning-dark"
     >
       <span>กำลังดูในมุมมองของ {user.name} · อ่านอย่างเดียว</span>
+      {error ? <span role="alert" className="text-danger">{error}</span> : null}
       <Button variant="secondary" onClick={leave} disabled={leaving}>ออกจากมุมมองนี้</Button>
     </div>
   );

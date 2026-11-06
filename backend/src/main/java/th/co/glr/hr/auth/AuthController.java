@@ -15,22 +15,20 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
     private final AuthService authService;
     private final PasswordResetService passwordResetService;
-    private final ViewAsService viewAs;
 
-    public AuthController(AuthService authService, PasswordResetService passwordResetService, ViewAsService viewAs) {
+    public AuthController(AuthService authService, PasswordResetService passwordResetService) {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
-        this.viewAs = viewAs;
     }
 
     @PostMapping("/login")
     AuthResponse login(@Valid @RequestBody LoginRequest request, HttpServletRequest httpRequest) {
-        return viewAs.decorate(authService.login(request, httpRequest), httpRequest.getSession(false));
+        return authService.login(request, httpRequest);
     }
 
     @PostMapping("/change-password")
     AuthResponse changePassword(@Valid @RequestBody ChangePasswordRequest request, HttpSession session) {
-        return viewAs.decorate(authService.changePassword(request, session), session);
+        return authService.changePassword(request, session);
     }
 
     @PostMapping("/logout")
@@ -41,7 +39,7 @@ public class AuthController {
 
     @GetMapping("/me")
     AuthResponse me(HttpSession session) {
-        return viewAs.decorate(authService.me(session), session);
+        return authService.me(session);
     }
 
     @PostMapping("/forgot-password")

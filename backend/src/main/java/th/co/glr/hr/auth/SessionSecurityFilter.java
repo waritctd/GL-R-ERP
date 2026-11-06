@@ -50,9 +50,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class SessionSecurityFilter extends OncePerRequestFilter {
 
     private final SessionAccountResolver accounts;
+    private final ViewAsService viewAs;
 
-    public SessionSecurityFilter(SessionAccountResolver accounts) {
+    public SessionSecurityFilter(SessionAccountResolver accounts, ViewAsService viewAs) {
         this.accounts = accounts;
+        this.viewAs = viewAs;
     }
 
     @Override
@@ -91,6 +93,9 @@ public class SessionSecurityFilter extends OncePerRequestFilter {
         }
         Optional<UserPrincipal> current = accounts.current(stored.id());
         if (current.isEmpty()) {
+            if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) instanceof UserPrincipal target) {
+                viewAs.recordStopQuietly(stored, target);
+            }
             session.invalidate();
             return null;
         }
@@ -113,8 +118,15 @@ public class SessionSecurityFilter extends OncePerRequestFilter {
             return real;
         }
         Optional<UserPrincipal> target = accounts.current(stored.id());
-        if (target.isEmpty()) {
-            SessionContext.stopViewAs(session);
+        // The owner gate is re-checked live: losing it (code changed, deactivated) ends the view too.
+        if (target.isEmpty() || !viewAs.mayViewAs(real.id())) {
+            // The SPA's parallel requests all see the dead view; only the first closes it in the audit.
+            synchronized (org.springframework.web.util.WebUtils.getSessionMutex(session)) {
+                if (session.getAttribute(SessionContext.VIEW_AS_USER_KEY) != null) {
+                    viewAs.recordStopQuietly(real, stored);
+                    SessionContext.stopViewAs(session);
+                }
+            }
             return real;
         }
         UserPrincipal t = target.get();

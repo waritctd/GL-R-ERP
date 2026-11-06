@@ -58,6 +58,20 @@ describe('view-as banner', () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it('a failed stop does not reload into the view: shows the error and re-enables the button', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('location', { ...window.location, assign });
+    stop.mockRejectedValue(new Error('หยุดไม่ได้'));
+    renderShell({ ...target, canViewAs: true, viewAs: { actorId: 1, actorName: 'เจ้าของ' } });
+
+    await screen.findByText('เนื้อหา');
+    fireEvent.click(screen.getByRole('button', { name: 'ออกจากมุมมองนี้' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('หยุดไม่ได้');
+    expect(assign).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'ออกจากมุมมองนี้' }).disabled).toBe(false);
+  });
+
   it('shows no banner when not viewing', async () => {
     renderShell({ ...target, canViewAs: true, viewAs: null });
 

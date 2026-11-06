@@ -37,12 +37,12 @@ public class ViewAsController {
             throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.BAD_REQUEST, "ต้องระบุพนักงาน");
         }
         service.start(request.employeeId(), sessions.requireRealUser(session), session);
-        return service.decorate(authService.me(session), session);
+        return authService.me(session);
     }
 
     @DeleteMapping
     AuthResponse stop(HttpSession session) {
         service.stop(sessions.requireRealUser(session), session);
-        return service.decorate(authService.me(session), session);
+        return authService.me(session);
     }
 }

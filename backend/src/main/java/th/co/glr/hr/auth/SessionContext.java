@@ -28,6 +28,8 @@ public class SessionContext {
      * evidence would stop testing role gates. So the filter trusts a session with no sign-in
      * record exactly as it always did, and re-checks every session that has one.
      */
+    public static final String SESSION_SIGNED_IN_AT_KEY = "GLR_HR_SIGNED_IN_AT";
+
     /**
      * Read-only "view as employee": the TARGET principal, present only while the owner is viewing.
      * {@link #SESSION_USER_KEY} stays the REAL actor the whole time (activity log, audit, the
@@ -35,8 +37,6 @@ public class SessionContext {
      * #requireUser} answers with the target so every controller runs as them.
      */
     public static final String VIEW_AS_USER_KEY = "GLR_HR_VIEW_AS_USER";
-
-    public static final String SESSION_SIGNED_IN_AT_KEY = "GLR_HR_SIGNED_IN_AT";
 
     /**
      * Records a real sign-in: the principal, and the mark that makes {@link SessionSecurityFilter}
@@ -60,10 +60,19 @@ public class SessionContext {
 
     /** The EFFECTIVE user: the view-as target while viewing, otherwise the signed-in actor. */
     public UserPrincipal requireUser(HttpSession session) {
+        UserPrincipal user = effectiveUser(session);
+        if (user == null) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "กรุณาเข้าสู่ระบบก่อนใช้งาน");
+        }
+        return user;
+    }
+
+    /** The view-as target while viewing, otherwise the signed-in actor; {@code null} if neither. */
+    public static UserPrincipal effectiveUser(HttpSession session) {
         if (session.getAttribute(VIEW_AS_USER_KEY) instanceof UserPrincipal target) {
             return target;
         }
-        return requireRealUser(session);
+        return session.getAttribute(SESSION_USER_KEY) instanceof UserPrincipal real ? real : null;
     }
 
     /** The REAL signed-in actor, ignoring any view-as. Only the view-as endpoints may use this. */

@@ -3,6 +3,7 @@ package th.co.glr.hr.auth;
 import jakarta.servlet.http.HttpSession;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,7 @@ public class ViewAsService {
         this.ownerEmployeeCode = ownerEmployeeCode == null ? "" : ownerEmployeeCode.trim();
     }
 
+    /** Live, uncached: one primary-key lookup, and only when the feature is configured at all. */
     public boolean mayViewAs(long realActorId) {
         if (ownerEmployeeCode.isEmpty()) return false;
         return employees.findByEmployeeId(realActorId)
@@ -77,15 +79,17 @@ public class ViewAsService {
         }
     }
 
-    /** Adds the real actor's gate and, while viewing, who is behind the view. */
-    public AuthResponse decorate(AuthResponse response, HttpSession session) {
-        if (!(session.getAttribute(SessionContext.SESSION_USER_KEY) instanceof UserPrincipal real)) {
-            return response;
+    /**
+     * Writes VIEW_AS_STOP for a view that is being dropped outside {@link #stop} (logout, login on
+     * the same browser, target deactivated). Never throws: an audit problem must not break those paths.
+     */
+    public void recordStopQuietly(UserPrincipal real, UserPrincipal target) {
+        try {
+            auditService.record(real, "VIEW_AS_STOP", "employee", target.id(), null, details(target));
+        } catch (RuntimeException e) {
+            LoggerFactory.getLogger(ViewAsService.class)
+                .warn("Could not record VIEW_AS_STOP for employee {}", real.id(), e);
         }
-        AuthResponse.ViewAsInfo info = session.getAttribute(SessionContext.VIEW_AS_USER_KEY) != null
-            ? new AuthResponse.ViewAsInfo(real.id(), real.name()) : null;
-        return new AuthResponse(response.user(), response.admin(), response.canCreateQuotation(),
-            response.canIssueBillingNote(), mayViewAs(real.id()), info);
     }
 
     private static Map<String, Object> details(UserPrincipal target) {
