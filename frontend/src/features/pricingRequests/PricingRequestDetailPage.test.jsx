@@ -2081,7 +2081,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     });
 
     it('new-form SPECIAL_SQM: กำไร % comes first and derives ราคาพิเศษ = ทุน/ตร.ม. × (1 + กำไร) × 1.07, net and กำไร show before save (owner 2026-11-06)', async () => {
-      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1.07 } }) };
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
       try {
         await renderCeoNewForm({ priceMode: 'SPECIAL_SQM', items: [nfItem()] });
         await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
@@ -2091,7 +2091,7 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
         // cost 60/แผ่น at 0.36 ตร.ม. = 166.67/ตร.ม.; × 1.30 × 1.07 = 231.83; net = 231.83 / 1.07 / 2.78 = 77.94
         fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '30' } });
         await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('231.83'));
-        expect(ceoRow(8001).getByTestId('pcr-ceo-special-formula-8001').textContent).toBe('= 166.67 × 1.30 × 1.07');
+        expect(ceoRow(8001).getByTestId('pcr-ceo-special-formula-8001').textContent).toBe('= 166.67 × 1.30 × VAT 1.07');
         expect(within(ceoPricingPanel()).getByTestId('pcr-ceo-special-steps').textContent).toContain('กำไร %');
         // a hand-typed ราคาพิเศษ is not labelled as the formula's
         fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: '240' } });
@@ -5332,15 +5332,15 @@ describe('CEO pricing inside รายการสินค้าและรา
   // The formula price (CEO config: cost x (1 + margin) x buffer) pre-fills ราคาพิเศษ, and ต้นทุน
   // reads per แผ่น AND per ตร.ม., so the CEO need not work these out.
   describe('auto-calculated prices and ต้นทุน in both units', () => {
-    it('pre-fills ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula price: 72/แผ่น at 0.36 ตร.ม. -> 72 x 2.78 = 200.16 (the formula already carries the 1.07 — never applied twice), and saves it', async () => {
+    it('pre-fills ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula price: 72/แผ่น (before VAT) at 0.36 ตร.ม. -> 72 x 2.78 x VAT 1.07 = 214.17, and saves it', async () => {
       await renderCeo({ priceMode: 'SPECIAL_SQM', items: [newFormItem()] }); // formula 72, sqmPerPiece 0.36
-      expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('200.16');
+      expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('214.17');
       // the pre-fill is an unsaved draft: the row says so (with its own tag) and the one save offers it
       expect(ceoRow(8001).getByText('ใช้ราคาตามสูตร — ยังไม่บันทึก')).not.toBeNull();
       expect(saveAllButton().textContent).toContain('บันทึกราคา (1 รายการ)');
 
       fireEvent.click(saveAllButton());
-      await waitFor(() => expect(lastSavedItem()).toEqual(expect.objectContaining({ specialPriceSqm: 200.16 })));
+      await waitFor(() => expect(lastSavedItem()).toEqual(expect.objectContaining({ specialPriceSqm: 214.17 })));
     });
 
     it('lets the CEO type over the pre-fill, and never replaces a saved ราคาพิเศษ', async () => {
@@ -6244,7 +6244,7 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
   });
 
   describe('summary bar', () => {
-    it('is the section "สรุปราคาคำขอนี้", sticky on desktop, and shows ตั้งราคาแล้ว n/N, ราคาขายรวม, ต้นทุนรวม (lines with cost AND net) and กำไรรวม ฿ + % of cost', async () => {
+    it('is the section "สรุปราคาคำขอนี้", scrolls with the page (not sticky — owner 2026-11-06), and shows ตั้งราคาแล้ว n/N, ราคาขายรวม, ต้นทุนรวม (lines with cost AND net) and กำไรรวม ฿ + % of cost', async () => {
       await renderCeoNewForm({
         requestItems: requestItemsN(4),
         items: [
@@ -6256,7 +6256,7 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
       });
 
       const region = screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' });
-      expect(region.className).toMatch(/sticky/);
+      expect(region.className).not.toMatch(/sticky/);
       const summary = ceoSummary();
       // priced = server net present and not blocked: 8001, 8002, 8003 (8004 has no cost and no net)
       expect(summary.getByTestId('pcr-ceo-sum-priced').textContent).toMatch(/ตั้งราคาแล้ว.*3\/4.*รายการ/);
@@ -6514,8 +6514,47 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
       expect(ceoTable().queryByTestId('pcr-ceo-details-8001')).toBeNull();
     });
 
+    it.each([
+      ['SPECIAL_SQM', 'ราคาพิเศษ/ตร.ม.', '1,338.83'],
+      ['NET', 'ราคาตั้ง/แผ่น', '18.40'],
+      ['DIRECT_NET', null, null],
+    ])('%s: the calculation ends on the price that mode is set from', async (priceMode, label, amount) => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        const costingItem = {
+          id: 1, factoryName: 'Equipe', factoryQuoteRevisionNo: 1, landedCostPerUnitThb: 14.1544,
+          rawUnitPrice: 14.283, rawCurrency: 'EUR', rawUnit: 'ตร.ม.', fxRate: 37.9944, sqmPerUnit: 0.014706,
+          goodsCostThb: 7.9806, normalizedQuantityPieces: 265880,
+          calculationSnapshot: JSON.stringify({
+            formula: 'V109', itemQtySqm: '3910.0312800000', dutyPct: '0.3', costBuffer: '1.07',
+            insuranceValueFactor: '1.15', insuranceRate: '0.0045', insuranceBuffer: '1.07',
+            freightAmountThbForGroup: '1000000', freightGroupQtySqm: '7820.0362800000', freightShareThb: '500001.6803',
+            clearanceAmountThbForShipment: '200000', shipmentQtySqm: '7820.0362800000', clearanceShareThb: '100000.3361',
+          }),
+        };
+        await renderCeoNewForm({
+          priceMode,
+          items: [nfItem({ pricingCostingItemId: 1, proposedMarginPct: 0.3, frozenLandedCostPerRequestedUnitThb: 14.1544, directNetPrice: 18 })],
+          costings: [buildCosting({ id: 601, items: [costingItem] })],
+        });
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+        fireEvent.click(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' }));
+        const calc = await ceoTable().findByTestId('pcr-ceo-calc-8001');
+        await waitFor(() => expect(calc.textContent).toContain('962.49'));
+        for (const other of ['ราคาพิเศษ/ตร.ม.', 'ราคาตั้ง/แผ่น'].filter((l) => l !== label)) {
+          expect(calc.textContent).not.toContain(other);
+        }
+        if (label) {
+          expect(calc.textContent).toContain(label);
+          expect(calc.textContent).toContain(amount);
+        }
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
+
     it('รายละเอียด shows the full cost calculation, step by step (owner request 2026-11-06)', async () => {
-      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1.07 } }) };
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
       try {
         // DL-2026-0325 row 1: 3,910.03 of a 7,820.04 ตร.ม. Equipe shipment = 10 containers, half each.
         const costingItem = {

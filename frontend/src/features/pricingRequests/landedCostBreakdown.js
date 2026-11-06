@@ -9,7 +9,10 @@
 //   S  = this line's share of the shipment's container clearance charge
 //   TC = [(C + i + F) × (1 + duty) × cost buffer] + S
 //   ทุน/ตร.ม. = TC ÷ ตร.ม.
-//   ราคาพิเศษ = ทุน/ตร.ม. × (1 + กำไร) × selling buffer (VAT)
+//   ราคาตั้ง/แผ่น (ก่อน VAT) = ทุน/แผ่น × (1 + กำไร) × selling buffer
+//   ราคาพิเศษ/ตร.ม. (รวม VAT) = ทุน/ตร.ม. × (1 + กำไร) × selling buffer × VAT 1.07
+
+import { VAT_FACTOR } from './ceoPricingRow.js';
 
 function money4(n) {
   return Math.round((Number(n) + Number.EPSILON) * 1e4) / 1e4;
@@ -69,7 +72,12 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
 
   const margin = num(marginFraction);
   const buffer = num(sellingBuffer);
-  const specialPerSqm = margin != null && buffer > 0 ? round2(costPerSqm * (1 + margin) * buffer) : null;
+  const priced = margin != null && buffer > 0;
+  const specialPerSqm = priced ? round2(costPerSqm * (1 + margin) * buffer * VAT_FACTOR) : null;
+  // The engine prices ราคาตั้ง from the frozen per-แผ่น cost (money4), so mirror that here.
+  const sqmPerPiece = num(costingItem.sqmPerUnit);
+  const costPerPiece = sqmPerPiece != null ? money4(costPerSqm * sqmPerPiece) : null;
+  const listPerPiece = priced && costPerPiece != null ? round2(costPerPiece * (1 + margin) * buffer) : null;
 
   const fullOrNull = (v) => (v == null || v === '' ? null : Number(v));
   return {
@@ -112,5 +120,8 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
     margin,
     sellingBuffer: buffer,
     specialPerSqm,
+    costPerPiece,
+    listPerPiece,
+    vat: VAT_FACTOR,
   };
 }

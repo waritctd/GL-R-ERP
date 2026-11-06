@@ -61,7 +61,7 @@ import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 import { CeoPricingHeader, CeoPricingWorkspace } from './CeoPricingWorkspace.jsx';
 import {
   ceoRowFigures, cleanNumber, fractionToPct, lineProfitThb, marginOutOfRange, pctToFraction, round2,
-  specialPriceSqmFromFormula,
+  specialPriceSqmFromFormula, VAT_FACTOR,
 } from './ceoPricingRow.js';
 import { landedCostBreakdown } from './landedCostBreakdown.js';
 import { ImportPricingHeader, ImportPricingWorkspace } from './ImportPricingWorkspace.jsx';
@@ -775,7 +775,7 @@ function PriceOverrideModal({ item, decision, onClose, onSubmit, pending, newFor
 const FX_SOURCE_LABEL = { THB: 'บาท', MANUAL: 'กรอกเอง', BOT: 'ธปท.' };
 const fxNote = (decision) => `${FX_SOURCE_LABEL[decision.fxSource] ?? decision.fxSource}, ${formatThaiDate(decision.fxEffectiveDate)}`;
 
-// "= ทุน/ตร.ม. × (1 + กำไร) × 1.07" under a SPECIAL_SQM ราคาพิเศษ — only while the box holds exactly
+// "= ทุน/ตร.ม. × (1 + กำไร) × 1.07 (VAT)" under a SPECIAL_SQM ราคาพิเศษ — only while the box holds exactly
 // that formula figure, so a hand-typed price is never labelled as if the formula produced it.
 function specialFormulaNote(decision, item, cost, special, marginFraction, sellingBuffer) {
   if (decision.priceMode !== 'SPECIAL_SQM' || decision.currency !== 'THB' || item.stockSource != null) return null;
@@ -783,7 +783,8 @@ function specialFormulaNote(decision, item, cost, special, marginFraction, selli
   const formula = specialPriceSqmFromFormula({ cost, marginFraction, sellingBuffer, sqmPerPiece: item.sqmPerPiece });
   if (formula == null || Number(special) !== formula) return null;
   const fmt2 = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `= ${fmt2(cost / Number(item.sqmPerPiece))} × ${fmt2(1 + Number(marginFraction))} × ${sellingBuffer}`;
+  const buffer = sellingBuffer !== 1 ? ` × ${sellingBuffer}` : '';
+  return `= ${fmt2(cost / Number(item.sqmPerPiece))} × ${fmt2(1 + Number(marginFraction))}${buffer} × VAT ${VAT_FACTOR}`;
 }
 
 export function PricingRequestDetailPage({ user, showToast }) {
