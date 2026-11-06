@@ -6593,6 +6593,80 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
         delete api.pricingFormulaConfig;
       }
     });
+
+    // CEO ruling 2026-11-06: capacity by thickness; thicknesses combine in one container, shares by container space.
+    const calcSnapshotRows = async (snapshotExtra) => {
+      const costingItem = {
+        id: 1, factoryName: 'Equipe', factoryQuoteRevisionNo: 1, landedCostPerUnitThb: 14.1544,
+        rawUnitPrice: 14.283, rawCurrency: 'EUR', rawUnit: 'ตร.ม.', fxRate: 37.9944, sqmPerUnit: 0.014706,
+        goodsCostThb: 7.9806, normalizedQuantityPieces: 265880, calculationConfigVersion: 2,
+        calculationSnapshot: JSON.stringify({
+          formula: 'V109', itemQtySqm: '300.0000000000', dutyPct: '0.300000', costBuffer: '1.070000',
+          insuranceValueFactor: '1.150000', insuranceRate: '0.004500', insuranceBuffer: '1.070000',
+          freightAmountThbForGroup: '160000.0000', freightGroupQtySqm: '600.0000000000', freightShareThb: '102400.0000',
+          clearanceAmountThbForShipment: '28000.0000', shipmentQtySqm: '600.0000000000', clearanceShareThb: '17920.0000',
+          ...snapshotExtra,
+        }),
+      };
+      await renderCeoNewForm({
+        priceMode: 'SPECIAL_SQM',
+        items: [nfItem({ pricingCostingItemId: 1, proposedMarginPct: 0.3, frozenLandedCostPerRequestedUnitThb: 14.1544 })],
+        costings: [buildCosting({ id: 601, items: [costingItem] })],
+      });
+      await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+      fireEvent.click(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' }));
+      return ceoTable().findByTestId('pcr-ceo-calc-8001');
+    };
+
+    it('F/S share lines read by container space when the snapshot has the container-unit keys', async () => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        // 300 ตร.ม. @19 mm + 300 ตร.ม. @10 mm: units 0.666667 / 1.041667 → 64%; 1 ตู้ + leftover 33.33 ตร.ม.
+        const calc = await calcSnapshotRows({
+          containerSqm: '450', itemContainerUnits: '0.666667', freightGroupContainerUnits: '1.041667',
+          shipmentContainerUnits: '1.041667', freightRoundUpAboveSqm: '600', freightFullContainers: '1', freightRemainderSqm: '33.33',
+          clearanceFullContainers: '1', clearanceRemainderSqm: '33.33',
+        });
+        await waitFor(() => expect(calc.textContent).toContain('160,000.00 × 0.666667 ÷ 1.041667 ตู้ (64%)'));
+        const text = calc.textContent;
+        expect(text).toContain('28,000.00 × 0.666667 ÷ 1.041667 ตู้ (64%)');
+        expect(text).toContain('1 ตู้ + 33.33 ตร.ม. · ความจุ 450 ตร.ม./ตู้ · เศษเกิน 600 ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้');
+        expect(text).not.toContain('แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน');
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
+
+    it('the F sub-line takes capacity and round-up threshold from the snapshot (thick-only: 450 / 250)', async () => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        const calc = await calcSnapshotRows({
+          containerSqm: '450', itemContainerUnits: '1', freightGroupContainerUnits: '2', shipmentContainerUnits: '2',
+          freightRoundUpAboveSqm: '250', freightFullContainers: '2', freightRemainderSqm: '0',
+          clearanceFullContainers: '2', clearanceRemainderSqm: '0',
+        });
+        await waitFor(() => expect(calc.textContent).toContain('2 ตู้ · ความจุ 450 ตร.ม./ตู้ · เศษเกิน 250 ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้'));
+        expect(calc.textContent).not.toContain('หนา 17–21 มม.');
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
+
+    it('an old snapshot without the container-unit keys keeps today\'s ÷ 800 text unchanged', async () => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        const calc = await calcSnapshotRows({
+          containerSqm: '800', freightFullContainers: '1', freightRemainderSqm: '0', clearanceFullContainers: '1', clearanceRemainderSqm: '0',
+        });
+        await waitFor(() => expect(calc.textContent).toContain('160,000.00 × 300.00 ÷ 600.00 ตร.ม. (50%)'));
+        const text = calc.textContent;
+        expect(text).toContain('28,000.00 × 300.00 ÷ 600.00 ตร.ม. (50%)');
+        expect(text).toContain('1 ตู้ = 600.00 ตร.ม. ÷ 800 ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน');
+        expect(text).not.toContain('แบ่งตามพื้นที่ในตู้');
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
   });
 
   describe('margin: typed and shown as a PERCENT, stored as a fraction', () => {

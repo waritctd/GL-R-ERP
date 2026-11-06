@@ -5,7 +5,7 @@
 //
 //   C  = goods cost (factory price × FX, per แผ่น, × แผ่น)
 //   i  = C × insurance value factor × insurance rate × insurance buffer
-//   F  = this line's share of the freight group's container charge
+//   F  = this line's share of the freight group's container charge (by container space)
 //   S  = this line's share of the shipment's container clearance charge
 //   TC = [(C + i + F) × (1 + duty) × cost buffer] + S
 //   ทุน/ตร.ม. = TC ÷ ตร.ม.
@@ -100,6 +100,8 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
       groupQtySqm: num(snap.freightGroupQtySqm),
       fullContainers: fullOrNull(snap.freightFullContainers),
       remainderSqm: num(snap.freightRemainderSqm),
+      groupUnits: num(snap.freightGroupContainerUnits),
+      roundUpAboveSqm: num(snap.freightRoundUpAboveSqm),
     },
     clearance: {
       share: clearance,
@@ -108,8 +110,11 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
       groupQtySqm: num(snap.shipmentQtySqm),
       fullContainers: fullOrNull(snap.clearanceFullContainers),
       remainderSqm: num(snap.clearanceRemainderSqm),
+      groupUnits: num(snap.shipmentContainerUnits),
     },
     containerSqm: num(snap.containerSqm),
+    // Container space (sqm ÷ capacity) the shares are taken over; absent on costings written before 2026-11-06.
+    itemUnits: num(snap.itemContainerUnits),
     dutyPct,
     costBuffer,
     cif,
