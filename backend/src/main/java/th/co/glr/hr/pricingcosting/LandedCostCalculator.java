@@ -663,6 +663,11 @@ public class LandedCostCalculator {
             + ",\"clearanceRemainderSqm\":\"" + clearance.remainderSqm() + "\""
             + ",\"dutyPct\":\"" + dutyPct + "\""
             + ",\"costBuffer\":\"" + formulaConfig.costBuffer() + "\""
+            + ",\"insuranceValueFactor\":\"" + formulaConfig.insuranceValueFactor() + "\""
+            + ",\"insuranceRate\":\"" + formulaConfig.insuranceRate() + "\""
+            + ",\"insuranceBuffer\":\"" + formulaConfig.insuranceBuffer() + "\""
+            + ",\"insuranceThb\":\"" + item.insuranceThb() + "\""
+            + ",\"goodsCostTotalThb\":\"" + item.goodsCostThb() + "\""
             + ",\"requestedUnitBasis\":\"" + item.source().requestItem().requestedUnitBasis() + "\""
             + ",\"normalizedQuantityPieces\":\"" + item.qtyPieces() + "\"}";
     }
