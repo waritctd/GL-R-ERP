@@ -308,15 +308,15 @@ describe('QuotationDocumentView ตำแหน่งติดตั้ง group
 });
 
 describe('QuotationDocumentView ผู้สั่งซื้อ signature slot -- owner-directed reversal of F2 (2026-09-26)', () => {
-  it('prints the manually-typed orderedByName as the fourth signature slot', () => {
+  // Owner 2026-11-06: the slot stays blank for the customer's pen even when a name is stored.
+  it('leaves the ผู้สั่งซื้อ slot as a dash even when an orderedByName is stored', () => {
     const { getByText } = render(
       <QuotationDocumentView quotation={docQuotation({ orderedByName: 'คุณวิชัย มั่นคง' })} />,
     );
-    // Scoped to the signature panel: the contact name ALSO heads the customer block
-    // (ติดต่อผู้สั่งซื้อ), exactly as the printed header does, so an unscoped query is ambiguous.
     const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
     expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
-    expect(signatures.getByText('คุณวิชัย มั่นคง')).not.toBeNull();
+    expect(signatures.queryByText('คุณวิชัย มั่นคง')).toBeNull();
+    expect(signatures.getByText('-')).not.toBeNull();
   });
 
   /** The fixture's contactName ('ณัฐพงศ์ ศรีวิไล') must NEVER appear in the signature slot, even
@@ -347,7 +347,6 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
     const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
     expect(signatures.getByText('ผู้สั่งซื้อ')).not.toBeNull();
     expect(signatures.queryByText('ผู้ติดต่อ')).toBeNull();
-    expect(signatures.getByText('คุณวิชัย มั่นคง')).not.toBeNull();
   });
 
   it('the English document keeps "Ordered by" for the same slot', () => {
@@ -359,7 +358,7 @@ describe('QuotationDocumentView ผู้สั่งซื้อ signature slot
     const signatures = within(getByText('ผู้เกี่ยวข้อง').closest('section'));
     expect(signatures.getByText('Ordered by')).not.toBeNull();
     expect(signatures.queryByText('ผู้ติดต่อ')).toBeNull();
-    expect(signatures.getByText('Mr. Wichai')).not.toBeNull();
+    expect(signatures.queryByText('Mr. Wichai')).toBeNull();
   });
 });
 

@@ -212,14 +212,13 @@ public final class DealQuotationRenderAdapter {
                 WastageCalculator.rowPriceMode(quotation.priceMode(), item.priceMode()), english, itemPictures))
             .toList();
 
-        // Slot 4 = the ผู้สั่งซื้อ snapshot; the dates row =
-        // created / submitted / approved, each only once it exists -- a DRAFT prints only
-        // ผู้พิมพ์'s, and ผู้สั่งซื้อ's stays dotted for the customer's pen.
+        // Slot 4 = ผู้สั่งซื้อ: ALWAYS null, the dotted line for the customer's pen (owner 2026-09-26,
+        // restated 2026-11-06). The picked ผู้ติดต่อ prints only after "เรียน"; the stored
+        // ordered_by_name is never printed here. The dates row = created / submitted / approved,
+        // each only once it exists -- a DRAFT prints only ผู้พิมพ์'s.
         // On an ENGLISH document each signatory prints its hr.employee first_name_en/
         // last_name_en, FALLING BACK to the Thai name when those are blank — an empty signature
-        // slot on a customer-facing document is worse than a Thai name on an English page. The
-        // ผู้สั่งซื้อ slot is the CUSTOMER's contact, not an employee: there is no English name
-        // stored for it anywhere, so it prints the snapshot as typed in either language.
+        // slot on a customer-facing document is worse than a Thai name on an English page.
         // printedBy/salesRep each fall back to the display override when the corresponding
         // *DisplayId is set (V179) — see #printedByName/#salesRepDisplayNameOrReal. approvedBy
         // is untouched: the override never covers the approver slot.
@@ -227,7 +226,7 @@ public final class DealQuotationRenderAdapter {
             printedByName(quotation, english),
             salesRepDisplayNameOrReal(quotation, english),
             displayName(quotation.approvedByName(), quotation.approvedByNameEn(), english),
-            orderedByName(quotation),
+            null,
             approverSignaturePng, approverSignatureMime,
             bangkokDate(quotation.createdAt()), bangkokDate(quotation.submittedAt()), bangkokDate(quotation.approvedAt()),
             printedBySignaturePng, printedBySignatureMime,
@@ -1101,25 +1100,6 @@ public final class DealQuotationRenderAdapter {
             return english.trim();
         }
         return thai;
-    }
-
-    // ── The ผู้สั่งซื้อ signature slot ──────────────────────────────────────────────────────────
-    // Prints the stored {@code DealQuotationDto#orderedByName} ({@code sales.quotation.ordered_by_name},
-    // V192), else the dotted {@code QuotationRenderer#BLANK_NAME_PLACEHOLDER} — the customer signs
-    // on paper. It never auto-fills from contactName/customerName here. Nobody types that name:
-    // the ผู้ติดต่อ is picked per quotation, and DealQuotationService writes that contact's name
-    // into ordered_by_name on every DRAFT save (null with no contact; the deal's own contact is
-    // never inherited). Issued rows are never re-saved, so they print exactly what they
-    // printed. Deliberately does NOT touch #printContactPart/the "เรียน ..." greeting line
-    // above, which reads contactName/customerName.
-
-    /** The ผู้สั่งซื้อ signature-slot name: the stored {@link DealQuotationDto#orderedByName} (the
-     * server-derived name of the quotation's picked ผู้ติดต่อ), or null (the dotted placeholder)
-     * when it is blank. {@code QuotationRenderer} only ever falls back to the placeholder when THIS
-     * returns null. Shared by both TH/EN documents -- {@code Signatories} is built once above for
-     * either language. */
-    static String orderedByName(DealQuotationDto quotation) {
-        return blank(quotation.orderedByName()) ? null : quotation.orderedByName().trim();
     }
 
     // ── ผู้พิมพ์/พนักงานขาย print-name override (V179) ──────────────────────────────────────────

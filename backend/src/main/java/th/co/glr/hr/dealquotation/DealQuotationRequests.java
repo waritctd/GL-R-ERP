@@ -356,9 +356,9 @@ public final class DealQuotationRequests {
      * inherited.
      *
      * ⚠️ Resolving to a contact is not REQUIRED, so create/update/submit do not refuse a quotation
-     * with no contact anywhere in the resolution chain. The picked contact's name is also the
-     * ผู้สั่งซื้อ signature name: the server writes it to ordered_by_name and ignores {@code
-     * orderedByName}. A contact id that IS given (or kept from the draft) must still belong
+     * with no contact anywhere in the resolution chain. The server writes the picked contact's
+     * name to ordered_by_name (stored only, never printed) and ignores {@code orderedByName}.
+     * A contact id that IS given (or kept from the draft) must still belong
      * to the deal's customer, refused as 400 otherwise; its name/phone/email are snapshotted onto
      * the quotation same as before (V167). Enforced in {@code DealQuotationService#resolveContact},
      * not by bean validation, because the customer check is a DB lookup.
@@ -484,8 +484,8 @@ public final class DealQuotationRequests {
             message = "ต้องเป็น BEFORE_DELIVERY, ON_DELIVERY หรือ ON_OR_BEFORE_DELIVERY")
         String fullPaymentTerm,
         /**
-         * IGNORED. The ผู้สั่งซื้อ signature name is the picked
-         * contact's name: {@code DealQuotationService} writes {@code ordered_by_name} from the
+         * IGNORED. {@code DealQuotationService} writes {@code ordered_by_name} (stored only, never
+         * printed) from the
          * resolved {@link #contactId} on every DRAFT save (null when no contact is picked) and never
          * reads this field. It stays on the wire, still size-checked, so an older client's request
          * is not refused.

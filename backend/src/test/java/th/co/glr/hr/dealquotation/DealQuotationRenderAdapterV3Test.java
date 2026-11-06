@@ -1034,18 +1034,16 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.attnLine()).isEqualTo("คุณธนพล ใจดี   /   บริษัท ทดสอบ จำกัด");
     }
 
-    // ── the ผู้สั่งซื้อ signature slot NEVER
-    // auto-fills from contactName/customerName — see
-    // DealQuotationRenderAdapter#orderedByName's own Javadoc. It prints
-    // ONLY a rep's manually-typed DealQuotationDto#orderedByName, or the dotted placeholder when
-    // that is blank — regardless of what contactName/customerName carry.
+    // ── the ผู้สั่งซื้อ signature slot ──
+    // The ผู้สั่งซื้อ slot is ALWAYS the dotted line for the customer's pen (owner, 2026-09-26, restated
+    // 2026-11-06): a stored ordered_by_name (the picked ผู้ติดต่อ's name) never prints there.
 
     @Test
-    void signatories_orderedBy_printsTheManualNameWhenSet() {
+    void signatories_orderedBy_staysNullEvenWhenAnOrderedByNameIsStored() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null)
                 .withOrderedByName("คุณวิชัย มั่นคง"), null, null);
-        assertThat(model.signatories().orderedBy()).isEqualTo("คุณวิชัย มั่นคง");
+        assertThat(model.signatories().orderedBy()).isNull();
     }
 
     /** A contact name AND a customer name are both present, but no
@@ -1065,31 +1063,6 @@ class DealQuotationRenderAdapterV3Test {
         assertThat(model.signatories().orderedBy()).isNull();
     }
 
-    @Test
-    void orderedByName_directly_printsTheManualNameTrimmed() {
-        assertThat(DealQuotationRenderAdapter.orderedByName(
-            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null)
-                .withOrderedByName("  คุณวิชัย มั่นคง  "))).isEqualTo("คุณวิชัย มั่นคง");
-    }
-
-    /** The same guard at the direct-method level: contactName/customerName present,
-     * orderedByName blank/null -- must return null (never fall back to either), and specifically
-     * must never equal the contact or customer name. */
-    @Test
-    void orderedByName_directly_neverFallsBackToContactOrCustomerNameAnyMore() {
-        assertThat(DealQuotationRenderAdapter.orderedByName(
-            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null))).isNull();
-        assertThat(DealQuotationRenderAdapter.orderedByName(
-            quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null))).isNull();
-        assertThat(DealQuotationRenderAdapter.orderedByName(
-            quotationWithContact(null, null, null))).isNull();
-        // Blank (whitespace-only) manual name is treated the same as unset -- null, not the
-        // whitespace itself.
-        assertThat(DealQuotationRenderAdapter.orderedByName(
-            quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null)
-                .withOrderedByName("   "))).isNull();
-    }
-
     /** The "เรียน ..." greeting line is OUT OF SCOPE for this reversal and must still read
      * contactName exactly as before -- this is the same fixture as the manual-name test above,
      * proving the two are independent: setting orderedByName does not change the greeting, and
@@ -1100,26 +1073,23 @@ class DealQuotationRenderAdapterV3Test {
             quotationWithContact("สมหญิง ใจดี", "บริษัท ทดสอบ จำกัด", null)
                 .withOrderedByName("คุณวิชัย มั่นคง"), null, null);
         assertThat(model.attnLine()).contains("สมหญิง ใจดี");
-        assertThat(model.signatories().orderedBy()).isEqualTo("คุณวิชัย มั่นคง");
-        assertThat(model.signatories().orderedBy())
-            .as("signature slot must never equal the greeting's contact name")
-            .isNotEqualTo("สมหญิง ใจดี");
+        assertThat(model.signatories().orderedBy()).isNull();
     }
 
     /** ⚠️ The full scenario the frontend produces on EVERY quotation, since the contact-picker
      * is not required: contactName is
      * null (DealQuotationService#resolveContact's blank snapshot), so the greeting falls back to
      * printing the customer alone -- exactly as {@link #printContactPart} already guarantees for a
-     * blank contactName -- while the ผู้สั่งซื้อ signature slot prints whatever the rep typed into
-     * `orderedByName`, entirely independently of there being no contact at all. */
+     * blank contactName -- while the ผู้สั่งซื้อ signature slot stays the dotted line even with a
+     * stored `orderedByName`. */
     @Test
-    void noContact_greetingFallsBackToCustomer_andSignatureSlotPrintsTheTypedOrderedByName() {
+    void noContact_greetingFallsBackToCustomer_andSignatureSlotStaysDotted() {
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(
             quotationWithContact(null, "บริษัท ทดสอบ จำกัด", null)
                 .withOrderedByName("คุณวิชัย มั่นคง"), null, null);
         assertThat(model.attnLine()).as("greeting reads just the customer, no contact part")
             .isEqualTo("บริษัท ทดสอบ จำกัด");
-        assertThat(model.signatories().orderedBy()).isEqualTo("คุณวิชัย มั่นคง");
+        assertThat(model.signatories().orderedBy()).isNull();
     }
 
     /** Same no-contact scenario, but nobody typed a ผู้สั่งซื้อ name either -- the signature slot

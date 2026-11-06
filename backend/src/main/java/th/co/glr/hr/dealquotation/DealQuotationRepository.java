@@ -648,7 +648,7 @@ public class DealQuotationRepository {
         // source request/decision, null for DEAL_DIRECT.
         String origin, String recipientType, String recipientLabel,
         Long pricingRequestId, Long pricingDecisionId,
-        // The ผู้สั่งซื้อ signature name — see DealQuotationDtos#orderedByName. A new DRAFT carries
+        // ordered_by_name (stored only, never printed) — see DealQuotationDtos#orderedByName. A new DRAFT carries
         // its contact snapshot's name (null when none); a revision/reorder copy carries its
         // source's stored value verbatim.
         String orderedByName,
@@ -1037,7 +1037,7 @@ public class DealQuotationRepository {
                             // apply) before calling this method, so there is nothing left to default
                             // here.
                             boolean omitContactHonorific, String fullPaymentTerm,
-                            // The ผู้สั่งซื้อ signature name — see DealQuotationDtos#orderedByName.
+                            // ordered_by_name (stored only, never printed) — see DealQuotationDtos#orderedByName.
                             // DealQuotationService passes the resolved contact's name, null when
                             // none, so a DRAFT save keeps it in step with the contact columns.
                             String orderedByName,
@@ -1124,8 +1124,8 @@ public class DealQuotationRepository {
      * printed ผู้สั่งซื้อ NAME is a bigger, more visible change than a phone/email typo fix, so it is
      * only re-snapshotted when the caller confirms the edit actually touched {@code first_name}/
      * {@code last_name} — never recomputed as an incidental side effect of some other field's PATCH.
-     * {@code ordered_by_name} (the signature name) follows {@code contact_name} under the same flag
-     * (a DRAFT's signature name is its contact's name).
+     * {@code ordered_by_name} (stored only, never printed) follows {@code contact_name} under the
+     * same flag.
      *
      * <p>Mirrors {@link #updateHeader}'s own {@code doc_status = 'DRAFT'} predicate exactly, so a
      * PENDING_APPROVAL/APPROVED/REJECTED/CANCELLED row's frozen snapshot is never touched — only a
@@ -1189,8 +1189,8 @@ public class DealQuotationRepository {
      * not the deal, so another deal's DRAFT that already points at the same contact id is refreshed
      * to the contact's live values too, exactly as editing the contact would do.
      *
-     * <p>{@code ordered_by_name} (the signature name) is cleared with the contact
-     * and refilled the same way, so a draft never prints the old customer's contact.
+     * <p>{@code ordered_by_name} (stored only, never printed) is cleared with the contact
+     * and refilled the same way.
      *
      * @return the number of drafts moved.
      */
@@ -1967,9 +1967,8 @@ public class DealQuotationRepository {
                    -- GLA-123 slice S1 M4(c) (V191): count of CEO-linked lines dropped since
                    -- creation — see DealQuotationDtos#itemsRemovedFromCeoCount's own Javadoc.
                    q.items_removed_from_ceo_count,
-                   -- Owner-directed reversal of F2 (V192, 2026-09-26): the manual, optional
-                   -- ผู้สั่งซื้อ signature-slot name — see DealQuotationDtos#orderedByName's own
-                   -- Javadoc. NULL on every pre-V192 row.
+                   -- V192: the picked contact's name, stored only, never printed (the ผู้สั่งซื้อ
+                   -- slot is always dotted) — see DealQuotationDtos#orderedByName. NULL on every pre-V192 row.
                    q.ordered_by_name,
                    -- V192.3: the phone and email beside it, printed when filled (2026-10-13).
                    q.ordered_by_phone, q.ordered_by_email,

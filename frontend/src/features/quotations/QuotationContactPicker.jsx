@@ -43,7 +43,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
   // `terms.omitContactHonorific`, on the inline-create and ?ticket= paths alike) and
   // PricingRequestCreateModal.
   omitContactHonorific = false, onChangeOmitContactHonorific,
-  label = 'ผู้ติดต่อ', hint = 'ชื่อจะพิมพ์เป็นผู้สั่งซื้อบนใบเสนอราคา',
+  label = 'ผู้ติดต่อ', hint = 'ชื่อจะพิมพ์ต่อจาก “เรียน” บนใบเสนอราคา',
 }, ref) {
   const [options, setOptions] = useState([]);
   const [loading, setLoading] = useState(false);

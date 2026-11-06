@@ -200,13 +200,10 @@ public final class DealQuotationDtos {
          * the list/search loops (which stay DEAL_DIRECT-only) — see
          * {@code DealQuotationService#requireQuotation}. */
         List<DealQuotationRepository.RemovedLinkedItemDto> removedCeoItems,
-        /** The ผู้สั่งซื้อ signature-slot name ({@code sales.quotation.ordered_by_name}, V192) — the
-         * ONLY source {@code DealQuotationRenderAdapter#orderedByName} prints there.
-         * {@code DealQuotationService} writes it from the picked contact's name on every
-         * DRAFT save (null when no contact is picked) and does not take it from the request, so a
-         * draft prints its contact or the dotted line. A row past DRAFT keeps whatever it was frozen
-         * with (including a name typed under an older rule); a revision/reorder copies it.
-         * Null/blank prints the dotted placeholder — the customer signs on paper. */
+        /** {@code sales.quotation.ordered_by_name} (V192): the picked contact's name, written by
+         * {@code DealQuotationService} on every DRAFT save (null with no contact); a
+         * revision/reorder copies it. Stored only, NEVER printed: the ผู้สั่งซื้อ signature slot is
+         * always the dotted line the customer signs on (owner 2026-11-06). */
         String orderedByName,
         /** V192.1 — "ไม่แสดงชื่อโครงการในใบเสนอราคา"
          * ({@code sales.quotation.hide_project_name}). When {@code true},

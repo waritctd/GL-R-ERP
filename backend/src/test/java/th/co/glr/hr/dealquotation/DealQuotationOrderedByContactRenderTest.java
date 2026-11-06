@@ -48,7 +48,7 @@ class DealQuotationOrderedByContactRenderTest {
         for (DealQuotationDto quotation : everyDocument()) {
             QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(quotation, null, null);
 
-            assertThat(model.signatories().orderedBy()).as("control: the name is handed over").isEqualTo(NAME);
+            assertThat(model.signatories().orderedBy()).as("the ผู้สั่งซื้อ slot stays dotted").isNull();
             String language = quotation.documentLanguage();
             assertThat(model.phoneLine()).as(language)
                 .contains(phoneLabel(language) + PHONE)
@@ -61,7 +61,7 @@ class DealQuotationOrderedByContactRenderTest {
         for (DealQuotationDto quotation : everyDocument()) {
             List<String> cells = sheetTexts(quotation);
 
-            assertThat(cells).as("control: the name beside them prints").anyMatch(text -> text.contains(NAME));
+            assertThat(cells).as("the stored ordered_by_name never prints").noneMatch(text -> text.contains(NAME));
             assertThat(cells).as(quotation.documentLanguage()).anyMatch(text -> text.contains(PHONE));
             assertThat(cells).as(quotation.documentLanguage()).anyMatch(text -> text.contains(EMAIL));
         }
@@ -73,7 +73,7 @@ class DealQuotationOrderedByContactRenderTest {
             QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(quotation, null, null);
 
             for (String html : List.of(new QuotationRenderer().toHtml(model), QuotationHtmlDocument.render(model))) {
-                assertThat(html).as("control: the name beside them prints").contains(NAME);
+                assertThat(html).as("the stored ordered_by_name never prints").doesNotContain(NAME);
                 assertThat(html).as(quotation.documentLanguage()).contains(PHONE).contains(EMAIL);
             }
         }
@@ -98,7 +98,7 @@ class DealQuotationOrderedByContactRenderTest {
         for (String language : List.of(WastageCalculator.DOCUMENT_LANGUAGE_TH, WastageCalculator.DOCUMENT_LANGUAGE_EN)) {
             QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(quotation(language, true), null, null);
 
-            assertThat(model.signatories().orderedBy()).as("control").isEqualTo(NAME);
+            assertThat(model.signatories().orderedBy()).as("the ผู้สั่งซื้อ slot stays dotted").isNull();
             assertThat(model.phoneLine()).as(language)
                 .doesNotContain(PRINTED_PHONE).doesNotContain(PRINTED_EMAIL)
                 .doesNotContain("Phone").doesNotContain("Email").doesNotContain("Tel.").doesNotContain("E :");
@@ -111,7 +111,7 @@ class DealQuotationOrderedByContactRenderTest {
         for (String language : List.of(WastageCalculator.DOCUMENT_LANGUAGE_TH, WastageCalculator.DOCUMENT_LANGUAGE_EN)) {
             QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(quotation(language, false), null, null);
 
-            assertThat(model.signatories().orderedBy()).as("control").isEqualTo(NAME);
+            assertThat(model.signatories().orderedBy()).as("the ผู้สั่งซื้อ slot stays dotted").isNull();
             assertThat(model.phoneLine()).as(language)
                 .doesNotContain("Phone").doesNotContain("Email").doesNotContain("Tel.").doesNotContain("E :");
         }

@@ -1482,9 +1482,9 @@ describe('QuotationEditorPage — the ผู้สั่งซื้อ field is
   });
 
   // The field's name and the document's heading differ, so the hint has to carry the link.
-  const HINT = 'ชื่อจะพิมพ์เป็นผู้สั่งซื้อบนใบเสนอราคา';
+  const HINT = 'ชื่อจะพิมพ์ต่อจาก “เรียน” บนใบเสนอราคา';
 
-  it('says, under the field, that the name prints as the document\'s ผู้สั่งซื้อ', async () => {
+  it('says, under the field, that the name prints after เรียน (not in the ผู้สั่งซื้อ slot)', async () => {
     api.tickets.get.mockResolvedValue(ticketFixture());
     renderEditor('/quotations/new?ticket=18');
 

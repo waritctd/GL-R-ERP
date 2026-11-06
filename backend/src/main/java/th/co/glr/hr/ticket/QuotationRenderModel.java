@@ -221,7 +221,8 @@ public record QuotationRenderModel(
      * {@code signatureLabelsV2 = false} keeps the template's own labels and prints no names at
      * all).
      *
-     * <p>Slot 4 (ผู้สั่งซื้อ) prints the deal's contact as {@code orderedBy}, and the
+     * <p>Slot 4 (ผู้สั่งซื้อ): {@code DealQuotationRenderAdapter} always passes a null {@code orderedBy},
+     * so it prints the dotted line the customer signs on (owner 2026-11-06). The
      * "วันที่…" row is filled per slot from {@code printedOn} (created), {@code checkedOn}
      * (submitted) and {@code approvedOn} (approved). Each date
      * is nullable and prints the dotted placeholder when absent (a DRAFT carries only ผู้พิมพ์'s);

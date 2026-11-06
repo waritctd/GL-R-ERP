@@ -46,7 +46,7 @@ describe('QuotationContactPicker — the field and its list', () => {
     const trigger = await screen.findByLabelText(/^ผู้ติดต่อ/);
     expect(trigger.getAttribute('aria-required')).toBeNull();
     expect(container.querySelector('.field-required')).toBeNull();
-    const hint = screen.getByText('ชื่อจะพิมพ์เป็นผู้สั่งซื้อบนใบเสนอราคา');
+    const hint = screen.getByText('ชื่อจะพิมพ์ต่อจาก “เรียน” บนใบเสนอราคา');
     expect(trigger.getAttribute('aria-describedby')).toBe(hint.id);
     // No other explanatory text: the old PCR-only hint and the "คุณ" checkbox's sub-line are gone.
     expect(screen.queryByText(/ฝ่ายนำเข้าไม่ใช้ข้อมูลนี้/)).toBeNull();

@@ -301,11 +301,11 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
     /**
      * Owner, 2026-10-13: "rendered if they have it, if not just leave it". The workbook the service
      * itself renders for the stored quotation, and the HTML the PDF is printed from, carry the
-     * picked contact's NAME in the ผู้สั่งซื้อ slot (ruling 2026-10-18; never the typed one) AND the
-     * phone and the email the rep typed.
+     * phone and the email the rep typed, and NO name in the ผู้สั่งซื้อ slot (owner 2026-11-06):
+     * neither the picked contact's nor the typed one.
      */
     @Test
-    void theDocumentTheServiceRenders_printsTheName_andThePhoneAndEmail() {
+    void theDocumentTheServiceRenders_printsThePhoneAndEmail_butNoNameInTheOrdererSlot() {
         long ticket = deal(salesActor);
         DealQuotationDto created = quotationService.create(ticket,
             contact(pickedContact(ticket), NAME, PHONE, EMAIL), salesActor);
@@ -315,15 +315,15 @@ class DealQuotationOrderedByContactIntegrationTest extends AbstractDealDirectQuo
         assertThat(stored.orderedByEmail()).isEqualTo(EMAIL);
 
         List<String> cells = sheetTexts(created.id());
-        assertThat(cells).as("the picked contact in the ผู้สั่งซื้อ slot")
-            .anyMatch(text -> text.contains("(" + PICKED_NAME + ")"));
+        assertThat(cells).as("no picked contact in the ผู้สั่งซื้อ slot")
+            .noneMatch(text -> text.contains("(" + PICKED_NAME + ")"));
         assertThat(cells).as("the typed name prints nowhere").noneMatch(text -> text.contains(NAME));
         assertThat(cells).anyMatch(text -> text.contains(PHONE));
         assertThat(cells).anyMatch(text -> text.contains(EMAIL));
 
         QuotationRenderModel model = DealQuotationRenderAdapter.toRenderModel(stored, null, null);
         String html = new QuotationRenderer().toHtml(model);
-        assertThat(html).as("the picked contact in the ผู้สั่งซื้อ slot").contains("(" + PICKED_NAME + ")")
+        assertThat(html).as("no picked contact in the ผู้สั่งซื้อ slot").doesNotContain("(" + PICKED_NAME + ")")
             .doesNotContain(NAME);
         assertThat(html).contains(PHONE).contains(EMAIL);
     }

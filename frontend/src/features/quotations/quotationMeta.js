@@ -1889,8 +1889,8 @@ export function validateAdjustment(adjustment) {
 // ── "ข้อมูลที่ยังไม่ครบ" checklist ──────────────────────────────────────────────────────────────
 // The fields are the ones the reference documents print in their HEADER (customer name, ที่อยู่,
 // เลขที่ผู้เสียภาษี, โทร., โครงการ) plus each item's own completeness. ผู้สั่งซื้อ is not here: it is
-// the optional ผู้ติดต่อ picked per quotation, from which the server derives the signature name
-// (`ordered_by_name`); nothing is inherited from the deal, so there is nothing to validate.
+// the signature slot the customer signs by hand, and the optional ผู้ติดต่อ (printed after "เรียน")
+// is picked per quotation; nothing is inherited from the deal, so there is nothing to validate.
 //
 // ⚠️ Two tiers, and the split is not invented here. A check BLOCKS บันทึกร่าง / ส่งขออนุมัติ only
 // when the backend ALREADY refuses the same state:
@@ -2170,9 +2170,8 @@ export function buildQuotationChecklist({
   } else if (projectName !== undefined && blankValue(projectName)) {
     push(QUOTATION_CHECK.DEAL_PROJECT, 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)');
   }
-  // ผู้สั่งซื้อ is not checked here: it is the optional ผู้ติดต่อ picked per quotation
-  // (`contactId`), and the server derives the signature name (`ordered_by_name`) from it, so it can
-  // never be "missing" in a way worth flagging. ผู้ออกแบบ (unitCode) is deliberately NOT checked
+  // ผู้สั่งซื้อ is not checked here: the signature slot is always left for the customer's pen, and
+  // the optional ผู้ติดต่อ (`contactId`) can never be "missing" in a way worth flagging. ผู้ออกแบบ (unitCode) is deliberately NOT checked
   // either: it is optional including ฝ่าย, and the backend never required it.
 
   if (customer) {
