@@ -155,6 +155,8 @@ function priceFields(row, model, card) {
     const formula = !row.isStock && row.formulaPerPiece != null
       ? <span className="text-xs" data-testid={`pcr-ceo-formula-list-${id}`}>{fmt(row.formulaPerPiece)}{row.formulaPerSqm != null ? <small className="block text-text-muted">{fmt(row.formulaPerSqm)} / ตร.ม.</small> : null}</span>
       : <span className="text-text-muted">–</span>;
+    // On a card every cell carries its own label (there is no column header to read it from).
+    const formulaCell = card ? <div className="grid gap-1 text-sm"><b>ราคาตั้ง (สูตร)</b>{formula}</div> : formula;
     const special = (
       <div className="grid gap-1">
         {lbl('ราคาพิเศษ/ตร.ม. (รวม VAT)', <Num row={row} card={card} field="specialPriceSqm" label="ราคาพิเศษ/ตร.ม. (รวม VAT)" suffix="/ตร.ม." disabled={!editable || lock || row.item.sqmPerPiece == null} value={row.special} max={row.specialMax} testid={`pcr-ceo-special-sqm-${id}`} derived={row.specialFormulaNote != null} />)}
@@ -164,7 +166,7 @@ function priceFields(row, model, card) {
         </span>
       </div>
     );
-    return [margin, formula, special];
+    return [margin, formulaCell, special];
   }
   if (priceMode === 'DIRECT_NET') {
     return [lbl('ราคาสุทธิ/แผ่น', <Num row={row} card={card} field="directNetPrice" label="ราคาสุทธิ/แผ่น" suffix="/แผ่น" disabled={!editable || lock} value={row.direct} max={row.directMax} testid={`pcr-ceo-direct-net-${id}`} />)];
@@ -568,6 +570,7 @@ export function CeoPricingWorkspace({ model }) {
             const id = row.item.id;
             const open = isOpen(row);
             const edge = edgeClass(row);
+            const cells = priceFields(row, model, true);
             return (
               <div
                 key={id}
@@ -580,13 +583,25 @@ export function CeoPricingWorkspace({ model }) {
                   <span className="text-xs text-text-muted">{`${row.qtyText} · ${row.sqmText} · ต้นทุน ${row.isStock ? 'ไม่มี (สต็อก)' : row.cost == null ? 'ต้องระบุเอง' : `${model.fmt(row.cost, 'THB')}/แผ่น`}`}</span>
                   <Tags row={row} />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {priceFields(row, model, true).map((cell, i) => <div key={i}>{cell}</div>)}
+                <div className="grid grid-cols-2 items-start gap-3">
+                  {cells.map((cell, i) => (
+                    <div key={i} className={cn('min-w-0', cells.length % 2 === 1 && i === cells.length - 1 && 'col-span-2')}>{cell}</div>
+                  ))}
                 </div>
-                <dl className="m-0 grid grid-cols-3 gap-2 text-center">
-                  <div><dt className="text-xs text-text-muted">สุทธิ/แผ่น</dt><dd className="m-0"><NetCell row={row} model={model} /></dd></div>
-                  <div><dt className="text-xs text-text-muted">รวม</dt><dd className="m-0 font-bold" data-testid={`pcr-ceo-total-${id}`}>{row.netPending ? '–' : model.fmt(row.total)}</dd></div>
-                  <div><dt className="text-xs text-text-muted">กำไร</dt><dd className="m-0 font-bold" data-testid={`pcr-ceo-profit-${id}`}>{row.profitPct != null ? `${row.profitPct.toFixed(0)}%` : '–'}</dd></div>
+                {/* Two columns, รวม on its own line: a 3-up strip squeezed ฿4,892,192.00 and the
+                    per-ตร.ม. figure into ~100px each and wrapped them on a 375px phone. */}
+                <dl className="m-0 grid grid-cols-2 gap-x-3 gap-y-2 rounded-md bg-surface-subtle p-2 tabular-nums">
+                  <div className="min-w-0"><dt className="text-xs text-text-muted">สุทธิ/แผ่น</dt><dd className="m-0 [&>div]:text-left"><NetCell row={row} model={model} /></dd></div>
+                  <div className="min-w-0 text-right"><dt className="text-xs text-text-muted">กำไร</dt>
+                    <dd className={cn('m-0 font-bold', row.profitTotal != null && (row.profitTotal >= 0 ? 'text-success' : 'text-danger'))} data-testid={`pcr-ceo-profit-${id}`}>
+                      {row.profitTotal != null ? model.fmt(row.profitTotal, 'THB') : '–'}
+                      {row.profitPct != null ? <small className="block font-normal text-text-muted">{`${row.profitPct.toFixed(1)}% ของต้นทุน`}</small> : null}
+                    </dd>
+                  </div>
+                  <div className="col-span-2 flex items-baseline justify-between gap-2 border-t border-border-subtle pt-2">
+                    <dt className="text-xs text-text-muted">รวม</dt>
+                    <dd className="m-0 font-bold" data-testid={`pcr-ceo-total-${id}`}>{row.netPending ? '–' : model.fmt(row.total)}</dd>
+                  </div>
                 </dl>
                 <Button type="button" variant="secondary" size="sm" className="justify-self-start" aria-expanded={open} onClick={() => toggle(row)}>
                   <Icon name={open ? 'chevronUp' : 'chevronDown'} size={14} /> รายละเอียด
@@ -622,8 +637,10 @@ export function CeoPricingWorkspace({ model }) {
         </div>
       </Panel>
 
+      {/* The bar below is fixed: reserve its height so it never covers the last card. */}
+      {editable ? <div aria-hidden="true" data-testid="pcr-ceo-mobile-bar-spacer" className="hidden h-24 mobile:block" /> : null}
       {editable ? (
-        <div data-testid="pcr-ceo-mobile-bar" className="fixed inset-x-0 bottom-0 z-20 hidden gap-2 border-t border-border bg-surface p-3 mobile:flex">
+        <div data-testid="pcr-ceo-mobile-bar" className="fixed inset-x-0 bottom-0 z-20 hidden gap-2 border-t border-border bg-surface p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] mobile:flex">
           {model.dirtyCount > 0 ? (
             <Button type="button" variant="secondary" className="flex-1" disabled={model.saveDisabled} loading={model.savingAll} onClick={model.onSaveAll} data-testid="pcr-ceo-mobile-save">{`บันทึก (${model.dirtyCount})`}</Button>
           ) : model.canReturn ? (
