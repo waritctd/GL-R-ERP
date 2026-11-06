@@ -511,8 +511,49 @@ public class DealQuotationRepository {
         // Mixed price modes (V192.5). The row's OWN price mode, PERSISTED in sales.quotation_item.price_mode. Non-null only on
         // a TILE row of a document whose price_mode is MIXED; null everywhere else, where the
         // document's mode applies (WastageCalculator#rowPriceMode).
-        String priceMode
+        String priceMode,
+        // 'IN_THAILAND' on a DEAL_DIRECT row the rep marked จากสต็อก; a PRICING_REQUEST row's value comes from its
+        // pricing-request item instead (see INSERT_ITEM_SQL), and the client value is ignored there.
+        String stockSource
     ) {
+        /** The pre-stockSource canonical shape: no stock declaration. */
+        public NewItem(
+            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
+            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+            BigDecimal wastageValue, Integer piecesPerBox, int piecesBeforeWastage, int piecesAfterWastage,
+            int piecesFinal, Integer boxes, BigDecimal unitPrice, BigDecimal discountPct,
+            BigDecimal netUnitPrice, BigDecimal lineAmount, BigDecimal vat, BigDecimal lineTotal,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String descriptionLine, String lineType, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal adjustmentPct, java.time.LocalDate adjustmentDeadline,
+            BigDecimal catalogWidthMm, BigDecimal catalogHeightMm, BigDecimal sqmPerBox,
+            boolean roundToFullBox, Long pricingRequestItemId, Long pricingDecisionItemId,
+            BigDecimal listPriceSqm, BigDecimal directNetPriceSqm, String priceMode) {
+            this(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
+                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
+                directNetPriceSqm, priceMode, null);
+        }
+
+        /** This row carrying {@code value} as its {@link #stockSource}, everything else unchanged. */
+        public NewItem withStockSource(String value) {
+            return new NewItem(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, piecesBeforeWastage, piecesAfterWastage, piecesFinal, boxes, unitPrice,
+                discountPct, netUnitPrice, lineAmount, vat, lineTotal, originCountry, leadTimeMinDays,
+                leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
+                adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
+                roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
+                directNetPriceSqm, priceMode, value);
+        }
+
         /** The pre-V192.5 canonical shape (no per-row price mode) — kept so every existing
          * construction site compiles unchanged. Defaults it to null: a row priced in its
          * document's mode. */
@@ -550,7 +591,7 @@ public class DealQuotationRepository {
                 leadTimeMaxDays, itemNotes, descriptionLine, lineType, quantity, unit, specialPriceSqm,
                 adjustmentPct, adjustmentDeadline, catalogWidthMm, catalogHeightMm, sqmPerBox,
                 roundToFullBox, pricingRequestItemId, pricingDecisionItemId, listPriceSqm,
-                directNetPriceSqm, value);
+                directNetPriceSqm, value, stockSource);
         }
 
         /** The shape without a pricing-request/decision item link — kept so every existing
@@ -825,7 +866,8 @@ public class DealQuotationRepository {
             .addValue("listPriceSqm", item.listPriceSqm())
             .addValue("directNetPriceSqm", item.directNetPriceSqm())
             // V192.5 — the row's own price mode; null on every row of a single-mode document.
-            .addValue("priceMode", item.priceMode());
+            .addValue("priceMode", item.priceMode())
+            .addValue("stockSource", item.stockSource());
     }
 
     private static final String INSERT_ITEM_SQL = """
@@ -849,11 +891,11 @@ public class DealQuotationRepository {
              :lineType, :specialPriceSqm, :adjustmentPct, :adjustmentDeadline, :sqmPerBox,
              :roundToFullBox, :pricingRequestItemId, :pricingDecisionItemId,
              -- Stock lines (V194, R1): a PRICING_REQUEST-origin line carries the SOURCE of the
-             -- pricing-request item it was created from (NULL = สั่งนำเข้า, and NULL for every
-             -- DEAL_DIRECT row, whose :pricingRequestItemId is null). Read in-statement so every
-             -- insert path (create, restore-a-removed-line) stamps it without widening NewItem.
-             (SELECT pri.stock_source FROM sales.pricing_request_item pri
-               WHERE pri.pricing_request_item_id = :pricingRequestItemId),
+             -- pricing-request item it was created from (NULL = สั่งนำเข้า), read in-statement so every
+             -- insert path stamps it. A DEAL_DIRECT row has no such item and takes the rep's own
+             -- :stockSource instead.
+             COALESCE((SELECT pri.stock_source FROM sales.pricing_request_item pri
+                        WHERE pri.pricing_request_item_id = :pricingRequestItemId), :stockSource),
              :listPriceSqm, :directNetPriceSqm, :priceMode)
         """;
 
@@ -927,7 +969,10 @@ public class DealQuotationRepository {
                    -- V192.5: the row's own price mode, rewritten on every save for the same reason —
                    -- a row whose mode changed must not keep the old one, and a document switched
                    -- back to ONE mode must have every row's cleared (the service sends NULL then).
-                   price_mode = :priceMode
+                   price_mode = :priceMode,
+                   -- Rewritten on every save: a direct row's tick is the rep's to clear, and a
+                   -- pricing-request row arrives here carrying its stored value (DealQuotationService#update).
+                   stock_source = :stockSource
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
             """, batch);
     }

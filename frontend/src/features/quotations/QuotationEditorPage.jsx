@@ -2672,6 +2672,7 @@ export function QuotationEditorPage({ user, showToast }) {
                               onMove={(targetGroupId) => moveItemToGroup(item.clientId, targetGroupId)}
                               onDuplicate={(targetGroupId) => duplicateItem(item.clientId, targetGroupId)}
                               hideDuplicate={isPricingRequestOrigin}
+                              showStockOption={!isPricingRequestOrigin}
                               onCatalogPicked={handleCatalogPicked}
                             />
                           );

@@ -564,7 +564,9 @@ public class DealQuotationService {
             item.listPriceSqm(), item.directNetPriceSqm(),
             // Always null today (this origin can never be MIXED, see #requirePriceModeAllowed), passed through so that stays
             // a rule rather than an accident of this constructor.
-            item.priceMode());
+            item.priceMode(),
+            // A revision copies the declaration; a PRICING_REQUEST row's INSERT re-reads it from its pricing-request line.
+            item.stockSource());
     }
 
     /** Refuses changing a CEO-linked line's TYPE (must stay TILE, the only type {@link #createFromPricingRequest}
@@ -981,6 +983,10 @@ public class DealQuotationService {
                 NewItem stored = link != null
                     ? withDecisionLink(item, link.pricingRequestItemId(), link.pricingDecisionItemId())
                     : item;
+                if (pricingRequestOrigin) {
+                    // The pricing-request line is the truth for a PRICING_REQUEST-origin row; the client's tick is ignored.
+                    stored = stored.withStockSource(existingItemsById.get(inputId).stockSource());
+                }
                 updates.add(new DealQuotationRepository.ExistingItem(inputId, seq, stored));
             } else if (pricingRequestOrigin) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -1759,8 +1765,11 @@ public class DealQuotationService {
         // later), and the only other reference to a ticket_item, pricing_request_item.source_ticket_item_id, is ON DELETE
         // SET NULL.
         tickets.replaceItems(ticketId, ticketItemsFromQuotation(fresh));
+        // A จากสต็อก line is covered in full, as the pricing-request route does at order confirmation, so the routing below sees it.
+        tickets.coverSourcedFromStockLines(ticketId);
         int depositPercent = DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent());
         ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), depositPercent, actor);
+        ticketService.notifySalesManagerOfStockCoverOnConfirm(ticketId, actor);
         // FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
         notifications.notifyByRoleAtLink("ceo", PricingRequestEventKind.ORDER_CONFIRMED,
             actor.name() + " ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"
@@ -1823,7 +1832,8 @@ public class DealQuotationService {
                 clip(item.unit(), TICKET_ITEM_RAW_UNIT_MAX),
                 null, // proposedPrice: see Javadoc
                 "THB",
-                item.catalogPriceId(), null));
+                item.catalogPriceId(), null,
+                th.co.glr.hr.pricingrequest.PricingRequestService.STOCK_IN_THAILAND.equals(item.stockSource()), null));
         }
         return rows;
     }
@@ -2988,7 +2998,8 @@ public class DealQuotationService {
             // never reaches here with either: that method refuses them.
             input.listPriceSqm() == null ? null : money2(input.listPriceSqm()),
             WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode) && input.directNetPriceSqm() != null
-                ? money2(input.directNetPriceSqm()) : null);
+                ? money2(input.directNetPriceSqm()) : null,
+            null, input.stockSource());
     }
 
     /**
@@ -3130,7 +3141,9 @@ public class DealQuotationService {
             // And the mode the row was priced in, on a mixed document (null otherwise): the copy's header says MIXED too
             // (#insertCopyOf copies source.priceMode()), and a mixed document whose rows lost their modes would be re-read with
             // every row as NET.
-            item.priceMode());
+            item.priceMode(),
+            // A revision copies the declaration; a PRICING_REQUEST row's INSERT re-reads it from its pricing-request line.
+            item.stockSource());
     }
 
     // price_catalog.product_prices' price_unit for a linear-metre trim (V153). Its sqm_per_piece is LINEAR METRES per

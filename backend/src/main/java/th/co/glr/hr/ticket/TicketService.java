@@ -1513,6 +1513,27 @@ public class TicketService {
     }
 
     /**
+     * The order-confirmation twin of {@link #reserveStock}'s supervision: a rep's จากสต็อก tick on a direct quotation
+     * becomes {@code qty_from_stock} (the STOCK_BONUS input) when the order is confirmed, so the manager is told here
+     * too. Call it AFTER the cover is written and the deal routed, so the all-stock claim reflects the real state. Says
+     * nothing when no line is covered.
+     */
+    @Transactional
+    public void notifySalesManagerOfStockCoverOnConfirm(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        Map<Long, BigDecimal> covered = new LinkedHashMap<>();
+        ticket.items().forEach(item -> covered.put(item.id(), nullToZero(item.qtyFromStock())));
+        if (covered.values().stream().noneMatch(qty -> qty.signum() > 0)) {
+            return;
+        }
+        boolean allCovered = ticket.items().stream()
+            .allMatch(item -> covered.get(item.id()).compareTo(nullToZero(item.qty())) >= 0);
+        boolean leavesTheImportAxis = allCovered
+            && FulfilmentStatus.FROM_STOCK.equals(ticket.summary().fulfillmentStatus());
+        notifySalesManagerOfRepDeclaration(ticket.summary(), actor, covered, ticket.items(), leavesTheImportAxis);
+    }
+
+    /**
      * Tells ฝ่ายขาย's ผู้จัดการ that one of their reps just declared stock coverage on their own
      * deal (the supervision half of "Sales declares, CEO may correct/override").
      *
@@ -3342,6 +3363,11 @@ public class TicketService {
         }
         if (canCancel(s, actor)) actions.add(new TicketActionDto("CANCEL", "operational", "ยกเลิก"));
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
+        // reserveStock's own gate, advertised only before the deal is on the import axis (or already FROM_STOCK).
+        // Lifecycle is already ACTIVE here: buildActions only calls this method for an ACTIVE deal.
+        if (canDeclareStockCoverage(s, actor) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null) {
+            actions.add(new TicketActionDto("RESERVE_STOCK", "operational", "ระบุสินค้าจากสต็อก"));
+        }
     }
 
     /**
@@ -3502,7 +3528,7 @@ public class TicketService {
 
     /**
      * The stage floor a stock-coverage declaration must clear: {@link #reserveStock}'s 409 reads it.
-     * ({@code RESERVE_STOCK} is not advertised in {@link #actions}; the endpoint exists.)
+     * ({@code RESERVE_STOCK} is advertised in {@link #actions} to the owner and the CEO from ORDER_RECEIVED while fulfilment is null.)
      *
      * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
      * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes

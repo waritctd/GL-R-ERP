@@ -53,6 +53,15 @@ class DealQuotationRequestsValidationTest {
         assertThat(VALIDATOR.validate(validItem().unitPrice(new BigDecimal("-5")).build())).isEmpty();
     }
 
+    /** IN_TRANSIT is a pricing-request-only concept (it needs an ETA); a direct line is Thai stock or import. */
+    @Test
+    void stockSource_acceptsOnlyNullOrInThailand() {
+        assertThat(VALIDATOR.validate(validItem().build().withStockSource(null))).isEmpty();
+        assertThat(VALIDATOR.validate(validItem().build().withStockSource("IN_THAILAND"))).isEmpty();
+        assertViolated(validItem().build().withStockSource("IN_TRANSIT"));
+        assertViolated(validItem().build().withStockSource("junk"));
+    }
+
     @Test
     void areaSqmOverMax_isRejected() {
         assertViolated(validItem().areaSqm(new BigDecimal("1000000")).build());

@@ -195,8 +195,44 @@ public final class DealQuotationRequests {
          */
         @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET",
             message = "วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET")
-        String priceMode
+        String priceMode,
+
+        /** TILE rows: "IN_THAILAND" marks a line shipped from Thai stock (จากสต็อก). IN_TRANSIT is a
+         * pricing-request-only value (it carries an ETA), never accepted here. A pricing-request-origin
+         * row ignores this: its pricing-request line is the truth. */
+        @Pattern(regexp = "IN_THAILAND", message = "stockSource ต้องเป็น IN_THAILAND หรือว่าง")
+        String stockSource
     ) {
+        /** The pre-stockSource canonical shape: no stock declaration (null = สั่งนำเข้า). */
+        public ItemInput(
+            String locationLabel, Long catalogPriceId, String productCode, String brand, String model,
+            String color, String texture, String sizeText, BigDecimal thicknessMm, BigDecimal sqmPerPiece,
+            String quantityMode, BigDecimal areaSqm, Integer piecesInput, String wastageMode,
+            BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice, BigDecimal discountPct,
+            String originCountry, Integer leadTimeMinDays, Integer leadTimeMaxDays, String itemNotes,
+            String lineType, String description, BigDecimal quantity, String unit,
+            BigDecimal specialPriceSqm, BigDecimal directNetPrice, BigDecimal adjustmentPct,
+            LocalDate adjustmentDeadline, BigDecimal adjustmentAmount, Long id, BigDecimal sqmPerBox,
+            Boolean roundToFullBox, BigDecimal listPriceSqm, BigDecimal directNetPriceSqm, String priceMode) {
+            this(
+                locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, lineType, description, quantity, unit, specialPriceSqm, directNetPrice,
+                adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
+                listPriceSqm, directNetPriceSqm, priceMode, null);
+        }
+
+        /** This row carrying {@code value} as its {@link #stockSource}, everything else unchanged. */
+        public ItemInput withStockSource(String value) {
+            return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
+                thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
+                itemNotes, lineType, description, quantity, unit, specialPriceSqm, directNetPrice,
+                adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
+                listPriceSqm, directNetPriceSqm, priceMode, value);
+        }
+
         /** The pre-V192.5 canonical shape (no per-row {@link #priceMode}) — kept so every existing
          * construction site compiles unchanged. Defaults it to null: the row is priced in its
          * document's mode, which is what every one of those sites means. */
@@ -227,7 +263,7 @@ public final class DealQuotationRequests {
                 piecesPerBox, unitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
                 itemNotes, lineType, description, quantity, unit, specialPriceSqm, directNetPrice,
                 adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
-                listPriceSqm, directNetPriceSqm, newPriceMode);
+                listPriceSqm, directNetPriceSqm, newPriceMode, stockSource);
         }
 
         /** The pre-V192.2 canonical shape (no {@link #listPriceSqm}/{@link #directNetPriceSqm}) — kept
@@ -264,7 +300,7 @@ public final class DealQuotationRequests {
                 piecesPerBox, newUnitPrice, discountPct, originCountry, leadTimeMinDays, leadTimeMaxDays,
                 itemNotes, lineType, description, quantity, unit, specialPriceSqm, newDirectNetPrice,
                 adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, roundToFullBox,
-                listPriceSqm, directNetPriceSqm, priceMode);
+                listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
 
         /** The pre-loose-pieces canonical shape (with {@link #sqmPerBox}, no
