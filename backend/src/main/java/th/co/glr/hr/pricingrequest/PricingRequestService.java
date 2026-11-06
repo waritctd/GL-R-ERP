@@ -369,7 +369,9 @@ public class PricingRequestService {
                 PricingRequestStatus.READY_FOR_CEO_REVIEW,
                 "สต็อกในไทยทั้งหมด - ส่งให้ CEO กำหนดราคาโดยไม่ผ่านฝ่ายนำเข้า", null);
             notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO กำหนดราคา (สต็อกในไทยทั้งหมด)");
+                CeoReviewNotice.message(
+                    actor.name() + " ส่งคำขอราคาสต็อกในไทยทั้งหมด — รอ CEO ตั้งราคา",
+                    summary, requests.findItems(id), null));
             return detail(id);
         }
         if (carryFactoryQuotesForwardOnSubmit(summary, actor)) {
@@ -425,7 +427,9 @@ public class PricingRequestService {
             "Factory quotes carried forward unchanged from the superseded pricing request "
                 + "— advanced for CEO review without a new Import round-trip", null);
         notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-            "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว (ใช้ราคาโรงงานเดิม)");
+            CeoReviewNotice.message(
+                actor.name() + " ส่งคำขอราคาใหม่โดยใช้ราคาโรงงานเดิม — รอ CEO ตั้งราคา",
+                summary, requests.findItems(summary.id()), factoryQuoteCarryForward.ceoReviewCosts(summary)));
         return true;
     }
 

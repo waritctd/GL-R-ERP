@@ -604,7 +604,10 @@ public class FactoryQuoteService {
                     PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
                     "All factory quotes ready for costing — request advanced for CEO review");
                 notifyCeo(summary, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
-                    "คำขอราคา " + summary.requestCode() + " พร้อมให้ CEO พิจารณาราคาแล้ว");
+                    th.co.glr.hr.pricingrequest.CeoReviewNotice.message(
+                        "ฝ่ายนำเข้า (" + actor.name() + ") ได้ราคาโรงงานครบทุกรายการแล้ว — รอ CEO ตั้งราคา",
+                        summary, pricingRequests.findItems(summary.id()),
+                        th.co.glr.hr.pricingrequest.CeoReviewNotice.costsOrNull(landedCosts, summary)));
             }
         }
         return requireQuote(quoteId);
