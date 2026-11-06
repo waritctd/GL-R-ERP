@@ -256,6 +256,47 @@ describe('DealDocumentRegister', () => {
     expect(oldRow.getByRole('button', { name: 'Excel' })).not.toBeNull();
   });
 
+  // PR-2026-0289: the order was confirmed from -3; -4 was auto-cancelled. The cancelled draft used to head the group.
+  it('leads with the quotation the order was confirmed from, flags it, and shows each row\'s deposit terms', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [
+        { id: 437, number: 'QT-2026-0290-4', docStatus: 'CANCELLED', revisionNo: 4, recipientType: 'OWNER', grandTotal: 65840.35, origin: 'DEAL_DIRECT', depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY' },
+        { id: 430, number: 'QT-2026-0290-3', docStatus: 'APPROVED', revisionNo: 3, recipientType: 'OWNER', grandTotal: 65840.35, origin: 'DEAL_DIRECT', depositPercent: 0, fullPaymentTerm: 'ON_DELIVERY' },
+        { id: 429, number: 'QT-2026-0290-2', docStatus: 'SUPERSEDED', revisionNo: 2, recipientType: 'OWNER', grandTotal: 65840.35, origin: 'DEAL_DIRECT', depositPercent: 50, remainderMode: 'ON_DELIVERY' },
+      ],
+      orderConfirmedQuotationId: 430,
+    });
+    renderRegister({ ...SALES });
+
+    const head = within(await screen.findByTestId('document-version-direct-430'));
+    const [p3, p4, p2] = positionsInDom(['document-version-direct-430', 'document-version-direct-437', 'document-version-direct-429']);
+    expect(p3).toBeLessThan(p4);
+    expect(p4).toBeLessThan(p2);
+    expect(head.getByTestId('document-flag').textContent).toBe('ใช้ยืนยันคำสั่งซื้อ');
+    expect(head.getByTestId('document-recipient')).not.toBeNull(); // the recipient chip moved to the head row too
+    expect(head.getByTestId('document-terms').textContent).toBe('ไม่รับมัดจำ · ชำระเต็มจำนวนเมื่อส่งมอบสินค้า');
+    expect(within(screen.getByTestId('document-version-direct-429')).getByTestId('document-terms').textContent)
+      .toBe('มัดจำ 50% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
+    expect(within(screen.getByTestId('document-version-direct-437')).queryByTestId('document-flag')).toBeNull();
+
+    // The other versions sit under "ฉบับอื่น 2 ฉบับ", open by default, and fold away on demand.
+    const toggle = screen.getByTestId('document-older-toggle');
+    expect(toggle.textContent).toContain('ฉบับอื่น 2 ฉบับ');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('document-version-direct-437').closest('[hidden]')).not.toBeNull();
+  });
+
+  it('flags nothing when the order was not confirmed from a direct quotation', async () => {
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [{ id: 22, number: 'QT-2026-0200-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 200, origin: 'DEAL_DIRECT', depositPercent: 50 }],
+    });
+    renderRegister({ ...SALES });
+    const row = within(await screen.findByTestId('document-version-direct-22'));
+    expect(row.queryByTestId('document-flag')).toBeNull();
+  });
+
   // Real backend: sales.quotation.number is UNIQUE from one sequence, so a direct row can never
   // legitimately share a chain row's number. In mock mode (separate counters) it can — and a
   // filter keyed on number silently hid a real document.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -14,7 +14,7 @@ import {
   depositNoticeStatusLabel, formatMoney, formatThaiDate, quotationRecipientLabel, quotationStatusLabel,
 } from '../../utils/format.js';
 import { canViewCustomerQuotation } from '../pricingRequests/pricingRequestMeta.js';
-import { canViewDealQuotation, dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
+import { canViewDealQuotation, dealQuotationStatusLabel, depositTermsSummary } from '../quotations/quotationMeta.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
@@ -158,8 +158,11 @@ export function DealDocumentRegister({
   // as the raw useParams() STRING and that panel keys the very same query with the numeric id —
   // the string would open a SECOND cache entry and fire a second request for data already loaded.
   const directQuotationsQuery = useQuery({
-    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketId)),
-    queryFn: () => api.dealQuotations.listForTicket(Number(ticketId)).then((r) => r.items ?? []),
+    // The full response: `orderConfirmedQuotationId` names the version the order was confirmed from, which leads
+    // its group (see dealDocumentVersions.js#inForceFirst).
+    queryKey: queryKeys.dealQuotationsByTicketWithConfirmed(Number(ticketId)),
+    queryFn: () => api.dealQuotations.listForTicket(Number(ticketId))
+      .then((r) => ({ items: r.items ?? [], orderConfirmedQuotationId: r.orderConfirmedQuotationId ?? null })),
     enabled: Boolean(ticketId) && canViewQuotations && canViewDealQuotation(user),
   });
 
@@ -209,7 +212,11 @@ export function DealDocumentRegister({
     [chainSettledOnce, legacyQuotations, customerQuotationRows],
   );
   const legacyGroups = useMemo(() => groupLegacyQuotations(legacyRows), [legacyRows]);
-  const directGroups = useMemo(() => groupDirectQuotations(directQuotationsQuery.data ?? []), [directQuotationsQuery.data]);
+  const orderConfirmedQuotationId = directQuotationsQuery.data?.orderConfirmedQuotationId ?? null;
+  const directGroups = useMemo(
+    () => groupDirectQuotations(directQuotationsQuery.data?.items ?? [], { orderConfirmedQuotationId }),
+    [directQuotationsQuery.data, orderConfirmedQuotationId],
+  );
   const quotationDocCount = chainGroups.length + legacyGroups.length + directGroups.length;
 
   const remainingInvoiceReady = isRemainingInvoiceReady(summary);
@@ -324,6 +331,10 @@ export function DealDocumentRegister({
     // (never a wrong one) — the frontend deploys before the backend image.
     recipient: q.recipientType ? quotationRecipientLabel(q.recipientType).label : null,
     meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
+    // The version the order was confirmed from says so, and every row states its deposit terms in the PDF's own
+    // wording, so "มัดจำเท่าไร" is answered without opening a file.
+    flag: orderConfirmedQuotationId != null && Number(q.id) === Number(orderConfirmedQuotationId) ? 'ใช้ยืนยันคำสั่งซื้อ' : null,
+    terms: depositTermsSummary(q),
     // Mirrors DealDirectQuotationPanel: PDF + Excel for every status.
     actions: pdfXlsx('direct', downloadDirectQuotation, q),
     // The number links to the quotation (the query that lists these is gated on canViewDealQuotation).
@@ -503,15 +514,30 @@ function RegisterSection({ testId, title, count, unit, children }) {
   );
 }
 
-// One document: the current (newest) version as a normal row, older versions indented beneath.
+// One document: the head version as a normal row, the others indented beneath under "ฉบับอื่น N ฉบับ".
+// The head is items[0] as the caller ordered it: newest for most families, the version in force for a direct
+// quotation (dealDocumentVersions.js#inForceFirst). The others start open, so nothing is hidden by default;
+// the toggle only lets a long history fold away.
 function DocumentGroup({ items }) {
   const [current, ...older] = items;
+  const [open, setOpen] = useState(true);
+  const listId = useId();
   return (
     <div className="flex flex-col gap-1.5" data-testid="document-group">
       <DocumentRow icon="fileText" {...current} />
       {older.length > 0 ? (
         <div className="ml-1.5 flex flex-col gap-1 border-l border-border-subtle pl-6 mobile:pl-3">
-          {older.map((v) => <DocumentRow key={v.testId} muted {...v} />)}
+          <button type="button" data-testid="document-older-toggle" aria-expanded={open} aria-controls={listId}
+            onClick={() => setOpen((v) => !v)}
+            className={cn('inline-flex items-center gap-1 self-start py-1 text-xs font-bold text-link', TOUCH_TARGET)}>
+            <span aria-hidden="true" className={cn('inline-flex transition-transform duration-150 ease-out motion-reduce:transition-none', !open && '-rotate-90')}>
+              <Icon name="chevronDown" size={12} />
+            </span>
+            {`ฉบับอื่น ${older.length} ฉบับ`}
+          </button>
+          <div id={listId} hidden={!open} className="flex flex-col gap-1">
+            {older.map((v) => <DocumentRow key={v.testId} muted {...v} />)}
+          </div>
         </div>
       ) : null}
     </div>
@@ -522,7 +548,7 @@ function DocumentGroup({ items }) {
 // 8px gap between them is kept by `gap-2`. Desktop stays compact.
 const TOUCH_TARGET = 'nav-drawer:min-h-11 nav-drawer:min-w-11';
 
-function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, actions = [], muted = false, to }) {
+function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, flag, terms, actions = [], muted = false, to }) {
   const hasAmount = amount !== undefined && amount !== null;
   const metaText = [date ? formatThaiDate(date) : null, meta].filter(Boolean).join(' · ');
   return (
@@ -538,6 +564,10 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
           <span className={cn('min-w-0 truncate mobile:whitespace-normal mobile:break-all', muted ? 'text-xs text-text-muted' : 'text-sm font-bold text-text')}>{title}</span>
         )}
         {status ? <StatusBadge tone={status.tone}>{status.label}</StatusBadge> : null}
+        {/* Which version the deal's order was confirmed from: shown wherever that row sits. */}
+        {flag ? (
+          <span data-testid="document-flag" className="rounded-pill bg-primary-bg px-2 text-xs font-bold text-primary">{flag}</span>
+        ) : null}
         {/* Recipient of the whole document: shown on the current (top) row only. */}
         {recipient && !muted ? (
           <span data-testid="document-recipient" title={`สำหรับ: ${recipient}`}
@@ -548,6 +578,10 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
       </div>
       <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center justify-between gap-x-3 gap-y-2">
         {metaText ? <span className="text-xs text-text-muted mobile:basis-full">{metaText}</span> : null}
+        {terms ? (
+          <span data-testid="document-terms"
+            className={cn('basis-full text-xs', muted ? 'text-text-muted' : 'font-bold text-text-secondary')}>{terms}</span>
+        ) : null}
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-2 mobile:w-full mobile:basis-full mobile:justify-between">
           {hasAmount ? (
             <span className={cn('tabular-nums', muted ? 'text-xs text-text-muted' : 'text-sm text-text')}>{formatMoney(amount)}</span>
