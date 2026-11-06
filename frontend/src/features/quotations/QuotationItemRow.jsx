@@ -1152,7 +1152,9 @@ export function QuotationItemRow({
             <label className="flex items-center gap-2 text-sm font-bold text-text-secondary">
               <input
                 type="checkbox" disabled={readOnly} checked={item.stockSource === 'IN_THAILAND'}
-                onChange={(e) => patch({ stockSource: e.target.checked ? 'IN_THAILAND' : null })}
+                onChange={(e) => patch(e.target.checked
+                  ? { stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null }
+                  : { stockSource: null, ...defaultLeadTimeForOrigin(item.originCountry) })}
               />
               จากสต็อก
             </label>

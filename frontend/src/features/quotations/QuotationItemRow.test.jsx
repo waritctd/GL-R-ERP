@@ -255,7 +255,15 @@ describe('QuotationItemRow — จากสต็อก (direct quotation ships 
     const box = screen.getByLabelText('จากสต็อก');
     expect(box.checked).toBe(false);
     fireEvent.click(box);
-    expect(onChange).toHaveBeenLastCalledWith({ stockSource: 'IN_THAILAND' });
+    expect(onChange).toHaveBeenLastCalledWith({ stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null });
+  });
+
+  it('ticking drops a catalogue-default lead time so the hidden 60-75 days is not saved', () => {
+    const { onChange } = renderStockRow({ leadTimeMinDays: 60, leadTimeMaxDays: 75 });
+    fireEvent.click(screen.getByLabelText('จากสต็อก'));
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ stockSource: 'IN_THAILAND', leadTimeMinDays: null, leadTimeMaxDays: null }),
+    );
   });
 
   it('unticking a ticked row sends null', () => {
@@ -263,7 +271,13 @@ describe('QuotationItemRow — จากสต็อก (direct quotation ships 
     const box = screen.getByLabelText('จากสต็อก');
     expect(box.checked).toBe(true);
     fireEvent.click(box);
-    expect(onChange).toHaveBeenLastCalledWith({ stockSource: null });
+    expect(onChange).toHaveBeenLastCalledWith({ stockSource: null, leadTimeMinDays: null, leadTimeMaxDays: null });
+  });
+
+  it('unticking restores the origin default lead time', () => {
+    const { onChange } = renderStockRow({ stockSource: 'IN_THAILAND', originCountry: 'อิตาลี', leadTimeMinDays: null, leadTimeMaxDays: null });
+    fireEvent.click(screen.getByLabelText('จากสต็อก'));
+    expect(onChange).toHaveBeenLastCalledWith({ stockSource: null, leadTimeMinDays: 75, leadTimeMaxDays: 90 });
   });
 
   it('hides ระยะเวลานำเข้า while ticked and shows it otherwise', () => {

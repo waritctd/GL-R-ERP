@@ -1309,6 +1309,7 @@ describe('DealFulfilmentPanel — ระบุสินค้าจากสต�
     expect(dialog.textContent).toContain('Brand X Model Y');
     expect(dialog.textContent).toContain('500');
     expect(dialog.textContent).toContain('ข้ามขั้นสั่งนำเข้า (IR)');
+    expect(dialog.textContent).toContain('ค่าคอมมิชชั่น');
     expect(api.tickets.reserveStock).not.toHaveBeenCalled();
   });
 

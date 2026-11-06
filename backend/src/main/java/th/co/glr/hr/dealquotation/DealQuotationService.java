@@ -1769,6 +1769,7 @@ public class DealQuotationService {
         tickets.coverSourcedFromStockLines(ticketId);
         int depositPercent = DealQuotationRenderAdapter.effectiveDepositPercent(fresh.depositPercent());
         ticketService.confirmCustomerForPromotedQuotation(ticketId, fresh.number(), depositPercent, actor);
+        ticketService.notifySalesManagerOfStockCoverOnConfirm(ticketId, actor);
         // FYI to the CEO (the pricing-request path keeps its own notice in OrderConfirmationService).
         notifications.notifyByRoleAtLink("ceo", PricingRequestEventKind.ORDER_CONFIRMED,
             actor.name() + " ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number() + " แล้ว\n"

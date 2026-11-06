@@ -1513,6 +1513,27 @@ public class TicketService {
     }
 
     /**
+     * The order-confirmation twin of {@link #reserveStock}'s supervision: a rep's จากสต็อก tick on a direct quotation
+     * becomes {@code qty_from_stock} (the STOCK_BONUS input) when the order is confirmed, so the manager is told here
+     * too. Call it AFTER the cover is written and the deal routed, so the all-stock claim reflects the real state. Says
+     * nothing when no line is covered.
+     */
+    @Transactional
+    public void notifySalesManagerOfStockCoverOnConfirm(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireTicket(ticketId);
+        Map<Long, BigDecimal> covered = new LinkedHashMap<>();
+        ticket.items().forEach(item -> covered.put(item.id(), nullToZero(item.qtyFromStock())));
+        if (covered.values().stream().noneMatch(qty -> qty.signum() > 0)) {
+            return;
+        }
+        boolean allCovered = ticket.items().stream()
+            .allMatch(item -> covered.get(item.id()).compareTo(nullToZero(item.qty())) >= 0);
+        boolean leavesTheImportAxis = allCovered
+            && FulfilmentStatus.FROM_STOCK.equals(ticket.summary().fulfillmentStatus());
+        notifySalesManagerOfRepDeclaration(ticket.summary(), actor, covered, ticket.items(), leavesTheImportAxis);
+    }
+
+    /**
      * Tells ฝ่ายขาย's ผู้จัดการ that one of their reps just declared stock coverage on their own
      * deal (the supervision half of "Sales declares, CEO may correct/override").
      *

@@ -1163,6 +1163,76 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(summary(deal).salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
     }
 
+    @Test
+    void repConfirmsWithAStockLine_theSalesManagerIsToldOnce_withoutClaimingTheWholeDeal() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal,
+            stockDraft(50, null, stockTile("Stock A", true), stockTile("Import B", false)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        List<Map<String, Object>> rows = ticketStockRows(deal);
+        String declared = ((BigDecimal) rows.get(0).get("qty_from_stock")).stripTrailingZeros().toPlainString();
+        String ordered = ((BigDecimal) rows.get(0).get("qty")).add((BigDecimal) rows.get(1).get("qty"))
+            .stripTrailingZeros().toPlainString();
+        TicketSummaryDto s = summary(deal);
+        assertThat(stockReservedMessages(smId)).singleElement().satisfies(m -> assertThat(m)
+            .contains(s.code()).contains(s.customerName()).contains(salesActor.name())
+            .contains(declared + "/" + ordered).contains("STOCK_BONUS").doesNotContain("ครบทั้งดีล"));
+    }
+
+    @Test
+    void repConfirmsAnAllStockZeroDepositDeal_theNoticeSaysTheDealLeavesTheImportAxis() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal,
+            stockDraft(0, "BEFORE_DELIVERY", stockTile("Stock A", true)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertThat(summary(deal).fulfillmentStatus()).isEqualTo("FROM_STOCK");
+        assertThat(stockReservedMessages(smId)).singleElement().satisfies(m -> assertThat(m).contains("ครบทั้งดีล"));
+    }
+
+    @Test
+    void repConfirmsAnAllStockDepositDeal_theNoticeDoesNotClaimTheDealLeftTheImportAxisYet() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedQuotation(deal, stockDraft(50, null, stockTile("Stock A", true)));
+
+        confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor);
+
+        assertThat(summary(deal).fulfillmentStatus()).isNull();
+        assertThat(stockReservedMessages(smId)).singleElement()
+            .satisfies(m -> assertThat(m).doesNotContain("ครบทั้งดีล"));
+    }
+
+    @Test
+    void confirmWithNoStockLine_orByANonRep_orOnReplay_sendsNoStockNotice() {
+        long smId = mailer.seedRoleEmployee("sales_manager");
+        long plainDeal = pipelineTicket(salesActor);
+        confirmer.confirmOrderFromDirectQuotation(approvedDirectQuotation(plainDeal, salesActor).id(), salesActor);
+        assertThat(stockReservedMessages(smId)).as("no stock line").isEmpty();
+
+        long managerDeal = pipelineTicket(salesActor);
+        DealQuotationDto stockQuote = approvedQuotation(managerDeal, stockDraft(50, null, stockTile("Stock A", true)));
+        confirmer.confirmOrderFromDirectQuotation(stockQuote.id(), salesManagerActor);
+        assertThat(stockReservedMessages(smId)).as("a non-rep confirming").isEmpty();
+
+        long repDeal = pipelineTicket(salesActor);
+        DealQuotationDto repQuote = approvedQuotation(repDeal, stockDraft(50, null, stockTile("Stock A", true)));
+        confirmer.confirmOrderFromDirectQuotation(repQuote.id(), salesActor);
+        confirmer.confirmOrderFromDirectQuotation(repQuote.id(), salesActor);
+        assertThat(stockReservedMessages(smId)).as("replay adds nothing").hasSize(1);
+    }
+
+    private List<String> stockReservedMessages(long recipientId) {
+        return jdbc.queryForList("""
+            SELECT message FROM hr.notification WHERE type = :type AND employee_id = :id ORDER BY notification_id
+            """, Map.of("type", TicketEventKind.STOCK_RESERVED, "id", recipientId), String.class);
+    }
+
     private List<String> storedStockSources(long quotationId) {
         return jdbc.queryForList(
             "SELECT stock_source FROM sales.quotation_item WHERE quotation_id = :id ORDER BY seq",

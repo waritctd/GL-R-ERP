@@ -1147,7 +1147,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         open={pendingStock != null}
         title={pendingStock?.qtyFromStock ? 'ยืนยันสินค้าจากสต็อก' : 'ยกเลิกสินค้าจากสต็อก'}
         message={pendingStock?.qtyFromStock
-          ? `${pendingStock.item.brand} ${pendingStock.item.model ?? ''} จำนวน ${Number(pendingStock.qtyFromStock).toLocaleString('en-US')} จะถูกบันทึกว่ามาจากสต็อก เมื่อทุกรายการมาจากสต็อก ดีลจะข้ามขั้นสั่งนำเข้า (IR) และย้ายไปขั้นนัดส่งสินค้าทันที`
+          ? `${pendingStock.item.brand} ${pendingStock.item.model ?? ''} จำนวน ${Number(pendingStock.qtyFromStock).toLocaleString('en-US')} จะถูกบันทึกว่ามาจากสต็อก เมื่อทุกรายการมาจากสต็อก ดีลจะข้ามขั้นสั่งนำเข้า (IR) และย้ายไปขั้นนัดส่งสินค้าทันที ตัวเลขนี้ใช้คำนวณค่าคอมมิชชั่นส่วนสินค้าจากสต็อก และผู้จัดการฝ่ายขายจะได้รับแจ้งเพื่อตรวจทาน`
           : `${pendingStock?.item.brand} ${pendingStock?.item.model ?? ''} จะกลับไปอยู่ในรายการนำเข้า`}
         confirmLabel={pendingStock?.qtyFromStock ? 'ยืนยันจากสต็อก' : 'กลับไปสั่งนำเข้า'}
         busy={reserveStockMutation.isPending}
