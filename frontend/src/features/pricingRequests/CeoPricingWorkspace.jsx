@@ -272,9 +272,17 @@ export function CostCalculation({ row, priceMode }) {
   const b = row.breakdown;
   const id = row.item.id;
   if (!b) return null;
-  const share = (part, qty) => (part.groupAmount != null && qty != null
-    ? `${n2(part.groupAmount)} × ${n2(b.qtySqm)} ÷ ${n2(qty)} ตร.ม. (${Math.round((b.qtySqm / qty) * 100)}%)`
-    : null);
+  // CEO ruling 2026-11-06: shares are by container space (ตร.ม. ÷ ความจุตู้); older costings carry no units.
+  const byUnits = b.itemUnits != null;
+  const share = (part, qty) => {
+    if (part.groupAmount == null) return null;
+    if (byUnits && part.groupUnits != null) {
+      return `${n2(part.groupAmount)} × ${nf(b.itemUnits)} ÷ ${nf(part.groupUnits)} ตู้ (${Math.round((b.itemUnits / part.groupUnits) * 100)}%)`;
+    }
+    return qty != null
+      ? `${n2(part.groupAmount)} × ${n2(b.qtySqm)} ÷ ${n2(qty)} ตร.ม. (${Math.round((b.qtySqm / qty) * 100)}%)`
+      : null;
+  };
   const perContainer = (part) => (part.fullContainers > 0 && !(part.remainderSqm > 0)
     ? `${n2(part.groupAmount / part.fullContainers)} × ${part.fullContainers} ตู้ = ` : '');
   const freightContainers = containerText(b.freight);
@@ -303,7 +311,9 @@ export function CostCalculation({ row, priceMode }) {
         <CalcStep label="ค่าเรือ" symbol="F" amount={n2(b.freight.share)}>
           {perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}
           {freightContainers ? (
-            <Sub>{`${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
+            <Sub>{byUnits
+              ? `${freightContainers} · ความจุ 800 ตร.ม./ตู้ (หนา 17–21 มม. 450) · เศษเกิน 600 ตร.ม. (หนา 17–21 มม.: 250) ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้`
+              : `${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
           ) : null}
         </CalcStep>
         <CalcStep label="ค่าชิปปิ้ง" symbol="S" amount={n2(b.clearance.share)}>

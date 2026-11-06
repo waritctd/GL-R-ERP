@@ -292,49 +292,202 @@ class PricingFormulaEngineTest {
         return new BigDecimal(value);
     }
 
-    // ── Container rule (owner ruling 2026-11-06: 1 ตู้ = 800 ตร.ม., method 2) ─────────────────
+    // ── Container rule (CEO ruling 2026-11-06: capacity by thickness, thicknesses combined) ────
+    // 20' container: 800 ตร.ม. under 17 mm, 450 from 17 mm. Container space E = Σ sqm_i / cap(t_i);
+    // full = floor(E), r = E − full. Rounding r up: thick-only group → r × 450 > 250; otherwise
+    // (thin-only or mixed) → r × 800 > 600.
+
+    private static PricingFormulaEngine.ContainerLine line(String thicknessMm, String sqm) {
+        return new PricingFormulaEngine.ContainerLine(bd(thicknessMm), bd(sqm));
+    }
+
+    private static List<PricingFormulaEngine.ContainerLine> lines(PricingFormulaEngine.ContainerLine... lines) {
+        return List.of(lines);
+    }
+
+    /** V109's Italy rows for [8,12) and [17,21) (the thin top band is 801+; the thick table stops at 451). */
+    private List<PricingFreightRateDto> italyThinAndThickRates() {
+        return List.of(
+            new PricingFreightRateDto(2L, "IT", "อิตาลี", bd("8"), bd("12"), bd("1"), bd("101"), bd("50000")),
+            new PricingFreightRateDto(3L, "IT", "อิตาลี", bd("8"), bd("12"), bd("101"), bd("451"), bd("80000")),
+            new PricingFreightRateDto(4L, "IT", "อิตาลี", bd("8"), bd("12"), bd("451"), bd("801"), bd("90000")),
+            new PricingFreightRateDto(5L, "IT", "อิตาลี", bd("8"), bd("12"), bd("801"), null, bd("100000")),
+            new PricingFreightRateDto(6L, "IT", "อิตาลี", bd("17"), bd("21"), bd("1"), bd("101"), bd("60000")),
+            new PricingFreightRateDto(7L, "IT", "อิตาลี", bd("17"), bd("21"), bd("101"), bd("451"), bd("100000")));
+    }
+
+    /** Same, but the thick 101–451 band (the thick full-container rate) is dearer than the thin 801+ one,
+     * so "highest full-container rate wins" is distinguishable from "first / thin thickness wins". */
+    private List<PricingFreightRateDto> dearThickRates() {
+        List<PricingFreightRateDto> rates = new java.util.ArrayList<>(italyThinAndThickRates());
+        rates.set(5, new PricingFreightRateDto(7L, "IT", "อิตาลี", bd("17"), bd("21"), bd("101"), bd("451"), bd("120000")));
+        return rates;
+    }
 
     @Test
-    void containerSplit_remainderOver75PctIsAFullContainer() {
+    void containerCapacity_isBy17mmThreshold_800Below_450FromSeventeen() {
+        assertThat(PricingFormulaEngine.containerCapacitySqm(bd("3"))).isEqualByComparingTo("800");
+        assertThat(PricingFormulaEngine.containerCapacitySqm(bd("16.9"))).isEqualByComparingTo("800");
+        // exactly 17 is thick; above 21 is still 450 (its rate lookup fails separately, as today)
+        assertThat(PricingFormulaEngine.containerCapacitySqm(bd("17"))).isEqualByComparingTo("450");
+        assertThat(PricingFormulaEngine.containerCapacitySqm(bd("21"))).isEqualByComparingTo("450");
+        assertThat(PricingFormulaEngine.containerCapacitySqm(bd("25"))).isEqualByComparingTo("450");
+    }
+
+    @Test
+    void containerUnits_sumsSqmOverEachLinesOwnCapacity() {
+        // 400 @10 = 0.5, 225 @19 = 0.5
+        assertThat(PricingFormulaEngine.containerUnits(lines(line("10", "400"), line("19", "225"))))
+            .isEqualByComparingTo("1");
+        // 300 @19 = 0.6667, 300 @10 = 0.375
+        assertThat(PricingFormulaEngine.containerUnits(lines(line("19", "300"), line("10", "300"))).doubleValue())
+            .isCloseTo(1.0416667, org.assertj.core.data.Offset.offset(0.000001));
+        // a single thick line: 700 / 450
+        assertThat(PricingFormulaEngine.containerUnits(lines(line("19", "700"))).doubleValue())
+            .isCloseTo(1.5555556, org.assertj.core.data.Offset.offset(0.000001));
+    }
+
+    @Test
+    void containerSplit_thinOnly_isUnchanged_remainderOver75PctIsAFullContainer() {
         // 3,910 = 4 × 800 + 710 → 710 is nearly full → 5 containers, nothing left over
-        assertThat(PricingFormulaEngine.containerSplit(bd("3910"))).isEqualTo(new PricingFormulaEngine.ContainerSplit(5, bd("0")));
+        PricingFormulaEngine.ContainerSplit nearlyFull = PricingFormulaEngine.containerSplit(lines(line("8", "3910")));
+        assertThat(nearlyFull.fullContainers()).isEqualTo(5);
+        assertThat(nearlyFull.remainderSqm()).isEqualByComparingTo("0");
         // 3,250 = 4 × 800 + 50 → 4 full + a 50 ตร.ม. part load
-        PricingFormulaEngine.ContainerSplit partLoad = PricingFormulaEngine.containerSplit(bd("3250"));
+        PricingFormulaEngine.ContainerSplit partLoad = PricingFormulaEngine.containerSplit(lines(line("8", "3250")));
         assertThat(partLoad.fullContainers()).isEqualTo(4);
         assertThat(partLoad.remainderSqm()).isEqualByComparingTo("50");
         // exactly 800 = 1 container; 600 (75%) alone stays a part load; 601 alone is a full container
-        assertThat(PricingFormulaEngine.containerSplit(bd("800")).fullContainers()).isEqualTo(1);
-        assertThat(PricingFormulaEngine.containerSplit(bd("600")).fullContainers()).isZero();
-        assertThat(PricingFormulaEngine.containerSplit(bd("601")).fullContainers()).isEqualTo(1);
+        assertThat(PricingFormulaEngine.containerSplit(lines(line("8", "800"))).fullContainers()).isEqualTo(1);
+        assertThat(PricingFormulaEngine.containerSplit(lines(line("8", "600"))).fullContainers()).isZero();
+        assertThat(PricingFormulaEngine.containerSplit(lines(line("8", "601"))).fullContainers()).isEqualTo(1);
     }
 
     @Test
-    void containerFreight_chargesTheFullContainerRatePerContainer_notOncePerShipment() {
+    void containerSplit_thickOnly_roundsUpAboveTwoFiftyOfAFourFiftyContainer() {
+        // 700 @19: E = 1.5556 → 1 full, r × 450 = 250 → NOT above 250 → stays a 250 ตร.ม. leftover
+        PricingFormulaEngine.ContainerSplit atThreshold = PricingFormulaEngine.containerSplit(lines(line("19", "700")));
+        assertThat(atThreshold.fullContainers()).isEqualTo(1);
+        assertThat(atThreshold.remainderSqm()).isEqualByComparingTo("250");
+        // 720 @19: r × 450 = 270 > 250 → 2 full, nothing left
+        PricingFormulaEngine.ContainerSplit roundedUp = PricingFormulaEngine.containerSplit(lines(line("19", "720")));
+        assertThat(roundedUp.fullContainers()).isEqualTo(2);
+        assertThat(roundedUp.remainderSqm()).isEqualByComparingTo("0");
+        // exactly one thick container
+        assertThat(PricingFormulaEngine.containerSplit(lines(line("17", "450"))).fullContainers()).isEqualTo(1);
+    }
+
+    @Test
+    void containerSplit_mixedThicknesses_fillOneContainerTogether() {
+        // 400 @10 (0.5) + 225 @19 (0.5): E = 1.0 → exactly 1 full container, no leftover
+        PricingFormulaEngine.ContainerSplit split = PricingFormulaEngine.containerSplit(lines(line("10", "400"), line("19", "225")));
+        assertThat(split.fullContainers()).isEqualTo(1);
+        assertThat(split.remainderSqm()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void containerSplit_mixedLeftover_isMeasuredOnTheNormal800Scale() {
+        // 300 @19 + 300 @10: E = 1.0417 → 1 full; r = 0.0417 → remainder expressed as r × 800 = 33.3
+        PricingFormulaEngine.ContainerSplit split = PricingFormulaEngine.containerSplit(lines(line("19", "300"), line("10", "300")));
+        assertThat(split.fullContainers()).isEqualTo(1);
+        assertThat(split.remainderSqm().doubleValue()).isCloseTo(33.33, org.assertj.core.data.Offset.offset(0.01));
+        // 400 @10 + 495 @19: E = 1.6, r = 0.6 → mixed uses the "normal" rule: r × 800 = 480 ≤ 600 → NOT rounded up
+        PricingFormulaEngine.ContainerSplit mixed = PricingFormulaEngine.containerSplit(lines(line("10", "400"), line("19", "495")));
+        assertThat(mixed.fullContainers()).isEqualTo(1);
+        assertThat(mixed.remainderSqm().doubleValue()).isCloseTo(480.0, org.assertj.core.data.Offset.offset(0.01));
+        // ...whereas the same r = 0.6 on thick-only (720 @19) IS rounded up (270 > 250) — see the thick-only test
+        // 600 @10 (0.75) + 472.5 @19 (1.05): E = 1.8 → r × 800 = 640 > 600 → 2 full
+        assertThat(PricingFormulaEngine.containerSplit(lines(line("10", "600"), line("19", "472.5"))).fullContainers())
+            .isEqualTo(2);
+    }
+
+    @Test
+    void containerFreight_thinOnly_isUnchanged_fullContainerRatePerContainer() {
         // DL-2026-0325: 7,820 ตร.ม. (Equipe, 8 มม.) = 9 × 800 + 620 → 10 containers × 100,000
-        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(italyFreightRates(), "IT", bd("8"), bd("7820"), "test");
+        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "7820")), "test");
         assertThat(freight.fullContainers()).isEqualTo(10);
         assertThat(freight.amountThb()).isEqualByComparingTo("1000000");
-        PricingFormulaEngine.ContainerCharge clearance = engine.containerClearance(clearanceFees(), bd("7820"), "test");
-        assertThat(clearance.amountThb()).isEqualByComparingTo("200000");
+        // 3,910 @8 → 5 full
+        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "3910")), "test").amountThb())
+            .isEqualByComparingTo("500000");
+        // 3,250 @8 → 4 full + 50 ตร.ม. in the 1–100 band (50,000)
+        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "3250")), "test").amountThb())
+            .isEqualByComparingTo("450000");
+        // a part load alone (300 ตร.ม.) is just its band
+        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "300")), "test").amountThb())
+            .isEqualByComparingTo("80000");
     }
 
     @Test
-    void containerFreight_aSmallRemainderPaysItsOwnBand() {
-        // 3,250 = 4 full (4 × 100,000) + 50 ตร.ม. in the 1–100 band (50,000); clearance 4 × 20,000 + 8,000
-        assertThat(engine.containerFreight(italyFreightRates(), "IT", bd("8"), bd("3250"), "test").amountThb())
+    void containerFreight_thinOnly_splitsAcrossSeveralLinesOfTheSameFactory() {
+        // two thin lines combine: 2,000 + 1,250 = 3,250 → same as the single-line 4 full + 50 case
+        assertThat(engine.containerFreight(italyFreightRates(), "IT", lines(line("8", "2000"), line("9", "1250")), "test").amountThb())
             .isEqualByComparingTo("450000");
-        assertThat(engine.containerClearance(clearanceFees(), bd("3250"), "test").amountThb())
-            .isEqualByComparingTo("88000");
-        // a part load alone (300 ตร.ม.) is unchanged: just its band
-        assertThat(engine.containerFreight(italyFreightRates(), "IT", bd("8"), bd("300"), "test").amountThb())
-            .isEqualByComparingTo("80000");
     }
 
     @Test
     void containerFreight_fallsBackToThe800Band_whenTheTableHasNoFullContainerColumn() {
         List<PricingFreightRateDto> noTopBand = List.of(
             new PricingFreightRateDto(1L, "IT", "อิตาลี", bd("12"), bd("17"), bd("451"), bd("801"), bd("100000")));
-        assertThat(engine.containerFreight(noTopBand, "IT", bd("12"), bd("1600"), "test").amountThb())
+        assertThat(engine.containerFreight(noTopBand, "IT", lines(line("12", "1600")), "test").amountThb())
             .isEqualByComparingTo("200000");
+    }
+
+    @Test
+    void containerFreight_thickOnly_fullContainerRateIsTheBandHolding450() {
+        // 700 @19: 1 full at the 17–21 band holding 450 (101–451 = 100,000) + 250 ตร.ม. leftover in that
+        // same band (100,000) = 200,000. The thick table has no 801+ band, so the old 800-based split cannot price this.
+        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "700")), "test");
+        assertThat(freight.fullContainers()).isEqualTo(1);
+        assertThat(freight.amountThb()).isEqualByComparingTo("200000");
+        // 720 @19: rounds up to 2 full → 2 × 100,000
+        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "720")), "test").amountThb())
+            .isEqualByComparingTo("200000");
+        // 450 @17 (exactly one thick container) → 1 × 100,000, nothing left
+        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("17", "450")), "test").amountThb())
+            .isEqualByComparingTo("100000");
+    }
+
+    @Test
+    void containerFreight_mixedShipment_chargesTheHighestFullContainerRatePresent() {
+        // 400 @10 + 225 @19: E = 1.0 → 1 full, no leftover. Thin full rate 100,000 vs thick full rate 120,000 → 120,000.
+        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(dearThickRates(), "IT",
+            lines(line("10", "400"), line("19", "225")), "test");
+        assertThat(freight.fullContainers()).isEqualTo(1);
+        assertThat(freight.amountThb()).isEqualByComparingTo("120000");
+    }
+
+    @Test
+    void containerFreight_mixedLeftover_looksUpEachThicknessAtItsOwnScale_andChargesTheHighest() {
+        // 300 @19 + 300 @10: 1 full (highest full rate 120,000 — thick) + leftover r = 0.0417:
+        //   10 mm band at 33.3 ตร.ม. (1–101 = 50,000), 19 mm band at 18.75 ตร.ม. (1–101 = 60,000) → 60,000.
+        PricingFormulaEngine.ContainerCharge freight = engine.containerFreight(dearThickRates(), "IT",
+            lines(line("19", "300"), line("10", "300")), "test");
+        assertThat(freight.fullContainers()).isEqualTo(1);
+        assertThat(freight.amountThb()).isEqualByComparingTo("180000");
+        // same shipment on the seeded IT table: 100,000 (both full rates tie) + 60,000
+        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "300"), line("10", "300")), "test").amountThb())
+            .isEqualByComparingTo("160000");
+    }
+
+    @Test
+    void containerClearance_usesTheSameSplitOverTheWholeShipment() {
+        // thin: 3,910 @8 → 5 × 20,000; 3,250 → 4 × 20,000 + 8,000
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("8", "3910")), "test").amountThb())
+            .isEqualByComparingTo("100000");
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("8", "3250")), "test").amountThb())
+            .isEqualByComparingTo("88000");
+        // DL-2026-0325: 7,820 → 10 × 20,000
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("8", "7820")), "test").amountThb())
+            .isEqualByComparingTo("200000");
+        // thick-only 700 @19: 1 full (20,000) + leftover looked up at r × 450 = 250 → 101–451 = 12,000
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "700")), "test").amountThb())
+            .isEqualByComparingTo("32000");
+        // thick-only 720 @19: 2 full
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "720")), "test").amountThb())
+            .isEqualByComparingTo("40000");
+        // mixed 300 @19 + 300 @10: 1 full + leftover at r × 800 = 33.3 → 1–101 = 8,000
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "300"), line("10", "300")), "test").amountThb())
+            .isEqualByComparingTo("28000");
     }
 }

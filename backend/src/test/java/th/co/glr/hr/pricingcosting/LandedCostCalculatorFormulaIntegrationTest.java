@@ -341,6 +341,95 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .isEqualByComparingTo("8000.0000");
     }
 
+    /**
+     * CEO ruling 2026-11-06 (capacity by thickness; thicknesses combine per factory shipment).
+     * ONE factory, 400 sqm @10 mm + 225 sqm @19 mm: container space E = 400/800 + 225/450 = 1.0, so
+     * ONE full container for the whole shipment (the old code split by thickness: 400 @10 in the
+     * 101–451 band + 225 @19 in the 101–451 band). Seeded Italy: 8–12 full (801+) = 100,000, 17–21
+     * band holding 450 (101–451) = 100,000 → F = 100,000; clearance 1 × 20,000. Shares by container
+     * space are 50% / 50% (NOT 64% / 36% by sqm): F 50,000 each, S 10,000 each.
+     */
+    @Test
+    void mixedThicknessShipment_combinesIntoOneContainer_andSharesByContainerSpace() {
+        long pricingRequestId = twoItemSameFactoryReadyForReview(
+            new BigDecimal("400"), new BigDecimal("10"), new BigDecimal("225"), new BigDecimal("19"));
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        List<PricingCostingItemDto> costingItems = costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        PricingCostingItemDto thin = costingItems.stream()
+            .filter(i -> i.requestedQuantity().compareTo(new BigDecimal("400")) == 0).findFirst().orElseThrow();
+        PricingCostingItemDto thick = costingItems.stream()
+            .filter(i -> i.requestedQuantity().compareTo(new BigDecimal("225")) == 0).findFirst().orElseThrow();
+
+        assertThat(thin.freightCostThb().multiply(thin.normalizedQuantityPieces()).doubleValue()).isCloseTo(50000.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(thick.freightCostThb().multiply(thick.normalizedQuantityPieces()).doubleValue()).isCloseTo(50000.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(thin.clearanceFeeThb().multiply(thin.normalizedQuantityPieces()).doubleValue()).isCloseTo(10000.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(thick.clearanceFeeThb().multiply(thick.normalizedQuantityPieces()).doubleValue()).isCloseTo(10000.0, org.assertj.core.data.Offset.offset(0.05));
+
+        // Snapshot: existing keys kept (containerSqm is now THIS item's capacity), new unit keys added.
+        com.fasterxml.jackson.databind.JsonNode thinSnap = snapshot(thin);
+        com.fasterxml.jackson.databind.JsonNode thickSnap = snapshot(thick);
+        assertThat(thinSnap.path("containerSqm").asText()).isEqualTo("800");
+        assertThat(thickSnap.path("containerSqm").asText()).isEqualTo("450");
+        assertThat(new BigDecimal(thinSnap.path("itemContainerUnits").asText())).isEqualByComparingTo("0.5");
+        assertThat(new BigDecimal(thickSnap.path("itemContainerUnits").asText())).isEqualByComparingTo("0.5");
+        for (com.fasterxml.jackson.databind.JsonNode snap : List.of(thinSnap, thickSnap)) {
+            assertThat(new BigDecimal(snap.path("freightGroupContainerUnits").asText())).isEqualByComparingTo("1");
+            assertThat(new BigDecimal(snap.path("shipmentContainerUnits").asText())).isEqualByComparingTo("1");
+            assertThat(snap.path("freightFullContainers").asText()).isEqualTo("1");
+            assertThat(snap.path("clearanceFullContainers").asText()).isEqualTo("1");
+            assertThat(new BigDecimal(snap.path("freightRemainderSqm").asText())).isEqualByComparingTo("0");
+            assertThat(new BigDecimal(snap.path("freightGroupQtySqm").asText())).isEqualByComparingTo("625");
+        }
+    }
+
+    /**
+     * Same shipment shape with a leftover: 300 sqm @19 mm + 300 sqm @10 mm. E = 0.6667 + 0.375 = 1.0417
+     * → 1 full + r = 0.0417 (mixed → normal rule, r × 800 = 33.3 ≤ 600, kept as a leftover). F = 100,000
+     * (full) + highest leftover band (10 mm @33.3 = 50,000; 19 mm @18.75 = 60,000) = 60,000 → 160,000.
+     * S = 20,000 + the 1–101 clearance band (8,000) = 28,000. Shares by container space:
+     * 19 mm 0.6667/1.0417 = 64%, 10 mm 36% → F 102,400 / 57,600.
+     */
+    @Test
+    void mixedThicknessShipment_withLeftover_chargesHighestLeftoverBand_andSharesByContainerSpace() {
+        long pricingRequestId = twoItemSameFactoryReadyForReview(
+            new BigDecimal("300"), new BigDecimal("19"), new BigDecimal("300"), new BigDecimal("10"));
+
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        List<PricingCostingItemDto> costingItems = costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        PricingCostingItemDto thick = costingItems.stream()
+            .filter(i -> snapshot(i).path("thicknessMm").asText().startsWith("19")).findFirst().orElseThrow();
+        PricingCostingItemDto thin = costingItems.stream()
+            .filter(i -> snapshot(i).path("thicknessMm").asText().startsWith("10")).findFirst().orElseThrow();
+
+        BigDecimal freightThick = thick.freightCostThb().multiply(thick.normalizedQuantityPieces());
+        BigDecimal freightThin = thin.freightCostThb().multiply(thin.normalizedQuantityPieces());
+        assertThat(freightThick.add(freightThin).doubleValue()).isCloseTo(160000.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(freightThick.doubleValue()).isCloseTo(102400.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(freightThin.doubleValue()).isCloseTo(57600.0, org.assertj.core.data.Offset.offset(0.05));
+        assertThat(thick.clearanceFeeThb().multiply(thick.normalizedQuantityPieces())
+            .add(thin.clearanceFeeThb().multiply(thin.normalizedQuantityPieces())).doubleValue())
+            .isCloseTo(28000.0, org.assertj.core.data.Offset.offset(0.05));
+
+        com.fasterxml.jackson.databind.JsonNode snap = snapshot(thick);
+        assertThat(snap.path("freightFullContainers").asText()).isEqualTo("1");
+        assertThat(snap.path("freightRemainderSqm").asDouble()).isCloseTo(33.33, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(snap.path("freightGroupContainerUnits").asDouble()).isCloseTo(1.0417, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(snap.path("shipmentContainerUnits").asDouble()).isCloseTo(1.0417, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(snap.path("itemContainerUnits").asDouble()).isCloseTo(0.6667, org.assertj.core.data.Offset.offset(0.0001));
+        assertThat(snap.path("containerSqm").asText()).isEqualTo("450");
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode snapshot(PricingCostingItemDto item) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().readTree(item.calculationSnapshot());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Missing inputs / bands MUST fail loudly, naming the item — never silently price as ฿0
     // ─────────────────────────────────────────────────────────────────────────────────────
@@ -839,10 +928,15 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
      * PER_SQM requested at 1 sqm/piece so requestedQty == qtySqm directly, for a simple hand-
      * computable allocation ratio. */
     private long twoItemSameFactoryReadyForReview(BigDecimal qtyA, BigDecimal qtyB) {
+        return twoItemSameFactoryReadyForReview(qtyA, new BigDecimal("10"), qtyB, new BigDecimal("10"));
+    }
+
+    private long twoItemSameFactoryReadyForReview(BigDecimal qtyA, BigDecimal thicknessA,
+                                                  BigDecimal qtyB, BigDecimal thicknessB) {
         long productIdA = insertCatalogProduct("Formula Factory", "IT", "V109-A-" + UUID.randomUUID(),
-            new BigDecimal("100.00"), "THB", "per_piece");
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", thicknessA);
         long productIdB = insertCatalogProduct("Formula Factory", "IT", "V109-B-" + UUID.randomUUID(),
-            new BigDecimal("100.00"), "THB", "per_piece");
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", thicknessB);
         PricingRequestItemRequest itemA = new PricingRequestItemRequest(
             null, productIdA, null, "Test", "ModelA", "Test ModelA", null, null, "1x1", "Formula Factory",
             qtyA, qtyA, "piece", UnitBasis.PER_PIECE, QuantityType.CONFIRMED, null, null, null);
