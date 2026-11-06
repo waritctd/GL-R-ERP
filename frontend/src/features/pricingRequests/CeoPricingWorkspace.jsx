@@ -8,7 +8,7 @@ import { cn } from '../../utils/cn.js';
 import { formatThaiDate } from '../../utils/format.js';
 import { pricingRequestRecipientLabel } from './pricingRequestMeta.js';
 
-// CEO pricing workspace for a NEW-FORM decision (redesign, 2026-11): header, sticky summary bar,
+// CEO pricing workspace for a NEW-FORM decision (redesign, 2026-11): header, summary bar (scrolls with the page — owner 2026-11-06),
 // pricing table (desktop) / cards (mobile), details row, ONE save. Presentational only: the page
 // builds the view-model (`model`) from its drafts and mutations, so no pricing rule lives here.
 // The table AND the cards are both rendered and hidden with Tailwind classes; the card inputs
@@ -415,7 +415,7 @@ export function CeoPricingWorkspace({ model }) {
       <section
         aria-label="สรุปราคาคำขอนี้"
         data-testid="pcr-ceo-summary"
-        className="sticky top-2 z-10 grid gap-2 rounded-md border border-border bg-surface p-3 mobile:static"
+        className="grid gap-2 rounded-md border border-border bg-surface p-3"
       >
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <div data-testid="pcr-ceo-sum-priced"><span className="block text-sm text-text-muted">ตั้งราคาแล้ว</span><b className="text-xl font-extrabold tabular-nums">{summary.priced}/{rows.length} <small className="text-sm font-semibold text-text-muted">รายการ</small></b></div>
