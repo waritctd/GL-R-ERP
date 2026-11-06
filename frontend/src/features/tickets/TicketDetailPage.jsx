@@ -62,6 +62,7 @@ import { isOwnerOrKeyer } from './dealOwnership.js';
 import {
   applyCatalogPick,
   applyDescriptiveFieldEdit,
+  hasRealTileCount,
   CatalogAutocompleteField,
   ITEM_FIELD_META,
   ItemField,
@@ -1947,8 +1948,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                           </label>
                           <div className="m-0">
                             <span className="mb-1 block text-xs">จำนวน (แผ่น)</span>
-                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', item.qty ? 'text-icon-muted' : 'text-text-muted')}>
-                              {item.qty ? `${item.qty} แผ่น` : '—'}
+                            <div className={cn('rounded-md border border-border-subtle bg-surface-muted px-2.5 py-[7px] text-sm', hasRealTileCount(item) ? 'text-icon-muted' : 'text-text-muted')}>
+                              {hasRealTileCount(item) ? `${item.qty} แผ่น` : '—'}
                             </div>
                           </div>
                         </>
@@ -2114,7 +2115,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                     </span>
                     <span data-label="จำนวน">
                       {item.unitBasis === 'SQM'
-                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}<small className="block text-text-muted">{item.qty} แผ่น</small></>
+                        ? <>{item.qtySqm != null ? `${Number(item.qtySqm).toFixed(2)} ตร.ม.` : '—'}{hasRealTileCount(item) && <small className="block text-text-muted">{item.qty} แผ่น</small>}</>
                         : <>{item.qty} แผ่น{item.qtySqm != null && <small className="block text-text-muted">{Number(item.qtySqm).toFixed(2)} ตร.ม.</small>}</>
                       }
                     </span>
