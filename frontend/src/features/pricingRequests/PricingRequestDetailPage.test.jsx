@@ -6244,7 +6244,7 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
   });
 
   describe('summary bar', () => {
-    it('is the section "สรุปราคาคำขอนี้", sticky on desktop, and shows ตั้งราคาแล้ว n/N, ราคาขายรวม, ต้นทุนรวม (lines with cost AND net) and กำไรรวม ฿ + % of cost', async () => {
+    it('is the section "สรุปราคาคำขอนี้", scrolls with the page (not sticky — owner 2026-11-06), and shows ตั้งราคาแล้ว n/N, ราคาขายรวม, ต้นทุนรวม (lines with cost AND net) and กำไรรวม ฿ + % of cost', async () => {
       await renderCeoNewForm({
         requestItems: requestItemsN(4),
         items: [
@@ -6256,7 +6256,7 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
       });
 
       const region = screen.getByRole('region', { name: 'สรุปราคาคำขอนี้' });
-      expect(region.className).toMatch(/sticky/);
+      expect(region.className).not.toMatch(/sticky/);
       const summary = ceoSummary();
       // priced = server net present and not blocked: 8001, 8002, 8003 (8004 has no cost and no net)
       expect(summary.getByTestId('pcr-ceo-sum-priced').textContent).toMatch(/ตั้งราคาแล้ว.*3\/4.*รายการ/);
