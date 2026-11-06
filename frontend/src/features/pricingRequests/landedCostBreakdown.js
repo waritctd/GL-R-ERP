@@ -95,8 +95,9 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
     },
     clearance: {
       share: clearance,
-      shipmentAmount: num(snap.clearanceAmountThbForShipment),
-      shipmentQtySqm: num(snap.shipmentQtySqm),
+      // Same shape as freight: the shipment is the clearance's "group".
+      groupAmount: num(snap.clearanceAmountThbForShipment),
+      groupQtySqm: num(snap.shipmentQtySqm),
       fullContainers: fullOrNull(snap.clearanceFullContainers),
       remainderSqm: num(snap.clearanceRemainderSqm),
     },

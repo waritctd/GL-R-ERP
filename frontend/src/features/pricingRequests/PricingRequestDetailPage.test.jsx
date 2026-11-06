@@ -6502,6 +6502,47 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(ceoTable().queryByTestId('pcr-ceo-details-8001')).toBeNull();
     });
+
+    it('รายละเอียด shows the full cost calculation, step by step (owner request 2026-11-06)', async () => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1.07 } }) };
+      try {
+        // DL-2026-0325 row 1: 3,910.03 of a 7,820.04 ตร.ม. Equipe shipment = 10 containers, half each.
+        const costingItem = {
+          id: 1, factoryName: 'Equipe', factoryQuoteRevisionNo: 1, landedCostPerUnitThb: 14.1544,
+          rawUnitPrice: 14.283, rawCurrency: 'EUR', rawUnit: 'ตร.ม.', fxRate: 37.9944, sqmPerUnit: 0.014706,
+          goodsCostThb: 7.9806, normalizedQuantityPieces: 265880, calculationConfigVersion: 2,
+          calculationSnapshot: JSON.stringify({
+            formula: 'V109', itemQtySqm: '3910.0312800000', dutyPct: '0.300000', costBuffer: '1.070000',
+            insuranceValueFactor: '1.150000', insuranceRate: '0.004500', insuranceBuffer: '1.070000',
+            freightAmountThbForGroup: '1000000.0000', freightGroupQtySqm: '7820.0362800000', freightShareThb: '500001.6803',
+            clearanceAmountThbForShipment: '200000.0000', shipmentQtySqm: '7820.0362800000', clearanceShareThb: '100000.3361',
+            containerSqm: '800', freightFullContainers: '10', freightRemainderSqm: '0', clearanceFullContainers: '10', clearanceRemainderSqm: '0',
+          }),
+        };
+        await renderCeoNewForm({
+          priceMode: 'SPECIAL_SQM',
+          items: [nfItem({ pricingCostingItemId: 1, proposedMarginPct: 0.3, frozenLandedCostPerRequestedUnitThb: 14.1544 })],
+          costings: [buildCosting({ id: 601, items: [costingItem] })],
+        });
+        await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+        fireEvent.click(ceoTable().getByRole('button', { name: 'รายละเอียด SCG A1' }));
+
+        const calc = await ceoTable().findByTestId('pcr-ceo-calc-8001');
+        await waitFor(() => expect(calc.textContent).toContain('1,338.83'));
+        const text = calc.textContent;
+        expect(text).toContain('7.9806 บาท/แผ่น × 265,880 แผ่น');
+        expect(text).toContain('2,121,881.93'); // C
+        expect(text).toContain('11,749.39'); // i
+        expect(text).toContain('100,000.00 × 10 ตู้'); // F per container
+        expect(text).toContain('500,001.68');
+        expect(text).toContain('100,000.34'); // S
+        expect(text).toContain('3,763,383.84'); // TC
+        expect(text).toContain('962.49'); // ทุน/ตร.ม.
+        expect(text).toContain('962.49 × กำไร 1.3 × VAT 1.07');
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
   });
 
   describe('margin: typed and shown as a PERCENT, stored as a fraction', () => {

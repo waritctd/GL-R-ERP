@@ -62,6 +62,7 @@ import { CeoPricingHeader, CeoPricingWorkspace } from './CeoPricingWorkspace.jsx
 import {
   ceoRowFigures, cleanNumber, fractionToPct, lineProfitThb, marginOutOfRange, pctToFraction, round2,
 } from './ceoPricingRow.js';
+import { landedCostBreakdown } from './landedCostBreakdown.js';
 import { ImportPricingHeader, ImportPricingWorkspace } from './ImportPricingWorkspace.jsx';
 import {
   formatOrDash, formatQty, qtyOf, specFor, productCodeOf, variantOf, qtyDetailOf, metaOf, nextStep,
@@ -2009,6 +2010,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
       qtyText: `${item.requestedQuantity} แผ่น`,
       sqmText: `${formatQty(round2(qty * sqm))} ตร.ม.`,
       piecesPerSqm: piecesPerSqmFromSqmPerPiece(item.sqmPerPiece),
+      // The full step-by-step cost calculation for รายละเอียด; ราคาพิเศษ follows the row's live กำไร %.
+      breakdown: isStockLine ? null : landedCostBreakdown({
+        costingItem,
+        formulaConfig: formulaConfigQuery.data,
+        marginFraction: marginDrives && !marginInvalid ? pctToFraction(marginDraftRaw) : item.proposedMarginPct,
+        sellingBuffer: Number(formulaConfigQuery.data?.sellingBuffer),
+      }),
       formulaPerPiece: isStockLine && decision.priceMode !== 'NET' ? null : formulaPerPiece,
       formulaPerSqm: formulaPerPiece != null && sqm > 0 ? round2(Number(formulaPerPiece) / sqm) : null,
       margin: {

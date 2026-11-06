@@ -222,6 +222,98 @@ function ProfitCell({ row, model }) {
   );
 }
 
+// Plain numbers for the calculation block: 2dp with thousands separators, no currency sign.
+const n2 = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Factors keep their own precision (1.3, 0.0045, 37.9944), never padded or rounded away.
+const nf = (v) => Number(v).toLocaleString('en-US', { maximumFractionDigits: 6 });
+
+function containerText(part) {
+  if (part.fullContainers == null) return null;
+  const rest = part.remainderSqm > 0 ? ` + ${nf(part.remainderSqm)} ตร.ม.` : '';
+  return `${part.fullContainers} ตู้${rest}`;
+}
+
+function CalcStep({ label, symbol, children, amount, tone }) {
+  return (
+    <div className={cn(
+      'grid gap-x-4 gap-y-0.5 border-b border-border-subtle px-3 py-2.5 last:border-b-0 md:grid-cols-[10rem_1fr_9rem] md:items-baseline',
+      tone === 'total' && 'bg-surface-subtle',
+      tone === 'final' && 'bg-success-bg text-success',
+    )}>
+      <div className="font-bold">{label}{symbol ? <small className="ml-1 font-normal text-text-muted">{symbol}</small> : null}</div>
+      <div className="tabular-nums leading-relaxed [overflow-wrap:anywhere]">{children}</div>
+      <div className={cn('font-bold tabular-nums md:text-right', tone === 'final' && 'text-base')}>{amount}</div>
+    </div>
+  );
+}
+
+const Sub = ({ children }) => <span className="block text-xs text-text-muted">{children}</span>;
+
+// The full landed-cost calculation for one costed line (owner request 2026-11-06), every step with
+// the numbers that went into it, so the CEO can check it against the formula sheet by hand.
+export function CostCalculation({ row }) {
+  const b = row.breakdown;
+  const id = row.item.id;
+  if (!b) return null;
+  const share = (part, qty) => (part.groupAmount != null && qty != null
+    ? `${n2(part.groupAmount)} × ${n2(b.qtySqm)} ÷ ${n2(qty)} ตร.ม. (${Math.round((b.qtySqm / qty) * 100)}%)`
+    : null);
+  const perContainer = (part) => (part.fullContainers > 0 && !(part.remainderSqm > 0)
+    ? `${n2(part.groupAmount / part.fullContainers)} × ${part.fullContainers} ตู้ = ` : '');
+  const freightContainers = containerText(b.freight);
+  const fxDate = row.costingItem?.fxEffectiveDate;
+  return (
+    <section aria-label="การคำนวณต้นทุน" className="grid gap-2 border-t border-border-subtle pt-3 text-sm md:col-span-3" data-testid={`pcr-ceo-calc-${id}`}>
+      <h4 className="m-0 flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span>การคำนวณต้นทุน (ตามสูตร)</span>
+        <span className="text-xs font-normal text-text-muted">
+          {[b.fxRate != null ? `อัตราแลกเปลี่ยน ${nf(b.fxRate)}` : null, fxDate ? `ณ ${formatThaiDate(fxDate)}` : null,
+            row.costingItem?.calculationConfigVersion != null ? `สูตรเวอร์ชัน ${row.costingItem.calculationConfigVersion}` : null]
+            .filter(Boolean).join(' · ')}
+        </span>
+      </h4>
+      <div className="overflow-hidden rounded-md border border-border-subtle">
+        <CalcStep label="ค่าสินค้า" symbol="C" amount={n2(b.goods)}>
+          {b.rawUnitPrice != null && b.fxRate != null
+            ? `${nf(b.rawUnitPrice)} ${b.rawCurrency ?? ''}${b.rawUnit ? `/${b.rawUnit}` : ''} × ${nf(b.fxRate)}${b.sqmPerPiece != null && b.rawUnit === 'ตร.ม.' ? ` × ${nf(b.sqmPerPiece)} ตร.ม./แผ่น` : ''} = `
+            : ''}
+          {`${nf(b.goodsPerPiece)} บาท/แผ่น × ${nf(b.pieces)} แผ่น`}
+        </CalcStep>
+        <CalcStep label="ค่าประกัน" symbol="i" amount={n2(b.insurance)}>
+          {b.insFactor != null ? `C × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}` : 'C × อัตราค่าประกันภัย'}
+          {b.insFactor != null ? <Sub>{`= ${n2(b.goods)} × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}`}</Sub> : null}
+        </CalcStep>
+        <CalcStep label="ค่าเรือ" symbol="F" amount={n2(b.freight.share)}>
+          {perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}
+          {freightContainers ? (
+            <Sub>{`${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
+          ) : null}
+        </CalcStep>
+        <CalcStep label="ค่าชิปปิ้ง" symbol="S" amount={n2(b.clearance.share)}>
+          {perContainer(b.clearance)}{share(b.clearance, b.clearance.groupQtySqm) ?? n2(b.clearance.share)}
+        </CalcStep>
+        <CalcStep label="ต้นทุนรวม" symbol="TC" amount={n2(b.totalCost)} tone="total">
+          <span className="block">{`[(C + i + F) × อากร ${nf(1 + b.dutyPct)} × ${nf(b.costBuffer)}] + S`}</span>
+          <span className="block">{`= [(${n2(b.goods)} + ${n2(b.insurance)} + ${n2(b.freight.share)}) × ${nf(1 + b.dutyPct)} × ${nf(b.costBuffer)}] + ${n2(b.clearance.share)}`}</span>
+          <span className="block">{`= [${n2(b.cif)} × ${nf(1 + b.dutyPct)} × ${nf(b.costBuffer)}] + ${n2(b.clearance.share)}`}</span>
+          <span className="block">{`= ${n2(b.beforeClearance)} + ${n2(b.clearance.share)}`}</span>
+        </CalcStep>
+        <CalcStep label="ทุน/ตร.ม." amount={n2(b.costPerSqm)}>
+          {`${n2(b.totalCost)} ÷ ${n2(b.qtySqm)} ตร.ม.`}
+          {b.sqmPerPiece != null ? <Sub>{`= ${(Math.round(b.costPerSqm * b.sqmPerPiece * 1e4) / 1e4).toLocaleString('en-US', { minimumFractionDigits: 4 })} บาท/แผ่น (× ${nf(b.sqmPerPiece)} ตร.ม./แผ่น)`}</Sub> : null}
+        </CalcStep>
+        {b.specialPerSqm != null ? (
+          <CalcStep label="ราคาพิเศษ/ตร.ม." amount={n2(b.specialPerSqm)} tone="final">
+            {`${n2(b.costPerSqm)} × กำไร ${nf(1 + b.margin)} × VAT ${nf(b.sellingBuffer)}`}
+            <Sub>รวม VAT · กำไรตามที่ตั้งในแถวนี้</Sub>
+          </CalcStep>
+        ) : null}
+      </div>
+      <p className="m-0 text-xs text-text-muted">ทุกบรรทัดคำนวณจากข้อมูลที่ระบบใช้จริงตอนคำนวณต้นทุน (ปัดเศษ 4 ตำแหน่งทุกขั้น แสดง 2 ตำแหน่ง)</p>
+    </section>
+  );
+}
+
 function Details({ row, model }) {
   const id = row.item.id;
   const { fmt, editable } = model;
@@ -267,6 +359,7 @@ function Details({ row, model }) {
         <span>รวม {row.item.requestedQuantity} แผ่น: <b>{fmt(row.total)}</b></span>
         <span>กำไร: {row.profitTotal != null ? `${fmt(row.profitTotal, 'THB')}${row.profitPct != null ? ` (${row.profitPct.toFixed(1)}%)` : ''}` : '–'}</span>
       </section>
+      {!row.isStock && !row.hasCostOverride ? <CostCalculation row={row} /> : null}
     </div>
   );
 }
