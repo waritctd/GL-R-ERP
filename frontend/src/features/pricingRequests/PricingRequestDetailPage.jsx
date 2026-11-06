@@ -1963,7 +1963,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     const cost = item.frozenLandedCostPerRequestedUnitThb != null ? Number(item.frozenLandedCostPerRequestedUnitThb) : null;
     const rawDraft = ceoPriceDrafts[item.id] ?? {};
     const {
-      currentList, marginDraftRaw, marginDrives, marginInvalid, formulaFromMargin, formulaPerPiece, draft,
+      currentList, marginDraftRaw, marginDrives, marginInvalid, impliedMarginFraction, impliedMarginPct, impliedNote, formulaFromMargin, formulaPerPiece, draft,
       autoSpecialPending, listDraft, listInvalid, net, netPending, total, profit, qty, invalid, dirty,
     } = ceoRowFigures({
       decision, item, rawDraft, cost, editable,
@@ -2027,7 +2027,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
       breakdown: isStockLine ? null : landedCostBreakdown({
         costingItem,
         formulaConfig: formulaConfigQuery.data,
-        marginFraction: marginDrives && !marginInvalid ? pctToFraction(marginDraftRaw) : item.proposedMarginPct,
+        marginFraction: impliedMarginFraction != null && !marginInvalid ? impliedMarginFraction
+          : marginDrives && !marginInvalid ? pctToFraction(marginDraftRaw) : item.proposedMarginPct,
         sellingBuffer: Number(formulaConfigQuery.data?.sellingBuffer),
       }),
       formulaPerPiece: isStockLine && decision.priceMode !== 'NET' ? null : formulaPerPiece,
@@ -2035,8 +2036,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
       margin: {
         show: !isStockLine && cost != null && !hasPriceOverride
           && (decision.priceMode === 'NET' || (decision.priceMode === 'SPECIAL_SQM' && decision.currency === 'THB')),
-        value: rawDraft.marginPct ?? fractionToPct(item.proposedMarginPct),
+        value: rawDraft.marginPct ?? impliedMarginPct ?? fractionToPct(item.proposedMarginPct),
         invalid: marginInvalid,
+        derived: impliedMarginPct != null,
+        impliedNote,
+        loss: impliedMarginFraction != null && impliedMarginFraction < 0,
         error: MARGIN_RANGE_ERROR_PCT,
         // The saved margin, shown as "เดิม x%" only while an unsaved, different กำไร % is typed.
         savedPct: marginDraftRaw != null && marginDraftRaw !== '' && !marginInvalid
@@ -2079,7 +2083,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
       clearingOverride: scopedSaving && Boolean(saveCeoItemPrice.variables?.clears?.clearSellingPriceOverride),
       // Under SPECIAL_SQM a new กำไร % re-derives ราคาพิเศษ, so it drops any typed ราคาพิเศษ draft.
       setDraft: (patch) => updateCeoPriceDraft(item.id, patch,
-        decision.priceMode === 'SPECIAL_SQM' && 'marginPct' in patch ? ['specialPriceSqm'] : []),
+        decision.priceMode === 'SPECIAL_SQM'
+          ? ['marginPct' in patch ? 'specialPriceSqm' : null, 'specialPriceSqm' in patch ? 'marginPct' : null].filter(Boolean) : []),
       openCostOverride: () => setCostOverrideItem({ decision, item, costingItem }),
       // ล้างส่วนลด / ใช้ราคาตามสูตร are scoped actions: each sends ONLY its own clear (an empty draft), so
       // neither can commit another still-unsent edit, and on success only that field's draft is dropped.

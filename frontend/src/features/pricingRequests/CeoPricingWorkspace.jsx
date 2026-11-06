@@ -112,7 +112,9 @@ function priceFields(row, model, card) {
   const id = row.item.id;
   const lbl = (text, node) => (card ? <label className="grid gap-1 text-sm font-bold">{text}{node}</label> : node);
   const margin = row.margin.show
-    ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} testid={`pcr-ceo-margin-input-${id}`} />)}
+    ? (<div className="grid gap-1">{lbl('กำไร %', <Num row={row} card={card} field="marginPct" label="กำไร %" suffix="%" disabled={!editable || lock} value={row.margin.value} derived={row.margin.derived} testid={`pcr-ceo-margin-input-${id}`} />)}
+      {row.margin.impliedNote ? <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-margin-formula-${id}`}>{row.margin.impliedNote}</span> : null}
+      {row.margin.loss ? <span role="alert" className="text-2xs text-danger">ขาดทุน — ราคาต่ำกว่าต้นทุน</span> : null}
       {row.margin.invalid ? <span role="alert" className="text-2xs text-danger">{row.margin.error}</span> : null}
       {row.margin.savedPct != null ? <span className="text-2xs text-text-muted" data-testid={`pcr-ceo-margin-was-${id}`}>{`เดิม ${row.margin.savedPct}%`}</span> : null}
       {row.margin.looksLikeFraction ? (

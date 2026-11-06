@@ -2113,6 +2113,52 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       }
     });
 
+    describe('new-form SPECIAL_SQM: a typed ราคาพิเศษ live-derives กำไร % (cost 60 at 0.36 ตร.ม. = 166.67/ตร.ม., buffer 1)', () => {
+      const withSpecial = async (fn) => {
+        api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+        try {
+          await renderCeoNewForm({ priceMode: 'SPECIAL_SQM', items: [nfItem()] });
+          await waitFor(() => expect(api.pricingFormulaConfig.get).toHaveBeenCalled());
+          await fn();
+        } finally {
+          delete api.pricingFormulaConfig;
+        }
+      };
+      const typeSpecial = (v) => fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001'), { target: { value: v } });
+
+      it('typing ราคาพิเศษ 240 shows the implied กำไร % 34.58 and its note; typing กำไร % afterwards re-derives ราคาพิเศษ', () => withSpecial(async () => {
+        typeSpecial('240');
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').value).toBe('34.58'));
+        expect(ceoRow(8001).getByTestId('pcr-ceo-margin-formula-8001').textContent).toBe('= 240.00 ÷ (166.67 × 1.07) − 1');
+        // กำไร % typed last leads again: 166.67 × 1.30 × 1.07 = 231.83, and the implied note is gone
+        fireEvent.change(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001'), { target: { value: '30' } });
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-special-sqm-8001').value).toBe('231.83'));
+        expect(ceoRow(8001).queryByTestId('pcr-ceo-margin-formula-8001')).toBeNull();
+      }));
+
+      it('saving after typing ราคาพิเศษ sends BOTH the typed specialPriceSqm and the implied marginPct fraction', () => withSpecial(async () => {
+        typeSpecial('240');
+        await waitFor(() => expect(ceoRow(8001).getByTestId('pcr-ceo-margin-input-8001').value).toBe('34.58'));
+        fireEvent.click(saveAllButton());
+        await waitFor(() => expect(api.pricingRequests.updatePricingDecision).toHaveBeenCalled());
+        const sent = api.pricingRequests.updatePricingDecision.mock.calls.at(-1)[1].items[0];
+        expect(sent.specialPriceSqm).toBe(240);
+        expect(sent.marginPct).toBeCloseTo(240 / ((60 / 0.36) * 1.07) - 1, 6);
+      }));
+
+      it('a special below cost shows the red loss alert and still allows saving', () => withSpecial(async () => {
+        typeSpecial('150');
+        const alert = await within(screen.getByTestId('pcr-ceo-row-8001')).findByRole('alert');
+        expect(alert.textContent).toContain('ขาดทุน — ราคาต่ำกว่าต้นทุน');
+        expect(saveAllButton().disabled).toBe(false);
+      }));
+
+      it('an implied margin out of range blocks the one save', () => withSpecial(async () => {
+        typeSpecial('100000000');
+        await waitFor(() => expect(saveAllButton().disabled).toBe(true));
+      }));
+    });
+
     it('margin input rejects an out-of-range PERCENT (server bound is the fraction 999.999999 = 99,999.9999%) and keeps the one save disabled', async () => {
       await renderCeoNewForm({ priceMode: 'NET', items: [nfItem()] });
 
