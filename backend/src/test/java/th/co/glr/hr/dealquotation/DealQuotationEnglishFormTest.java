@@ -366,15 +366,12 @@ class DealQuotationEnglishFormTest {
         assertThat(names).doesNotContain("จินตนา").doesNotContain("เจนเนตร").doesNotContain("ราม");
     }
 
-    /** The ผู้สั่งซื้อ slot never auto-fills from
-     * the contact snapshot -- it prints ONLY a rep's manually-typed
-     * {@code DealQuotationDto#orderedByName}, exactly as typed (English document, no separate
-     * English name concept for a manual free-text field). */
+    /** The ผู้สั่งซื้อ slot stays dotted even when an orderedByName is stored (owner 2026-11-06). */
     @Test
-    void signatureBlock_printsTheManualOrderedByNameWhenSet() throws Exception {
+    void signatureBlock_orderedBySlot_staysDottedEvenWithAStoredOrderedByName() throws Exception {
         DealQuotationDto quotation = englishQuotation(q -> q.withOrderedByName("Ms. Aisha Rahman"));
         String names = str(render(quotation), NAMES_ROW, 0);
-        assertThat(names).contains("(Ms. Aisha Rahman)");
+        assertThat(names).doesNotContain("(Ms. Aisha Rahman)").contains("(..........................)");
     }
 
     /** Regression guard: the CONTACT snapshot ("Ms. Aisha Rahman") is present but no

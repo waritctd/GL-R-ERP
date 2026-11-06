@@ -116,7 +116,7 @@ describe('QuotationDocumentView — ผู้ติดต่อ\'s Phone and Ema
   });
 
   // Wrong way round: the typed contact belongs on the header line (as printed) but never in the
-  // fourth signature slot, which is still exactly the name.
+  // fourth signature slot, which is always a dash.
   it('reaches the header line but does not leak into the signature slot', () => {
     const { getByTestId, getByText } = view({ orderedByPhone: PHONE, orderedByEmail: EMAIL });
     expect(getByTestId('doc-sales-contact')).not.toBeNull(); // the control: there IS something to leak
@@ -124,7 +124,7 @@ describe('QuotationDocumentView — ผู้ติดต่อ\'s Phone and Ema
     expect(getByTestId('doc-contact').textContent)
       .toBe(`ติดต่อผู้สั่งซื้อธนพล ศรีวัฒนกุล · โทร. ${PHONE} · ${EMAIL}`);
     const signatures = getByText('ผู้เกี่ยวข้อง').closest('section');
-    expect(within(signatures).getByText('คุณวิชัย มั่นคง')).not.toBeNull();
+    expect(within(signatures).queryByText('คุณวิชัย มั่นคง')).toBeNull();
     expect(signatures.textContent).not.toContain('089-765-4321');
     expect(signatures.textContent).not.toContain(EMAIL);
     // …and the block itself is not part of the signature panel.
