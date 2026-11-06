@@ -190,11 +190,16 @@ public class PricingFormulaEngine {
     public record ContainerSplit(int fullContainers, BigDecimal remainderSqm) {}
 
     /** A container-rule charge: the total THB amount and the split it was charged on. */
-    public record ContainerCharge(BigDecimal amountThb, int fullContainers, BigDecimal remainderSqm) {}
+    public record ContainerCharge(BigDecimal amountThb, int fullContainers, BigDecimal remainderSqm,
+                                  BigDecimal roundUpAboveSqm) {}
 
     /** Capacity of a 20' container for this thickness: 450 ตร.ม. from 17 mm up, else 800. */
     public static BigDecimal containerCapacitySqm(BigDecimal thicknessMm) {
-        return thicknessMm.compareTo(THICK_FROM_MM) >= 0 ? THICK_CONTAINER_SQM : CONTAINER_SQM;
+        return isThick(thicknessMm) ? THICK_CONTAINER_SQM : CONTAINER_SQM;
+    }
+
+    private static boolean isThick(BigDecimal thicknessMm) {
+        return thicknessMm.compareTo(THICK_FROM_MM) >= 0;
     }
 
     /** Container space E = Σ sqm_i / capacity(t_i). */
@@ -207,11 +212,15 @@ public class PricingFormulaEngine {
     }
 
     private static boolean thickOnly(List<ContainerLine> lines) {
-        return lines.stream().allMatch(l -> containerCapacitySqm(l.thicknessMm()).compareTo(THICK_CONTAINER_SQM) == 0);
+        return lines.stream().allMatch(l -> isThick(l.thicknessMm()));
     }
 
     /** Full containers and the leftover fraction r of a container (zero when rounded up). */
-    private record Fill(int full, BigDecimal r, boolean thickOnly) {}
+    private record Fill(int full, BigDecimal r, boolean thickOnly) {
+        BigDecimal roundUpAboveSqm() {
+            return thickOnly ? THICK_NEARLY_FULL_REMAINDER_SQM : NEARLY_FULL_REMAINDER_SQM;
+        }
+    }
 
     private static Fill fill(List<ContainerLine> lines) {
         // 9 dp so that thirds that sum to 0.999999999999 still count as one whole container
@@ -245,7 +254,7 @@ public class PricingFormulaEngine {
         if (f.full() > 0) {
             BigDecimal highest = null;
             for (ContainerLine line : lines) {
-                BigDecimal rate = fullFreightRate(rates, originCountryCode, line.thicknessMm(), itemLabel);
+                BigDecimal rate = fullFreightRate(rates, originCountryCode, line.thicknessMm(), thicknessLabel(itemLabel, line));
                 highest = highest == null ? rate : highest.max(rate);
             }
             amount = amount.add(highest.multiply(BigDecimal.valueOf(f.full())));
@@ -254,12 +263,16 @@ public class PricingFormulaEngine {
             BigDecimal highest = null;
             for (ContainerLine line : lines) {
                 BigDecimal qty = atLeastOne(f.r().multiply(containerCapacitySqm(line.thicknessMm())));
-                BigDecimal rate = selectFreightRate(rates, originCountryCode, line.thicknessMm(), qty, itemLabel).amountThb();
+                BigDecimal rate = selectFreightRate(rates, originCountryCode, line.thicknessMm(), qty, thicknessLabel(itemLabel, line)).amountThb();
                 highest = highest == null ? rate : highest.max(rate);
             }
             amount = amount.add(highest);
         }
-        return new ContainerCharge(money4(amount), f.full(), remainderSqm(f));
+        return new ContainerCharge(money4(amount), f.full(), remainderSqm(f), f.roundUpAboveSqm());
+    }
+
+    private static String thicknessLabel(String label, ContainerLine line) {
+        return label + " หนา " + line.thicknessMm() + " มม.";
     }
 
     // Thin: the sheet's full-container column (801+), or — when the table stops below it (e.g. 12–16 mm)
@@ -267,7 +280,7 @@ public class PricingFormulaEngine {
     private BigDecimal fullFreightRate(List<PricingFreightRateDto> rates, String originCountryCode,
                                        BigDecimal thicknessMm, String itemLabel) {
         BigDecimal cap = containerCapacitySqm(thicknessMm);
-        if (cap.compareTo(THICK_CONTAINER_SQM) == 0) {
+        if (isThick(thicknessMm)) {
             return selectFreightRate(rates, originCountryCode, thicknessMm, cap, itemLabel).amountThb();
         }
         PricingFreightRateDto full = findFreightRate(rates, originCountryCode, thicknessMm,
@@ -294,7 +307,7 @@ public class PricingFormulaEngine {
         if (f.r().signum() > 0) {
             amount = amount.add(selectClearanceFee(fees, atLeastOne(remainder), shipmentLabel).amountThb());
         }
-        return new ContainerCharge(money4(amount), f.full(), remainder);
+        return new ContainerCharge(money4(amount), f.full(), remainder, f.roundUpAboveSqm());
     }
 
     // The bands start at 1 ตร.ม.; a sliver of a leftover (e.g. 0.5) is priced as the first band.

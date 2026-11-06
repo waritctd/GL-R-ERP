@@ -670,6 +670,7 @@ public class LandedCostCalculator {
             + ",\"itemContainerUnits\":\"" + itemUnits + "\""
             + ",\"freightGroupContainerUnits\":\"" + groupUnits + "\""
             + ",\"shipmentContainerUnits\":\"" + shipmentUnits + "\""
+            + ",\"freightRoundUpAboveSqm\":\"" + freight.roundUpAboveSqm() + "\""
             + ",\"freightFullContainers\":\"" + freight.fullContainers() + "\""
             + ",\"freightRemainderSqm\":\"" + freight.remainderSqm() + "\""
             + ",\"clearanceFullContainers\":\"" + clearance.fullContainers() + "\""

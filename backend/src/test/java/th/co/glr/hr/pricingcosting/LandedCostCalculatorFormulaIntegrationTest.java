@@ -362,10 +362,16 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         PricingCostingItemDto thick = costingItems.stream()
             .filter(i -> i.requestedQuantity().compareTo(new BigDecimal("225")) == 0).findFirst().orElseThrow();
 
-        assertThat(thin.freightCostThb().multiply(thin.normalizedQuantityPieces()).doubleValue()).isCloseTo(50000.0, org.assertj.core.data.Offset.offset(0.05));
-        assertThat(thick.freightCostThb().multiply(thick.normalizedQuantityPieces()).doubleValue()).isCloseTo(50000.0, org.assertj.core.data.Offset.offset(0.05));
-        assertThat(thin.clearanceFeeThb().multiply(thin.normalizedQuantityPieces()).doubleValue()).isCloseTo(10000.0, org.assertj.core.data.Offset.offset(0.05));
-        assertThat(thick.clearanceFeeThb().multiply(thick.normalizedQuantityPieces()).doubleValue()).isCloseTo(10000.0, org.assertj.core.data.Offset.offset(0.05));
+        // Exact money: the stored snapshot shares (the per-piece x pieces product is rounded, so it is not asserted).
+        com.fasterxml.jackson.databind.JsonNode thinMoney = snapshot(thin);
+        com.fasterxml.jackson.databind.JsonNode thickMoney = snapshot(thick);
+        for (com.fasterxml.jackson.databind.JsonNode m : List.of(thinMoney, thickMoney)) {
+            assertThat(new BigDecimal(m.path("freightAmountThbForGroup").asText())).isEqualByComparingTo("100000");
+            assertThat(new BigDecimal(m.path("clearanceAmountThbForShipment").asText())).isEqualByComparingTo("20000");
+            assertThat(new BigDecimal(m.path("freightShareThb").asText())).isEqualByComparingTo("50000");
+            assertThat(new BigDecimal(m.path("clearanceShareThb").asText())).isEqualByComparingTo("10000");
+            assertThat(m.path("freightRoundUpAboveSqm").asText()).isEqualTo("600");
+        }
 
         // Snapshot: existing keys kept (containerSqm is now THIS item's capacity), new unit keys added.
         com.fasterxml.jackson.databind.JsonNode thinSnap = snapshot(thin);
@@ -404,14 +410,19 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         PricingCostingItemDto thin = costingItems.stream()
             .filter(i -> snapshot(i).path("thicknessMm").asText().startsWith("10")).findFirst().orElseThrow();
 
-        BigDecimal freightThick = thick.freightCostThb().multiply(thick.normalizedQuantityPieces());
-        BigDecimal freightThin = thin.freightCostThb().multiply(thin.normalizedQuantityPieces());
-        assertThat(freightThick.add(freightThin).doubleValue()).isCloseTo(160000.0, org.assertj.core.data.Offset.offset(0.05));
-        assertThat(freightThick.doubleValue()).isCloseTo(102400.0, org.assertj.core.data.Offset.offset(0.05));
-        assertThat(freightThin.doubleValue()).isCloseTo(57600.0, org.assertj.core.data.Offset.offset(0.05));
-        assertThat(thick.clearanceFeeThb().multiply(thick.normalizedQuantityPieces())
-            .add(thin.clearanceFeeThb().multiply(thin.normalizedQuantityPieces())).doubleValue())
-            .isCloseTo(28000.0, org.assertj.core.data.Offset.offset(0.05));
+        // Exact money from the stored snapshot: share = group amount x (item units / group units) = x 0.64 / 0.36.
+        com.fasterxml.jackson.databind.JsonNode thickMoney = snapshot(thick);
+        com.fasterxml.jackson.databind.JsonNode thinMoney = snapshot(thin);
+        for (com.fasterxml.jackson.databind.JsonNode m : List.of(thickMoney, thinMoney)) {
+            assertThat(new BigDecimal(m.path("freightAmountThbForGroup").asText())).isEqualByComparingTo("160000");
+            assertThat(new BigDecimal(m.path("clearanceAmountThbForShipment").asText())).isEqualByComparingTo("28000");
+            assertThat(m.path("freightRoundUpAboveSqm").asText()).isEqualTo("600");
+        }
+        assertThat(new BigDecimal(thickMoney.path("freightShareThb").asText())).isEqualByComparingTo("102400");
+        assertThat(new BigDecimal(thinMoney.path("freightShareThb").asText())).isEqualByComparingTo("57600");
+        assertThat(new BigDecimal(thickMoney.path("clearanceShareThb").asText())).isEqualByComparingTo("17920");
+        assertThat(new BigDecimal(thinMoney.path("clearanceShareThb").asText())).isEqualByComparingTo("10080");
+        // Kept as tolerances (they genuinely round): the leftover r x 800 (33.333333, 6 dp) and the 4-dp unit figures.
 
         com.fasterxml.jackson.databind.JsonNode snap = snapshot(thick);
         assertThat(snap.path("freightFullContainers").asText()).isEqualTo("1");

@@ -312,7 +312,7 @@ export function CostCalculation({ row, priceMode }) {
           {perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}
           {freightContainers ? (
             <Sub>{byUnits
-              ? `${freightContainers} · ความจุ 800 ตร.ม./ตู้ (หนา 17–21 มม. 450) · เศษเกิน 600 ตร.ม. (หนา 17–21 มม.: 250) ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้`
+              ? `${freightContainers} · ความจุ ${nf(b.containerSqm)} ตร.ม./ตู้ · เศษเกิน ${nf(b.freight.roundUpAboveSqm)} ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้`
               : `${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
           ) : null}
         </CalcStep>

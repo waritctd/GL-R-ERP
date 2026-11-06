@@ -490,4 +490,34 @@ class PricingFormulaEngineTest {
         assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "300"), line("10", "300")), "test").amountThb())
             .isEqualByComparingTo("28000");
     }
+
+    @Test
+    void containerFreight_missingBand_namesTheFailingThickness_onTheFullRatePath() {
+        // 400 @10 + 450 @25: E = 1.5 → full containers; 25 mm has no band at all → the error names 25, not 10
+        assertThatThrownBy(() -> engine.containerFreight(italyThinAndThickRates(), "IT",
+            lines(line("10", "400"), line("25", "450")), "ชิปเมนต์ X"))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ชิปเมนต์ X หนา 25 มม.");
+    }
+
+    @Test
+    void containerFreight_missingBand_namesTheFailingThickness_onTheLeftoverPath() {
+        // 100 @10 + 50 @25: E < 1 → leftover only; the 25 mm lookup fails and is named
+        assertThatThrownBy(() -> engine.containerFreight(italyThinAndThickRates(), "IT",
+            lines(line("10", "100"), line("25", "50")), "ชิปเมนต์ X"))
+            .isInstanceOf(ApiException.class)
+            .hasMessageContaining("ชิปเมนต์ X หนา 25 มม.");
+    }
+
+    @Test
+    void containerCharge_reportsTheRoundUpThreshold_600ForThinOrMixed_250ForThickOnly() {
+        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("8", "300")), "t").roundUpAboveSqm())
+            .isEqualByComparingTo("600");
+        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("10", "300"), line("19", "300")), "t").roundUpAboveSqm())
+            .isEqualByComparingTo("600");
+        assertThat(engine.containerFreight(italyThinAndThickRates(), "IT", lines(line("19", "700")), "t").roundUpAboveSqm())
+            .isEqualByComparingTo("250");
+        assertThat(engine.containerClearance(clearanceFees(), lines(line("19", "700")), "t").roundUpAboveSqm())
+            .isEqualByComparingTo("250");
+    }
 }

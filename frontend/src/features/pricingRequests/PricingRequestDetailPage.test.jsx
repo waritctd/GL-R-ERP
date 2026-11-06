@@ -6624,14 +6624,29 @@ describe('CEO pricing workspace redesign — new-form decision, CEO view', () =>
         // 300 ตร.ม. @19 mm + 300 ตร.ม. @10 mm: units 0.666667 / 1.041667 → 64%; 1 ตู้ + leftover 33.33 ตร.ม.
         const calc = await calcSnapshotRows({
           containerSqm: '450', itemContainerUnits: '0.666667', freightGroupContainerUnits: '1.041667',
-          shipmentContainerUnits: '1.041667', freightFullContainers: '1', freightRemainderSqm: '33.33',
+          shipmentContainerUnits: '1.041667', freightRoundUpAboveSqm: '600', freightFullContainers: '1', freightRemainderSqm: '33.33',
           clearanceFullContainers: '1', clearanceRemainderSqm: '33.33',
         });
         await waitFor(() => expect(calc.textContent).toContain('160,000.00 × 0.666667 ÷ 1.041667 ตู้ (64%)'));
         const text = calc.textContent;
         expect(text).toContain('28,000.00 × 0.666667 ÷ 1.041667 ตู้ (64%)');
-        expect(text).toContain('1 ตู้ + 33.33 ตร.ม. · ความจุ 800 ตร.ม./ตู้ (หนา 17–21 มม. 450) · เศษเกิน 600 ตร.ม. (หนา 17–21 มม.: 250) ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้');
+        expect(text).toContain('1 ตู้ + 33.33 ตร.ม. · ความจุ 450 ตร.ม./ตู้ · เศษเกิน 600 ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้');
         expect(text).not.toContain('แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน');
+      } finally {
+        delete api.pricingFormulaConfig;
+      }
+    });
+
+    it('the F sub-line takes capacity and round-up threshold from the snapshot (thick-only: 450 / 250)', async () => {
+      api.pricingFormulaConfig = { get: vi.fn().mockResolvedValue({ formulaConfig: { sellingBuffer: 1 } }) };
+      try {
+        const calc = await calcSnapshotRows({
+          containerSqm: '450', itemContainerUnits: '1', freightGroupContainerUnits: '2', shipmentContainerUnits: '2',
+          freightRoundUpAboveSqm: '250', freightFullContainers: '2', freightRemainderSqm: '0',
+          clearanceFullContainers: '2', clearanceRemainderSqm: '0',
+        });
+        await waitFor(() => expect(calc.textContent).toContain('2 ตู้ · ความจุ 450 ตร.ม./ตู้ · เศษเกิน 250 ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้'));
+        expect(calc.textContent).not.toContain('หนา 17–21 มม.');
       } finally {
         delete api.pricingFormulaConfig;
       }

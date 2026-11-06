@@ -101,6 +101,7 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
       fullContainers: fullOrNull(snap.freightFullContainers),
       remainderSqm: num(snap.freightRemainderSqm),
       groupUnits: num(snap.freightGroupContainerUnits),
+      roundUpAboveSqm: num(snap.freightRoundUpAboveSqm),
     },
     clearance: {
       share: clearance,
