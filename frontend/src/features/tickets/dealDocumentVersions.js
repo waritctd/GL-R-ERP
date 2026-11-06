@@ -90,7 +90,7 @@ function directBaseNumber(r) {
  * DealDocumentRegister's own note), and those rows must group with each other rather than each
  * becoming a singleton — but must not merge with a row that states a recipient.
  */
-export const groupDirectQuotations = (rows) => groupVersions(rows, {
+export const groupDirectQuotations = (rows, { orderConfirmedQuotationId = null } = {}) => groupVersions(rows, {
   keyOf: (r) => {
     const base = directBaseNumber(r);
     const recipient = r.recipientType || 'UNKNOWN';
@@ -98,7 +98,28 @@ export const groupDirectQuotations = (rows) => groupVersions(rows, {
   },
   versionOf: (r) => r.revisionNo,
   dateOf: (r) => r.approvedAt ?? r.createdAt,
-});
+}).map((g) => ({ ...g, versions: inForceFirst(g.versions, orderConfirmedQuotationId) }));
+
+// Head-row rank inside one direct group: lower leads. The head row is the version that governs the deal, never
+// merely the newest: confirming an order cancels the deal's open drafts, so ordering by revision alone put a
+// CANCELLED -4 above the APPROVED -3 the order was confirmed from.
+const IN_FORCE_STATUSES = ['ACCEPTED', 'APPROVED', 'ISSUED', 'SENT'];
+const OPEN_STATUSES = ['DRAFT', 'PENDING_APPROVAL'];
+function inForceRank(v, orderConfirmedQuotationId) {
+  if (orderConfirmedQuotationId != null && Number(v.id) === Number(orderConfirmedQuotationId)) return 0;
+  if (IN_FORCE_STATUSES.includes(v.docStatus)) return 1;
+  if (OPEN_STATUSES.includes(v.docStatus)) return 2;
+  return 3; // CANCELLED, SUPERSEDED, REJECTED, EXPIRED: history
+}
+
+/**
+ * A direct group's versions with the governing one first: the version the order was confirmed from, then any other
+ * approved/accepted one, then an open draft or one awaiting approval, then history. Within a rank the incoming
+ * newest-first order is kept (Array#sort is stable).
+ */
+export function inForceFirst(versions, orderConfirmedQuotationId = null) {
+  return [...versions].sort((a, b) => inForceRank(a, orderConfirmedQuotationId) - inForceRank(b, orderConfirmedQuotationId));
+}
 
 /**
  * Stored remaining invoices, grouped by baseNumber. A DRAFT has no baseNumber yet. The backend

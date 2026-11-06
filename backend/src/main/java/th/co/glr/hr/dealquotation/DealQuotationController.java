@@ -84,9 +84,15 @@ public class DealQuotationController {
     }
 
     @GetMapping("/tickets/{ticketId}/deal-quotations")
-    Map<String, List<DealQuotationDto>> listForTicket(@PathVariable long ticketId, HttpSession session) {
+    Map<String, Object> listForTicket(@PathVariable long ticketId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("items", quotations.listForTicket(ticketId, user));
+        List<DealQuotationDto> items = quotations.listForTicket(ticketId, user);
+        // `orderConfirmedQuotationId`: the row the deal's order was confirmed from (null when none, or not visible to
+        // this viewer). The deal page's document register leads its group with it. A HashMap because Map.of refuses null.
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("items", items);
+        body.put("orderConfirmedQuotationId", quotations.orderConfirmedQuotationId(ticketId, items));
+        return body;
     }
 
     /** Read-only, no create side effect (unlike {@code POST .../deal-quotations} above, which
