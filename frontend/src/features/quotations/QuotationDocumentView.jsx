@@ -297,13 +297,9 @@ export function QuotationDocumentView({ quotation }) {
         ) : null}
       </Panel>
 
-      {/* Four slots, matching the printed form's own signature block — ผู้สั่งซื้อ is the fourth.
-          It shows ONLY the stored `orderedByName` and falls back to "-" here (the dotted signature
-          line in the actual PDF/XLSX) when it is null — mirroring exactly what
-          DealQuotationRenderAdapter#orderedByName prints, so screen and paper can never disagree.
-          Ruling 2026-10-18: nobody types that name any more. The ผู้ติดต่อ is picked per quotation
-          and the server derives `orderedByName` from it on every draft save (null with none); the
-          deal's own contact is never inherited. Issued rows keep the name they were issued with. */}
+      {/* Four slots, matching the printed form's own signature block — ผู้สั่งซื้อ is the fourth and
+          is ALWAYS "-" (the dotted line the customer signs on in the PDF/XLSX), matching
+          DealQuotationRenderAdapter. The picked ผู้ติดต่อ prints only after "เรียน" (owner 2026-11-06). */}
       <Panel title="ผู้เกี่ยวข้อง">
         <div className="grid grid-cols-4 gap-4 tablet:grid-cols-2 mobile:grid-cols-1 text-center text-sm">
           <div>
@@ -322,7 +318,7 @@ export function QuotationDocumentView({ quotation }) {
           </div>
           <div>
             <span className="block text-2xs font-bold uppercase text-text-muted">{labels.orderedBy}</span>
-            <strong className="block mt-6 border-t border-border pt-2">{quotation.orderedByName ?? '-'}</strong>
+            <strong className="block mt-6 border-t border-border pt-2">-</strong>
           </div>
         </div>
       </Panel>

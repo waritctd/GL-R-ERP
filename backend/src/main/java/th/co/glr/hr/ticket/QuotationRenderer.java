@@ -1668,8 +1668,7 @@ public class QuotationRenderer {
             sig != null ? sig.printedBy() : null,
             sig != null ? sig.checkedBy() : null,
             sig != null ? sig.approvedBy() : null,
-            // ผู้สั่งซื้อ — the deal's contact, auto-filled as the name for the signature; the
-            // placeholder when the model has none.
+            // ผู้สั่งซื้อ — null from DealQuotationRenderAdapter, so the dotted placeholder.
             sig != null ? sig.orderedBy() : null,
         };
         // Dates auto-fill: ผู้พิมพ์ = created, พนักงานขาย = submitted, ผู้จัดการฝ่ายขาย = approved;
