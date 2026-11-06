@@ -418,6 +418,11 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
                 + " AND link = :link ORDER BY notification_id DESC LIMIT 1",
             Map.of("id", ceoUserId, "link", "/pricing-requests/" + pricingRequestId), String.class);
         assertThat(message).isEqualTo(expected).contains("ต้นทุนรวม ");
+        String title = jdbc.queryForObject(
+            "SELECT title FROM hr.notification WHERE employee_id = :id AND type = 'PRICING_COSTING_SUBMITTED'"
+                + " AND link = :link ORDER BY notification_id DESC LIMIT 1",
+            Map.of("id", ceoUserId, "link", "/pricing-requests/" + pricingRequestId), String.class);
+        assertThat(title).isEqualTo("รอ CEO ตั้งราคา");
     }
 
     /**
