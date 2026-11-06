@@ -268,7 +268,7 @@ const Sub = ({ children }) => <span className="block text-xs text-text-muted">{c
 
 // The full landed-cost calculation for one costed line (owner request 2026-11-06), every step with
 // the numbers that went into it, so the CEO can check it against the formula sheet by hand.
-export function CostCalculation({ row }) {
+export function CostCalculation({ row, priceMode }) {
   const b = row.breakdown;
   const id = row.item.id;
   if (!b) return null;
@@ -319,10 +319,19 @@ export function CostCalculation({ row }) {
           {`${n2(b.totalCost)} ÷ ${n2(b.qtySqm)} ตร.ม.`}
           {b.sqmPerPiece != null ? <Sub>{`= ${(Math.round(b.costPerSqm * b.sqmPerPiece * 1e4) / 1e4).toLocaleString('en-US', { minimumFractionDigits: 4 })} บาท/แผ่น (× ${nf(b.sqmPerPiece)} ตร.ม./แผ่น)`}</Sub> : null}
         </CalcStep>
-        {b.specialPerSqm != null ? (
+        {/* The last line is the price THIS mode is set from: ราคาพิเศษ (รวม VAT) per ตร.ม., NET's
+            ราคาตั้ง per แผ่น (ก่อน VAT — the quotation adds VAT), and none for DIRECT_NET, where the
+            CEO types the price itself. The selling buffer is shown only when it is not 1. */}
+        {priceMode === 'SPECIAL_SQM' && b.specialPerSqm != null ? (
           <CalcStep label="ราคาพิเศษ/ตร.ม." amount={n2(b.specialPerSqm)} tone="final">
-            {`${n2(b.costPerSqm)} × กำไร ${nf(1 + b.margin)} × VAT ${nf(b.sellingBuffer)}`}
+            {`${n2(b.costPerSqm)} × กำไร ${nf(1 + b.margin)}${b.sellingBuffer !== 1 ? ` × บัฟเฟอร์ ${nf(b.sellingBuffer)}` : ''} × VAT ${nf(b.vat)}`}
             <Sub>รวม VAT · กำไรตามที่ตั้งในแถวนี้</Sub>
+          </CalcStep>
+        ) : null}
+        {priceMode === 'NET' && b.listPerPiece != null ? (
+          <CalcStep label="ราคาตั้ง/แผ่น" amount={n2(b.listPerPiece)} tone="final">
+            {`${nf(b.costPerPiece)} × กำไร ${nf(1 + b.margin)}${b.sellingBuffer !== 1 ? ` × บัฟเฟอร์ ${nf(b.sellingBuffer)}` : ''}`}
+            <Sub>ก่อน VAT (ใบเสนอราคาบวก VAT 7%) · ส่วนลด % หักจากราคานี้</Sub>
           </CalcStep>
         ) : null}
       </div>
@@ -376,7 +385,7 @@ function Details({ row, model }) {
         <span>รวม {row.item.requestedQuantity} แผ่น: <b>{fmt(row.total)}</b></span>
         <span>กำไร: {row.profitTotal != null ? `${fmt(row.profitTotal, 'THB')}${row.profitPct != null ? ` (${row.profitPct.toFixed(1)}%)` : ''}` : '–'}</span>
       </section>
-      {!row.isStock && !row.hasCostOverride ? <CostCalculation row={row} /> : null}
+      {!row.isStock && !row.hasCostOverride ? <CostCalculation row={row} priceMode={model.priceMode} /> : null}
     </div>
   );
 }

@@ -70,7 +70,8 @@ describe('SPECIAL_SQM — กำไร % drives ราคาพิเศษ (own
   const special = { priceMode: 'SPECIAL_SQM', currency: 'THB', fxRateUsed: 1 };
   // The owner's worked example: ทุน 953.72 บาท/ตร.ม., 0.36 ตร.ม./แผ่น -> cost 343.3416 / แผ่น (unrounded ทุน 953.7266).
   const ownerItem = item({ sqmPerPiece: 0.36, netUnitPrice: null, proposedMarginPct: 0.3, proposedSellingPricePerRequestedUnit: null });
-  const ownerFigures = (o) => figures({ decision: special, item: ownerItem, cost: 343.3416, sellingBuffer: 1.07, ...o });
+  // The selling buffer is 1.00 since 2026-11-06; VAT 1.07 is applied on its own.
+  const ownerFigures = (o) => figures({ decision: special, item: ownerItem, cost: 343.3416, sellingBuffer: 1, ...o });
 
   it('prefills ราคาพิเศษ = 953.72 × 1.3 × 1.07 = 1,326.63 (VAT applied once, not twice)', () => {
     expect(ownerFigures().draft.specialPriceSqm).toBe(1326.63);

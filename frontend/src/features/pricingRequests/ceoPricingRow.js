@@ -52,26 +52,29 @@ export function lineProfitThb(costThb, netPriceInCurrency, fxRate) {
 function round10(n) {
   return Math.round((Number(n) + Number.EPSILON) * 1e10) / 1e10;
 }
-const VAT_FACTOR = 1.07;
+/** Thai VAT on the document — the same 7% WastageCalculator strips from a ราคาพิเศษ. */
+export const VAT_FACTOR = 1.07;
 
 /**
  * ราคาพิเศษ บาท/ตร.ม. (รวม VAT) from the formula, per the owner's own worked rule (2026-11-06):
- *   ทุน/ตร.ม. × (1 + กำไร) × 1.07 = ราคาพิเศษ/ตร.ม. รวม VAT
- * e.g. 953.72 × 1.3 × 1.07 = 1,326.63. The formula's selling_buffer (1.07) IS that VAT, so it is
- * applied exactly once — the old prefill multiplied the already-buffered formula price by 1.07
- * AGAIN. Worked per ตร.ม. straight from the cost so no per-แผ่น rounding creeps in. Falls back to
- * the (already buffered) formula price per แผ่น × แผ่น/ตร.ม. when there is no cost/margin/buffer.
+ *   ทุน/ตร.ม. × (1 + กำไร) × selling buffer × VAT 1.07 = ราคาพิเศษ/ตร.ม. รวม VAT
+ * e.g. 953.72 × 1.3 × 1.07 = 1,326.63 with the selling buffer at 1.00. The formula price
+ * (ราคาตั้ง) is BEFORE VAT — the quotation adds VAT to it — so VAT is applied here exactly once,
+ * as the fixed 7% the server strips back off (WastageCalculator#netPerPieceFromSpecialSqm). The
+ * selling buffer stays a buffer (CEO settings: "ไม่ใช่ VAT"), owner-set to 1.00 on 2026-11-06.
+ * Worked per ตร.ม. straight from the cost so no per-แผ่น rounding creeps in. Falls back to the
+ * formula price per แผ่น × แผ่น/ตร.ม. × VAT when there is no cost/margin/buffer.
  * null when there is nothing to derive it from.
  */
 export function specialPriceSqmFromFormula({ cost, marginFraction, sellingBuffer, pricePerPiece, sqmPerPiece }) {
   const sqm = Number(sqmPerPiece);
   if (!(sqm > 0)) return null;
   if (cost != null && marginFraction != null && sellingBuffer > 0 && Number(cost) > 0) {
-    return round2((Number(cost) / sqm) * (1 + Number(marginFraction)) * Number(sellingBuffer));
+    return round2((Number(cost) / sqm) * (1 + Number(marginFraction)) * Number(sellingBuffer) * VAT_FACTOR);
   }
   const price = Number(pricePerPiece);
   if (pricePerPiece == null || !(price > 0)) return null;
-  return round2(price * round2(1 / sqm));
+  return round2(price * round2(1 / sqm) * VAT_FACTOR);
 }
 
 /**
