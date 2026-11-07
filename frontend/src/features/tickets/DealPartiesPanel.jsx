@@ -14,6 +14,7 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { OverflowMenu } from '../../components/common/OverflowMenu.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { cn } from '../../utils/cn.js';
 import { formatMoney } from '../../utils/format.js';
 import { dealQuotationStatusLabel } from '../quotations/quotationMeta.js';
@@ -229,6 +230,9 @@ export function DealPartiesPanel({ ticketId, parties = [], loading = false, canE
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const buyers = buyerParties(parties);
+  // Render ONE layout, not both hidden by CSS: a hidden copy still holds a ⋯ menu trigger in the DOM, which
+  // assistive tech and the e2e walk of every `main [aria-haspopup="menu"]` would meet.
+  const isMobile = useIsMobile();
 
   function refresh() {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketParties(ticketId) });
@@ -268,8 +272,28 @@ export function DealPartiesPanel({ ticketId, parties = [], loading = false, canE
         <p className="m-0 px-5 py-4 text-sm text-text-muted">ยังไม่มีผู้รับเหมาในดีลนี้</p>
       ) : (
         <>
-          {/* Desktop: a compact table. */}
-          <table className="w-full border-collapse text-sm mobile:hidden">
+          {isMobile ? (
+            // Phone (≤720px): one stacked card per contractor.
+          <ul className="m-0 flex list-none flex-col gap-0 p-0">
+            {buyers.map((party) => (
+              <li key={party.id} className={cn('flex flex-col gap-2 border-b border-border-subtle px-4 py-3 last:border-b-0', party.status === 'NOT_AWARDED' && 'opacity-60')}>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0">
+                    <strong className="block text-sm text-text">{party.customerName ?? '-'}</strong>
+                    {party.contactName ? <span className="text-xs text-text-muted">{party.contactName}</span> : null}
+                  </span>
+                  <PartyAmount party={party} />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <PartyQuotation party={party} />
+                  <PartyOutcome party={party} />
+                </div>
+                <PartyActions ticketId={ticketId} party={party} canEdit={canEdit} onUpdate={onUpdate} onRemove={onRemove} busy={busy} />
+              </li>
+            ))}
+          </ul>
+          ) : (
+          <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-border-subtle text-left text-2xs font-bold uppercase tracking-wide text-text-muted">
                 <th className="px-5 py-2.5 font-bold">ผู้รับเหมา</th>
@@ -296,25 +320,7 @@ export function DealPartiesPanel({ ticketId, parties = [], loading = false, canE
               ))}
             </tbody>
           </table>
-          {/* Phone (≤720px): one stacked card per contractor. */}
-          <ul className="m-0 hidden list-none flex-col gap-0 p-0 mobile:flex">
-            {buyers.map((party) => (
-              <li key={party.id} className={cn('flex flex-col gap-2 border-b border-border-subtle px-4 py-3 last:border-b-0', party.status === 'NOT_AWARDED' && 'opacity-60')}>
-                <div className="flex items-start justify-between gap-3">
-                  <span className="min-w-0">
-                    <strong className="block text-sm text-text">{party.customerName ?? '-'}</strong>
-                    {party.contactName ? <span className="text-xs text-text-muted">{party.contactName}</span> : null}
-                  </span>
-                  <PartyAmount party={party} />
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <PartyQuotation party={party} />
-                  <PartyOutcome party={party} />
-                </div>
-                <PartyActions ticketId={ticketId} party={party} canEdit={canEdit} onUpdate={onUpdate} onRemove={onRemove} busy={busy} />
-              </li>
-            ))}
-          </ul>
+          )}
         </>
       )}
       {canEdit ? (
