@@ -83,12 +83,18 @@ const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(
 // editor's own อนุมัติ/ไม่อนุมัติ button gate.
 
 // ── "จัดกลุ่มตามโครงการ" (deal-party-model.md, prototype screen 1) ─────────────────────────────
-// A deal with more than one BUYER party (DealQuotationDto.dealBuyerCount) is one project quoted to
-// several contractors: its rows are listed together under a thin group row, inside DataTable's own
-// row mechanism (a synthetic row whose first cell spans the grid, the rest hidden), so search,
-// pagination and the mobile cards all keep working. Grouping turns column sorting off: a sort would
-// scatter a group's rows away from their header.
+// EVERY deal holding more than one quotation row is listed together under a thin group row: a project
+// quoted to several contractors, and one contractor's revisions of a single document alike. The rows
+// of a group come out inside DataTable's own row mechanism (a synthetic row whose first cell spans the
+// grid, the rest hidden), so search, pagination and the mobile cards all keep working. Grouping turns
+// column sorting off: a sort would scatter a group's rows away from their header.
+//
+// Revisions of one document (the same number with a `-<n>` suffix: QT-2026-0303-1 … -5) fold into ONE
+// row, the version in force (the newest approved one, else the newest), with its older versions behind
+// a "เวอร์ชันก่อนหน้า N" button, or all open at once with "ขยายทุกเวอร์ชัน".
 const GROUP_PREF_KEY = 'glr.quotations.groupByProject';
+const IN_FORCE_STATUSES = new Set(['APPROVED', 'ACCEPTED', 'ISSUED', 'SENT']);
+const EMPTY_SET = new Set();
 
 function readGroupPref() {
   try {
@@ -106,37 +112,43 @@ function writeGroupPref(on) {
   }
 }
 
-/** The rows in server order, each multi-bidder deal's rows pulled together under a group row placed
- * where its newest row was. Member rows are copied with `inGroup: true`. */
-export function groupQuotationRows(rows) {
+// Only a 1-2 digit tail is a revision suffix: a bare number such as QT-2026-0901 ends in a 4-digit
+// running sequence and must never be folded with its neighbours (same rule as dealDocumentVersions.js).
+const REVISION_SUFFIX = /-(\d{1,2})$/;
+
+function versionOf(row) {
+  const m = REVISION_SUFFIX.exec(String(row.number ?? ''));
+  return m ? Number(m[1]) : null;
+}
+
+/** The versions of ONE document, newest first, the one in force (newest approved, else newest) split off. */
+function splitInForce(versions) {
+  const newestFirst = [...versions].sort((a, b) => (versionOf(b) ?? 0) - (versionOf(a) ?? 0) || Number(b.id) - Number(a.id));
+  const inForce = newestFirst.find((v) => IN_FORCE_STATUSES.has(v.docStatus)) ?? newestFirst[0];
+  return { inForce, older: newestFirst.filter((v) => v !== inForce) };
+}
+
+/**
+ * The rows in server order, each deal's rows pulled together under a group row placed where its newest row
+ * was. Member rows are copied with `inGroup: true`. `expanded` is a Set of document keys whose older versions
+ * are open, `expandAll` opens every one, `onToggleVersions(docKey)` is what a row's version button calls.
+ */
+export function groupQuotationRows(rows, { expanded = EMPTY_SET, expandAll = false, onToggleVersions = null } = {}) {
   const byTicket = new Map();
   for (const row of rows) {
-    if (Number(row.dealBuyerCount ?? 0) > 1 && row.ticketId != null) {
-      if (!byTicket.has(row.ticketId)) byTicket.set(row.ticketId, []);
-      byTicket.get(row.ticketId).push(row);
-    }
+    if (row.ticketId == null) continue;
+    if (!byTicket.has(row.ticketId)) byTicket.set(row.ticketId, []);
+    byTicket.get(row.ticketId).push(row);
   }
   const out = [];
   const emitted = new Set();
   for (const row of rows) {
     const members = byTicket.get(row.ticketId);
-    if (!members) { out.push(row); continue; }
+    if (!members || members.length < 2) { out.push(row); continue; }
     if (emitted.has(row.ticketId)) continue;
     emitted.add(row.ticketId);
     const headline = members.find((m) => m.partyHeadline) ?? null;
     const searchText = members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''} ${m.docStatus ?? ''}`).join(' ');
-    out.push({
-      isGroup: true,
-      id: `group-${row.ticketId}`,
-      ticketId: row.ticketId,
-      ticketCode: row.ticketCode,
-      projectName: members.find((m) => m.projectName)?.projectName ?? null,
-      buyerCount: Number(row.dealBuyerCount),
-      decided: members.some((m) => m.partyStatus === 'AWARDED' || m.partyStatus === 'AWARDED_SPLIT'),
-      headlineAmount: headline?.grandTotal ?? null,
-      // What a search over the group header matches: any of its rows' own text.
-      searchText,
-    });
     // Numbered per contractor: one party's quotations sit together under one number, the ยอดหลัก
     // party first, the rest in server order.
     const byParty = new Map();
@@ -146,9 +158,43 @@ export function groupQuotationRows(rows) {
       byParty.get(key).push(m);
     }
     const parties = [...byParty.values()].sort((a, b) => Number(b.some((m) => m.partyHeadline)) - Number(a.some((m) => m.partyHeadline)));
-    const ordered = parties.flatMap((party, p) => party.map((m) => ({ ...m, groupIndex: p + 1 })));
+    out.push({
+      isGroup: true,
+      id: `group-${row.ticketId}`,
+      ticketId: row.ticketId,
+      ticketCode: row.ticketCode,
+      projectName: members.find((m) => m.projectName)?.projectName ?? null,
+      buyerCount: parties.length,
+      versionCount: members.length,
+      decided: members.some((m) => m.partyStatus === 'AWARDED' || m.partyStatus === 'AWARDED_SPLIT'),
+      headlineAmount: headline?.grandTotal ?? null,
+      // What a search over the group header matches: any of its rows' own text, older versions included.
+      searchText,
+    });
+    const ordered = [];
+    parties.forEach((party, p) => {
+      // Documents of this contractor: rows sharing a revision-suffixed number are versions of one document.
+      const docs = new Map();
+      for (const m of party) {
+        const base = versionOf(m) == null ? null : String(m.number).replace(REVISION_SUFFIX, '');
+        const key = base == null ? `row-${m.id}` : `${m.ticketId}:${base}`;
+        if (!docs.has(key)) docs.set(key, []);
+        docs.get(key).push(m);
+      }
+      for (const [docKey, versions] of docs) {
+        const { inForce, older } = splitInForce(versions);
+        const open = expandAll || expanded.has(docKey);
+        const base = { inGroup: true, groupIndex: p + 1, groupContractors: parties.length, docKey };
+        ordered.push({
+          ...inForce, ...base,
+          olderCount: older.length, versionsOpen: open, versionNo: versionOf(inForce),
+          onToggleVersions: onToggleVersions ? () => onToggleVersions(docKey) : null,
+        });
+        if (open) for (const o of older) ordered.push({ ...o, ...base, isOlderVersion: true, versionNo: versionOf(o) });
+      }
+    });
     ordered.forEach((m, i) => out.push({
-      ...m, inGroup: true, groupSize: ordered.length, groupSearchText: searchText,
+      ...m, groupSize: ordered.length, groupSearchText: searchText,
       ...(i === 0 ? { groupFirst: true } : {}), ...(i === ordered.length - 1 ? { groupLast: true } : {}),
     }));
   }
@@ -160,7 +206,8 @@ function GroupRowContent({ row }) {
     <span className="flex min-w-0 flex-col gap-1" data-testid="quotation-group-row">
       <span className="flex min-w-0 items-center justify-between gap-3 text-xs">
         <span className="flex items-center gap-2 font-bold text-info">
-          {`ดีลเดียวกัน · ${row.buyerCount} ผู้รับเหมา`}
+          {row.buyerCount > 1 ? `ดีลเดียวกัน · ${row.buyerCount} ผู้รับเหมา` : 'ดีลเดียวกัน'}
+          {row.versionCount > row.buyerCount ? <span className="font-normal text-text-muted">{`${row.versionCount} ฉบับ`}</span> : null}
           {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
         </span>
         {row.ticketId != null ? (
@@ -170,11 +217,39 @@ function GroupRowContent({ row }) {
         ) : null}
       </span>
       {row.projectName ? <strong className="min-w-0 truncate text-md font-extrabold text-text">{row.projectName}</strong> : null}
-      <span className="text-xs text-text-muted">
-        {row.decided
-          ? 'บันทึกผลประมูลแล้ว'
-          : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`}
-      </span>
+      {row.buyerCount > 1 ? (
+        <span className="text-xs text-text-muted">
+          {row.decided
+            ? 'บันทึกผลประมูลแล้ว'
+            : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** "เวอร์ชันก่อนหน้า N" on a document's in-force row, the v-tag on an opened older version. */
+function VersionControls({ row }) {
+  if (row.isOlderVersion) {
+    return <span className="font-mono text-2xs text-text-muted">{row.versionNo != null ? `v${row.versionNo}` : ''}</span>;
+  }
+  if (!row.olderCount) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        data-testid="quotation-versions-toggle"
+        aria-expanded={row.versionsOpen}
+        className={cn(
+          'inline-flex min-h-6 items-center gap-1 rounded-full border px-2 text-2xs font-extrabold mobile:min-h-[44px]',
+          row.versionsOpen ? 'border-primary bg-primary-bg text-info-dark' : 'border-border-strong bg-surface text-text-secondary hover:bg-surface-hover',
+        )}
+        onClick={(event) => { event.stopPropagation(); row.onToggleVersions?.(); }}
+      >
+        {`เวอร์ชันก่อนหน้า ${row.olderCount}`}
+        <Icon name={row.versionsOpen ? 'chevronUp' : 'chevronDown'} size={10} />
+      </button>
+      {row.versionNo != null ? <span className="font-mono text-2xs text-text-muted">{`ใช้อยู่: v${row.versionNo}`}</span> : null}
     </span>
   );
 }
@@ -195,8 +270,9 @@ function PartyChipLine({ row }) {
   const chip = partyStatusLabel(row.partyStatus);
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      {row.partyStatus ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
-      {row.partyHeadline ? <span className="text-2xs font-bold text-warning-dark">★ ยอดหลัก</span> : null}
+      {row.partyStatus && !row.isOlderVersion ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
+      {row.partyHeadline && !row.isOlderVersion ? <span className="text-2xs font-bold text-warning-dark">★ ยอดหลัก</span> : null}
+      <VersionControls row={row} />
     </span>
   );
 }
@@ -208,7 +284,7 @@ const COLUMNS = [
     sortable: true,
     searchAccessor: (row) => (row.isGroup ? row.searchText : row.number),
     render: (row) => (row.isGroup ? <GroupRowContent row={row} /> : (
-      <span className="inline-flex items-center">
+      <span className={cn('inline-flex items-center', row.isOlderVersion && 'pl-4')}>
         <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
           <code>{row.number}</code>
         </Link>
@@ -229,7 +305,7 @@ const COLUMNS = [
     render: (row) => (row.isGroup ? null : (
       <span className="flex flex-col gap-0.5">
         <span className="flex items-center gap-2 font-bold">
-          {row.inGroup ? <GroupIndexCircle n={row.groupIndex} /> : null}
+          {row.inGroup && row.groupContractors > 1 && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
           {row.customerName ?? '-'}
         </span>
         {row.inGroup
@@ -293,7 +369,7 @@ export function quotationRowClassName(row) {
   if (row.isGroup) {
     return 'bg-info-bg-alt [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden border-t-2 border-t-info-border mobile:border-t mobile:border-info-border mobile:rounded-b-none mobile:py-1.5';
   }
-  const dim = row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : '';
+  const dim = row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : row.isOlderVersion ? 'bg-surface-muted text-text-muted' : '';
   if (!row.inGroup) return dim;
   return [
     dim,
@@ -331,7 +407,7 @@ function QuotationCard({ row }) {
   if (!row.inGroup) return body;
   return (
     <div className="flex min-w-0 gap-3">
-      <GroupIndexCircle n={row.groupIndex} />
+      {row.groupContractors > 1 && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
       <div className="flex min-w-0 flex-1 flex-col gap-2">{body}</div>
     </div>
   );
@@ -401,9 +477,18 @@ export function QuotationListPage({ user }) {
     });
   }
   const columns = groupByProject ? GROUPED_COLUMNS : COLUMNS;
+  // Which documents have their older versions open (a Set of docKeys), or every one with ขยายทุกเวอร์ชัน.
+  const [openVersions, setOpenVersions] = useState(() => new Set());
+  const [expandAll, setExpandAll] = useState(false);
+  const toggleVersions = (docKey) => setOpenVersions((current) => {
+    const next = new Set(current);
+    if (!next.delete(docKey)) next.add(docKey);
+    return next;
+  });
   const tableRows = useMemo(
-    () => (groupByProject ? groupQuotationRows(filteredRows) : filteredRows),
-    [groupByProject, filteredRows],
+    () => (groupByProject ? groupQuotationRows(filteredRows, { expanded: openVersions, expandAll, onToggleVersions: toggleVersions }) : filteredRows),
+    // toggleVersions only closes over setOpenVersions, which is stable.
+    [groupByProject, filteredRows, openVersions, expandAll],
   );
 
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
@@ -502,6 +587,19 @@ export function QuotationListPage({ user }) {
           {groupByProject ? 'เปิด' : 'ปิด'}
         </span>
       </button>
+      {groupByProject ? (
+        <button
+          type="button"
+          aria-pressed={expandAll}
+          data-testid="quotation-expand-toggle"
+          className={`inline-flex min-h-8 mobile:min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+            expandAll ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+          }`}
+          onClick={() => setExpandAll((on) => !on)}
+        >
+          ขยายทุกเวอร์ชัน
+        </button>
+      ) : null}
       </div>
       <div id="quotation-list-panel" role="tabpanel">
         {/* Filter row: พนักงานขาย/ยอดรวม for see-all roles (sales_manager/ceo), อีเมลลูกค้า for everyone -- moved OUT of the

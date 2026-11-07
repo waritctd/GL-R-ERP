@@ -434,6 +434,94 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
   });
 });
 
+// Every deal holding more than one quotation is grouped, a single contractor's revisions included, and
+// the revisions of one document fold into the version in force (prototype: list-grouping, 2026-11-07).
+describe('QuotationListPage — revisions of one document fold into the version in force', () => {
+  const rev = (n, overrides = {}) => row({
+    id: 100 + n, number: `QT-2026-0303-${n}`, customerName: 'บจก.สตูดิโอ ตัวอย่าง', projectName: 'Toscana House',
+    ticketId: 307, ticketCode: 'DL-2026-0302', partyId: 7, dealBuyerCount: 1,
+    docStatus: n === 5 ? 'APPROVED' : 'SUPERSEDED', revisionNo: n, ...overrides,
+  });
+  const chain = [rev(5), rev(4), rev(3), rev(2), rev(1)];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({ items: chain });
+  });
+
+  it('groupQuotationRows: one contractor with five versions is ONE group with ONE row, the approved newest in force', () => {
+    const out = groupQuotationRows(chain);
+    expect(out.filter((r) => r.isGroup)).toHaveLength(1);
+    const members = out.filter((r) => r.inGroup);
+    expect(members.map((m) => m.number)).toEqual(['QT-2026-0303-5']);
+    expect(members[0].olderCount).toBe(4);
+    expect(members[0].versionNo).toBe(5);
+    expect(out.find((r) => r.isGroup)).toMatchObject({ buyerCount: 1, versionCount: 5 });
+  });
+
+  it('the version in force is the newest APPROVED one, not just the newest', () => {
+    const rows = [rev(3, { docStatus: 'DRAFT' }), rev(2, { docStatus: 'APPROVED' }), rev(1, { docStatus: 'SUPERSEDED' })];
+    const [, inForce] = groupQuotationRows(rows);
+    expect(inForce.number).toBe('QT-2026-0303-2');
+    expect(inForce.olderCount).toBe(2);
+  });
+
+  it('opening a document lists its older versions newest first, dimmed, after the row in force', () => {
+    const out = groupQuotationRows(chain, { expanded: new Set(['307:QT-2026-0303']) });
+    const members = out.filter((r) => r.inGroup);
+    expect(members.map((m) => m.number)).toEqual(['QT-2026-0303-5', 'QT-2026-0303-4', 'QT-2026-0303-3', 'QT-2026-0303-2', 'QT-2026-0303-1']);
+    expect(members.slice(1).every((m) => m.isOlderVersion)).toBe(true);
+    expect(quotationRowClassName(members[1])).toContain('bg-surface-muted');
+    expect(members[4].groupLast).toBe(true);
+    expect(groupQuotationRows(chain, { expandAll: true }).filter((r) => r.inGroup)).toHaveLength(5);
+  });
+
+  it('a number without a revision suffix is never folded with its neighbours', () => {
+    const rows = [row({ id: 1, number: 'QT-2026-0901', ticketId: 9, partyId: 1 }), row({ id: 2, number: 'QT-2026-0902', ticketId: 9, partyId: 1 })];
+    expect(groupQuotationRows(rows).filter((r) => r.inGroup)).toHaveLength(2);
+  });
+
+  it('a deal with a single quotation row stays ungrouped', () => {
+    expect(groupQuotationRows([rev(5)]).some((r) => r.isGroup)).toBe(false);
+  });
+
+  it('renders a header for a one-contractor deal, no numbered circle, and a version button that opens the older versions', async () => {
+    renderListPage(salesUser);
+    const group = await screen.findByTestId('quotation-group-row');
+    expect(group.textContent).toContain('Toscana House');
+    expect(group.textContent).toContain('5 ฉบับ');
+    expect(group.textContent).not.toContain('ผู้รับเหมา');
+    expect(screen.queryByTestId('quotation-group-index')).toBeNull();
+    expect(screen.getByText('QT-2026-0303-5')).toBeTruthy();
+    expect(screen.queryByText('QT-2026-0303-4')).toBeNull();
+    const toggle = screen.getByTestId('quotation-versions-toggle');
+    expect(toggle.textContent).toContain('เวอร์ชันก่อนหน้า 4');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    await screen.findByText('QT-2026-0303-4');
+    expect(screen.getByText('QT-2026-0303-1')).toBeTruthy();
+    expect(screen.getByTestId('quotation-versions-toggle').getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByTestId('quotation-versions-toggle'));
+    await waitFor(() => expect(screen.queryByText('QT-2026-0303-4')).toBeNull());
+  });
+
+  it('ขยายทุกเวอร์ชัน opens every document at once', async () => {
+    renderListPage(salesUser);
+    await screen.findByTestId('quotation-group-row');
+    fireEvent.click(screen.getByTestId('quotation-expand-toggle'));
+    await screen.findByText('QT-2026-0303-1');
+    expect(screen.getByTestId('quotation-expand-toggle').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('a search for an older version\'s number still finds its group', async () => {
+    renderListPage(salesUser);
+    await screen.findByTestId('quotation-group-row');
+    fireEvent.change(screen.getByPlaceholderText(/ค้นหา/), { target: { value: 'QT-2026-0303-2' } });
+    expect(await screen.findByText('QT-2026-0303-5')).toBeTruthy();
+  });
+});
+
 describe('QuotationListPage column floors (responsive review, 2026-09-10)', () => {
   // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout and no text measurement, so it
   // cannot observe the defect this pins: at a 721px viewport the six `minmax(0, …)` tracks were
