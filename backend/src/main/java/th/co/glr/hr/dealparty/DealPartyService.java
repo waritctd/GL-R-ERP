@@ -67,7 +67,8 @@ public class DealPartyService {
     public DealPartyDto add(long ticketId, AddPartyRequest request, UserPrincipal actor) {
         TicketSummaryDto summary = requireSummary(ticketId);
         requireManageAccess(summary, actor);
-        requireActive(summary);
+        tickets.lockTicketForUpdate(ticketId);
+        requireActive(requireSummary(ticketId));
         String role = request.role() == null ? null : request.role().trim().toUpperCase();
         if (role == null || !DealPartyDtos.ROLES.contains(role)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "บทบาทไม่ถูกต้อง (DESIGNER / OWNER / BUYER)");
@@ -91,7 +92,8 @@ public class DealPartyService {
     public DealPartyDto patch(long ticketId, long partyId, PatchPartyRequest request, UserPrincipal actor) {
         TicketSummaryDto summary = requireSummary(ticketId);
         requireManageAccess(summary, actor);
-        requireActive(summary);
+        tickets.lockTicketForUpdate(ticketId);
+        requireActive(requireSummary(ticketId));
         DealPartyDto party = requirePartyOnTicket(ticketId, partyId);
         if (request.status() != null) {
             String status = request.status().trim().toUpperCase();
@@ -119,6 +121,8 @@ public class DealPartyService {
     public void delete(long ticketId, long partyId, UserPrincipal actor) {
         TicketSummaryDto summary = requireSummary(ticketId);
         requireManageAccess(summary, actor);
+        tickets.lockTicketForUpdate(ticketId);
+        requireActive(requireSummary(ticketId));
         DealPartyDto party = requirePartyOnTicket(ticketId, partyId);
         if (!DealPartyDtos.STATUS_ACTIVE.equals(party.status()) || parties.hasAnyQuotation(partyId)) {
             throw new ApiException(HttpStatus.CONFLICT, "ลบได้เฉพาะผู้เกี่ยวข้องที่ยังไม่มีใบเสนอราคา");
@@ -193,7 +197,10 @@ public class DealPartyService {
         if (!DealPartyDtos.NOT_AWARDED_REASONS.contains(reason)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เหตุผลที่ไม่ได้งานไม่ถูกต้อง");
         }
+        // A late winner on an already-awarded deal leaves the other buyers alone unless the rep says otherwise.
+        boolean touchOthers = !alreadyAwarded || request.othersOutcome() != null;
         List<DealPartyDto> others = buyers.values().stream()
+            .filter(p -> touchOthers)
             // Only contractors who actually bid lose; a party that never quoted (ACTIVE) is left as it is.
             .filter(p -> !awardedIds.contains(p.id())
                 && (DealPartyDtos.STATUS_QUOTED.equals(p.status()) || DealPartyDtos.STATUS_NEGOTIATING.equals(p.status())))
@@ -206,7 +213,7 @@ public class DealPartyService {
             if (primary != null && w.id() == primary.id()) {
                 continue;
             }
-            String code = summary.code() + "-" + (char) ('A' + parties.countChildren(ticketId));
+            String code = summary.code() + "-" + childCodeSuffix(parties.countChildren(ticketId));
             long childId = parties.forkChild(ticketId, code, w.customerId(), w.customerName(), w.contactId(), actor.id());
             long childPartyId = parties.insert(childId, w.customerId(), w.contactId(), DealPartyDtos.ROLE_BUYER,
                 DealPartyDtos.STATUS_AWARDED, true, actor.id());
@@ -288,6 +295,10 @@ public class DealPartyService {
             .filter(c -> c.customerId() == customerId)
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ผู้ติดต่อไม่ใช่ของลูกค้ารายนี้"));
         return contact.id();
+    }
+
+    public static String childCodeSuffix(int n) {
+        return n < 26 ? String.valueOf((char) ('A' + n)) : String.valueOf(n + 1);
     }
 
     private static void requireActive(TicketSummaryDto summary) {

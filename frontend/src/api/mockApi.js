@@ -7812,7 +7812,7 @@ function mockForkChildDeal(parent, party, user) {
   const child = {
     ...structuredClone({ ...parent, events: [], items: [], quotations: [], quotation: null }),
     id: nextId,
-    code: `${parent.code}-${String.fromCharCode(65 + siblings)}`,
+    code: `${parent.code}-${siblings < 26 ? String.fromCharCode(65 + siblings) : siblings + 1}`,
     parentTicketId: parent.id,
     customerId: party.customerId, customerName: customer?.name ?? null, contactId: party.contactId ?? null,
     title: customer?.name ?? parent.title,

@@ -45,7 +45,7 @@ export function BidOutcomeModal({
   const existingChildren = parties.filter((p) => p.status === 'AWARDED_SPLIT').length;
   const [checked, setChecked] = useState([]);
   const [primaryChoice, setPrimaryChoice] = useState(null);
-  const [othersOutcome, setOthersOutcome] = useState('NOT_AWARDED');
+  const [othersOutcome, setOthersOutcome] = useState(alreadyAwarded ? 'KEEP_WAITING' : 'NOT_AWARDED');
   const [reason, setReason] = useState('OTHER_BIDDER');
   const [error, setError] = useState(null);
 

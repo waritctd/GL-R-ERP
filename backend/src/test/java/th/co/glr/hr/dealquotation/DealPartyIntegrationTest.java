@@ -249,6 +249,47 @@ class DealPartyIntegrationTest extends AbstractDealDirectQuotationIntegrationTes
     }
 
     @Test
+    void outcome_lateWinnerOnAnAwardedDeal_withoutOthersOutcome_leavesWaitingBuyersAlone() {
+        long ticketId = deal(salesActor);
+        DealPartyDto partyA = partyService.list(ticketId, salesActor).get(0);
+        DealPartyDto partyB = partyService.add(ticketId, new AddPartyRequest(contractor("บจก.รอ บี").id(), "BUYER", null), salesActor);
+        DealPartyDto partyC = partyService.add(ticketId, new AddPartyRequest(contractor("บจก.รอ ซี").id(), "BUYER", null), salesActor);
+        DealPartyDto partyD = partyService.add(ticketId, new AddPartyRequest(contractor("บจก.มาทีหลัง ดี").id(), "BUYER", null), salesActor);
+        approved(ticketId, draft().withRecipientType("BUYER"), salesActor);
+        quotationService.create(ticketId, draft().withPartyId(partyB.id()), salesActor);
+        quotationService.create(ticketId, draft().withPartyId(partyC.id()), salesActor);
+        DealQuotationDto draftD = quotationService.create(ticketId, draft().withPartyId(partyD.id()), salesActor);
+        partyService.recordBidOutcome(ticketId,
+            new BidOutcomeRequest(List.of(partyA.id()), null, "KEEP_WAITING", null), salesActor);
+        quotationService.submit(draftD.id(), salesActor);
+        quotationService.approve(draftD.id(), new DealQuotationRequests.ApproveRequest(null), salesManagerActor);
+
+        partyService.recordBidOutcome(ticketId, new BidOutcomeRequest(List.of(partyD.id()), null, null, null), salesActor);
+
+        Map<Long, DealPartyDto> byId = partyService.list(ticketId, salesActor).stream()
+            .collect(java.util.stream.Collectors.toMap(DealPartyDto::id, p -> p));
+        assertThat(byId.get(partyB.id()).status()).isEqualTo("QUOTED");
+        assertThat(byId.get(partyC.id()).status()).isEqualTo("QUOTED");
+        assertThat(byId.get(partyD.id()).status()).isEqualTo("AWARDED_SPLIT");
+    }
+
+    @Test
+    void childCodeSuffix_isALetterBelow26_andANumberAfter() {
+        assertThat(DealPartyService.childCodeSuffix(0)).isEqualTo("A");
+        assertThat(DealPartyService.childCodeSuffix(25)).isEqualTo("Z");
+        assertThat(DealPartyService.childCodeSuffix(26)).isEqualTo("27");
+        assertThat(DealPartyService.childCodeSuffix(30)).isEqualTo("31");
+    }
+
+    @Test
+    void deleteParty_onACancelledDeal_isRefused() {
+        long ticketId = deal(salesActor);
+        DealPartyDto partyB = partyService.add(ticketId, new AddPartyRequest(contractor("บจก.ลบไม่ได้").id(), "BUYER", null), salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CANCELLED' WHERE ticket_id = :id", Map.of("id", ticketId));
+        refusal(() -> partyService.delete(ticketId, partyB.id(), salesActor), HttpStatus.CONFLICT);
+    }
+
+    @Test
     void outcome_refusesAWinnerWhoseQuotationIsNotApproved() {
         long ticketId = deal(salesActor);
         DealPartyDto partyA = partyService.list(ticketId, salesActor).get(0);
