@@ -1291,7 +1291,7 @@ export function QuotationEditorPage({ user, showToast }) {
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, attachingToDeal, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs, stageCatalog, isInlineCreate, dealForm.entryChannel, ticket?.entryChannel]);
+    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs, stageCatalog, ticket?.entryChannel]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
