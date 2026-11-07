@@ -417,7 +417,7 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     renderListPage(salesUser);
     const group = await s26Group();
     expect(group.textContent).not.toMatch(/^3 ผู้รับเหมา/);
-    expect(within(group).getByText('S26 HOTEL').className).toContain('text-md font-extrabold');
+    expect(within(group).getByText('S26 HOTEL').className).toContain('text-sm font-extrabold');
     expect(group.innerHTML).not.toMatch(/text-\[\d+px\]/);
   });
 
