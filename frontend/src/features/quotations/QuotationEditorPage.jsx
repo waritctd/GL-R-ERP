@@ -328,6 +328,14 @@ export function QuotationEditorPage({ user, showToast }) {
     ticketIdParam ? Number(ticketIdParam) : null,
     !id && Boolean(ticketIdParam),
   );
+  // N6 over EVERY live direct quotation: the summary serves only the newest, the server checks them all. The
+  // deal page's own list query (same key); a role that cannot read it (403) falls back to the summary's row.
+  const dealRowsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketIdParam)),
+    queryFn: () => api.dealQuotations.listForTicket(Number(ticketIdParam)).then((r) => r?.items ?? []),
+    enabled: !id && Boolean(ticketIdParam),
+    retry: false,
+  });
   function changeDealMode(next) {
     setDealModeChoice(next);
     if (next === 'create' && ticketIdParam) {
@@ -1201,7 +1209,9 @@ export function QuotationEditorPage({ user, showToast }) {
     needsDeal,
     recipientRequired: !quotation,
     recipientType,
-    liveDirectQuotation: !quotation && !isInlineCreate ? (ticket?.liveDirectQuotation ?? null) : null,
+    liveDirectQuotation: !quotation && !isInlineCreate
+      ? [ticket?.liveDirectQuotation, ...(dealRowsQuery.data ?? []).filter((q) => q.origin === 'DEAL_DIRECT')].filter(Boolean)
+      : null,
     dealStatus: ticket?.status ?? 'draft',
     // One pricing route per deal: a NEW quotation on a picked deal that holds a live pricing request
     // (DealQuotationService#create 409s it).
@@ -1212,7 +1222,7 @@ export function QuotationEditorPage({ user, showToast }) {
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, ticket, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
+    needsDeal, quotation, recipientType, ticket, dealRowsQuery.data, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;

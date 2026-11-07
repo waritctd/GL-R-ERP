@@ -1095,6 +1095,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // open revision draft hanging off it. Same query key as DealDocumentRegister, so one fetch.
   const dealQuotationRows = dealQuotationsQuery.data ?? [];
   const confirmedRow = dealQuotationRows.find((q) => q.id === confirm?.quotationId);
+  // What confirming from `quotationId` cancels (DealQuotationRepository#cancelOtherOpenDirectQuotations).
+  const openDirectRowsOtherThan = (quotationId) => dealQuotationRows.filter(
+    (q) => q.origin === 'DEAL_DIRECT' && q.id !== quotationId && (q.docStatus === 'DRAFT' || q.docStatus === 'PENDING_APPROVAL'),
+  );
   const reviseCandidate = dealQuotationRows
     .filter((q) => canReviseDealQuotation(user, q, orderConfirmationOf(ticket?.events)))
     // The server refuses a revise on a SUPERSEDED/CANCELLED request's quotation (409).
@@ -1117,7 +1121,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
   // At the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา: the client may simply accept the original.
-  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
+  // The summary serves only the newest live direct quotation; an APPROVED one beside a newer owner/buyer
+  // DRAFT/PENDING is read off the deal's rows so ⋯ can still confirm it (only the owner may; the confirm needs 'draft').
+  const approvedDirect = isOwner && (summary.status ?? 'draft') === 'draft'
+    ? dealQuotationRows.filter((q) => q.origin === 'DEAL_DIRECT' && q.docStatus === 'APPROVED')
+      .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null)
+    : null;
+  const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, {
+    reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items,
+    approvedDirect: approvedDirect && { id: approvedDirect.id, number: approvedDirect.number }, primary: workState.action,
+  });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   const confirmDirectSecondary = secondaryActions.find((action) => action.key === 'confirm_order_direct') ?? null;
@@ -2627,6 +2640,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         open={confirm?.kind === 'confirmOrderDirect'}
         number={confirm?.number}
         depositPercent={confirmedRow?.depositPercent}
+        cancelledNumbers={confirm?.kind === 'confirmOrderDirect' ? openDirectRowsOtherThan(confirm.quotationId).map((q) => q.number) : undefined}
         cancelLabel="ปิด"
         // Until the row is read the deposit wording (it may be 0%) is unknown: no confirm yet.
         busy={confirmOrderDirectMutation.isPending || (confirm?.kind === 'confirmOrderDirect' && !confirmedRow)}

@@ -31,3 +31,21 @@ describe('ConfirmOrderDialog deposit wording', () => {
     expect(text).not.toContain('ไม่เก็บมัดจำ');
   });
 });
+
+// Confirming auto-cancels the deal's OTHER open direct quotations (DealQuotationService#confirmOrderFromDirectQuotation):
+// the dialog names them before the irreversible click.
+describe('ConfirmOrderDialog auto-cancelled quotations', () => {
+  it('names every open quotation that will be cancelled', () => {
+    const text = open({ depositPercent: 30, cancelledNumbers: ['QT-2026-0078-1', 'QT-2026-0080-1'] });
+    expect(text).toContain('จะถูกยกเลิกอัตโนมัติ');
+    expect(text).toContain('QT-2026-0078-1');
+    expect(text).toContain('QT-2026-0080-1');
+    expect(text).toContain('ย้อนกลับไม่ได้');
+  });
+
+  it.each([undefined, []])('cancelledNumbers %j: the copy is unchanged', (cancelledNumbers) => {
+    const text = open({ depositPercent: 30, cancelledNumbers });
+    expect(text).not.toContain('อัตโนมัติ');
+    expect(text).toContain('จากนั้นออกใบแจ้งรับมัดจำ');
+  });
+});
