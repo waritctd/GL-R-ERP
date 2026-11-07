@@ -194,7 +194,9 @@ public class DealPartyService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เหตุผลที่ไม่ได้งานไม่ถูกต้อง");
         }
         List<DealPartyDto> others = buyers.values().stream()
-            .filter(p -> !awardedIds.contains(p.id()) && DealPartyDtos.IN_RUNNING.contains(p.status()))
+            // Only contractors who actually bid lose; a party that never quoted (ACTIVE) is left as it is.
+            .filter(p -> !awardedIds.contains(p.id())
+                && (DealPartyDtos.STATUS_QUOTED.equals(p.status()) || DealPartyDtos.STATUS_NEGOTIATING.equals(p.status())))
             .toList();
 
         // 2. extra winners -> child deals, BEFORE the primary confirmation cancels the deal's other open documents.

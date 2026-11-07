@@ -14,7 +14,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      tickets: { get: vi.fn(), create: vi.fn() },
+      // parties / addParty / openForProject: deal parties (deal-party-model.md). Default to "none"
+      // (see the top-level beforeEach below) so every older test sees today's single-party deal.
+      tickets: { get: vi.fn(), create: vi.fn(), parties: vi.fn(), addParty: vi.fn(), openForProject: vi.fn() },
       // A NEW quotation on a picked deal reads the deal's pricing requests (one pricing route per
       // deal). None here: every test in this file is about the editor itself.
       pricingRequests: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
@@ -85,6 +87,11 @@ function baseQuotation(overrides = {}) {
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  api.tickets.parties.mockResolvedValue({ parties: [] });
+  api.tickets.openForProject.mockResolvedValue({ deals: [] });
+});
 
 describe('QuotationEditorPage item calc wiring', () => {
   beforeEach(() => {
@@ -853,6 +860,78 @@ describe('QuotationEditorPage inline deal creation', () => {
   // The retry reuses the deal it already made. That deal was made for ONE customer and ONE project,
   // so it may be reused only while the form still says those two; otherwise a quotation saved onto
   // the earlier choice's deal would sit in another customer's records.
+  // deal-party-model.md, prototype screen 4: a project the rep already has an open deal on.
+  describe('โครงการนี้มีดีลของคุณอยู่แล้ว', () => {
+    const openDeal = {
+      id: 18, code: 'DL-2026-0280', projectName: testProject.name, salesStage: 'QUOTE_BUYER', customerName: 'บริษัท เดิม จำกัด',
+      buyerCount: 2, parties: [
+        { id: 1, customerName: 'บริษัท ตัวอย่าง คอนสตรัคชั่น', role: 'BUYER', status: 'QUOTED' },
+        { id: 2, customerName: 'บจก.สมมติ ก่อสร้าง', role: 'BUYER', status: 'QUOTED' },
+      ],
+    };
+    beforeEach(() => {
+      api.tickets.openForProject.mockResolvedValue({ deals: [openDeal] });
+      api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+      api.customers.contacts.mockResolvedValue({ contacts: [] });
+      api.dealQuotations.displayNameOptions.mockResolvedValue({ items: [] });
+    });
+
+    it('asks once customer and project are chosen, defaulting to add the customer to the existing deal', async () => {
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      const notice = within(await screen.findByTestId('existing-deal-notice'));
+      expect(api.tickets.openForProject).toHaveBeenCalledWith(testProject.name);
+      expect(notice.getByText('โครงการนี้มีดีลของคุณอยู่แล้ว')).toBeTruthy();
+      expect(notice.getByText('DL-2026-0280')).toBeTruthy();
+      expect(notice.getByText('2 ผู้รับเหมา')).toBeTruthy();
+      expect(notice.getByText('บริษัท ตัวอย่าง คอนสตรัคชั่น · บจก.สมมติ ก่อสร้าง')).toBeTruthy();
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในดีลเดิม`) }).checked).toBe(true);
+      expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย');
+      // Attaching makes no deal, so ช่องทางรับงาน is not asked.
+      expect(screen.queryByRole('group', { name: 'ช่องทางรับงาน' })).toBeNull();
+    });
+
+    it('saving adds the customer as a BUYER party, then creates the quotation for that party on the existing deal', async () => {
+      api.tickets.addParty.mockResolvedValue({ party: { id: 31 } });
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      await screen.findByTestId('existing-deal-notice');
+      await fillOneValidItem();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ partyId: 31 })));
+      expect(api.tickets.addParty).toHaveBeenCalledWith(18, { customerId: testCustomer.id, role: 'BUYER' });
+      expect(api.tickets.create).not.toHaveBeenCalled();
+      expect(await screen.findByText('navigated-to-99')).toBeTruthy();
+    });
+
+    it('a customer already bidding on the deal is reused, not refused', async () => {
+      api.tickets.addParty.mockRejectedValue(Object.assign(new Error('อยู่ในดีลนี้แล้ว'), { status: 409 }));
+      api.tickets.parties.mockResolvedValue({ parties: [{ id: 44, customerId: testCustomer.id, role: 'BUYER' }] });
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      await screen.findByTestId('existing-deal-notice');
+      await fillOneValidItem();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ partyId: 44 })));
+    });
+
+    it('สร้างดีลใหม่แยกต่างหาก keeps the inline-create path unchanged', async () => {
+      api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      fireEvent.click(within(await screen.findByTestId('existing-deal-notice')).getByRole('radio', { name: /สร้างดีลใหม่แยกต่างหาก/ }));
+      expect(screen.getByTestId('existing-deal-result').textContent).toContain('จะสร้างดีลใหม่');
+      pickEntryChannel();
+      await fillOneValidItem();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(42, expect.not.objectContaining({ partyId: expect.anything() })));
+      expect(api.tickets.addParty).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the deal a retry reuses is the one made for the customer and project on the form', () => {
     const otherCustomer = { id: 2, name: 'บริษัท รุ่งเรือง ดีเวลลอปเมนท์ จำกัด', taxId: '0105565067890' };
     // The same id as testProject, on purpose: an id is whatever the server gave, and a different
@@ -1036,6 +1115,61 @@ function groupedItem(seq, locationLabel, model) {
     descriptionLine: `กระเบื้อง รุ่น ${model}`, sizeLine: '', calculationLine: '',
   };
 }
+
+// deal-party-model.md: /quotations/new?ticket=<deal>&party=<party> — the deal page's เสนอราคา for one
+// contractor. The document belongs to that party, addressed to ITS customer, and the one-live-quotation
+// block is per party.
+describe('QuotationEditorPage — a quotation for one party of a multi-bidder deal', () => {
+  const parties = [
+    {
+      id: 1, ticketId: 18, customerId: 5, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', role: 'BUYER', status: 'QUOTED',
+      latestQuotationId: 2, latestQuotationNumber: 'QT-2026-0002', latestQuotationStatus: 'PENDING_APPROVAL',
+    },
+    {
+      id: 3, ticketId: 18, customerId: 7, customerName: 'บริษัท สมมติ ก่อสร้าง จำกัด', role: 'BUYER', status: 'ACTIVE',
+      latestQuotationId: null, latestQuotationNumber: null, latestQuotationStatus: null,
+    },
+  ];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.parties.mockResolvedValue({ parties });
+    api.tickets.openForProject.mockResolvedValue({ deals: [] });
+    api.customers.search.mockResolvedValue({ customers: [] });
+    api.dealQuotations.displayNameOptions.mockResolvedValue({ items: [] });
+    api.customers.contacts.mockImplementation((customerId) => Promise.resolve({
+      contacts: customerId === 7 ? [{ id: 9, customerId: 7, firstName: 'ประมูล', lastName: 'หนึ่ง' }] : [],
+    }));
+    api.tickets.get.mockResolvedValue({
+      ticket: {
+        summary: {
+          id: 18, code: 'PR-2026-0018', createdById: 6, createdByName: 'คุณสมหมาย ขายดี', salesStage: 'QUOTE_BUYER', lifecycle: 'ACTIVE',
+          customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด', customerId: 5, projectName: 'ศูนย์การค้า Fashion Island',
+          // The deal-wide field names the OTHER party's live quotation.
+          liveDirectQuotation: { id: 2, number: 'QT-2026-0002', docStatus: 'PENDING_APPROVAL', recipientType: 'BUYER' },
+        },
+      },
+    });
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 77 } });
+  });
+
+  it("?party= addresses the party's customer, lists its contacts, is not blocked by another party's live quotation, and sends partyId", async () => {
+    renderEditor('/quotations/new?ticket=18&party=3');
+    await waitFor(() => expect(api.tickets.parties).toHaveBeenCalledWith(18));
+    await waitFor(() => expect(api.customers.contacts).toHaveBeenCalledWith(7));
+    expect((await screen.findAllByText('บริษัท สมมติ ก่อสร้าง จำกัด')).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('deal-picker-live-quotation')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ partyId: 3 })));
+  });
+
+  it('without ?party= the quotation is the deal customer\'s, whose own live quotation still blocks', async () => {
+    renderEditor('/quotations/new?ticket=18');
+    expect(await screen.findByTestId('deal-picker-live-quotation')).toBeTruthy();
+  });
+});
 
 describe('QuotationEditorPage ตำแหน่งติดตั้ง groups (owner feedback F1, 2026-09-10)', () => {
   beforeEach(() => {

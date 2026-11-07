@@ -403,6 +403,26 @@ export function isLiveDirectQuotation(live) {
   return Boolean(live) && LIVE_DIRECT_QUOTATION_STATUSES.has(live.docStatus);
 }
 
+/**
+ * V204 deal parties (docs/decisions/deal-party-model.md): which party a NEW quotation on a deal will
+ * belong to. The named one (`?party=`), else — as DealQuotationService#create defaults it — the deal's
+ * own customer's party, preferring the recipient's role. Null when the parties are not known.
+ */
+export function quotationTargetParty(parties, { partyId = null, customerId = null, recipientType = null } = {}) {
+  if (!Array.isArray(parties)) return null;
+  if (partyId != null) return parties.find((p) => Number(p.id) === Number(partyId)) ?? null;
+  const own = parties.filter((p) => customerId != null && Number(p.customerId) === Number(customerId));
+  return own.find((p) => p.role === recipientType) ?? own[0] ?? null;
+}
+
+/** The live direct quotation of ONE party (the create-time 409 is per party since V204), in the
+ * `{ id, number, docStatus }` shape TicketSummaryDto.liveDirectQuotation carries, or null. */
+export function liveQuotationOfParty(party) {
+  if (!party || party.latestQuotationId == null) return null;
+  const live = { id: party.latestQuotationId, number: party.latestQuotationNumber, docStatus: party.latestQuotationStatus };
+  return isLiveDirectQuotation(live) ? live : null;
+}
+
 /** N6's reason, word for word the server's 409: the editor disables บันทึกร่าง with it BEFORE the rep
  * reaches that refusal (DESIGN.md §14: a disabled action says why). */
 function liveDirectQuotationBlockMessage(live) {
