@@ -31,6 +31,7 @@ import {
   isMixedPriceMode, isPriceModeAvailable, mixedPriceModeAvailable, PRICE_MODE_MIXED, PRICE_MODE_MIXED_OPTION,
   rowPriceMode, summarizeRowPriceModes,
   dealQuotationStatusLabel, isDealQuotationEditable, isDealQuotationReadOnlyViewer,
+  liveQuotationOfParty, quotationTargetParty,
   duplicateLocationLabelGroupIds, emptyLocationGroupIds,
   newLocationGroupId,
   REMAINDER_MODE_OPTIONS, UNLABELLED_LOCATION_TEXT, validateQuotationItem, VALIDITY_DAYS_OPTIONS,
@@ -38,7 +39,8 @@ import {
 } from './quotationMeta.js';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
-import { DealCustomerCard, QuotationRecipientField } from './DealCustomerCard.jsx';
+import { DealCustomerCard, ExistingDealNotice, QuotationRecipientField } from './DealCustomerCard.jsx';
+import { offRoutePartiesFor, recipientRouteRefusal, useStageCatalog } from '../tickets/stageCatalog.js';
 import { useDealHasLivePricingRequest } from './DealPicker.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
@@ -250,6 +252,28 @@ export function QuotationEditorPage({ user, showToast }) {
   });
   const ticket = ticketQuery.data ?? null;
 
+  // V204 deal parties (deal-party-model.md). `?party=` names the contractor a NEW quotation is for
+  // (the deal page's เสนอราคา link); an existing quotation carries its own partyId. The party's
+  // customer, not the deal's, is who the document is addressed to and whose contacts are offered.
+  const partyParam = !id ? searchParams.get('party') : null;
+  const partiesQuery = useQuery({
+    queryKey: queryKeys.ticketParties(effectiveTicketId),
+    queryFn: () => api.tickets.parties(effectiveTicketId).then((r) => r?.parties ?? []),
+    enabled: Boolean(effectiveTicketId) && Boolean(ticket) && ['sales', 'sales_manager', 'ceo'].includes(user?.role),
+    retry: false,
+  });
+  const dealParties = partiesQuery.data;
+  const namedParty = id
+    ? (quotation?.partyId != null ? (dealParties ?? []).find((p) => Number(p.id) === Number(quotation.partyId)) ?? null : null)
+    : (partyParam ? quotationTargetParty(dealParties, { partyId: partyParam }) : null);
+  // Only a party whose customer differs from the deal's changes anything on this page.
+  const partyCustomer = namedParty && Number(namedParty.customerId) !== Number(ticket?.customerId)
+    ? { id: namedParty.customerId, name: namedParty.customerName }
+    : null;
+  // The customer record this page reads and edits: the party's, else the deal's.
+  const recordCustomerId = partyCustomer?.id ?? ticket?.customerId ?? null;
+  const recordCustomerName = partyCustomer ? partyCustomer.name : (ticket?.customerName ?? null);
+
   // "ยืนยันคำสั่งซื้อ". An APPROVED direct quotation's deal either still takes the order (offer the
   // confirm) or already has it (offer "ไปที่ดีล"). The discriminator is the backend's OWN
   // precondition: the deal's `status === 'draft'` (DealQuotationService#confirmOrderFromDirectQuotation
@@ -280,14 +304,14 @@ export function QuotationEditorPage({ user, showToast }) {
   // the row is not in those 30 (a name that is a substring of 30+ others), it falls back to the
   // quotation's snapshot below: degraded, never wrong about which customer.
   const customerRecordQuery = useQuery({
-    queryKey: queryKeys.customerRecord(ticket?.customerId),
+    queryKey: queryKeys.customerRecord(recordCustomerId),
     queryFn: async () => {
-      const res = await api.customers.search(ticket.customerName ?? '');
-      return (res?.customers ?? []).find((c) => Number(c.id) === Number(ticket.customerId)) ?? null;
+      const res = await api.customers.search(recordCustomerName ?? '');
+      return (res?.customers ?? []).find((c) => Number(c.id) === Number(recordCustomerId)) ?? null;
     },
     // `ticket` is null on the inline-create path (DealCustomerCard holds the full record there), so
     // this only ever runs on the ?ticket= and editable-draft paths.
-    enabled: Boolean(ticket?.customerId) && (!id || quotation?.docStatus === 'DRAFT'),
+    enabled: Boolean(recordCustomerId) && (!id || quotation?.docStatus === 'DRAFT'),
   });
   // What the rep just saved through CustomerDetailsFields, until the refetch catches up.
   const [customerOverride, setCustomerOverride] = useState(null);
@@ -328,6 +352,14 @@ export function QuotationEditorPage({ user, showToast }) {
     ticketIdParam ? Number(ticketIdParam) : null,
     !id && Boolean(ticketIdParam),
   );
+  // N6 over EVERY live direct quotation: the summary serves only the newest, the server checks them all. The
+  // deal page's own list query (same key); a role that cannot read it (403) falls back to the summary's row.
+  const dealRowsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketIdParam)),
+    queryFn: () => api.dealQuotations.listForTicket(Number(ticketIdParam)).then((r) => r?.items ?? []),
+    enabled: !id && Boolean(ticketIdParam),
+    retry: false,
+  });
   function changeDealMode(next) {
     setDealModeChoice(next);
     if (next === 'create' && ticketIdParam) {
@@ -342,6 +374,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // ผู้รับใบเสนอราคา. '' = not chosen. Seeded from the stored row on an existing quotation, and on the
   // ?ticket= path preselected from the deal's own stage until the rep touches it (see the effect below).
   const [recipientType, setRecipientType] = useState('');
+  const { catalog: stageCatalog, isLoading: stageCatalogLoading } = useStageCatalog();
   const recipientTouchedRef = useRef(false);
   // Once-per-ticket seed guards for the ?ticket= path (โครงการ and ผู้รับ — see their effects below).
   // Declared here, ABOVE the main seeding effect, because that effect clears them when the rep picks
@@ -430,11 +463,30 @@ export function QuotationEditorPage({ user, showToast }) {
     setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
   }
-  // The deals the inline flow's own `tickets.create` made on this visit, by the customer and project
-  // each was made for. Kept across a later dealQuotations.create failure so a retry reuses that
+  // The deals the inline flow's own `tickets.create` made on this visit, by the customer, project and
+  // channel each was made for. Kept across a later dealQuotations.create failure so a retry reuses that
   // ticket instead of minting a second deal (see handleInlineCreate).
   const [createdTicketIds, setCreatedTicketIds] = useState({});
   const [creatingDeal, setCreatingDeal] = useState(false);
+
+  // ── "โครงการนี้มีดีลของคุณอยู่แล้ว" (deal-party-model.md, prototype screen 4) ─────────────────────
+  // On a NEW deal, once customer and project are both chosen: does this rep already have an open,
+  // pre-outcome deal on that project? If so the default is to add the customer to it as another
+  // contractor (a party) instead of minting a second deal for the same opportunity.
+  const openDealsQuery = useQuery({
+    queryKey: queryKeys.openDealsForProject(dealForm.project?.name),
+    queryFn: () => api.tickets.openForProject(dealForm.project.name).then((r) => r?.deals ?? []),
+    enabled: isInlineCreate && dealMode === 'create' && Boolean(dealForm.customer) && Boolean(dealForm.project?.name),
+    retry: false,
+  });
+  const openDeals = isInlineCreate && dealMode === 'create' && dealForm.customer && dealForm.project
+    ? (openDealsQuery.data ?? []) : [];
+  const existingDeal = openDeals[0] ?? null;
+  const [attachChoice, setAttachChoice] = useState('existing');
+  const attachingToDeal = Boolean(existingDeal) && attachChoice === 'existing';
+  // The party each attach made on this visit (by deal and customer), so a retry after a failed
+  // quotation create reuses it.
+  const [attachedPartyIds, setAttachedPartyIds] = useState({});
 
   const [items, setItems] = useState([]);
   // v3: ส่วนลดพิเศษ rows live in their OWN ordered list, not in `items`. They always print LAST
@@ -639,12 +691,21 @@ export function QuotationEditorPage({ user, showToast }) {
   // shape as the โครงการ seed above, and never over a choice the rep already made. When the stage is
   // not a quote stage, the deal's own entry channel names the recipient (UNSPECIFIED names none, so
   // the rep is still asked).
+  // Never an off-route party (owner ruling 2026-11-07: the server 409s it): each hint that names one falls through
+  // to the next, and the channel's own party is on its route by construction. Waits for the served route while it
+  // loads; if it never loads there is no route to filter by, and the hints stand.
   useEffect(() => {
-    if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
+    if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id || stageCatalogLoading) return;
     recipientSeededForTicket.current = ticket.id;
     if (recipientTouchedRef.current) return;
-    setRecipientType(recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
-  }, [id, ticket]);
+    const requested = searchParams.get('recipient');
+    const offRoute = offRoutePartiesFor(stageCatalog, ticket.entryChannel);
+    setRecipientType([
+      quotationRecipientOption(requested) && requested,
+      recipientForDealStage(ticket.salesStage),
+      recipientForEntryChannel(ticket.entryChannel),
+    ].find((code) => code && !offRoute?.has(code)) || '');
+  }, [id, ticket, searchParams, stageCatalog, stageCatalogLoading]);
 
   function updateItem(clientId, patch) {
     setDirty(true);
@@ -1155,18 +1216,33 @@ export function QuotationEditorPage({ user, showToast }) {
   // บันทึกร่าง/ส่งขออนุมัติ buttons (blocking entries only: QUOTATION_BLOCKING_CHECKS, exactly what the
   // backend already refuses), and the ส่งขออนุมัติ confirm dialog's list of optional gaps. Advisory
   // only; the server re-validates regardless.
-  const snapshotCustomer = ticket?.customerId
+  const snapshotCustomer = recordCustomerId
     ? {
-      id: ticket.customerId,
-      name: quotation?.customerName ?? ticket.customerName,
+      id: recordCustomerId,
+      name: quotation?.customerName ?? recordCustomerName,
       // Raw from the DTO: a real one always carries these (null when empty); `undefined` on
       // anything else reads as "unknown" and raises no warning.
       ...(quotation ? { address: quotation.customerAddress, taxId: quotation.customerTaxId, phone: quotation.customerPhone } : {}),
     }
     : null;
-  const summaryCustomer = (customerOverride && Number(customerOverride.id) === Number(ticket?.customerId) ? customerOverride : null)
+  const summaryCustomer = (customerOverride && Number(customerOverride.id) === Number(recordCustomerId) ? customerOverride : null)
     ?? customerRecordQuery.data ?? snapshotCustomer;
   const checklistCustomer = isInlineCreate ? dealForm.customer : summaryCustomer;
+  // The one-live-direct-quotation block is per PARTY since V204: a deal whose OTHER contractor holds
+  // a live quotation must not stop this party's. With the parties read, it is this quotation's party
+  // (?party=, else the deal customer's party for the chosen recipient); before that, the deal-wide
+  // summary field, which the server's own 409 backs up either way.
+  const targetParty = namedParty ?? quotationTargetParty(dealParties, { customerId: ticket?.customerId, recipientType });
+  const pickedDealLiveQuotation = dealParties !== undefined && (targetParty || partyParam)
+    ? liveQuotationOfParty(targetParty)
+    : (ticket?.liveDirectQuotation ?? null);
+  // V204: with the parties read, only THIS party's live quotation can block (the server's lock is per party);
+  // before that, every live row on the deal (the server checks all of them) as the route rule needs.
+  const dealLiveRows = [ticket?.liveDirectQuotation, ...(dealRowsQuery.data ?? []).filter((q) => q.origin === 'DEAL_DIRECT')].filter(Boolean);
+  const checklistLiveRows = dealParties !== undefined && (targetParty || partyParam)
+    ? [pickedDealLiveQuotation].filter(Boolean)
+    : dealLiveRows;
+  const checklistDealStatus = ticket?.status ?? 'draft';
   const checklistProjectName = isInlineCreate ? null : (quotation ? quotation.projectName : (ticket ? ticket.projectName : undefined));
   const duplicateGroupIndex = duplicateGroupIds.size
     ? groups.findIndex((g) => duplicateGroupIds.has(g.groupId)) : null;
@@ -1174,7 +1250,8 @@ export function QuotationEditorPage({ user, showToast }) {
     isInlineCreate,
     customer: checklistCustomer,
     hasProject: Boolean(dealForm.project),
-    hasEntryChannel: Boolean(dealForm.entryChannel) && dealForm.entryChannel !== 'UNSPECIFIED',
+    // Attaching to an existing deal makes no deal, so it needs no ช่องทางรับงาน.
+    hasEntryChannel: attachingToDeal || (Boolean(dealForm.entryChannel) && dealForm.entryChannel !== 'UNSPECIFIED'),
     projectName: checklistProjectName,
     items,
     itemErrorsByRow,
@@ -1199,17 +1276,22 @@ export function QuotationEditorPage({ user, showToast }) {
     needsDeal,
     recipientRequired: !quotation,
     recipientType,
-    liveDirectQuotation: !quotation && !isInlineCreate ? (ticket?.liveDirectQuotation ?? null) : null,
+    // Only a NEW or CHANGED recipient: the server accepts a stored off-route one re-sent unchanged on a DRAFT.
+    offRouteRecipientMessage: !quotation || recipientType !== quotation.recipientType
+      ? recipientRouteRefusal(stageCatalog, isInlineCreate ? dealForm.entryChannel : ticket?.entryChannel, recipientType)
+      : null,
+    liveDirectQuotation: !quotation && !isInlineCreate ? checklistLiveRows : null,
+    dealStatus: checklistDealStatus,
     // One pricing route per deal: a NEW quotation on a picked deal that holds a live pricing request
     // (DealQuotationService#create 409s it).
     livePricingRequest: !quotation && !isInlineCreate && dealHasLivePricingRequest,
     // V192.3 — a typed-but-malformed address is what DealQuotationService refuses on every save.
     orderedByEmail: terms.orderedByEmail,
     missingLeadTimeSeqs,
-  }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, checklistProjectName, items, itemErrorsByRow,
+  }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, attachingToDeal, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, ticket, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
+    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs, stageCatalog, ticket?.entryChannel]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1430,7 +1512,11 @@ export function QuotationEditorPage({ user, showToast }) {
   }
 
   const createMutation = useMutation({
-    mutationFn: () => api.dealQuotations.create(effectiveTicketId, buildUpsertPayload()),
+    mutationFn: () => api.dealQuotations.create(effectiveTicketId, {
+      ...buildUpsertPayload(),
+      // ?party= (the deal page's เสนอราคา for one contractor): the document belongs to that party.
+      ...(partyParam ? { partyId: Number(partyParam) } : {}),
+    }),
     onSuccess: async (res) => {
       // NOT applySavedQuotation: a brand-new quotation has no prior editSeq to compare, and this
       // navigates to /quotations/:id, which re-mounts the page and re-hydrates from the server. KNOWN,
@@ -1654,13 +1740,66 @@ export function QuotationEditorPage({ user, showToast }) {
   // If tickets.create fails, the form stays as the user left it (nothing resets on error) and the
   // backend's Thai message is toasted. If dealQuotations.create then fails, the ticket id stays in
   // createdTicketIds so the next click retries only the quotation instead of minting a second ticket.
-  async function handleInlineCreate() {
+  // The success tail every first save of a NEW quotation shares.
+  async function finishFirstSave(quotationRes) {
+    setDirty(false);
+    setSaveError(null);
+    setSaveErrorLiveQuotationId(null);
+    rememberDefaults();
+    queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+    queryClient.invalidateQueries({ queryKey: ['tickets'] });
+    showToast('success', 'บันทึกร่างแล้ว');
+    await attachPending(quotationRes.quotation.id);
+    navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
+  }
+
+  // "เพิ่ม {customer} เป็นผู้รับเหมาในดีลเดิม": the customer joins the existing deal as a BUYER party
+  // (reusing its party when it already has one: the add then answers 409), and the quotation is
+  // created on that deal for that party.
+  async function handleAttachCreate() {
     setCreatingDeal(true);
     try {
-      // A deal is remembered under the customer and project it was made for, and reused for those
-      // two only: after a refusal the rep can choose another customer or project before saving
-      // again, and that quotation must not land on the earlier choice's deal.
-      const madeFor = `${dealForm.customer.id}/${dealForm.project.id}`;
+      const deal = existingDeal;
+      const madeFor = `${deal.id}/${dealForm.customer.id}`;
+      let partyId = attachedPartyIds[madeFor];
+      if (!partyId) {
+        try {
+          const res = await api.tickets.addParty(deal.id, {
+            customerId: dealForm.customer.id, role: 'BUYER', ...(contact?.id ? { contactId: contact.id } : {}),
+          });
+          partyId = res?.party?.id;
+        } catch (error) {
+          if (error?.status !== 409) throw error;
+          const res = await api.tickets.parties(deal.id);
+          partyId = (res?.parties ?? []).find((p) => Number(p.customerId) === Number(dealForm.customer.id) && p.role === 'BUYER')?.id;
+          if (!partyId) throw error;
+        }
+        if (!partyId) throw new Error('เพิ่มผู้รับเหมาในดีลไม่สำเร็จ');
+        setAttachedPartyIds((made) => ({ ...made, [madeFor]: partyId }));
+      }
+      const quotationRes = await api.dealQuotations.create(deal.id, { ...buildUpsertPayload(), partyId });
+      await finishFirstSave(quotationRes);
+    } catch (error) {
+      setSaveError(error.message || 'บันทึกไม่สำเร็จ');
+      setSaveErrorLiveQuotationId(error.details?.liveQuotationId ?? null);
+      showToast('error', error.message || 'บันทึกไม่สำเร็จ');
+    } finally {
+      setCreatingDeal(false);
+    }
+  }
+
+  async function handleInlineCreate() {
+    if (attachingToDeal) {
+      await handleAttachCreate();
+      return;
+    }
+    setCreatingDeal(true);
+    try {
+      // A deal is remembered under the customer, project and ช่องทางรับงาน it was made for, and reused for
+      // those only: after a refusal the rep can choose another customer, project or channel before saving
+      // again, and that quotation must not land on the earlier choice's deal (a different channel is a
+      // different route: the server refuses a recipient off it, and a deal's channel is not corrected here).
+      const madeFor = `${dealForm.customer.id}/${dealForm.project.id}/${dealForm.entryChannel}`;
       let ticketId = createdTicketIds[madeFor];
       if (!ticketId) {
         const ticketRes = await api.tickets.create({
@@ -1686,15 +1825,7 @@ export function QuotationEditorPage({ user, showToast }) {
         setCreatedTicketIds((made) => ({ ...made, [madeFor]: ticketId }));
       }
       const quotationRes = await api.dealQuotations.create(ticketId, buildUpsertPayload());
-      setDirty(false);
-      setSaveError(null);
-      setSaveErrorLiveQuotationId(null);
-      rememberDefaults();
-      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
-      queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      showToast('success', 'บันทึกร่างแล้ว');
-      await attachPending(quotationRes.quotation.id);
-      navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
+      await finishFirstSave(quotationRes);
     } catch (error) {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
       setSaveErrorLiveQuotationId(error.details?.liveQuotationId ?? null);
@@ -1956,7 +2087,7 @@ export function QuotationEditorPage({ user, showToast }) {
     <div className="col-span-full">
       <QuotationContactPicker
         ref={contactPickerRef}
-        customerId={ticket?.customerId ?? (isInlineCreate ? dealForm.customer?.id : null) ?? null}
+        customerId={recordCustomerId ?? (isInlineCreate ? dealForm.customer?.id : null) ?? null}
         customerName={customerName}
         value={contact}
         onChange={(next) => { setContact(next); setDirty(true); }}
@@ -2258,7 +2389,19 @@ export function QuotationEditorPage({ user, showToast }) {
               user={user}
               mode={dealMode}
               onModeChange={changeDealMode}
-              selectedDeal={ticketIdParam ? ticket : null}
+              selectedDeal={ticketIdParam && ticket ? (partyCustomer ? { ...ticket, customerName: partyCustomer.name } : ticket) : null}
+              selectedDealLive={ticketIdParam && dealParties !== undefined ? pickedDealLiveQuotation : undefined}
+              attachingToDeal={attachingToDeal}
+              existingDealNotice={existingDeal ? (
+                <ExistingDealNotice
+                  deal={existingDeal}
+                  customerName={dealForm.customer?.name}
+                  repName={user?.name}
+                  choice={attachChoice}
+                  onChoice={(next) => { setAttachChoice(next); setDirty(true); }}
+                  moreCount={openDeals.length - 1}
+                />
+              ) : null}
               value={{ ...dealForm, recipientType }}
               onChange={updateDealForm}
               // "คัดลอกเป็นใบใหม่": same job, different bidder. The source's project name is offered
@@ -2292,7 +2435,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 {/* ผู้ติดต่อ, then the customer's phone/email, then the designer: one group spaced
                     like the rest of the page (gap-3). */}
                 <div className="grid gap-3">
-                  {dealMode === 'create' ? (
+                  {dealMode === 'create' && !attachingToDeal ? (
                     <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
                       เจ้าของงาน
                       <select
@@ -2405,7 +2548,7 @@ export function QuotationEditorPage({ user, showToast }) {
                         value={recipientType}
                         onChange={changeRecipient}
                         idPrefix="quotation-recipient-edit"
-                        // The off-route note reads this draft's deal's channel (the deal summary is
+                        // The off-route pills read this draft's deal's channel (the deal summary is
                         // fetched for a DRAFT; see ticketQuery).
                         entryChannel={ticket?.entryChannel ?? null}
                       />

@@ -8,7 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
+import th.co.glr.hr.ticket.DealRoute;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.EntryChannel;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketSummaryDto;
@@ -210,5 +212,77 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(recipientColumns(created.id()))
             .containsEntry("recipient_type", "DESIGNER")
             .containsEntry("recipient_label", "คุณสมชาย (ผู้ออกแบบ)");
+    }
+
+    // ── update: route (owner ruling 2026-11-07). Only a CHANGE of recipient to an OFF-route party is refused. ──
+
+    @Test
+    void update_changingTheRecipientToAnOffRouteParty_is409_withTheRouteSentence_andChangesNothing() {
+        long owner = deal(salesActor, EntryChannel.OWNER_DIRECT);
+        DealQuotationDto draft = quotationService.create(owner, draft("OWNER"), salesActor);
+        int events = eventCount(owner, TicketEventKind.STAGE_CHANGED);
+
+        ApiException e = refusal(() -> quotationService.update(draft.id(), draft("DESIGNER"), salesActor), HttpStatus.CONFLICT);
+
+        assertThat(e.getMessage()).isEqualTo(
+            "ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+        assertThat(e.getMessage()).isEqualTo(DealRoute.refusalMessage(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_DESIGN_SIDE));
+        assertThat(recipientColumns(draft.id())).containsEntry("recipient_type", "OWNER");
+        assertThat(summary(owner).salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
+        assertThat(eventCount(owner, TicketEventKind.STAGE_CHANGED)).isEqualTo(events);
+
+        long buyerDirect = deal(salesActor, EntryChannel.BUYER_DIRECT);
+        DealQuotationDto buyerDraft = quotationService.create(buyerDirect, draft("BUYER"), salesActor);
+        for (String off : new String[] {"DESIGNER", "OWNER"}) {
+            ApiException b = refusal(() -> quotationService.update(buyerDraft.id(), draft(off), salesActor), HttpStatus.CONFLICT);
+            assertThat(b.getMessage()).as(off).startsWith("ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ");
+            assertThat(b.getMessage()).as(off).endsWith(" ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+        }
+        assertThat(recipientColumns(buyerDraft.id())).containsEntry("recipient_type", "BUYER");
+    }
+
+    @Test
+    void update_changingTheRecipientToAnOnRouteParty_stillWorks() {
+        long ticket = deal(salesActor, EntryChannel.OWNER_DIRECT);
+        DealQuotationDto draft = quotationService.create(ticket, draft("OWNER"), salesActor);
+
+        assertThat(quotationService.update(draft.id(), draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+    }
+
+    /** The editor re-sends the stored recipient on EVERY save; a draft addressed before the channel was corrected
+     * must stay saveable, and may move to an on-route party — but not to another off-route one. */
+    @Test
+    void update_anUnchangedOffRouteRecipient_isNotRefused_onALegacyDraft() {
+        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+        DealQuotationDto draft = quotationService.create(ticket, draft("DESIGNER"), salesActor);
+        tickets.updateEntryChannel(ticket, EntryChannel.BUYER_DIRECT); // designer AND owner are now off-route
+
+        assertThat(quotationService.update(draft.id(), draft("DESIGNER"), salesActor).recipientType()).isEqualTo("DESIGNER");
+        assertThat(quotationService.update(draft.id(), draft(null), salesActor).recipientType()).isEqualTo("DESIGNER");
+        refusal(() -> quotationService.update(draft.id(), draft("OWNER"), salesActor), HttpStatus.CONFLICT);
+        assertThat(recipientColumns(draft.id())).containsEntry("recipient_type", "DESIGNER");
+        assertThat(quotationService.update(draft.id(), draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");
+    }
+
+    @Test
+    void update_onAnUnspecifiedChannelDeal_changesToAnyParty() {
+        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+        DealQuotationDto draft = quotationService.create(ticket, draft("BUYER"), salesActor);
+        tickets.updateEntryChannel(ticket, EntryChannel.UNSPECIFIED);
+
+        assertThat(quotationService.update(draft.id(), draft("DESIGNER"), salesActor).recipientType()).isEqualTo("DESIGNER");
+        assertThat(quotationService.update(draft.id(), draft("OWNER"), salesActor).recipientType()).isEqualTo("OWNER");
+    }
+
+    /** A REVISION draft of an off-route-addressed quotation re-sends its parent's recipient on save: not refused. */
+    @Test
+    void update_aRevisionDraft_ofAnOffRouteAddressedParent_isNotStranded() {
+        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+        DealQuotationDto parent = approved(ticket, salesActor, "DESIGNER");
+        tickets.updateEntryChannel(ticket, EntryChannel.OWNER_DIRECT);
+        DealQuotationDto revision = quotationService.createRevision(parent.id(), salesActor);
+
+        assertThat(quotationService.update(revision.id(), draft("DESIGNER"), salesActor).recipientType()).isEqualTo("DESIGNER");
     }
 }

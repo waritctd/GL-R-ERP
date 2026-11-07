@@ -11,7 +11,7 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 /**
  * "การติดตามดีล" (Slice B2, handoff 103) — the weekly-report replacement: win%
- * (effective value + rep override), designer/owner/buyer names, and next
+ * (effective value + rep override), designer/owner names (buyers are deal parties), and next
  * follow-up date. Read-only for any viewer sections.dealTracking lets in;
  * `canEdit` narrows further to the deal owner / sales_manager / ceo,
  * mirroring TicketService.requireDealOwnership (see
@@ -61,7 +61,6 @@ export function DealTrackingPanel({
       winProbability: summary.winProbabilityOverride != null ? String(summary.winProbabilityOverride) : '',
       designerName: summary.designerName ?? '',
       ownerName: summary.ownerName ?? '',
-      buyerName: summary.buyerName ?? '',
       nextFollowUpAt: summary.nextFollowUpAt ?? '',
     });
     setEditOpen(true);
@@ -72,7 +71,9 @@ export function DealTrackingPanel({
       winProbability: draft.winProbability === '' ? null : Number(draft.winProbability),
       designerName: draft.designerName.trim() || null,
       ownerName: draft.ownerName.trim() || null,
-      buyerName: draft.buyerName.trim() || null,
+      // Buyers are deal parties now (deal-party-model.md, "ผู้รับเหมาที่เสนอราคา"); the PUT is a full
+      // replace, so the stored free-text value is sent back unchanged rather than cleared.
+      buyerName: summary.buyerName ?? null,
       nextFollowUpAt: draft.nextFollowUpAt || null,
     });
     setEditOpen(false);
@@ -126,14 +127,6 @@ export function DealTrackingPanel({
                   onChange={(e) => setDraft((d) => ({ ...d, ownerName: e.target.value }))}
                 />
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
-                ชื่อผู้ซื้อ
-                <input
-                  type="text" className="text-base"
-                  value={draft.buyerName}
-                  onChange={(e) => setDraft((d) => ({ ...d, buyerName: e.target.value }))}
-                />
-              </label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="primary" disabled={updating} onClick={submitTracking}>
@@ -168,10 +161,6 @@ export function DealTrackingPanel({
                 <span className="text-text-muted">เจ้าของโครงการ</span>
                 <span className="font-bold text-text">{summary.ownerName || '—'}</span>
               </div>
-              <div className="flex items-center justify-between gap-2 border-b border-border-subtle py-1.5 text-sm">
-                <span className="text-text-muted">ผู้ซื้อ</span>
-                <span className="font-bold text-text">{summary.buyerName || '—'}</span>
-              </div>
             </div>
             {canEdit ? (
               <Button type="button" variant="secondary" className="self-start" onClick={openEdit}>
@@ -179,6 +168,7 @@ export function DealTrackingPanel({
                 แก้ไขข้อมูลติดตาม
               </Button>
             ) : null}
+            <p className="m-0 text-xs text-text-muted">ผู้ซื้อ / ผู้รับเหมา อยู่ใน &quot;ผู้รับเหมาที่เสนอราคา&quot; ด้านบน</p>
           </div>
         )}
       </div>

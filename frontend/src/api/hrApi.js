@@ -460,6 +460,23 @@ export const api = {
     listActivities: (id) => apiRequest(API_ROUTES.tickets.activities(id)),
     updateTracking: (id, payload) => apiRequest(API_ROUTES.tickets.tracking(id), { method: 'PUT', body: payload }),
     changeCustomer: (id, payload) => apiRequest(API_ROUTES.tickets.customer(id), { method: 'PUT', body: payload }),
+    // Deal parties (docs/decisions/deal-party-model.md). Mirrors the dealparty controller:
+    //   GET    parties            -> { parties: Party[] } (same view access as the ticket)
+    //   POST   addParty           { customerId, role, contactId? } -> { party }; 409 when that
+    //                             customer already holds that role on the deal
+    //   PATCH  updateParty        { status?: NEGOTIATING|QUOTED|WITHDRAWN, contactId?, headline?: true } -> { party }
+    //   DELETE removeParty        -> 204; only an ACTIVE party with no quotation, else 409
+    //   POST   recordBidOutcome   { awardedPartyIds, primaryPartyId?, othersOutcome, notAwardedReason? }
+    //                             -> { result: { primaryTicketId, childTicketIds, ticket } }
+    //   GET    openForProject     -> { deals } — the actor's own ACTIVE pre-outcome deals on that project
+    parties: (ticketId) => apiRequest(API_ROUTES.tickets.parties(ticketId)),
+    addParty: (ticketId, payload) => apiRequest(API_ROUTES.tickets.parties(ticketId), { method: 'POST', body: payload }),
+    updateParty: (ticketId, partyId, payload) =>
+      apiRequest(API_ROUTES.tickets.party(ticketId, partyId), { method: 'PATCH', body: payload }),
+    removeParty: (ticketId, partyId) => apiRequest(API_ROUTES.tickets.party(ticketId, partyId), { method: 'DELETE' }),
+    recordBidOutcome: (ticketId, payload) =>
+      apiRequest(API_ROUTES.tickets.bidOutcome(ticketId), { method: 'POST', body: payload }),
+    openForProject: (projectName) => apiRequest(API_ROUTES.tickets.openForProject(projectName)),
   },
   depositNotices: {
     noteTemplates: () => apiRequest(API_ROUTES.depositNotices.noteTemplates),

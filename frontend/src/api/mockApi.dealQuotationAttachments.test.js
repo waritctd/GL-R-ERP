@@ -25,7 +25,7 @@ const ONE_ITEM = {
 const draftOn18 = async () => {
   retireLiveDirectQuotationsForTests(18);
   retireLivePricingRequestsForTests(18);
-  return (await api.dealQuotations.create(18, { recipientType: 'DESIGNER', items: [ONE_ITEM] })).quotation;
+  return (await api.dealQuotations.create(18, { recipientType: 'BUYER', items: [ONE_ITEM] })).quotation;
 };
 const pdf = (name = 'vendor-quote.pdf') => new File(['%PDF-1.4 vendor cost'], name, { type: 'application/pdf' });
 const ids = (answer) => answer.items.map((item) => item.id);
@@ -84,7 +84,7 @@ describe('mock dealQuotations, เอกสารแนบ', () => {
     await api.auth.login(sales);
     retireLiveDirectQuotationsForTests(19);
     retireLivePricingRequestsForTests(19);
-    const { quotation: created } = await api.dealQuotations.create(19, { recipientType: 'DESIGNER', items: [ONE_ITEM] });
+    const { quotation: created } = await api.dealQuotations.create(19, { recipientType: 'BUYER', items: [ONE_ITEM] });
     const { attachment } = await api.dealQuotations.uploadAttachment(created.id, pdf());
     await api.dealQuotations.submit(created.id);
     await api.auth.login({ role: 'sales_manager' });

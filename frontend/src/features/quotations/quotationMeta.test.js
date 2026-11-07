@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
-import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
-import { routeForChannel } from '../tickets/stageCatalog.js';
 import { quotationStatusLabel } from '../../utils/format.js';
 import { API_ROUTES } from '../../api/routes.js';
 import {
@@ -1593,12 +1591,13 @@ describe('buildQuotationChecklist', () => {
     // live direct quotation).
     //
     // 'livePricingRequest' mirrors DealQuotationService#create's 409 on a deal holding a live
-    // pricing request.
+    // pricing request. 'recipientOffRoute' mirrors the 409 on a new or changed recipient off the deal's
+    // route (owner ruling 2026-11-07).
     // orderedByEmail: the server refuses a malformed ผู้ติดต่อ Email with a 400 on every save, so
     // the editor says so before the click. (A blank one is fine: the field is optional.)
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
       ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
-        'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient'],
+        'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient', 'recipientOffRoute'],
     );
     // The submit-only set: บันทึกร่าง still works, ส่งขออนุมัติ is disabled (QuotationEditorPage guards).
     expect([...meta.QUOTATION_SUBMIT_BLOCKING_CHECKS].sort()).toEqual(['creditDays', 'fullPaymentTerm', 'leadTime']);
@@ -1659,6 +1658,70 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
 
+  it('slice 2: N6 relaxed — an APPROVED live quotation addressed to a strictly EARLIER party does not block a later recipient; everything else still does', () => {
+    const live = (docStatus, recipientType) => ({ id: 77, number: 'QT-2026-0077-1', docStatus, recipientType });
+    const checks = (liveDirectQuotation, recipientType) =>
+      meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType, liveDirectQuotation }).map((e) => e.check);
+    // allowed
+    expect(checks(live('APPROVED', 'DESIGNER'), 'OWNER')).toEqual([]);
+    expect(checks(live('APPROVED', 'DESIGNER'), 'BUYER')).toEqual([]);
+    expect(checks(live('APPROVED', 'OWNER'), 'BUYER')).toEqual([]);
+    // blocked: same / earlier recipient, not APPROVED, BUYER/unknown live recipient, no recipient chosen yet
+    expect(checks(live('APPROVED', 'DESIGNER'), 'DESIGNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'OWNER'), 'DESIGNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'OWNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'BUYER'), 'BUYER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'UNSPECIFIED'), 'BUYER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('PENDING_APPROVAL', 'DESIGNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('DRAFT', 'DESIGNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'DESIGNER'), '')).toEqual(expect.arrayContaining(['liveDirectQuotation']));
+  });
+
+  it('slice 2: N6 relaxed only while the deal is still in draft — once the order is confirmed the block returns', () => {
+    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
+    const checks = (dealStatus) => meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'OWNER', liveDirectQuotation: live, dealStatus })
+      .map((e) => e.check);
+    expect(checks('draft')).toEqual([]);
+    expect(checks(undefined)).toEqual([]);
+    expect(checks('approved')).toEqual(['liveDirectQuotation']);
+  });
+
+  // The server (DirectQuotationLocks) checks EVERY live row; the deal summary serves only the newest, so the
+  // pre-check takes the deal's live rows (newest first) and blocks if ANY row blocks, naming the newest blocker.
+  it('slice 2: N6 over every live row — any blocking row blocks, and the message names the newest BLOCKING one; a single row (object) still works', () => {
+    const row = (id, docStatus, recipientType) => ({ id, number: `QT-2026-00${id}-1`, docStatus, recipientType });
+    const blocks = (rows, recipientType, dealStatus) => meta.blocksNewDirectQuotation(rows, recipientType, dealStatus);
+    const messages = (rows, recipientType) =>
+      meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType, liveDirectQuotation: rows })
+        .filter((e) => e.check === 'liveDirectQuotation').map((e) => e.message);
+    const approvedDesigner = row(77, 'APPROVED', 'DESIGNER');
+    const ownerDraft = row(78, 'DRAFT', 'OWNER');
+    const ownerPending = row(78, 'PENDING_APPROVAL', 'OWNER');
+
+    // Newest row alone would allow BUYER (APPROVED designer); the older owner row blocks.
+    expect(blocks([approvedDesigner, ownerDraft], 'BUYER')).toBe(true);
+    expect(blocks([ownerDraft, approvedDesigner], 'BUYER')).toBe(true);
+    expect(blocks([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER')).toBe(true);
+    // Every row APPROVED + strictly earlier: allowed. Dead rows are ignored.
+    expect(blocks([row(79, 'APPROVED', 'OWNER'), approvedDesigner], 'BUYER')).toBe(false);
+    expect(blocks([approvedDesigner], 'BUYER')).toBe(false);
+    expect(blocks([approvedDesigner, row(80, 'CANCELLED', 'OWNER')], 'BUYER')).toBe(false);
+    expect(blocks([], 'BUYER')).toBe(false);
+    // Past draft every live row blocks.
+    expect(blocks([approvedDesigner], 'BUYER', 'quotation_issued')).toBe(true);
+    // Single-row callers (DealPicker, mockApi) are unchanged.
+    expect(blocks(approvedDesigner, 'BUYER')).toBe(false);
+    expect(blocks(ownerDraft, 'BUYER')).toBe(true);
+
+    expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
+      .toEqual(['ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
+    // Two blockers: the newest (highest id) is named, whatever the list order.
+    const newestNamed = ['ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
+    expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
+    expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
+    expect(messages([approvedDesigner], 'BUYER')).toEqual([]);
+  });
+
   it('slice 2: the recipient table maps to S4/S5/S8 and back, and never offers UNSPECIFIED', () => {
     expect(meta.QUOTATION_RECIPIENT_OPTIONS.map((o) => [o.code, o.stage])).toEqual([
       ['DESIGNER', 'QUOTE_DESIGN_SIDE'], ['OWNER', 'QUOTE_OWNER'], ['BUYER', 'QUOTE_BUYER'],
@@ -1691,6 +1754,23 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
 
+  // Owner ruling 2026-11-07: the server 409s a direct quotation addressed to a party OFF the deal's route
+  // (DealRoute.refusalMessage), so the editor blocks the save with that same sentence instead of letting the rep
+  // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
+  // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
+  it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
+    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
+      offRouteRecipientMessage: sentence });
+    expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);
+    // On-route / no stated route / not passed: nothing extra.
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'OWNER',
+      offRouteRecipientMessage: null })).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER' })).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
+      offRouteRecipientMessage: '' })).toEqual([]);
+  });
+
   // The channel pre-fills the recipient on a new deal.
   it('owner ruling #2: each real entry channel names its recipient; UNSPECIFIED/unknown name none', () => {
     expect(meta.recipientForEntryChannel('DESIGNER_LED')).toBe('DESIGNER');
@@ -1698,20 +1778,6 @@ describe('buildQuotationChecklist', () => {
     expect(meta.recipientForEntryChannel('BUYER_DIRECT')).toBe('BUYER');
     expect(meta.recipientForEntryChannel('UNSPECIFIED')).toBe('');
     expect(meta.recipientForEntryChannel(null)).toBe('');
-  });
-
-  // The route is READ from the served catalog (routeForChannel), never a local table, so this is
-  // exercised against the guarded fixture mockApi serves.
-  it('owner ruling #1: a recipient is off-route exactly when its quote stage is not on the channel\'s served route', () => {
-    const offRoute = (channel, recipient) => meta.isRecipientOffRoute(routeForChannel(DEAL_STAGE_CATALOG, channel), recipient);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('DESIGNER_LED', r))).toEqual([false, false, false]);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('OWNER_DIRECT', r))).toEqual([true, false, false]);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('BUYER_DIRECT', r))).toEqual([true, true, false]);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('UNSPECIFIED', r))).toEqual([false, false, false]);
-    // No recipient chosen, or the catalog not loaded yet (empty route): never a note.
-    expect(offRoute('BUYER_DIRECT', '')).toBe(false);
-    expect(meta.isRecipientOffRoute([], 'DESIGNER')).toBe(false);
-    expect(meta.isRecipientOffRoute(undefined, 'DESIGNER')).toBe(false);
   });
 
   // ผู้ออกแบบ and ฝ่าย are optional (also on the backend, never blocking). Wrong-way-round: neither a
@@ -2091,5 +2157,28 @@ describe('depositTermsSummary', () => {
   it('100% is full payment up front, and a blank percent is the PDF default 30%', () => {
     expect(meta.depositTermsSummary({ depositPercent: 100 })).toBe('ชำระเต็มจำนวน 100% เมื่อสั่งซื้อสินค้า');
     expect(meta.depositTermsSummary({ depositPercent: null })).toBe('มัดจำ 30% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
+  });
+});
+
+describe('deal parties — the per-party live-quotation block (V204)', () => {
+  it('picks the named party, else the deal customer\'s party preferring the recipient role', () => {
+    const { quotationTargetParty } = meta;
+    const parties = [
+      { id: 1, customerId: 5, role: 'DESIGNER' },
+      { id: 2, customerId: 5, role: 'BUYER' },
+      { id: 3, customerId: 7, role: 'BUYER' },
+    ];
+    expect(quotationTargetParty(parties, { partyId: 3 })?.id).toBe(3);
+    expect(quotationTargetParty(parties, { customerId: 5, recipientType: 'BUYER' })?.id).toBe(2);
+    expect(quotationTargetParty(parties, { customerId: 5, recipientType: 'OWNER' })?.id).toBe(1);
+    expect(quotationTargetParty(undefined, { customerId: 5 })).toBeNull();
+  });
+
+  it('a party\'s live quotation is its latest one in DRAFT / PENDING_APPROVAL / APPROVED', () => {
+    const { liveQuotationOfParty } = meta;
+    const party = (docStatus) => ({ latestQuotationId: 9, latestQuotationNumber: 'QT-1', latestQuotationStatus: docStatus });
+    expect(liveQuotationOfParty(party('APPROVED'))).toEqual({ id: 9, number: 'QT-1', docStatus: 'APPROVED' });
+    expect(liveQuotationOfParty(party('CANCELLED'))).toBeNull();
+    expect(liveQuotationOfParty({ latestQuotationId: null })).toBeNull();
   });
 });

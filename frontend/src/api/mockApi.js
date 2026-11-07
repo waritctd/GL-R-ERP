@@ -1,6 +1,7 @@
 import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
-import { nextAccountAction } from '../features/tickets/accountActions.js';
+import { isPastProcurement } from '../features/finance/moneyMilestone.js';
+import { accountOwesStep } from '../features/tickets/accountActions.js';
 import { isOwnerOrKeyer } from '../features/tickets/dealOwnership.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
@@ -52,7 +53,7 @@ import {
   hasSpecialPricing,
   // The recipient table (code -> Thai label) and the live DEAL_DIRECT status set, shared with the
   // editor so the mock validates and labels recipients exactly as the pills do.
-  isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
+  isLiveDirectQuotation, blocksNewDirectQuotation, quotationRecipientOption, stageForQuotationRecipient, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
   // V192.3: the SAME email shape check the editor runs before it saves — see
   // resolveDealQuotationOrderedByContact below.
   orderedByEmailError,
@@ -456,6 +457,13 @@ const mockCustomers = [
   // mock mode only. Ticket 19 (ISSUED deposit notice) is wired to this row via demoSales.js's
   // makeMoneyDeal `customerId` param.
   { id: 6, name: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด', taxId: '0105512345678', address: '991 ถนนพระราม 1 แขวงปทุมวัน กรุงเทพฯ 10330', branch: 'สำนักงานใหญ่', phone: '02-610-8000' },
+  // Deal parties (deal-party-model.md): two more contractors bidding ticket 18's project, its
+  // designer, and a fourth contractor with no party yet — the one the quotation editor's
+  // "โครงการนี้มีดีลของคุณอยู่แล้ว" prompt is demonstrated with. Fictitious names.
+  { id: 7, name: 'บริษัท สมมติ ก่อสร้าง จำกัด', taxId: '0105560000071', address: '12 ถนนพหลโยธิน แขวงจตุจักร กรุงเทพฯ 10900', branch: 'สำนักงานใหญ่', phone: '02-555-0171' },
+  { id: 8, name: 'บริษัท เดโม เอ็นจิเนียริ่ง จำกัด', taxId: '0105560000082', address: '45 ถนนบางนา-ตราด แขวงบางนา กรุงเทพฯ 10260', branch: 'สำนักงานใหญ่', phone: '02-555-0182' },
+  { id: 9, name: 'บริษัท ดีไซน์ สตูดิโอ ตัวอย่าง จำกัด', taxId: '0105560000093', address: '8 ซอยทองหล่อ แขวงคลองตันเหนือ กรุงเทพฯ 10110', branch: 'สำนักงานใหญ่', phone: '02-555-0193' },
+  { id: 10, name: 'บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด', taxId: '0105560000104', address: '77 ถนนรัชดาภิเษก แขวงห้วยขวาง กรุงเทพฯ 10310', branch: 'สำนักงานใหญ่', phone: '02-555-0104' },
 ];
 let mockCustomerSeq = mockCustomers.length + 1;
 
@@ -489,6 +497,9 @@ const mockContacts = [
   // ticket.customerId is null, but ticket 19 now carries a real customer, which activates that
   // check for quotation work on it. One row keeps that path from dead-ending.
   { id: 8, customerId: 6, firstName: 'วรวุฒิ', lastName: 'พารากร', position: 'ฝ่ายจัดซื้อ', email: 'worawut@siamparagon-dev.co.th', phone: '02-610-8001' },
+  { id: 9, customerId: 7, firstName: 'ประมูล', lastName: 'หนึ่ง', position: 'ฝ่ายประมูล', email: 'bid1@sommut-con.co.th', phone: '081-555-0109' },
+  { id: 10, customerId: 8, firstName: 'ประมูล', lastName: 'สอง', position: 'ผู้จัดการโครงการ', email: 'bid2@demo-eng.co.th', phone: '081-555-0110' },
+  { id: 11, customerId: 10, firstName: 'ประมูล', lastName: 'สาม', position: 'ฝ่ายจัดซื้อ', email: 'bid3@example-con.co.th', phone: '081-555-0111' },
 ];
 let mockContactSeq = mockContacts.length + 1;
 
@@ -498,6 +509,12 @@ const mockProjects = [
   { id: 3, customerId: 2, name: 'โครงการ Asoke Tower ชั้น 12-15' },
   { id: 4, customerId: 3, name: 'โครงการ PDG HQ Renovation' },
   { id: 5, customerId: 4, name: 'โครงการ Rueangchat Condo Phase 2' },
+  // One site, four project rows (customers.project.customer_id is still per customer before
+  // deal-party-model slice 1): ticket 18's own, and each other contractor's.
+  { id: 6, customerId: 5, name: 'ศูนย์การค้า Fashion Island' },
+  { id: 7, customerId: 7, name: 'ศูนย์การค้า Fashion Island' },
+  { id: 8, customerId: 8, name: 'ศูนย์การค้า Fashion Island' },
+  { id: 9, customerId: 10, name: 'ศูนย์การค้า Fashion Island' },
 ];
 let mockProjectSeq = mockProjects.length + 1;
 
@@ -3707,12 +3724,12 @@ function derivePaymentFields(ticket) {
 }
 
 // Mirrors DashboardRepository#financeOutstanding: outstanding on deals in account's list scope that have an
-// account to-do (nextAccountAction as the account viewer).
+// account to-do (accountOwesStep: the final-payment stage gate must not shrink ค้างรับ).
 function mockFinanceOutstanding() {
   return moneyValue(db.tickets
     .filter(accountListScopeIncludes)
     .map((t) => ({ ...t, ...derivePaymentFields(t), commissionRecorded: hasRecordedCommission(t) }))
-    .filter((t) => nextAccountAction(t) != null)
+    .filter((t) => accountOwesStep(t))
     .reduce((sum, t) => sum + Number(t.amountOutstanding ?? 0), 0));
 }
 
@@ -4169,6 +4186,12 @@ function mockConfirmedQuotationEvent(ticket) {
 function requireNoOtherDirectQuotationAfterConfirm(ticket, row) {
   const promoted = mockConfirmedQuotationEvent(ticket);
   if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST' || !promoted || ticket.orderConfirmedQuotationId === row.id) return;
+  // V204: the lock is per party. Another contractor still in the bid (ACTIVE / QUOTED / NEGOTIATING)
+  // may submit and approve its own quotation after the first order was confirmed — a later
+  // bid-outcome forks it to its own deal.
+  const confirmedPartyId = mockDealQuotations.find((q) => q.id === ticket.orderConfirmedQuotationId)?.partyId ?? null;
+  const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
+  if (party && party.id !== confirmedPartyId && ['ACTIVE', 'QUOTED', 'NEGOTIATING'].includes(party.status)) return;
   fail('ดีลนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้', 409);
 }
 
@@ -4249,6 +4272,13 @@ function mockRouteRefusal(entryChannel, stage) {
   const no = DEAL_STAGE_CATALOG.stages.find((s) => s.code === stage)?.no ?? '';
   return `ดีลนี้เป็น${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ดีลที่ระบุช่องทางไว้'}`
     + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+}
+
+/** Mirrors TicketService.requireQuotationRecipientOnRoute: a direct quotation may not be addressed to a party off
+ * the deal's route (409, DealRoute.refusalMessage). A channel with no route and a recipient with no stage refuse nothing. */
+function mockRequireRecipientOnRoute(entryChannel, recipientType) {
+  const stage = stageForQuotationRecipient(recipientType);
+  if (stage && !mockIsOnRoute(entryChannel, stage)) fail(mockRouteRefusal(entryChannel, stage), 409);
 }
 /**
  * The stages a manual move is closed to in mock mode — a literal mirror of the four
@@ -4502,6 +4532,16 @@ export function setTicketItemQtyFromStockForTests(ticketId, itemId, qty) {
   const item = db.tickets.find((t) => t.id === Number(ticketId))?.items.find((i) => i.id === Number(itemId));
   if (!item) throw new Error(`no ticket item ${itemId}`);
   item.qtyFromStock = qty;
+}
+
+/** TicketRepository#findLiveDirectQuotationForParty: the create-time refusal is per ผู้รับเหมา. */
+function mockLivePartyDirectQuotation(ticketId, partyId) {
+  const live = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && q.partyId === partyId && isDealDirectOrigin(q) && isLiveDirectQuotation(q))
+    .sort((a, b) => b.id - a.id)[0];
+  return live
+    ? { id: live.id, number: live.number, docStatus: live.docStatus, recipientType: live.recipientType ?? 'UNSPECIFIED' }
+    : null;
 }
 
 function mockLiveDirectQuotation(ticketId) {
@@ -6427,9 +6467,10 @@ function nextMockDealQuotationRevisionNo(ticketId, base) {
  * demonstrates a numbering the real service no longer uses on the printed number, and nothing
  * would catch the drift, since stageCatalog.test.js guards only the gate.
  */
-function mockDealBaseNumberOrMint(ticketId) {
+function mockDealBaseNumberOrMint(ticketId, partyId = null) {
+  // V204: the family belongs to the PARTY — each contractor's quotation chain has its own number.
   const newest = mockDealQuotations
-    .filter((q) => q.ticketId === Number(ticketId))
+    .filter((q) => q.ticketId === Number(ticketId) && (partyId == null || q.partyId === Number(partyId)))
     .sort((a, b) => b.id - a.id)[0];
   return newest
     ? quotationBaseNumber(newest.number, newest.revisionNo ?? 1)
@@ -6534,6 +6575,50 @@ function submitDealQuotationRow(row, user) {
   return delay({ quotation: buildDealQuotationDto(row) });
 }
 
+// The effects of "ยืนยันคำสั่งซื้อ" from an APPROVED direct quotation, shared by promoteToDeal and
+// the bid outcome (its primary deal and every forked child). `fromStatus` is the event's from-status.
+function applyMockOrderConfirmation(ticket, row, user, fromStatus = ticket.status) {
+  const now = new Date().toISOString();
+  ticket.quotationOnly = false;
+  ticket.status = 'quotation_issued';
+  ticket.updatedAt = now;
+  ticket.orderConfirmedQuotationId = row.id; // mock-internal: which quotation the order was confirmed from
+  pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', fromStatus, 'quotation_issued',
+    `ยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}`);
+  // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no
+  // non-positive quantity), no pricing field copied, qty_sqm from the same piece count.
+  ticket.items = (row.items ?? [])
+    .filter((it) => (it.lineType ?? 'TILE') !== 'ADJUSTMENT' && Number(it.quantity) > 0)
+    .map((it, i) => {
+      const tile = (it.lineType ?? 'TILE') !== 'PLAIN';
+      const sqmPerPiece = Number(it.sqmPerPiece);
+      return {
+        id: ticket.id * 100 + i, ticketId: ticket.id,
+        brand: [it.brand, it.model, it.descriptionLine, it.description].find((v) => v && String(v).trim())
+          ?? 'รายการจากใบเสนอราคา',
+        model: it.model ?? null, color: it.color ?? null, texture: it.texture ?? null,
+        size: it.sizeText ?? it.size ?? null, factory: null,
+        qty: Number(it.quantity),
+        qtySqm: tile && sqmPerPiece > 0 ? Math.round(Number(it.quantity) * sqmPerPiece * 100) / 100 : null,
+        unitBasis: 'PIECE', rawUnit: it.unit ?? null,
+        proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: i,
+        catalogPriceId: null, catalogProductCode: null, stockSalePrice: null,
+        // DealQuotationService#ticketItemsFromQuotation + coverSourcedFromStockLines: a จากสต็อก line is covered in full.
+        sourcedFromStock: it.stockSource === 'IN_THAILAND',
+        qtyFromStock: it.stockSource === 'IN_THAILAND' ? Number(it.quantity) : 0,
+      };
+    });
+  // TicketService#confirmCustomerForPromotedQuotation -- the confirmCustomer body.
+  if (ticket.paymentStatus == null) {
+    ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
+    pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
+    followQuotationDepositPolicy(ticket, row, user);
+  }
+  autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
+  // confirmCustomer's own no-deposit branch routes an all-stock deal; a deposit deal routes when the deposit lands.
+  if (depositBypassesNotice(ticket)) routeAllStockDealToDelivery(ticket, user);
+}
+
 /**
  * Mirrors DealQuotationRepository#supersedeOtherLiveOnTicket + the event loop in
  * DealQuotationService#supersedeOtherLiveOnTicket (one live offer per DEAL, origin-agnostic).
@@ -6543,7 +6628,9 @@ function submitDealQuotationRow(row, user) {
 function supersedeOtherLiveMockDealQuotations(row, user, now) {
   const ticket = db.tickets.find((t) => t.id === row.ticketId);
   mockDealQuotations
-    .filter((q) => q.id !== row.id && q.ticketId === row.ticketId
+    // V204: one live offer per PARTY, not per deal — a sibling contractor's APPROVED bid on the same
+    // deal is its own offer and stays live.
+    .filter((q) => q.id !== row.id && q.ticketId === row.ticketId && (q.partyId ?? null) === (row.partyId ?? null)
       && ((isDealDirectOrigin(q) && q.docStatus === 'APPROVED')
         || (q.origin === 'PRICING_REQUEST' && ['ISSUED', 'REVISION_REQUESTED'].includes(q.docStatus))))
     .forEach((sibling) => {
@@ -7350,6 +7437,18 @@ function buildDealQuotationDto(row) {
     items: row.items.map((item) => mockDealQuotationItemDto(item, decision, row.priceMode || 'NET')),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    // V204 deal parties: which bidder this document belongs to, that party's outcome, whether it is
+    // the deal's headline (pipeline) amount, and how many BUYER parties the deal has — the quotation
+    // list groups a project's bids under one deal when that count is above 1.
+    ...(() => {
+      const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
+      return {
+        partyId: party?.id ?? null,
+        partyStatus: party?.status ?? null,
+        partyHeadline: party?.headline === true,
+        dealBuyerCount: mockBuyerCount(row.ticketId),
+      };
+    })(),
   };
 }
 
@@ -7513,6 +7612,232 @@ mockDealQuotationNumberSeq = 3;
 // One id sequence across both quotation arrays: start past the highest literal seed id above.
 mockQuotationSeq = Math.max(mockQuotationSeq, Math.max(...mockDealQuotations.map((q) => q.id)) + 1);
 
+// ── Deal parties (docs/decisions/deal-party-model.md, V204) ───────────────────────────────────
+// One row per customer taking part in a deal: DESIGNER / OWNER / BUYER. Each bidding contractor is
+// one BUYER party with its own quotation chain (sales.quotation.party_id). Mirrors the backend's
+// dealparty package. AUTHZ HERE IS AN APPROXIMATION (CLAUDE.md "Mock API contract"): verify every
+// permission claim against DealPartyService, never this file.
+const DEAL_PARTY_ROLES = ['DESIGNER', 'OWNER', 'BUYER'];
+const DEAL_PARTY_NOT_AWARDED_REASONS = ['OTHER_BIDDER', 'PRICE', 'LEAD_TIME', 'PAYMENT_TERMS', 'RELATIONSHIP', 'PRODUCT_FIT'];
+// PATCH may only move a pre-outcome party between these (AWARDED/NOT_AWARDED come from bid-outcome).
+const DEAL_PARTY_PATCHABLE_STATUSES = ['NEGOTIATING', 'QUOTED', 'WITHDRAWN'];
+const DEAL_PARTY_BIDDING_STATUSES = ['QUOTED', 'NEGOTIATING'];
+const mockDealParties = [];
+let mockDealPartySeq = 1;
+
+function mockInsertDealParty({ ticketId, customerId, contactId = null, role = 'BUYER', status = 'ACTIVE', headline = false, addedById = null }) {
+  const now = new Date().toISOString();
+  const party = {
+    id: mockDealPartySeq++, ticketId: Number(ticketId), customerId: Number(customerId), contactId: contactId == null ? null : Number(contactId),
+    role, status, notAwardedReason: null, headline, splitTicketId: null, addedById, createdAt: now, updatedAt: now,
+  };
+  mockDealParties.push(party);
+  return party;
+}
+
+function mockPartiesOf(ticketId) {
+  return mockDealParties.filter((p) => p.ticketId === Number(ticketId));
+}
+
+function mockBuyerCount(ticketId) {
+  return mockPartiesOf(ticketId).filter((p) => p.role === 'BUYER').length;
+}
+
+/** The party's newest quotation: the newest not SUPERSEDED/CANCELLED one, else the newest of any. */
+function mockPartyLatestQuotation(party) {
+  const rows = mockDealQuotations.filter((q) => q.partyId === party.id).sort((a, b) => b.id - a.id);
+  return rows.find((q) => !['SUPERSEDED', 'CANCELLED'].includes(q.docStatus)) ?? rows[0] ?? null;
+}
+
+function buildDealPartyDto(party) {
+  const customer = mockCustomers.find((c) => c.id === party.customerId);
+  const contact = party.contactId ? mockContacts.find((c) => c.id === party.contactId) : null;
+  const latest = mockPartyLatestQuotation(party);
+  const split = party.splitTicketId ? db.tickets.find((t) => t.id === party.splitTicketId) : null;
+  return {
+    id: party.id,
+    ticketId: party.ticketId,
+    customerId: party.customerId,
+    customerName: customer?.name ?? null,
+    contactId: party.contactId,
+    contactName: contact ? `${contact.firstName} ${contact.lastName ?? ''}`.trim() : null,
+    role: party.role,
+    status: party.status,
+    notAwardedReason: party.notAwardedReason,
+    headline: party.headline,
+    splitTicketId: party.splitTicketId,
+    splitTicketCode: split?.code ?? null,
+    latestQuotationId: latest?.id ?? null,
+    latestQuotationNumber: latest?.number ?? null,
+    latestQuotationStatus: latest?.docStatus ?? null,
+    latestQuotationAmount: latest ? dealQuotationTotals(latest.items, latest.documentLanguage || 'TH').grandTotal : null,
+    addedById: party.addedById,
+    createdAt: party.createdAt,
+    updatedAt: party.updatedAt,
+  };
+}
+
+/** The "ticket" a quotation snapshots its ลูกค้า / ผู้ติดต่อ from: the party's customer when the row
+ * belongs to one (sibling bids on one deal print their own company), else the deal's own. */
+function mockQuotationCustomerTicket(ticket, partyId) {
+  const party = partyId != null ? mockDealParties.find((p) => p.id === Number(partyId)) : null;
+  if (!party || party.customerId === ticket?.customerId) return ticket;
+  const customer = mockCustomers.find((c) => c.id === party.customerId);
+  return { ...ticket, customerId: party.customerId, customerName: customer?.name ?? null };
+}
+
+/** Mirrors DealQuotationService#create's default: no partyId -> the deal's own customer's party,
+ * preferring the recipient's role; the deal's customer gets a party if it has none. */
+function mockDefaultQuotationParty(ticket, recipientType, user) {
+  if (ticket.customerId == null) return null;
+  const own = mockPartiesOf(ticket.id).filter((p) => p.customerId === Number(ticket.customerId));
+  const match = own.find((p) => p.role === recipientType) ?? own[0];
+  if (match) return match;
+  return mockInsertDealParty({
+    ticketId: ticket.id, customerId: ticket.customerId, contactId: ticket.contactId ?? null,
+    role: DEAL_PARTY_ROLES.includes(recipientType) ? recipientType : 'BUYER',
+    headline: mockPartiesOf(ticket.id).length === 0, addedById: user?.id ?? null,
+  });
+}
+
+function mockMarkPartyQuoted(party) {
+  if (party && party.status === 'ACTIVE') {
+    party.status = 'QUOTED';
+    party.updatedAt = new Date().toISOString();
+  }
+}
+
+function requireDealPartyWriter(ticket) {
+  const user = requireSession();
+  if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+function findMockParty(ticket, partyId) {
+  const party = mockDealParties.find((p) => p.id === Number(partyId) && p.ticketId === ticket.id);
+  if (!party) fail('ไม่พบผู้เกี่ยวข้องในดีลนี้', 404);
+  return party;
+}
+
+function mockPartyName(party) {
+  return mockCustomers.find((c) => c.id === party.customerId)?.name ?? `#${party.id}`;
+}
+
+function mockIsPreOutcome(ticket) {
+  return (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE'
+    && !mockPartiesOf(ticket.id).some((p) => p.status === 'AWARDED')
+    && dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED');
+}
+
+function mockNormalisedProjectName(name) {
+  return String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// Seed: ticket 18 (QUOTE_BUYER, every seeded ใบเสนอราคา hangs off it) is bid by three contractors —
+// its own customer plus two more, each with an APPROVED quotation of its own — and has a designer.
+const SEED_BID_PROJECT = 'ศูนย์การค้า Fashion Island';
+function seedBidQuotation({ id, number, revisionNo, customerId, contactId, quotationDate, unitPrice }) {
+  const customer = mockCustomers.find((c) => c.id === customerId);
+  const contact = mockContacts.find((c) => c.id === contactId);
+  return {
+    id, number, ticketId: 18, docStatus: 'APPROVED', revisionNo, parentQuotationId: null,
+    createdById: null, createdByName: 'คุณสมหมาย ขายดี', salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี', salesRepPhone: '081-234-5678',
+    submittedAt: `${quotationDate}T09:00:00Z`, submittedBy: 6,
+    approvedById: null, approvedByName: 'คุณผึ้ง ผู้จัดการขาย', approvedAt: `${quotationDate}T11:00:00Z`,
+    approvalDecidedAt: `${quotationDate}T11:00:00Z`, approvalDecidedBy: 9, approvalNote: null,
+    quotationDate,
+    customerName: customer.name, customerAddress: customer.address, customerTaxId: customer.taxId, customerPhone: customer.phone,
+    contactId: contact.id, contactName: `${contact.firstName} ${contact.lastName}`, contactPhone: contact.phone, contactEmail: contact.email,
+    orderedByName: `${contact.firstName} ${contact.lastName}`,
+    projectName: SEED_BID_PROJECT,
+    deptCode: null, unitCode: 'D002', offerDate: quotationDate,
+    depositPercent: 30, remainderMode: 'ON_DELIVERY', creditDays: null, validityDays: 30, validityDate: null,
+    customerNotes: null, currency: 'THB', recipientType: 'BUYER', recipientLabel: 'ผู้ซื้อ / ผู้รับเหมา',
+    items: [
+      buildDealQuotationItemRow({
+        locationLabel: 'ชั้น 1 - โซน A', catalogPriceId: null, productCode: null,
+        brand: 'SCG', model: 'Elegance Series', color: 'ขาวนวล', texture: 'ด้าน',
+        sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
+        quantityMode: 'AREA', areaSqm: 200, piecesInput: null,
+        wastageMode: 'PERCENT', wastageValue: 5, piecesPerBox: 4,
+        unitPrice, discountPct: 0,
+        originCountry: 'ไทย-สต็อก', leadTimeMinDays: 30, leadTimeMaxDays: 45,
+        itemNotes: null,
+      }, 0),
+    ],
+    createdAt: `${quotationDate}T09:00:00Z`, updatedAt: `${quotationDate}T11:00:00Z`,
+  };
+}
+mockDealQuotations.push(
+  seedBidQuotation({ id: 801, number: 'QT-2026-0003-1', revisionNo: 1, customerId: 7, contactId: 9, quotationDate: '2026-09-08', unitPrice: 410 }),
+  seedBidQuotation({ id: 802, number: 'QT-2026-0004-2', revisionNo: 2, customerId: 8, contactId: 10, quotationDate: '2026-09-10', unitPrice: 395 }),
+);
+mockDealQuotationNumberSeq = Math.max(mockDealQuotationNumberSeq, 5);
+mockQuotationSeq = Math.max(mockQuotationSeq, 803);
+
+// Backfill (V204's, in mock form): every deal with a customer gets one headline party from it —
+// AWARDED at/after ORDER_RECEIVED, QUOTED with a live quotation, else ACTIVE — and every quotation of
+// the deal is attached to it. Deals without a customer get none, as the migration's WHERE says.
+for (const t of db.tickets) {
+  if (t.customerId == null) continue;
+  const live = mockDealQuotations.some((q) => q.ticketId === t.id && !['SUPERSEDED', 'CANCELLED'].includes(q.docStatus));
+  const status = dealStageIndex(t.salesStage) >= dealStageIndex('ORDER_RECEIVED') ? 'AWARDED' : live ? 'QUOTED' : 'ACTIVE';
+  const party = mockInsertDealParty({
+    ticketId: t.id, customerId: t.customerId, contactId: t.contactId ?? null, role: 'BUYER', status, headline: true, addedById: t.createdById ?? null,
+  });
+  for (const q of mockDealQuotations) if (q.ticketId === t.id && q.partyId == null) q.partyId = party.id;
+}
+{
+  const seedDeal = db.tickets.find((t) => t.id === 18);
+  if (seedDeal) {
+    if (seedDeal.projectId == null) seedDeal.projectId = 6;
+    const bidderA = mockInsertDealParty({ ticketId: 18, customerId: 7, contactId: 9, status: 'QUOTED', addedById: 6 });
+    const bidderB = mockInsertDealParty({ ticketId: 18, customerId: 8, contactId: 10, status: 'NEGOTIATING', addedById: 6 });
+    mockDealQuotations.find((q) => q.id === 801).partyId = bidderA.id;
+    mockDealQuotations.find((q) => q.id === 802).partyId = bidderB.id;
+    mockInsertDealParty({ ticketId: 18, customerId: 9, role: 'DESIGNER', addedById: 6 });
+  }
+}
+
+/**
+ * Mirrors DealPartyService#recordBidOutcome's fork: a child deal for one extra winner, on the same
+ * project, with that party as its sole AWARDED party and its quotation chain moved over, confirmed
+ * onto ORDER_RECEIVED the same way the parent is. Code `<parent>-A`, `-B`, …
+ */
+function mockForkChildDeal(parent, party, user) {
+  const siblings = db.tickets.filter((t) => t.parentTicketId === parent.id).length;
+  const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
+  const customer = mockCustomers.find((c) => c.id === party.customerId);
+  const now = new Date().toISOString();
+  const child = {
+    ...structuredClone({ ...parent, events: [], items: [], quotations: [], quotation: null }),
+    id: nextId,
+    code: `${parent.code}-${siblings < 26 ? String.fromCharCode(65 + siblings) : siblings + 1}`,
+    parentTicketId: parent.id,
+    customerId: party.customerId, customerName: customer?.name ?? null, contactId: party.contactId ?? null,
+    title: customer?.name ?? parent.title,
+    status: 'draft', paymentStatus: null, fulfillmentStatus: null,
+    lifecycle: 'ACTIVE', lostReason: null, lostAt: null,
+    orderConfirmedQuotationId: null, closeConfirmedAt: null, closeConfirmedByName: null,
+    createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
+    events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'DEAL_SPLIT_FROM_PARENT', fromStatus: null, toStatus: 'draft', message: `แยกจากดีล ${parent.code} (ผลประมูล)`, createdAt: now }],
+  };
+  db.tickets.unshift(child);
+  const childParty = mockInsertDealParty({
+    ticketId: child.id, customerId: party.customerId, contactId: party.contactId, role: 'BUYER', status: 'AWARDED', headline: true, addedById: party.addedById,
+  });
+  const chain = mockDealQuotations.filter((q) => q.partyId === party.id);
+  chain.forEach((q) => { q.ticketId = child.id; q.partyId = childParty.id; });
+  party.status = 'AWARDED_SPLIT';
+  party.splitTicketId = child.id;
+  party.headline = false;
+  party.updatedAt = now;
+  const approved = mockPartyLatestQuotation(childParty);
+  if (approved?.docStatus === 'APPROVED') applyMockOrderConfirmation(child, approved, user, 'draft');
+  if (dealStageIndex(child.salesStage) < dealStageIndex('ORDER_RECEIVED')) child.salesStage = 'ORDER_RECEIVED';
+  return child;
+}
+
 
 // §5 WARN_UNPAID_* gates: `ruleWarnings`/`unpaidByRuleDays` on both LeavePreviewDto and
 // LeaveRequestDto -- see LeaveRuleWarningDto.java/LeaveRuleCode.java's enforcement() split and
@@ -7648,6 +7973,11 @@ async function mockConfirmDepositPaid(id) {
   return delay({ ticket: buildTicketDetail(ticket) });
 }
 
+// Owner ruling 2026-11-07 (mirrors TicketService#canConfirmFinalPaymentNow): closed until DELIVERY_SCHEDULING+.
+function mockPastProcurement(ticket) {
+  return isPastProcurement(ticket.salesStage);
+}
+
 async function mockConfirmFinalPayment(id) {
   // account only — no CEO fallback. Mirrors TicketService's PAYMENT_RECORD_ROLES
   // (confirmFinalPayment is a payment-recording entry point too, whether or not it ends up calling
@@ -7656,9 +7986,10 @@ async function mockConfirmFinalPayment(id) {
   const ticket = findTicketRaw(Number(id));
   requireMockAccountScope(user, ticket);
   requireActive(ticket);
-  const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-    || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
+  const allowed = (['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+    || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')))
+    && mockPastProcurement(ticket);
+  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
   const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
   if (outstanding <= 0) {
     if (ticket.paymentStatus !== 'FULLY_PAID') {
@@ -7768,8 +8099,9 @@ function buildTicketActions(user, ticket) {
       add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
       add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
     }
-    const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+    const finalPaymentAllowed = (['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')))
+      && mockPastProcurement(ticket);
     // account only -- see the PAYMENT_RECORD_ROLES comment above RECORD_PAYMENT.
     if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
     // Three-party close: account confirms, CEO verifies. Sales is not involved.
@@ -8561,6 +8893,13 @@ export const api = {
         quotation: null,
       };
       db.tickets.unshift(ticket);
+      // Mirrors TicketRepository.create (V204): the deal's customer is its first party — BUYER,
+      // ACTIVE, the headline — so every deal has at least one party, as the backfill gave older ones.
+      if (ticket.customerId != null) {
+        mockInsertDealParty({
+          ticketId: ticket.id, customerId: ticket.customerId, contactId: ticket.contactId, role: 'BUYER', headline: true, addedById: user.id,
+        });
+      }
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -9072,6 +9411,145 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
+    // ── Deal parties (deal-party-model.md). Mirrors DealPartyController / DealPartyService. ──
+
+    async parties(ticketId) {
+      // Same view access as the ticket (TicketService#get's gate).
+      const { user, ticket } = requireTicketViewer(ticketId);
+      if (user.role === 'import' || user.role === 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const parties = mockPartiesOf(ticket.id)
+        .sort((a, b) => DEAL_PARTY_ROLES.indexOf(b.role) - DEAL_PARTY_ROLES.indexOf(a.role) || a.id - b.id)
+        .map(buildDealPartyDto);
+      return delay({ parties });
+    },
+
+    async addParty(ticketId, payload) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const user = requireDealPartyWriter(ticket);
+      requireActive(ticket);
+      const role = payload?.role;
+      if (!DEAL_PARTY_ROLES.includes(role)) fail(`ไม่รองรับบทบาท '${role}'`, 400);
+      const customer = mockCustomers.find((c) => c.id === Number(payload?.customerId));
+      if (!customer) fail('ไม่พบลูกค้าที่เลือก', 400);
+      const contactId = payload?.contactId ?? null;
+      if (contactId != null) {
+        const contact = mockContacts.find((c) => c.id === Number(contactId));
+        if (!contact || contact.customerId !== customer.id) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
+      }
+      if (mockPartiesOf(ticket.id).some((p) => p.customerId === customer.id && p.role === role)) {
+        fail(`${customer.name} อยู่ในดีลนี้ในบทบาทนี้แล้ว`, 409);
+      }
+      const party = mockInsertDealParty({ ticketId: ticket.id, customerId: customer.id, contactId, role, addedById: user.id });
+      pushEvent(ticket, user, 'DEAL_PARTY_ADDED', ticket.status, ticket.status, `เพิ่ม ${customer.name}`);
+      return delay({ party: buildDealPartyDto(party) });
+    },
+
+    async updateParty(ticketId, partyId, payload) {
+      const ticket = findTicketRaw(Number(ticketId));
+      requireDealPartyWriter(ticket);
+      requireActive(ticket);
+      const party = findMockParty(ticket, partyId);
+      if (payload?.status != null) {
+        if (!DEAL_PARTY_PATCHABLE_STATUSES.includes(payload.status)) fail(`เปลี่ยนสถานะเป็น '${payload.status}' ที่นี่ไม่ได้`, 400);
+        if (['AWARDED', 'AWARDED_SPLIT', 'NOT_AWARDED'].includes(party.status)) fail('ผู้รับเหมารายนี้บันทึกผลประมูลแล้ว จึงแก้สถานะไม่ได้', 409);
+        party.status = payload.status;
+      }
+      if (payload?.contactId !== undefined && payload.contactId !== null) {
+        const contact = mockContacts.find((c) => c.id === Number(payload.contactId));
+        if (!contact || contact.customerId !== party.customerId) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้ารายนี้', 400);
+        party.contactId = contact.id;
+      }
+      if (payload?.headline === true) {
+        if (party.role !== 'BUYER') fail('ยอดหลักต้องเป็นผู้รับเหมา (ผู้ซื้อ)', 400);
+        mockPartiesOf(ticket.id).forEach((p) => { p.headline = p.id === party.id; });
+      }
+      party.updatedAt = new Date().toISOString();
+      return delay({ party: buildDealPartyDto(party) });
+    },
+
+    async removeParty(ticketId, partyId) {
+      const ticket = findTicketRaw(Number(ticketId));
+      requireDealPartyWriter(ticket);
+      const party = findMockParty(ticket, partyId);
+      if (party.status !== 'ACTIVE' || mockDealQuotations.some((q) => q.partyId === party.id)) {
+        fail('ลบได้เฉพาะผู้เกี่ยวข้องที่ยังไม่มีใบเสนอราคา', 409);
+      }
+      mockDealParties.splice(mockDealParties.indexOf(party), 1);
+      return delay(null);
+    },
+
+    async recordBidOutcome(ticketId, payload) {
+      const ticket = findTicketRaw(Number(ticketId));
+      const user = requireDealPartyWriter(ticket);
+      requireActive(ticket);
+      const ids = Array.isArray(payload?.awardedPartyIds) ? payload.awardedPartyIds.map(Number) : [];
+      if (ids.length === 0) fail('ต้องเลือกผู้รับเหมาที่ได้งานอย่างน้อย 1 ราย', 400);
+      if (new Set(ids).size !== ids.length) fail('เลือกผู้รับเหมาซ้ำ', 400);
+      const othersOutcome = payload?.othersOutcome;
+      if (!['NOT_AWARDED', 'KEEP_WAITING'].includes(othersOutcome)) fail(`ไม่รองรับผลของรายที่ไม่ได้เลือก '${othersOutcome}'`, 400);
+      const reason = othersOutcome === 'NOT_AWARDED' ? (payload?.notAwardedReason || 'OTHER_BIDDER') : null;
+      if (reason && !DEAL_PARTY_NOT_AWARDED_REASONS.includes(reason)) fail(`ไม่รองรับเหตุผล '${reason}'`, 400);
+      const awarded = ids.map((id) => findMockParty(ticket, id));
+      for (const party of awarded) {
+        const latest = mockPartyLatestQuotation(party);
+        if (party.role !== 'BUYER' || !DEAL_PARTY_BIDDING_STATUSES.includes(party.status) || latest?.docStatus !== 'APPROVED') {
+          fail(`${mockPartyName(party)}: บันทึกผลได้เฉพาะผู้รับเหมาที่ใบเสนอราคาล่าสุดอนุมัติแล้ว`, 409);
+        }
+      }
+      // A deal already awarded takes a LATER outcome for the parties still waiting: each newly
+      // awarded party forks its own child deal; there is no second primary (primaryPartyId ignored).
+      const alreadyAwarded = mockPartiesOf(ticket.id).some((p) => p.status === 'AWARDED');
+      let primary = null;
+      if (!alreadyAwarded) {
+        primary = payload?.primaryPartyId != null ? awarded.find((p) => p.id === Number(payload.primaryPartyId)) : awarded[0];
+        if (!primary) fail('ดีลหลักต้องเป็นหนึ่งในผู้รับเหมาที่ได้งาน', 400);
+        if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
+          fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
+        }
+      }
+      const now = new Date().toISOString();
+      if (primary) {
+        const customer = mockCustomers.find((c) => c.id === primary.customerId);
+        ticket.customerId = primary.customerId;
+        ticket.customerName = customer?.name ?? ticket.customerName;
+        ticket.contactId = primary.contactId ?? null;
+        primary.status = 'AWARDED';
+        mockPartiesOf(ticket.id).forEach((p) => { p.headline = p.id === primary.id; });
+        primary.updatedAt = now;
+        applyMockOrderConfirmation(ticket, mockPartyLatestQuotation(primary), user);
+      }
+      const childTicketIds = awarded.filter((p) => p !== primary).map((party) => mockForkChildDeal(ticket, party, user).id);
+      if (othersOutcome === 'NOT_AWARDED') {
+        mockPartiesOf(ticket.id)
+          .filter((p) => p.role === 'BUYER' && !awarded.includes(p) && DEAL_PARTY_BIDDING_STATUSES.includes(p.status))
+          .forEach((p) => Object.assign(p, { status: 'NOT_AWARDED', notAwardedReason: reason, headline: false, updatedAt: now }));
+      }
+      pushEvent(ticket, user, 'BID_OUTCOME_RECORDED', ticket.status, ticket.status,
+        `บันทึกผลประมูล: ได้งาน ${awarded.map(mockPartyName).join(', ')}`);
+      return delay({ result: { primaryTicketId: ticket.id, childTicketIds, ticket: buildTicketDetail(ticket).summary } });
+    },
+
+    async openForProject(projectName) {
+      const user = requireDealEntry();
+      const key = mockNormalisedProjectName(projectName);
+      if (!key) return delay({ deals: [] });
+      const deals = db.tickets
+        .filter((t) => isOwnerOrKeyer(t, user.id) && mockIsPreOutcome(t))
+        .filter((t) => mockNormalisedProjectName(mockProjects.find((p) => p.id === t.projectId)?.name) === key)
+        .sort((a, b) => b.id - a.id)
+        .map((t) => {
+          const parties = mockPartiesOf(t.id);
+          return {
+            id: t.id, code: t.code,
+            projectName: mockProjects.find((p) => p.id === t.projectId)?.name ?? null,
+            salesStage: t.salesStage, customerName: t.customerName,
+            buyerCount: parties.filter((p) => p.role === 'BUYER').length,
+            parties: parties.map((p) => ({ id: p.id, customerName: mockPartyName(p), role: p.role, status: p.status })),
+          };
+        });
+      return delay({ deals });
+    },
+
     // Mirrors TicketService.changeCustomer: same gate order (ownership, active, a quotation past
     // DRAFT, a live pricing request, then the customer/project/contact checks), and the same write
     // set -- the ticket, every DRAFT quotation of the deal (DealQuotationRepository
@@ -9106,6 +9584,12 @@ export const api = {
       ticket.projectId = project.id;
       ticket.contactId = contactId == null ? null : Number(contactId);
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
+      // V204 (TicketRepository#changeCustomer): a deal with exactly one party moves that party with
+      // it; a deal with several keeps them (a bill-to correction, not a bidder change).
+      const onlyParty = mockPartiesOf(ticket.id);
+      if (onlyParty.length === 1) {
+        Object.assign(onlyParty[0], { customerId: customer.id, contactId: ticket.contactId, updatedAt: new Date().toISOString() });
+      }
       const resnapshotAt = new Date().toISOString();
       // The request's contact (null clears it), and its name as orderedByName (never printed).
       const contactSnapshot = resolveDealQuotationContact(ticket, { contactId: ticket.contactId });
@@ -16465,19 +16949,41 @@ export const api = {
       // SUPERSEDED — quotationMeta.hasLivePricingRequest, the one definition), a direct quotation
       // may not be started. After the recipient 400, before the live-quotation guard.
       if (hasLivePricingRequest(mockPricingRequests, ticket.id)) fail(LIVE_PRICING_REQUEST_BLOCK_MESSAGE, 409);
+      // Then the deal's route (a property of the deal, so before the live-quotation guard, which is about its documents).
+      mockRequireRecipientOnRoute(ticket.entryChannel, recipientType);
+      // V204: the quotation belongs to a party — the one named, else the deal's own customer's
+      // party (preferring the recipient's role). Its customer/contact are what the document snapshots.
+      let party;
+      if (payload.partyId != null) {
+        party = mockDealParties.find((p) => p.id === Number(payload.partyId) && p.ticketId === ticket.id);
+        if (!party) fail('ไม่พบผู้รับเหมานี้ในดีล', 400);
+        if (['AWARDED_SPLIT', 'NOT_AWARDED', 'WITHDRAWN'].includes(party.status)) {
+          fail(`ผู้รับเหมา ${mockPartyName(party)} ไม่อยู่ในการเสนอราคาแล้ว จึงสร้างใบเสนอราคาใหม่ไม่ได้`, 409);
+        }
+      } else {
+        party = mockDefaultQuotationParty(ticket, recipientType, user);
+      }
+      const snapTicket = mockQuotationCustomerTicket(ticket, party?.id);
       // Mirrors DealQuotationService#create's live-quotation guard (DirectQuotationLocks
       // predicate): a deal already holding a LIVE DEAL_DIRECT quotation gets a 409 whose body names
       // it, so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข" instead of minting a second
-      // base number.
-      const live = mockLiveDirectQuotation(ticket.id);
-      if (live) {
+      // base number. Per PARTY since V204: a named party is blocked only by its OWN live row. With no party,
+      // the relaxed rule: every live row must be APPROVED and addressed to an earlier party, while the deal is
+      // still in 'draft'; the 409 names the newest live row that blocks.
+      const blocking = party
+        ? mockLivePartyDirectQuotation(ticket.id, party.id)
+        : mockDealQuotations
+          .filter((q) => q.ticketId === ticket.id && isDealDirectOrigin(q) && isLiveDirectQuotation(q)
+            && blocksNewDirectQuotation(q, recipientType, ticket.status ?? 'draft'))
+          .sort((a, b) => b.id - a.id)[0];
+      if (blocking) {
         fail(
-          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${blocking.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
           409,
-          { liveQuotationId: live.id, number: live.number, docStatus: live.docStatus },
+          { liveQuotationId: blocking.id, number: blocking.number, docStatus: blocking.docStatus },
         );
       }
-      const contactSnapshot = resolveDealQuotationContact(ticket, payload);
+      const contactSnapshot = resolveDealQuotationContact(snapTicket, payload);
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
@@ -16489,7 +16995,7 @@ export const api = {
       const orderedByContact = resolveDealQuotationOrderedByContact(payload);
       // The deal's number family — read AFTER every refusal above, so a rejected create never
       // consumes a suffix, matching the real service's ordering.
-      const createBaseNumber = mockDealBaseNumberOrMint(ticket.id);
+      const createBaseNumber = mockDealBaseNumberOrMint(ticket.id, party?.id ?? null);
       const createRevisionNo = nextMockDealQuotationRevisionNo(ticket.id, createBaseNumber);
       const row = {
         id: mockQuotationSeq++,
@@ -16517,8 +17023,9 @@ export const api = {
         approvedById: null, approvedByName: null, approvedAt: null,
         approvalDecidedAt: null, approvalDecidedBy: null, approvalNote: null,
         quotationDate: now.slice(0, 10),
-        ...mockDealQuotationCustomerSnapshot(ticket),
+        ...mockDealQuotationCustomerSnapshot(snapTicket),
         ...contactSnapshot,
+        partyId: party?.id ?? null,
         // Mirrors DealQuotationService#create: an EXPLICIT payload.projectName (even blank, to send
         // no project at all on a brand-new document) wins; omitted/null (a caller that never sends
         // the field) falls back to the deal's own project. Ignoring payload.projectName would leave
@@ -16557,6 +17064,7 @@ export const api = {
         createdAt: now, updatedAt: now,
       };
       mockDealQuotations.push(row);
+      mockMarkPartyQuoted(party);
       // Addressing the document to a party moves the deal onto that party's stage, at CREATE.
       // Pushed AFTER the row exists, so the stage and the quotation the fact gate reads land
       // together.
@@ -16647,13 +17155,15 @@ export const api = {
       });
       // Continues the DEAL's family, not a fresh base — a request-scoped numbering lookup would be
       // a defect on this path.
-      const prBaseNumber = mockDealBaseNumberOrMint(ticket.id);
+      const prParty = mockDefaultQuotationParty(ticket, pr.recipientType, user);
+      const prBaseNumber = mockDealBaseNumberOrMint(ticket.id, prParty?.id ?? null);
       const prRevisionNo = nextMockDealQuotationRevisionNo(ticket.id, prBaseNumber);
       const row = {
         id: mockQuotationSeq++,
         number: quotationRevisionNumber(prBaseNumber, prRevisionNo),
         ticketId: ticket.id,
         origin: 'PRICING_REQUEST',
+        partyId: prParty?.id ?? null,
         pricingRequestId: pr.id,
         pricingDecisionId: decision.id,
         recipientType: pr.recipientType,
@@ -16698,6 +17208,7 @@ export const api = {
       // Advance the deal on the recipient carried over from the source คำขอราคา — the same advance
       // create() performs. Since ขั้น 4 is only reachable by quoting someone, this is what gets a
       // PCR-route deal there in mock mode.
+      mockMarkPartyQuoted(prParty);
       advanceDealToQuotationRecipientStage(ticket, row.recipientType, user);
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_CREATED', pr.status, pr.status,
         'สร้างร่างใบเสนอราคาลูกค้า (เครื่องมือใบเสนอราคาแบบ direct)');
@@ -16745,6 +17256,9 @@ export const api = {
         if (row.parentQuotationId != null && nextRecipientType !== row.recipientType) {
           fail(revisionRecipientRefusal(quotationRecipientOption(row.recipientType)?.label ?? row.recipientType), 409);
         }
+        // Mirrors DealQuotationService#update: only a CHANGE to a party off the deal's route is refused; the stored
+        // recipient re-sent unchanged (a draft addressed before the channel was corrected) still saves.
+        if (nextRecipientType !== row.recipientType) mockRequireRecipientOnRoute(ticket.entryChannel, nextRecipientType);
       }
       // A PRICING_REQUEST-origin quotation's items come ENTIRELY from createFromPricingRequest;
       // adding an extra row (of any line type) is refused for this origin — mirrors
@@ -16786,9 +17300,11 @@ export const api = {
       // ล้าง: a picked ผู้ติดต่อ may be cleared per quotation — clearContact stores a blank
       // snapshot whatever contactId says, so orderedByName is null below. Update only; create
       // ignores the flag. Mirrors DealQuotationService#update.
+      // V204: a party's quotation snapshots ITS customer, not the deal's.
+      const snapTicket = mockQuotationCustomerTicket(ticket, row.partyId);
       const contactSnapshot = payload.clearContact === true
-        ? resolveDealQuotationContact(ticket, {})
-        : resolveDealQuotationContact(ticket, payload, row);
+        ? resolveDealQuotationContact(snapTicket, {})
+        : resolveDealQuotationContact(snapTicket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
       // Carry the pricing-request/decision-item LINK forward across the save, keyed by the
@@ -16828,7 +17344,7 @@ export const api = {
         validityMode, validityUntil,
         customerNotes: payload.customerNotes ?? null,
         // F7: re-snapshot the ลูกค้า columns on every DRAFT save — DealQuotationService#update.
-        ...mockDealQuotationCustomerSnapshot(ticket),
+        ...mockDealQuotationCustomerSnapshot(snapTicket),
         ...contactSnapshot,
         ...header,
         // Same DIRECT-assignment discipline as above: a full PUT always carries the payload's own
@@ -17295,45 +17811,7 @@ export const api = {
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
       }
-      const now = new Date().toISOString();
-      ticket.quotationOnly = false;
-      ticket.status = 'quotation_issued';
-      ticket.updatedAt = now;
-      ticket.orderConfirmedQuotationId = row.id; // mock-internal: which quotation the order was confirmed from
-      pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', 'draft', 'quotation_issued',
-        `ยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}`);
-      // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no
-      // non-positive quantity), no pricing field copied, qty_sqm from the same piece count.
-      ticket.items = (row.items ?? [])
-        .filter((it) => (it.lineType ?? 'TILE') !== 'ADJUSTMENT' && Number(it.quantity) > 0)
-        .map((it, i) => {
-          const tile = (it.lineType ?? 'TILE') !== 'PLAIN';
-          const sqmPerPiece = Number(it.sqmPerPiece);
-          return {
-            id: ticket.id * 100 + i, ticketId: ticket.id,
-            brand: [it.brand, it.model, it.descriptionLine, it.description].find((v) => v && String(v).trim())
-              ?? 'รายการจากใบเสนอราคา',
-            model: it.model ?? null, color: it.color ?? null, texture: it.texture ?? null,
-            size: it.sizeText ?? it.size ?? null, factory: null,
-            qty: Number(it.quantity),
-            qtySqm: tile && sqmPerPiece > 0 ? Math.round(Number(it.quantity) * sqmPerPiece * 100) / 100 : null,
-            unitBasis: 'PIECE', rawUnit: it.unit ?? null,
-            proposedPrice: null, approvedPrice: null, currency: 'THB', sortOrder: i,
-            catalogPriceId: null, catalogProductCode: null, stockSalePrice: null,
-            // DealQuotationService#ticketItemsFromQuotation + coverSourcedFromStockLines: a จากสต็อก line is covered in full.
-            sourcedFromStock: it.stockSource === 'IN_THAILAND',
-            qtyFromStock: it.stockSource === 'IN_THAILAND' ? Number(it.quantity) : 0,
-          };
-        });
-      // TicketService#confirmCustomerForPromotedQuotation -- the confirmCustomer body.
-      if (ticket.paymentStatus == null) {
-        ticket.paymentStatus = 'CUSTOMER_CONFIRMED';
-        pushEvent(ticket, user, 'CUSTOMER_CONFIRMED', ticket.status, ticket.status, null);
-        followQuotationDepositPolicy(ticket, row, user);
-      }
-      autoAdvanceStage(ticket, 'ORDER_RECEIVED', user);
-      // confirmCustomer's own no-deposit branch routes an all-stock deal; a deposit deal routes when the deposit lands.
-      if (depositBypassesNotice(ticket)) routeAllStockDealToDelivery(ticket, user);
+      applyMockOrderConfirmation(ticket, row, user, 'draft');
       return result();
     },
 

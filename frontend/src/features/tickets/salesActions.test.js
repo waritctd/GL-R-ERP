@@ -303,6 +303,57 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
       .toMatchObject({ key: SALES_ACTION.CONFIRM_ORDER_DIRECT });
   });
 
+  // Same design as the pricing-request route choice: an APPROVED designer/owner direct quotation lets
+  // the rep quote the NEXT party (เสนอราคา menu is primary; ยืนยันคำสั่งซื้อ moves to the ⋯ menu).
+  describe('APPROVED designer/owner direct quotation -> QUOTE_NEXT_PARTY (direct)', () => {
+    const KNOWN = new Set(); // every party on the route
+    const next = (liveOverrides, { dealOverrides = {}, offRouteParties = KNOWN } = {}) =>
+      nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('APPROVED', liveOverrides), ...dealOverrides }), [],
+        { offRouteParties });
+
+    it('DESIGNER -> เสนอราคาเจ้าของโครงการ with [OWNER, BUYER], anchored on the designer, direct: true', () => {
+      expect(next({ recipientType: 'DESIGNER' })).toMatchObject({
+        key: SALES_ACTION.QUOTE_NEXT_PARTY,
+        label: 'เสนอราคาเจ้าของโครงการ',
+        parties: ['OWNER', 'BUYER'],
+        anchorParty: 'DESIGNER',
+        anchorDeclined: false,
+        direct: true,
+      });
+    });
+
+    it('OWNER -> เสนอราคาผู้ซื้อ with [BUYER]', () => {
+      expect(next({ recipientType: 'OWNER' })).toMatchObject({
+        key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'], anchorParty: 'OWNER', direct: true,
+      });
+    });
+
+    it('a skipped OWNER (off the route) leaves only BUYER, labelled by the first on-route party', () => {
+      expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: new Set(['OWNER']) }))
+        .toMatchObject({ key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'] });
+    });
+
+    it('stays CONFIRM_ORDER_DIRECT for BUYER / UNSPECIFIED, when no later party is on the route, and when the route is unknown', () => {
+      for (const recipientType of ['BUYER', 'UNSPECIFIED']) {
+        expect(next({ recipientType }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
+      }
+      expect(next({ recipientType: 'OWNER' }, { offRouteParties: new Set(['BUYER']) }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
+      expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: new Set(['OWNER', 'BUYER']) }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
+      expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: null }).key).toBe(SALES_ACTION.CONFIRM_ORDER_DIRECT);
+    });
+
+    it('DRAFT / PENDING_APPROVAL direct quotations never turn into a route choice', () => {
+      const draftAction = nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('DRAFT') }), [], { offRouteParties: KNOWN });
+      const pendingAction = nextSalesAction(baseDeal({ status: 'draft', liveDirectQuotation: liveDirect('PENDING_APPROVAL') }), [], { offRouteParties: KNOWN });
+      expect([draftAction.key, pendingAction.key]).toEqual([SALES_ACTION.SUBMIT_DIRECT_QUOTATION, SALES_ACTION.AWAIT_DIRECT_APPROVAL]);
+    });
+
+    it('a deal past draft is not offered the route choice either (same status guard as the confirm)', () => {
+      const action = next({ recipientType: 'DESIGNER' }, { dealOverrides: { status: 'approved' } });
+      expect(action?.key).not.toBe(SALES_ACTION.QUOTE_NEXT_PARTY);
+    });
+  });
+
   it('null / absent liveDirectQuotation leaves the cascade exactly as before (CREATE_PCR)', () => {
     expect(nextSalesAction(baseDeal({ liveDirectQuotation: null }), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
     expect(nextSalesAction(baseDeal(), [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });

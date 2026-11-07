@@ -176,9 +176,12 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
     }
 
     @Test
-    void finalPayment_accountOnS15_recordsTheBalanceAndReachesFullyPaid() throws Exception {
+    void finalPayment_accountAtDeliveryScheduling_recordsTheBalanceAndReachesFullyPaid() throws Exception {
         long id = createS15Deal("DEPOSIT_PAID");
         insertPayment(id, "DEPOSIT", new BigDecimal("50000.00"));
+        // 2026-11-07: final payment opens at DELIVERY_SCHEDULING (S15 PROCUREMENT is refused).
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERY_SCHEDULING' WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", id));
 
         JsonNode deal = okDeal(financeMvc.perform(routeNamed("final-payment").request(id, accountUser)));
 

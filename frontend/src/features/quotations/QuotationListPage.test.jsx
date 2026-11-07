@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationListPage } from './QuotationListPage.jsx';
 import { api } from '../../api/index.js';
@@ -271,6 +271,69 @@ describe('QuotationListPage', () => {
 
     expect(screen.queryByRole('combobox', { name: 'กรองตามพนักงานขาย' })).toBeNull();
     expect(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ')).not.toBeNull();
+  });
+});
+
+// deal-party-model.md, prototype screen 1: a project quoted to several contractors is ONE deal, its
+// bids listed together under a group row.
+describe('QuotationListPage — จัดกลุ่มตามโครงการ', () => {
+  const bid = (overrides) => row({
+    ticketId: 18, ticketCode: 'DL-2026-0280', dealBuyerCount: 3, projectName: 'S26 HOTEL', docStatus: 'APPROVED', ...overrides,
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({
+      items: [
+        bid({ id: 3, number: 'QT-2026-0280-2', customerName: 'บจก.สมมติ ก่อสร้าง', partyStatus: 'QUOTED', grandTotal: 491400.03 }),
+        row({ id: 2, number: 'QT-2026-0339-2', customerName: 'บริษัท เดี่ยว จำกัด', projectName: 'บ้านคุณตัวอย่าง', dealBuyerCount: 1, ticketId: 30 }),
+        bid({ id: 1, number: 'QT-2026-0270-4', customerName: 'บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด', partyStatus: 'QUOTED', partyHeadline: true, grandTotal: 512900 }),
+        bid({ id: 4, number: 'QT-2026-0340-1', customerName: 'บจก.ทิ้งท้าย', partyStatus: 'NOT_AWARDED' }),
+      ],
+    });
+  });
+
+  it('is on by default: one group row per multi-bidder deal, its bids pulled together beneath it', async () => {
+    const { container } = renderListPage(salesUser);
+    const group = await screen.findByTestId('quotation-group-row');
+    expect(group.textContent).toContain('S26 HOTEL');
+    expect(group.textContent).toContain('3 ผู้รับเหมา');
+    expect(group.textContent).toContain('รอผลประมูล · ยอดหลัก');
+    expect(within(group).getByRole('link', { name: 'ดีล DL-2026-0280 →' }).getAttribute('href')).toBe('/tickets/18');
+    expect(screen.getByTestId('quotation-group-toggle').getAttribute('aria-pressed')).toBe('true');
+    // Order: the group header where its newest row was, its three bids, then the single-bidder row.
+    const numbers = [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent);
+    expect(numbers[0]).toContain('S26 HOTEL');
+    expect(numbers[1]).toContain('QT-2026-0280-2');
+    expect(numbers[2]).toContain('QT-2026-0270-4');
+    expect(numbers[3]).toContain('QT-2026-0340-1');
+    expect(numbers[4]).toContain('QT-2026-0339-2');
+  });
+
+  it('a grouped bid shows its outcome chip and ★ ยอดหลัก instead of the project name; NOT_AWARDED is dimmed', async () => {
+    renderListPage(salesUser);
+    await screen.findByTestId('quotation-group-row');
+    const headlineRow = screen.getByText('QT-2026-0270-4').closest('tr');
+    expect(within(headlineRow).getByText('★ ยอดหลัก')).toBeTruthy();
+    expect(within(headlineRow).getByText('เสนอราคาแล้ว')).toBeTruthy();
+    expect(within(headlineRow).queryByText('S26 HOTEL')).toBeNull();
+    const lostRow = screen.getByText('QT-2026-0340-1').closest('tr');
+    expect(lostRow.className).toContain('opacity-60');
+    expect(within(lostRow).getByText('ไม่ได้งาน')).toBeTruthy();
+    // The single-bidder row keeps its project line.
+    expect(within(screen.getByText('QT-2026-0339-2').closest('tr')).getByText('บ้านคุณตัวอย่าง')).toBeTruthy();
+  });
+
+  it('turning it off removes the group row and remembers the choice', async () => {
+    const { unmount } = renderListPage(salesUser);
+    fireEvent.click(await screen.findByTestId('quotation-group-toggle'));
+    await waitFor(() => expect(screen.queryByTestId('quotation-group-row')).toBeNull());
+    expect(within(screen.getByText('QT-2026-0270-4').closest('tr')).getByText('S26 HOTEL')).toBeTruthy();
+    unmount();
+    renderListPage(salesUser);
+    await screen.findByText('QT-2026-0270-4');
+    expect(screen.getByTestId('quotation-group-toggle').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByTestId('quotation-group-toggle'));
   });
 });
 

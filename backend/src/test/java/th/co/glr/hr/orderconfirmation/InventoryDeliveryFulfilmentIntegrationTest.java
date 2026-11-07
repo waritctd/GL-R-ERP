@@ -720,6 +720,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         DepositNoticeDto notice = confirmOrderAndIssueDepositNotice(deal);
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
 
+        tickets.updateSalesStage(deal.ticketId, DealStage.DELIVERY_SCHEDULING); // 2026-11-07 final-payment gate
         ticketService.confirmFinalPayment(deal.ticketId, accountActor);
 
         mailer.assertEmployeeNotice(salesRepId, "DEPOSIT_PAYMENT_CONFIRMED", DEPOSIT_CONFIRMED_TITLE,
@@ -770,6 +771,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().paymentStatus())
             .as("fixture: receipts cover the payable but payment_status never advanced").isNotEqualTo("FULLY_PAID");
 
+        tickets.updateSalesStage(deal.ticketId, DealStage.DELIVERY_SCHEDULING); // 2026-11-07 final-payment gate
         ticketService.confirmFinalPayment(deal.ticketId, accountActor);
 
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().paymentStatus()).isEqualTo("FULLY_PAID");
@@ -869,6 +871,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     void completeDelivery_onAnAlreadyPaidInFullDeal_notifiesAccountToConfirmCloseReady() {
         long accountId = mailer.seedRoleEmployee("account");
         Deal deal = allStockDealWithDepositPaid("4");
+        tickets.updateSalesStage(deal.ticketId, DealStage.DELIVERY_SCHEDULING); // 2026-11-07 final-payment gate
         ticketService.confirmFinalPayment(deal.ticketId, accountActor);
         assertThat(tickets.payableAmount(deal.ticketId).subtract(tickets.sumPaid(deal.ticketId)).signum())
             .as("fixture: nothing outstanding").isZero();
