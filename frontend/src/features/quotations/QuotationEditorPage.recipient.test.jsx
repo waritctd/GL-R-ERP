@@ -31,6 +31,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         get: vi.fn(), create: vi.fn(), update: vi.fn(), calculateLine: vi.fn(), submit: vi.fn(),
         approve: vi.fn(), reject: vi.fn(), createRevision: vi.fn(), createReorder: vi.fn(), cancel: vi.fn(),
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(), promoteToDeal: vi.fn(),
+        // The deal's quotation rows (the deal page's own list query) — N6's pre-check reads every live one.
+        listForTicket: vi.fn(),
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
       },
       catalog: { prices: vi.fn() },
@@ -145,6 +147,7 @@ beforeEach(() => {
   api.customers.projects.mockResolvedValue({ projects: [] });
   api.dealQuotations.calculateLine.mockResolvedValue({ item: {} });
   api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+  api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
 });
 
 describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
@@ -295,6 +298,52 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await fillCompleteQuotationItem();
     await waitFor(() => expect(saveButton().disabled).toBe(true));
     expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1)');
+  }, 10000);
+
+  // The summary serves only the NEWEST live direct quotation; the server (DirectQuotationLocks) checks every live
+  // row. Here the newest (#3, a revision) is an APPROVED designer quotation while an older OWNER one (#2) is still
+  // PENDING_APPROVAL: BUYER is refused, naming #2 — so the editor must say so BEFORE the save.
+  const LIVE_ROWS = [
+    { id: 3, number: 'QT-2026-0003-1', origin: 'DEAL_DIRECT', ticketId: 18, docStatus: 'APPROVED', recipientType: 'DESIGNER' },
+    { id: 2, number: 'QT-2026-0002-1', origin: 'DEAL_DIRECT', ticketId: 18, docStatus: 'PENDING_APPROVAL', recipientType: 'OWNER' },
+    { id: 1, number: 'QT-2026-0001-1', origin: 'DEAL_DIRECT', ticketId: 18, docStatus: 'CANCELLED', recipientType: 'DESIGNER' },
+  ];
+  const newestLive = { id: 3, number: 'QT-2026-0003-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
+
+  it('?recipient=BUYER: an older live OWNER row blocks บันทึกร่าง WITH its number, though the newest live row (APPROVED designer) alone would allow', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: newestLive }) } });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: LIVE_ROWS });
+    renderEditor('/quotations/new?ticket=18&recipient=BUYER');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }).getAttribute('aria-checked')).toBe('true'));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(18));
+    await waitFor(() => expect(saveButton().disabled).toBe(true));
+    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0002-1)');
+  }, 10000);
+
+  it('?recipient=BUYER: only an APPROVED designer row (plus a cancelled one) -> บันทึกร่าง stays enabled and the create goes out', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: newestLive }) } });
+    api.dealQuotations.listForTicket.mockResolvedValue({ items: [LIVE_ROWS[0], LIVE_ROWS[2]] });
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+    renderEditor('/quotations/new?ticket=18&recipient=BUYER', { idRoute: 'probe' });
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }).getAttribute('aria-checked')).toBe('true'));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(18));
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ recipientType: 'BUYER' })));
+  }, 10000);
+
+  it('?recipient=BUYER: a live PRICING_REQUEST-origin row is not a direct quotation (N6 ignores it), so บันทึกร่าง stays enabled', async () => {
+    api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: newestLive }) } });
+    api.dealQuotations.listForTicket.mockResolvedValue({
+      items: [LIVE_ROWS[0], { ...LIVE_ROWS[1], id: 4, number: 'QT-2026-0004-1', origin: 'PRICING_REQUEST' }],
+    });
+    renderEditor('/quotations/new?ticket=18&recipient=BUYER');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }).getAttribute('aria-checked')).toBe('true'));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(18));
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
   }, 10000);
 
   it('N6: a deal with a live direct quotation disables บันทึกร่าง WITH the reason, beside the inline notice', async () => {

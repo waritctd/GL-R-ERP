@@ -1687,6 +1687,42 @@ describe('buildQuotationChecklist', () => {
     expect(checks('approved')).toEqual(['liveDirectQuotation']);
   });
 
+  // The server (DirectQuotationLocks) checks EVERY live row; the deal summary serves only the newest, so the
+  // pre-check takes the deal's live rows (newest first) and blocks if ANY row blocks, naming the newest blocker.
+  it('slice 2: N6 over every live row — any blocking row blocks, and the message names the newest BLOCKING one; a single row (object) still works', () => {
+    const row = (id, docStatus, recipientType) => ({ id, number: `QT-2026-00${id}-1`, docStatus, recipientType });
+    const blocks = (rows, recipientType, dealStatus) => meta.blocksNewDirectQuotation(rows, recipientType, dealStatus);
+    const messages = (rows, recipientType) =>
+      meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType, liveDirectQuotation: rows })
+        .filter((e) => e.check === 'liveDirectQuotation').map((e) => e.message);
+    const approvedDesigner = row(77, 'APPROVED', 'DESIGNER');
+    const ownerDraft = row(78, 'DRAFT', 'OWNER');
+    const ownerPending = row(78, 'PENDING_APPROVAL', 'OWNER');
+
+    // Newest row alone would allow BUYER (APPROVED designer); the older owner row blocks.
+    expect(blocks([approvedDesigner, ownerDraft], 'BUYER')).toBe(true);
+    expect(blocks([ownerDraft, approvedDesigner], 'BUYER')).toBe(true);
+    expect(blocks([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER')).toBe(true);
+    // Every row APPROVED + strictly earlier: allowed. Dead rows are ignored.
+    expect(blocks([row(79, 'APPROVED', 'OWNER'), approvedDesigner], 'BUYER')).toBe(false);
+    expect(blocks([approvedDesigner], 'BUYER')).toBe(false);
+    expect(blocks([approvedDesigner, row(80, 'CANCELLED', 'OWNER')], 'BUYER')).toBe(false);
+    expect(blocks([], 'BUYER')).toBe(false);
+    // Past draft every live row blocks.
+    expect(blocks([approvedDesigner], 'BUYER', 'quotation_issued')).toBe(true);
+    // Single-row callers (DealPicker, mockApi) are unchanged.
+    expect(blocks(approvedDesigner, 'BUYER')).toBe(false);
+    expect(blocks(ownerDraft, 'BUYER')).toBe(true);
+
+    expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
+      .toEqual(['ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
+    // Two blockers: the newest (highest id) is named, whatever the list order.
+    const newestNamed = ['ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
+    expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
+    expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
+    expect(messages([approvedDesigner], 'BUYER')).toEqual([]);
+  });
+
   it('slice 2: the recipient table maps to S4/S5/S8 and back, and never offers UNSPECIFIED', () => {
     expect(meta.QUOTATION_RECIPIENT_OPTIONS.map((o) => [o.code, o.stage])).toEqual([
       ['DESIGNER', 'QUOTE_DESIGN_SIDE'], ['OWNER', 'QUOTE_OWNER'], ['BUYER', 'QUOTE_BUYER'],

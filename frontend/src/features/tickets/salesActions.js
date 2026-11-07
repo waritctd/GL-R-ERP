@@ -25,7 +25,7 @@
 // bucket 1: a delivery-ready deal matching bucket 1's guard still gets CREATE_PCR. See bucket 5.
 
 import { bangkokTodayIso } from '../../utils/format.js';
-import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
+import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_ROUTE as PARTY_ROUTE } from '../quotations/quotationMeta.js';
 import { depositSettled } from './dealMoneyStatus.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
@@ -166,7 +166,6 @@ const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
 
 // The quote route in S-order (DESIGNER → OWNER → BUYER). The labels are a short phrase for after a
 // verb ("เสนอราคาผู้ซื้อ"), not the ผู้รับ chip labels (ผู้ซื้อ / ผู้รับเหมา).
-const PARTY_ROUTE = QUOTATION_RECIPIENT_OPTIONS.map((option) => option.code);
 export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ' };
 // A request's quotation "went out": sent at least once and not awaiting a revision. A REJECTED or
 // EXPIRED one counts — that party said no.
@@ -224,6 +223,15 @@ export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest
 const partiesAfter = (party, offRouteParties) =>
   PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(party) + 1).filter((next) => !offRouteParties.has(next));
 
+/** The "เสนอราคา<next party>" route choice, shared by the pricing-request and the direct-quotation paths. */
+const quoteNextPartyAction = (anchorParty, parties, extra) => ({
+  key: SALES_ACTION.QUOTE_NEXT_PARTY,
+  label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
+  parties,
+  anchorParty,
+  ...extra,
+});
+
 /**
  * Once a designer/owner quotation is sent, the rep picks the next party. The anchor is the request
  * furthest along the route whose quotation went out (with no row for it, QUOTATION_ISSUED alone
@@ -247,13 +255,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
       ? { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id }
       : null;
   }
-  return {
-    key: SALES_ACTION.QUOTE_NEXT_PARTY,
-    label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
-    parties,
-    anchorParty: anchor.recipientType,
-    anchorDeclined: DECLINED_DOC_STATUSES.has(quotationOf(anchor)?.docStatus),
-  };
+  return quoteNextPartyAction(anchor.recipientType, parties, { anchorDeclined: DECLINED_DOC_STATUSES.has(quotationOf(anchor)?.docStatus) });
 }
 
 /**
@@ -524,16 +526,7 @@ function directQuoteNextPartyAction(deal, offRouteParties) {
     || (live.recipientType !== 'DESIGNER' && live.recipientType !== 'OWNER')) return null;
   const parties = partiesAfter(live.recipientType, offRouteParties);
   if (parties.length === 0) return null;
-  return {
-    key: SALES_ACTION.QUOTE_NEXT_PARTY,
-    label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
-    parties,
-    anchorParty: live.recipientType,
-    anchorDeclined: false,
-    direct: true,
-    quotationId: live.id,
-    quotationNumber: live.number,
-  };
+  return quoteNextPartyAction(live.recipientType, parties, { anchorDeclined: false, direct: true, quotationId: live.id, quotationNumber: live.number });
 }
 
 /**

@@ -2726,8 +2726,102 @@ describe('TicketDetailPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
       fireEvent.click(await screen.findByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' }));
       const dialog = within(await screen.findByRole('dialog'));
+      expect(screen.getByRole('dialog').textContent).not.toContain('อัตโนมัติ'); // only row is the confirmed one: copy unchanged
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
+    });
+
+    // The summary serves only the NEWEST live direct quotation. With a later party's DRAFT/PENDING beside an
+    // APPROVED designer quotation, the deal page reads the APPROVED row off its quotation list and ⋯ still
+    // offers ยืนยันคำสั่งซื้อ for that row (before, only the quotation's own editor could).
+    describe('APPROVED designer quotation beside a newer owner quotation: ⋯ ยืนยันคำสั่งซื้อ', () => {
+      const approvedDesigner = { id: 77, number: 'QT-2026-0077-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'DESIGNER', depositPercent: 0, salesRepId: 1 };
+      const ownerRow = (docStatus) => ({ id: 78, number: 'QT-2026-0078-1', origin: 'DEAL_DIRECT', docStatus, recipientType: 'OWNER', depositPercent: 0, salesRepId: 1 });
+      function dealWithOwnerQuotation(docStatus, { status = 'draft', createdById = 1, rows = [approvedDesigner], ownerId = 78 } = {}) {
+        deal({ requests: [], quotations: [...rows, { ...ownerRow(docStatus), id: ownerId, number: `QT-2026-00${ownerId}-1` }] });
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', createdById, status, entryChannel: 'DESIGNER_LED',
+              liveDirectQuotation: { id: ownerId, number: `QT-2026-00${ownerId}-1`, docStatus, recipientType: 'OWNER' },
+            },
+          }),
+        });
+        api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
+      }
+      const openMore = async () => {
+        fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      };
+
+      it('owner DRAFT is the primary (submit): ⋯ -> ยืนยันคำสั่งซื้อ -> dialog names the APPROVED row -> promoteToDeal(77), never 78', async () => {
+        dealWithOwnerQuotation('DRAFT');
+        renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+        await primaryWithAction('submit_direct_quotation');
+
+        await openMore();
+        fireEvent.click(await screen.findByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' }));
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(dialog.getByText(/ใบเสนอราคา QT-2026-0077-1/)).not.toBeNull();
+        // The confirm auto-cancels the deal's other open direct quotations: the dialog says which (here, only #78).
+        expect(dialog.getByText(/จะถูกยกเลิกอัตโนมัติ/).textContent).toContain('QT-2026-0078-1');
+        expect(dialog.getByText(/จะถูกยกเลิกอัตโนมัติ/).textContent).not.toContain('QT-2026-0077-1');
+        fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+        await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
+        expect(api.dealQuotations.promoteToDeal).not.toHaveBeenCalledWith(78);
+      });
+
+      it('two APPROVED direct rows (77, 79) beside an owner DRAFT 80: confirms the NEWEST approved one (79); only the open DRAFT (80) is named as auto-cancelled, never the approved 77', async () => {
+        dealWithOwnerQuotation('DRAFT', { ownerId: 80, rows: [approvedDesigner, { ...approvedDesigner, id: 79, number: 'QT-2026-0079-1' }] });
+        renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+        await primaryWithAction('submit_direct_quotation');
+        await openMore();
+        fireEvent.click(await screen.findByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' }));
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(dialog.getByText(/ใบเสนอราคา QT-2026-0079-1/)).not.toBeNull();
+        const cancels = dialog.getByText(/จะถูกยกเลิกอัตโนมัติ/).textContent;
+        expect(cancels).toContain('QT-2026-0080-1');
+        expect(cancels).not.toContain('QT-2026-0077-1');
+        fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+        await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(79));
+        expect(api.dealQuotations.promoteToDeal).not.toHaveBeenCalledWith(77);
+      });
+
+      it('an APPROVED PRICING_REQUEST-origin row on a draft deal is not a direct quotation: no ยืนยันคำสั่งซื้อ in ⋯', async () => {
+        deal({
+          requests: [],
+          quotations: [{ id: 9101, number: 'QT-2026-0101-1', origin: 'PRICING_REQUEST', pricingRequestId: 501, docStatus: 'APPROVED', recipientType: 'DESIGNER', salesRepId: 1, depositPercent: 30 }],
+        });
+        renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+        await stickyInputsSettled();
+        const more = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+        if (more) fireEvent.click(more);
+        expect(screen.queryByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
+      });
+
+      it('owner PENDING_APPROVAL (the page only waits): ⋯ still offers it', async () => {
+        dealWithOwnerQuotation('PENDING_APPROVAL');
+        renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+        await openMore();
+        expect(await screen.findByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' })).not.toBeNull();
+      });
+
+      it('not offered once the order is confirmed (deal past draft)', async () => {
+        dealWithOwnerQuotation('DRAFT', { status: 'quotation_issued' });
+        renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+        await stickyInputsSettled();
+        const more = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+        if (more) fireEvent.click(more);
+        expect(screen.queryByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
+      });
+
+      it('not offered to a sales rep who does not own the deal', async () => {
+        dealWithOwnerQuotation('DRAFT', { createdById: 2 });
+        renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+        await stickyInputsSettled();
+        const more = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
+        if (more) fireEvent.click(more);
+        expect(screen.queryByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' })).toBeNull();
+      });
     });
   });
 
@@ -4748,6 +4842,7 @@ describe('TicketDetailPage', () => {
       expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
       expect(dialog.getByText(/QT-2026-0077-1/)).not.toBeNull();
       expect(await dialog.findByText(/ไม่เก็บมัดจำ/)).not.toBeNull(); // copy follows the quotation's 0%
+      expect(screen.getByRole('dialog').textContent).not.toContain('อัตโนมัติ'); // no other open direct quotation: copy unchanged
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
       await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'ยืนยันคำสั่งซื้อแล้ว'));

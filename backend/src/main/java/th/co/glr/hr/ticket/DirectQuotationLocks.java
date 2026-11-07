@@ -83,7 +83,7 @@ public final class DirectQuotationLocks {
     /**
      * N6 (S2-B3): 409 when {@code ticketId} already has a live direct quotation, naming the NEWEST
      * blocking one (the newest live row that fails the exception below; with a single live row that is
-     * {@link TicketRepository#findLiveDirectQuotation}, the row {@link TicketSummaryDto#liveDirectQuotation} serves) in the error body's top-level
+     * the row {@link TicketSummaryDto#liveDirectQuotation} serves) in the error body's top-level
      * {@code liveQuotationId} / {@code number} / {@code docStatus}, so the client can offer
      * "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข" instead of minting a second base number. A no-op otherwise.
      *

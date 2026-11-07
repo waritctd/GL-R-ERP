@@ -2294,16 +2294,20 @@ public class TicketRepository {
 
     /**
      * The ONE definition of a "live" direct quotation, shared as SQL text by
-     * {@link #hasLiveDirectQuotation} (the lock) and {@link #findLiveDirectQuotation} (the
-     * refusal and {@link TicketSummaryDto#liveDirectQuotation}) so the two can never disagree about
-     * which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
+     * {@link #hasLiveDirectQuotation} (the lock), {@link #findLiveDirectQuotations} (the refusal)
+     * and {@link #liveDirectQuotationSelect} ({@link TicketSummaryDto#liveDirectQuotation}), so they can never
+     * disagree about which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
      */
     private static final String LIVE_DIRECT_QUOTATION_PREDICATE = """
                              AND origin = 'DEAL_DIRECT'
                              AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
         """;
 
-    /** The newest live direct quotation's row for {@code ticketIdRef} — see {@link #findLiveDirectQuotation}. */
+    /**
+     * The NEWEST live direct quotation's row for {@code ticketIdRef} (highest {@code quotation_id}): the row
+     * {@link TicketSummaryDto#liveDirectQuotation} serves for a whole page in one statement. A deal can hold
+     * several live rows (an APPROVED parent and its DRAFT revision, a reorder clone); the client acts on the newest.
+     */
     private static String liveDirectQuotationSelect(String ticketIdRef) {
         return """
             SELECT quotation_id, number, doc_status, recipient_type
@@ -2315,26 +2319,7 @@ public class TicketRepository {
         """;
     }
 
-    private static final String LIVE_DIRECT_QUOTATION_SELECT = liveDirectQuotationSelect(":ticketId");
-
-    /**
-     * Quotation ↔ deal linking — the NEWEST live direct quotation on the
-     * deal (highest {@code quotation_id}), or empty. Newest matters because a deal can legitimately
-     * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
-     * reorder clone — and the client acts on the one being worked on.
-     *
-     * <p>The list/detail field does not call this: {@link SummaryFactsSql#SELECT} reads the same row
-     * (via {@link #liveDirectQuotationSelect}) for a whole page in one statement. Each call here is an
-     * index lookup on {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
-     */
-    public Optional<LiveDirectQuotationDto> findLiveDirectQuotation(long ticketId) {
-        List<LiveDirectQuotationDto> rows = jdbc.query(LIVE_DIRECT_QUOTATION_SELECT, Map.of("ticketId", ticketId),
-            (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
-                rs.getString("doc_status"), rs.getString("recipient_type")));
-        return rows.stream().findFirst();
-    }
-
-    /** Every live direct quotation on the deal, newest first (same predicate as {@link #findLiveDirectQuotation}). */
+    /** Every live direct quotation on the deal, newest first (same predicate as the lock). */
     public List<LiveDirectQuotationDto> findLiveDirectQuotations(long ticketId) {
         return jdbc.query("""
             SELECT quotation_id, number, doc_status, recipient_type

@@ -321,6 +321,53 @@ describe('resolveWorkState — live direct quotation (slice 2)', () => {
     expect(secondaryWorkActions({ role: 'ceo' }, approved('DESIGNER'), [], { offRouteParties: new Set() })).toEqual([]);
   });
 
+  // The summary serves only the NEWEST live direct quotation. When that is a later party's DRAFT/PENDING
+  // beside an APPROVED designer quotation, the caller hands the APPROVED row in (`approvedDirect`, read
+  // off the deal's quotation list) and ⋯ still offers ยืนยันคำสั่งซื้อ for THAT row.
+  describe('secondaryWorkActions — approvedDirect (APPROVED designer row beside a newer owner quotation)', () => {
+    const approvedDesigner = { id: 77, number: 'QT-2026-0077-1' };
+    const ownerLive = (docStatus) => ({ id: 78, number: 'QT-2026-0078-1', docStatus, recipientType: 'OWNER' });
+    const sales = { role: 'sales' };
+    const dealWith = (live, overrides = {}) => baseDeal({ status: 'draft', liveDirectQuotation: live, ...overrides });
+    const confirmFor77 = expect.objectContaining({ key: 'confirm_order_direct', label: 'ยืนยันคำสั่งซื้อ', quotationId: 77, quotationNumber: 'QT-2026-0077-1' });
+
+    it('owner DRAFT is the primary (submit) -> ⋯ confirms the APPROVED designer row, by ITS id and number', () => {
+      const deal = dealWith(ownerLive('DRAFT'));
+      expect(resolveWorkState(sales, deal, [], { offRouteParties: new Set() }).action).toMatchObject({ key: 'submit_direct_quotation', quotationId: 78 });
+      expect(secondaryWorkActions(sales, deal, [], { offRouteParties: new Set(), approvedDirect: approvedDesigner })).toEqual([confirmFor77]);
+    });
+
+    it('owner PENDING_APPROVAL is a waiting banner (no primary) -> ⋯ still confirms the APPROVED designer row', () => {
+      const deal = dealWith(ownerLive('PENDING_APPROVAL'));
+      expect(resolveWorkState(sales, deal, [], { offRouteParties: new Set() }).action).toBeNull();
+      expect(secondaryWorkActions(sales, deal, [], { offRouteParties: new Set(), approvedDirect: approvedDesigner })).toEqual([confirmFor77]);
+    });
+
+    it('route still unknown (offRouteParties null) does not hide it', () => {
+      expect(secondaryWorkActions(sales, dealWith(ownerLive('DRAFT')), [], { approvedDirect: approvedDesigner })).toEqual([confirmFor77]);
+    });
+
+    it('no duplicate when the primary already IS confirm_order_direct (APPROVED buyer row) or the direct route choice (APPROVED designer row)', () => {
+      const buyer = { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'BUYER' };
+      expect(resolveWorkState(sales, dealWith(buyer), [], { offRouteParties: new Set() }).action).toMatchObject({ key: 'confirm_order_direct' });
+      expect(secondaryWorkActions(sales, dealWith(buyer), [], { offRouteParties: new Set(), approvedDirect: approvedDesigner })).toEqual([]);
+      const designer = { ...buyer, recipientType: 'DESIGNER' };
+      const keys = secondaryWorkActions(sales, dealWith(designer), [], { offRouteParties: new Set(), approvedDirect: approvedDesigner })
+        .filter((a) => a.key === 'confirm_order_direct');
+      expect(keys).toEqual([confirmFor77]);
+    });
+
+    it('absent past draft (the confirm 409s once an order is confirmed), for non-sales roles, and when nothing is passed', () => {
+      const opts = { offRouteParties: new Set(), approvedDirect: approvedDesigner };
+      expect(secondaryWorkActions(sales, dealWith(ownerLive('DRAFT'), { status: 'quotation_issued' }), [], opts)).toEqual([]);
+      for (const role of ['ceo', 'sales_manager', 'import', 'account']) {
+        expect(secondaryWorkActions({ role }, dealWith(ownerLive('DRAFT')), [], opts)).toEqual([]);
+      }
+      expect(secondaryWorkActions(sales, dealWith(ownerLive('DRAFT')), [], { offRouteParties: new Set() })).toEqual([]);
+      expect(secondaryWorkActions(sales, dealWith(ownerLive('DRAFT'), { lifecycle: 'ON_HOLD' }), [], opts)).toEqual([]);
+    });
+  });
+
   it('an ON_HOLD deal still returns nothing — the lifecycle banner owns that state', () => {
     const result = resolveWorkState({ role: 'ceo' }, baseDeal({ lifecycle: 'ON_HOLD', liveDirectQuotation: pending }), []);
     expect(result).toEqual({ action: null });
