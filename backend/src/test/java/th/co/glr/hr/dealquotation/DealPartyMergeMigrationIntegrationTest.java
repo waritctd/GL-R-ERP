@@ -78,6 +78,29 @@ class DealPartyMergeMigrationIntegrationTest extends AbstractDealDirectQuotation
     }
 
     @Test
+    void groupsWithDifferentKeyerOrPolicy_areLeftWhole() {
+        CustomerDto a = customer("บจก.ผู้รับเหมา จี");
+        CustomerDto b = customer("บจก.ผู้รับเหมา เอช");
+        CustomerDto c = customer("บจก.ผู้รับเหมา ไอ");
+        CustomerDto d = customer("บจก.ผู้รับเหมา เจ");
+        long keyerA = container(a, SITE + " keyer", salesActor);
+        long keyerB = container(b, SITE + " keyer", salesActor);
+        long policyA = container(c, SITE + " policy", salesActor);
+        long policyB = container(d, SITE + " policy", salesActor);
+        for (long t : new long[] {keyerA, keyerB, policyA, policyB}) {
+            quote(t);
+        }
+        jdbc.update("UPDATE sales.ticket SET keyed_by = :k WHERE ticket_id = :id", Map.of("k", otherRep.id(), "id", keyerB));
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'WAIVED' WHERE ticket_id = :id", Map.of("id", policyB));
+
+        migrate();
+        for (long t : new long[] {keyerA, keyerB, policyA, policyB}) {
+            assertThat(status(t)).isEqualTo("draft");
+            assertThat(ticketOf(quoteIdsOn(t).get(0))).isEqualTo(t);
+        }
+    }
+
+    @Test
     void differentReps_areNotMerged() {
         CustomerDto a = customer("บจก.ผู้รับเหมา อี");
         CustomerDto b = customer("บจก.ผู้รับเหมา เอฟ");
