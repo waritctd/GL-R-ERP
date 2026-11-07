@@ -264,6 +264,13 @@ V205 against production data on 2026-11-07 (grouped by deal owner and project ro
 (contains an ordinary pipeline deal). Same-company duplicates typed as two customers become two
 parties on one deal; merging the customer rows is still a manual step.
 
+V206 (2026-11-07) finishes what V205 skipped on bookkeeping: the same project whose open deals are
+all pure containers and whose live quotations all name ONE rep now merges even when the deal owner
+or keyer differs (an admin-typed deal, a second keyer) or one customer was quoted twice (one party,
+both quotations). The survivor is the lowest-id deal owned by that rep, so ownership stays with the
+rep who quoted. Projects quoted by several different reps ("showroom @myanmar"), test data and
+projects with an ordinary deal are still left alone. Production: 14 projects, 19 deals folded.
+
 Behaviour decided while building, beyond the rules above:
 
 - A quotation created without a party attaches to the deal's own customer's party, preferring
