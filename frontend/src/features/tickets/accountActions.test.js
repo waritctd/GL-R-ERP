@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountMoneyBucket, nextAccountAction } from './accountActions.js';
+import { accountMoneyBucket, accountOwesStep, awaitingGoodsForFinalPayment, nextAccountAction } from './accountActions.js';
 
 function ticket(overrides = {}) {
   return {
@@ -40,7 +40,7 @@ describe('nextAccountAction', () => {
   });
 
   it('awaiting-final-payment -> รับชำระส่วนที่เหลือ', () => {
-    const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' });
+    const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage: 'DELIVERY_SCHEDULING' });
     const action = nextAccountAction(t);
     expect(action.key).toBe('confirmFinalPayment');
     expect(action.label).toBe('รับชำระส่วนที่เหลือ');
@@ -48,12 +48,12 @@ describe('nextAccountAction', () => {
   });
 
   it('deposit-paid also counts as final payment due (mirrors TicketService#canConfirmFinalPaymentNow)', () => {
-    const t = ticket({ paymentStatus: 'DEPOSIT_PAID' });
+    const t = ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage: 'DELIVERY_SCHEDULING' });
     expect(nextAccountAction(t).key).toBe('confirmFinalPayment');
   });
 
   it('a deposit-bypassed deal (WAIVED policy) can go straight to final payment', () => {
-    const t = ticket({ depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' });
+    const t = ticket({ depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'DELIVERY_SCHEDULING' });
     expect(nextAccountAction(t).key).toBe('confirmFinalPayment');
   });
 
@@ -163,6 +163,38 @@ describe('nextAccountAction', () => {
     expect(nextAccountAction(t).key).toBe('confirmCloseReady');
   });
 
+  // Owner ruling 2026-11-07: รับชำระส่วนที่เหลือ stays closed until money-milestone 3 (PROCUREMENT) is
+  // done, i.e. the deal reached DELIVERY_SCHEDULING or later. Mirrors TicketService#canConfirmFinalPaymentNow.
+  describe('final payment is gated until the deal reaches DELIVERY_SCHEDULING', () => {
+    const early = ['ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT'];
+    const late = ['DELIVERY_SCHEDULING', 'DELIVERED'];
+    const shapes = [
+      ['DEPOSIT_PAID', { paymentStatus: 'DEPOSIT_PAID' }],
+      ['AWAITING_FINAL_PAYMENT', { paymentStatus: 'AWAITING_FINAL_PAYMENT' }],
+      ['deposit-bypass + CUSTOMER_CONFIRMED', { depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' }],
+    ];
+    const cases = (stages) => stages.flatMap((stage) => shapes.map(([label, o]) => [`${label} @ ${stage}`, { ...o, salesStage: stage }]));
+
+    it.each(cases(early))('%s: no final-payment CTA, no finalPaymentPending bucket', (_n, o) => {
+      const t = ticket(o);
+      expect(nextAccountAction(t, 'account')).toBeNull();
+      expect(nextAccountAction(t)).toBeNull();
+      expect(accountMoneyBucket(t)).toBeNull();
+    });
+
+    it.each(cases(late))('%s: still offered (regression guard)', (_n, o) => {
+      const t = ticket(o);
+      expect(nextAccountAction(t, 'account').key).toBe('confirmFinalPayment');
+      expect(accountMoneyBucket(t)).toBe('finalPaymentPending');
+    });
+
+    it('an early-stage deal with a balance still owed keeps its overdue chase (outstanding is not hidden)', () => {
+      const t = ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage: 'PROCUREMENT', overdue: true, amountOutstanding: 5000 });
+      expect(nextAccountAction(t, 'account').key).toBe('chaseOverdue');
+      expect(accountMoneyBucket(t)).toBe('overdue');
+    });
+  });
+
   // GLA-118 (owner ruling 2026-09-20, part A): recording a payment — confirmDeposit/
   // confirmFinalPayment — is account only now, no CEO fallback. The CEO still reaches /finance
   // (canConfirmPayments is unchanged), so the worklist must stop offering those two CTAs to
@@ -175,7 +207,7 @@ describe('nextAccountAction', () => {
     });
 
     it('awaiting-final-payment: ceo gets no CTA, account still gets รับชำระส่วนที่เหลือ', () => {
-      const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' });
+      const t = ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage: 'DELIVERED' });
       expect(nextAccountAction(t, 'ceo')).toBeNull();
       expect(nextAccountAction(t, 'account').key).toBe('confirmFinalPayment');
     });
@@ -210,10 +242,27 @@ describe('nextAccountAction', () => {
   });
 });
 
+// ค้างรับ's SQL (ACCOUNT_HAS_TODO) has no stage condition, so accountOwesStep must not depend on the stage
+// for an AWAITING_FINAL_PAYMENT / DEPOSIT_PAID deal, whatever stage it sits at (incl. null).
+describe('accountOwesStep (ค้างรับ: owed regardless of the final-payment stage gate)', () => {
+  const stages = ['QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT',
+    'DELIVERY_SCHEDULING', 'DELIVERED', null, undefined];
+  it.each(stages.map((s) => [String(s), s]))('AWAITING_FINAL_PAYMENT @ %s is owed', (_n, salesStage) => {
+    expect(accountOwesStep(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage }))).toBe(true);
+  });
+  it.each(stages.map((s) => [String(s), s]))('DEPOSIT_PAID @ %s is owed', (_n, salesStage) => {
+    expect(accountOwesStep(ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage }))).toBe(true);
+  });
+  it('nothing pending is not owed, and null input is not owed', () => {
+    expect(accountOwesStep(ticket({ paymentStatus: 'CUSTOMER_CONFIRMED' }))).toBe(false);
+    expect(accountOwesStep(null)).toBe(false);
+  });
+});
+
 describe('accountMoneyBucket', () => {
   it('buckets match nextAccountAction’s own key ordering', () => {
     expect(accountMoneyBucket(ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }))).toBe('depositPending');
-    expect(accountMoneyBucket(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' }))).toBe('finalPaymentPending');
+    expect(accountMoneyBucket(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage: 'DELIVERED' }))).toBe('finalPaymentPending');
     expect(accountMoneyBucket(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', overdue: true, amountOutstanding: 500 }))).toBe('overdue');
     expect(accountMoneyBucket(ticket({
       paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', amountOutstanding: 0, invoiceOnFile: true,
@@ -227,5 +276,38 @@ describe('accountMoneyBucket', () => {
     const closedPaid = { salesStage: 'CLOSED_PAID', paymentStatus: 'FULLY_PAID', amountOutstanding: 0 };
     expect(accountMoneyBucket(ticket({ ...closedPaid, commissionRecorded: true }))).toBeNull();
     expect(accountMoneyBucket(ticket({ ...closedPaid, commissionRecorded: false }))).toBe('commissionPending');
+  });
+});
+
+// The รอสินค้าเข้า panel: owed money the final-payment stage gate is holding (not overdue, no CTA yet).
+describe('awaitingGoodsForFinalPayment', () => {
+  const held = (o = {}) => ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage: 'PROCUREMENT', ...o });
+
+  it.each([
+    ['DEPOSIT_PAID', { paymentStatus: 'DEPOSIT_PAID' }],
+    ['AWAITING_FINAL_PAYMENT', { paymentStatus: 'AWAITING_FINAL_PAYMENT' }],
+    ['deposit-bypass + CUSTOMER_CONFIRMED', { depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' }],
+  ])('%s before DELIVERY_SCHEDULING is held', (_n, o) => {
+    const t = held(o);
+    expect(nextAccountAction(t, 'account')).toBeNull(); // the premise: no CTA yet
+    expect(awaitingGoodsForFinalPayment(t)).toBe(true);
+  });
+
+  it.each(['DELIVERY_SCHEDULING', 'DELIVERED'])('once the deal is at %s the gate is open, so it is not held', (salesStage) => {
+    expect(awaitingGoodsForFinalPayment(held({ salesStage }))).toBe(false);
+  });
+
+  it('an overdue balance is chased, not held', () => {
+    expect(awaitingGoodsForFinalPayment(held({ overdue: true, amountOutstanding: 5000 }))).toBe(false);
+  });
+
+  it('a deal with no final-payment state (deposit notice only, nothing pending, not issued) is not held', () => {
+    expect(awaitingGoodsForFinalPayment(held({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }))).toBe(false);
+    expect(awaitingGoodsForFinalPayment(held({ paymentStatus: 'CUSTOMER_CONFIRMED' }))).toBe(false);
+    expect(awaitingGoodsForFinalPayment(held({ status: 'draft' }))).toBe(false);
+  });
+
+  it('null input is not held', () => {
+    expect(awaitingGoodsForFinalPayment(null)).toBe(false);
   });
 });

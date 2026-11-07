@@ -1,6 +1,7 @@
 import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
-import { nextAccountAction } from '../features/tickets/accountActions.js';
+import { isPastProcurement } from '../features/finance/moneyMilestone.js';
+import { accountOwesStep } from '../features/tickets/accountActions.js';
 import { isOwnerOrKeyer } from '../features/tickets/dealOwnership.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
@@ -3707,12 +3708,12 @@ function derivePaymentFields(ticket) {
 }
 
 // Mirrors DashboardRepository#financeOutstanding: outstanding on deals in account's list scope that have an
-// account to-do (nextAccountAction as the account viewer).
+// account to-do (accountOwesStep: the final-payment stage gate must not shrink ค้างรับ).
 function mockFinanceOutstanding() {
   return moneyValue(db.tickets
     .filter(accountListScopeIncludes)
     .map((t) => ({ ...t, ...derivePaymentFields(t), commissionRecorded: hasRecordedCommission(t) }))
-    .filter((t) => nextAccountAction(t) != null)
+    .filter((t) => accountOwesStep(t))
     .reduce((sum, t) => sum + Number(t.amountOutstanding ?? 0), 0));
 }
 
@@ -7648,6 +7649,11 @@ async function mockConfirmDepositPaid(id) {
   return delay({ ticket: buildTicketDetail(ticket) });
 }
 
+// Owner ruling 2026-11-07 (mirrors TicketService#canConfirmFinalPaymentNow): closed until DELIVERY_SCHEDULING+.
+function mockPastProcurement(ticket) {
+  return isPastProcurement(ticket.salesStage);
+}
+
 async function mockConfirmFinalPayment(id) {
   // account only — no CEO fallback. Mirrors TicketService's PAYMENT_RECORD_ROLES
   // (confirmFinalPayment is a payment-recording entry point too, whether or not it ends up calling
@@ -7656,9 +7662,10 @@ async function mockConfirmFinalPayment(id) {
   const ticket = findTicketRaw(Number(id));
   requireMockAccountScope(user, ticket);
   requireActive(ticket);
-  const allowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-    || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
-  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
+  const allowed = (['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+    || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')))
+    && mockPastProcurement(ticket);
+  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
   const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
   if (outstanding <= 0) {
     if (ticket.paymentStatus !== 'FULLY_PAID') {
@@ -7768,8 +7775,9 @@ function buildTicketActions(user, ticket) {
       add('RECORD_PARTIAL_DELIVERY', 'fulfillment', 'บันทึกการส่งสินค้า', { requiredFields: ['source', 'lines'] });
       add('COMPLETE_DELIVERY', 'fulfillment', 'ส่งมอบครบ');
     }
-    const finalPaymentAllowed = ['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
-      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED'));
+    const finalPaymentAllowed = (['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
+      || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')))
+      && mockPastProcurement(ticket);
     // account only -- see the PAYMENT_RECORD_ROLES comment above RECORD_PAYMENT.
     if (user.role === 'account' && finalPaymentAllowed) add('FINAL_PAYMENT', 'payment', 'รับเงินครบ');
     // Three-party close: account confirms, CEO verifies. Sales is not involved.

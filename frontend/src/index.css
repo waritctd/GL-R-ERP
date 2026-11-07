@@ -32,7 +32,7 @@
    `(max-width: 720px)` — and so does styles.css. So at exactly 720px the JS branch
    said "mobile" while every `max-[720px]:` utility said "desktop", and a
    `grid-cols-2 max-[720px]:grid-cols-1` pair fell through to the 2-column base.
-   Measured on the real bundle: AccountOverview's stat grid went 2 cols at 719px ->
+   Measured on the real bundle (the since-removed AccountOverview stat grid): it went 2 cols at 719px ->
    3 cols at 720px, and 3 cols at 1039px -> 5 cols at 1040px. The variants below are
    hand-written with the traditional INCLUSIVE `max-width`, so CSS and JS agree at
    every integer width.
@@ -44,7 +44,7 @@
    same-layer, same-specificity utilities are won by whichever is emitted LAST.
    Declaring `mobile` before `nav-drawer` would therefore make ≤1040px beat ≤720px
    and silently invert every element that sets one property in both bands
-   (AccountOverview.jsx, Layout.jsx's StatGrid, and 13 others). Keep this list
+   (Layout.jsx's StatGrid and other call sites). Keep this list
    sorted widest -> narrowest, and add new variants in the right slot.
 
    Plain `--breakpoint-*` theme keys are not used because Tailwind's
@@ -87,8 +87,7 @@
   }
 }
 /* ≤560px / ≤520px — sub-mobile bands where dashboard card rows stop fitting
-   (HrOverview's task rows and attendance stats; ImportOverview's pulse tiles
-   switch to a horizontal scroller). */
+   (HrOverview's task rows and attendance stats). */
 @custom-variant mobile-sm {
   @media (max-width: 560px) {
     @slot;

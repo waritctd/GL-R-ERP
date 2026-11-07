@@ -1795,7 +1795,7 @@ public class TicketService {
         requireActive(s);
         if (!canConfirmFinalPaymentNow(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
+                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
         }
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
@@ -2132,9 +2132,12 @@ public class TicketService {
         // change; see the branch report.
         boolean depositBypassed = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
             && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
-        return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
+        // Owner ruling 2026-11-07: closed until money-milestone 3 is done (DELIVERY_SCHEDULING or later).
+        // A null/unknown stage indexes -1, so it fails closed.
+        boolean pastProcurement = DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.DELIVERY_SCHEDULING);
+        return pastProcurement && ("AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
-            || depositBypassed;
+            || depositBypassed);
     }
 
     // ── Deal pipeline (V50): 14-stage journey on the ticket itself ──────────
