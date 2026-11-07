@@ -671,6 +671,45 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(revision.parentQuotationId()).isEqualTo(fifty.id());
     }
 
+    /**
+     * Confirm-order must serialise on the SAME per-ticket advisory lock as approve/create/revise
+     * ({@code DealQuotationRepository.lockTicket}), not only the ticket row lock; otherwise it can
+     * commit alongside an approval that supersedes the row it confirmed. Pinned deterministically: a
+     * second connection holds the advisory lock; the confirmation must wait on it, then finish once it
+     * is released.
+     */
+    @Test
+    void confirmOrder_waitsForThePerTicketAdvisoryLock_heldByAnotherTransaction() throws Exception {
+        long deal = pipelineTicket(salesActor);
+        DealQuotationDto approved = approvedDirectQuotation(deal, salesActor);
+        javax.sql.DataSource ds = ((org.springframework.jdbc.datasource.DataSourceTransactionManager) transactionManager)
+            .getDataSource();
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (java.sql.Connection holder = ds.getConnection()) {
+            holder.setAutoCommit(false);
+            try (java.sql.PreparedStatement ps = holder.prepareStatement("SELECT pg_advisory_xact_lock(?, ?)")) {
+                ps.setInt(1, DealQuotationRepository.TICKET_LOCK_CLASS_ID);
+                ps.setInt(2, (int) deal);
+                ps.execute();
+            }
+            java.util.concurrent.Future<?> confirm = pool.submit(
+                () -> confirmer.confirmOrderFromDirectQuotation(approved.id(), salesActor));
+            try {
+                confirm.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                org.junit.jupiter.api.Assertions.fail(
+                    "confirm-order completed while another transaction held the ticket advisory lock");
+            } catch (java.util.concurrent.TimeoutException expected) {
+                // still waiting on the advisory lock — what we want
+            }
+            holder.rollback(); // releases pg_advisory_xact_lock
+            confirm.get(20, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(summary(deal).salesStage()).isEqualTo(DealStage.ORDER_RECEIVED);
+        assertThat(eventCount(deal, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isEqualTo(1);
+    }
+
     private int quotationRows(long ticketId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id",
             Map.of("id", ticketId), Integer.class);
