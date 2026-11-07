@@ -113,6 +113,13 @@ function splitInForce(versions) {
 
 const KNOWN_ROLES = ['DESIGNER', 'OWNER', 'BUYER'];
 
+// A row that takes part in the bid: a contractor's quotation, or one whose recipient was never recorded (every
+// contractor bid from before the field existed, V205's merged sibling bids among them). Designer and owner
+// quotations are not bids, so they get no number, no outcome chip and do not make a deal "รอผลประมูล".
+function isBidRow(row) {
+  return row.recipientType !== 'DESIGNER' && row.recipientType !== 'OWNER';
+}
+
 function countRoles(members) {
   const seen = { DESIGNER: new Set(), OWNER: new Set(), BUYER: new Set() };
   for (const m of members) {
@@ -151,13 +158,16 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
       byParty.get(key).push(m);
     }
     const parties = [...byParty.values()].sort((a, b) => Number(b.some((m) => m.partyHeadline)) - Number(a.some((m) => m.partyHeadline)));
+    const bidders = parties.filter((party) => party.some(isBidRow));
     out.push({
       isGroup: true,
       id: `group-${row.ticketId}`,
       ticketId: row.ticketId,
       ticketCode: row.ticketCode,
       projectName: members.find((m) => m.projectName)?.projectName ?? null,
-      buyerCount: parties.length,
+      partyCount: parties.length,
+      // Parties bidding (contractors, plus recipients never recorded): more than one makes the deal a bid.
+      bidderCount: bidders.length,
       // Who the deal's quotations are for, by role: distinct parties per DESIGNER / OWNER / BUYER. A row whose
       // recipient was never recorded (UNSPECIFIED, every quotation from before the field existed) counts nowhere.
       roleCounts: countRoles(members),
@@ -168,7 +178,8 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
       searchText,
     });
     const ordered = [];
-    parties.forEach((party, p) => {
+    parties.forEach((party) => {
+      const bidderNo = bidders.indexOf(party) + 1;
       // Documents of this contractor: rows sharing a revision-suffixed number are versions of one document.
       const docs = new Map();
       for (const m of party) {
@@ -180,7 +191,8 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
       for (const [docKey, versions] of docs) {
         const { inForce, older } = splitInForce(versions);
         const open = !collapsed.has(docKey);
-        const base = { inGroup: true, groupIndex: p + 1, groupContractors: parties.length, docKey };
+        // Only bidders are numbered (1, 2, … in ยอดหลัก-first order); a designer or owner quotation gets no number.
+        const base = { inGroup: true, groupIndex: bidderNo || null, groupContractors: bidders.length, docKey };
         ordered.push({
           ...inForce, ...base,
           olderCount: older.length, versionsOpen: open, versionNo: versionOf(inForce),
@@ -228,12 +240,11 @@ export function RecipientChip({ role, count = null }) {
 function GroupSummary({ row }) {
   const docs = row.documentCount ?? 1;
   const counts = row.roleCounts ?? {};
-  const contractors = counts.BUYER ?? 0;
   return (
     <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted" data-testid="quotation-group-summary">
       <span>{`ใบเสนอราคา ${docs} รายการ${row.versionCount > docs ? ` (${row.versionCount} เวอร์ชัน)` : ''}`}</span>
       {KNOWN_ROLES.filter((r) => counts[r]).map((r) => <RecipientChip key={r} role={r} count={counts[r]} />)}
-      {contractors > 1 ? (
+      {(row.bidderCount ?? 0) > 1 ? (
         <span>
           {row.decided
             ? 'บันทึกผลประมูลแล้ว'
@@ -316,7 +327,7 @@ function PartyChipLine({ row }) {
   return (
     <span className="flex flex-wrap items-center gap-1.5">
       {!row.isOlderVersion ? <RecipientChip role={row.recipientType} /> : null}
-      {row.partyStatus && !row.isOlderVersion && row.recipientType === 'BUYER' ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
+      {row.partyStatus && !row.isOlderVersion && isBidRow(row) ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
       {row.partyHeadline && !row.isOlderVersion ? <span className="text-2xs font-bold text-warning-dark">★ ยอดหลัก</span> : null}
       <VersionControls row={row} />
     </span>
@@ -351,7 +362,7 @@ const COLUMNS = [
     render: (row) => (row.isGroup ? null : (
       <span className="flex flex-col gap-0.5">
         <span className="flex items-center gap-2 font-bold">
-          {row.inGroup && row.groupContractors > 1 && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
+          {row.inGroup && row.groupContractors > 1 && row.groupIndex && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
           {row.customerName ?? '-'}
         </span>
         {row.inGroup
@@ -396,7 +407,7 @@ const COLUMNS = [
   },
 ];
 
-// Grouped: no column sorts (see GROUP_PREF_KEY's comment).
+// The list is always grouped, so no column sorts: a sort would tear a deal's rows out from under its header.
 // Every row of a group answers a search with the whole group's text, so a match keeps the group whole.
 const GROUPED_COLUMNS = COLUMNS.map((column) => ({
   ...column,
@@ -407,10 +418,6 @@ const GROUPED_COLUMNS = COLUMNS.map((column) => ({
   },
 }));
 
-// One group = header row + member rows read as ONE box. Desktop (<tr>): [&>td] selectors give the
-// header a tinted 2px top edge, members an inset 4px info rail, the last member a 2px bottom edge.
-// Mobile (<li> cards, gap 10px in .record-card-list): the same rows are joined by cancelling that
-// gap with a negative margin and sharing one border colour. A NOT_AWARDED bid is dimmed.
 // One group = header row + member rows read as ONE box. Desktop (<tr>): the header gets a tinted 2px top edge,
 // members an inset 4px info rail, the last member a 2px bottom edge. Mobile (<li> cards, gap 10px in
 // .record-card-list): the rows are joined into one box by cancelling that gap with a negative margin and sharing
@@ -464,7 +471,7 @@ function QuotationCard({ row }) {
   if (!row.inGroup) return body;
   return (
     <div className="flex min-w-0 gap-3">
-      {row.groupContractors > 1 && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
+      {row.groupContractors > 1 && row.groupIndex && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
       <div className="flex min-w-0 flex-1 flex-col gap-2">{body}</div>
     </div>
   );
@@ -526,7 +533,6 @@ export function QuotationListPage({ user }) {
   // The filters sit in a plain row ABOVE DataTable's own search input (see the JSX below, shared by
   // every breakpoint), so column headers stay plain text at every width and `columns` does not
   // diverge by role.
-  const columns = GROUPED_COLUMNS;
   // Older versions are open by default; this Set holds the documents the rep folded away.
   const [collapsedVersions, setCollapsedVersions] = useState(() => new Set());
   const toggleVersions = (docKey) => setCollapsedVersions((current) => {
@@ -537,6 +543,12 @@ export function QuotationListPage({ user }) {
   const tableRows = useMemo(
     () => groupQuotationRows(filteredRows, { collapsed: collapsedVersions, onToggleVersions: toggleVersions }),
     [filteredRows, collapsedVersions],
+  );
+  // The footer's "(กรองจาก M)" denominator: the same grouping and the same folded versions, unfiltered, so
+  // folding a document's versions does not read as a filter.
+  const unfilteredTotal = useMemo(
+    () => groupQuotationRows(rows, { collapsed: collapsedVersions }).length,
+    [rows, collapsedVersions],
   );
 
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
@@ -682,10 +694,10 @@ export function QuotationListPage({ user }) {
         </div>
 
         <DataTable
-          columns={columns}
+          columns={GROUPED_COLUMNS}
           rows={tableRows}
           // Group rows count as rows in the footer, so the "(กรองจาก M)" denominator counts them too.
-          unfilteredTotal={groupQuotationRows(rows).length}
+          unfilteredTotal={unfilteredTotal}
           getRowKey={(row) => row.id}
           gridClassName={LIST_TABLE_GRID}
           rowClassName={quotationRowClassName}

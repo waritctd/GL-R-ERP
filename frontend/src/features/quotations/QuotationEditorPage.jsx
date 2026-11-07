@@ -1764,12 +1764,14 @@ export function QuotationEditorPage({ user, showToast }) {
       const role = recipientType || 'BUYER';
       const madeFor = `${deal.id}/${dealForm.customer.id}/${role}`;
       let partyId = attachedPartyIds[madeFor];
+      let addedHere = false;
       if (!partyId) {
         try {
           const res = await api.tickets.addParty(deal.id, {
             customerId: dealForm.customer.id, role, ...(contact?.id ? { contactId: contact.id } : {}),
           });
           partyId = res?.party?.id;
+          addedHere = partyId != null;
         } catch (error) {
           if (error?.status !== 409) throw error;
           const res = await api.tickets.parties(deal.id);
@@ -1779,7 +1781,23 @@ export function QuotationEditorPage({ user, showToast }) {
         if (!partyId) throw new Error('เพิ่มผู้รับใบเสนอราคาในดีลไม่สำเร็จ');
         setAttachedPartyIds((made) => ({ ...made, [madeFor]: partyId }));
       }
-      const quotationRes = await api.dealQuotations.create(deal.id, { ...buildUpsertPayload(), partyId });
+      let quotationRes;
+      try {
+        quotationRes = await api.dealQuotations.create(deal.id, { ...buildUpsertPayload(), partyId });
+      } catch (error) {
+        // The existing deal can refuse the quotation (e.g. that role is off-route for ITS ช่องทางรับงาน, which
+        // the editor cannot check: the picker knows only the new-deal form's channel). Take back the party
+        // this attempt added, so the deal is not left holding an empty recipient.
+        if (addedHere) {
+          await api.tickets.removeParty(deal.id, partyId).catch(() => {});
+          setAttachedPartyIds((made) => {
+            const next = { ...made };
+            delete next[madeFor];
+            return next;
+          });
+        }
+        throw error;
+      }
       await finishFirstSave(quotationRes);
     } catch (error) {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');

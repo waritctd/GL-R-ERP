@@ -1,3 +1,4 @@
+import { partyStatusLabel } from '../tickets/dealPartyMeta.js';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import React from 'react';
@@ -474,7 +475,7 @@ describe('QuotationListPage — revisions of one document fold into the version 
     expect(members.slice(1).every((m) => m.isOlderVersion)).toBe(true);
     expect(quotationRowClassName(members[1])).toContain('bg-surface-muted');
     expect(members[4].groupLast).toBe(true);
-    expect(out.find((r) => r.isGroup)).toMatchObject({ buyerCount: 1, versionCount: 5, documentCount: 1 });
+    expect(out.find((r) => r.isGroup)).toMatchObject({ partyCount: 1, versionCount: 5, documentCount: 1 });
   });
 
   it('a collapsed document shows only its version in force', () => {
@@ -566,6 +567,39 @@ describe('QuotationListPage — who each quotation is for', () => {
     const old = (await screen.findAllByTestId('quotation-group-row')).find((g) => g.textContent.includes('DL-2026-0071'));
     expect(within(old).queryByTestId('quotation-recipient-chip')).toBeNull();
     expect(old.textContent).not.toContain('รอผลประมูล');
+  });
+
+  it('numbers only the bidders: a designer or owner quotation gets no number', async () => {
+    renderListPage(salesUser);
+    await screen.findAllByTestId('quotation-group-row');
+    const numberOf = (n) => within(screen.getByText(n).closest('tr')).queryByTestId('quotation-group-index')?.textContent ?? null;
+    expect(numberOf('QT-2026-0701-1')).toBeNull();
+    expect(numberOf('QT-2026-0702-1')).toBeNull();
+    expect([numberOf('QT-2026-0704-1'), numberOf('QT-2026-0703-1')]).toEqual(['1', '2']);
+  });
+});
+
+describe('QuotationListPage — contractor bids from before the recipient was recorded', () => {
+  // V205's merged sibling bids and older direct quotations: BUYER parties, recipient UNSPECIFIED.
+  const q = (overrides) => row({ ticketId: 80, ticketCode: 'DL-2026-0080', projectName: 'โครงการ ประมูลเดิม', docStatus: 'APPROVED', recipientType: 'UNSPECIFIED', ...overrides });
+  const items = [
+    q({ id: 2, number: 'QT-2026-0802-1', customerName: 'บจก.รับเหมา เก่า หนึ่ง', partyId: 2, partyStatus: 'AWARDED' }),
+    q({ id: 1, number: 'QT-2026-0801-1', customerName: 'บจก.รับเหมา เก่า สอง', partyId: 1, partyStatus: 'NOT_AWARDED' }),
+  ];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({ items });
+  });
+
+  it('still shows each bid outcome and the deal\'s bid state, with no role label', async () => {
+    renderListPage(salesUser);
+    const group = (await screen.findAllByTestId('quotation-group-row')).find((g) => g.textContent.includes('DL-2026-0080'));
+    expect(group.textContent).toContain('บันทึกผลประมูลแล้ว');
+    expect(within(group).queryByTestId('quotation-recipient-chip')).toBeNull();
+    const lost = screen.getByText('QT-2026-0801-1').closest('tr');
+    expect(within(lost).getByText(partyStatusLabel('NOT_AWARDED').label)).toBeTruthy();
+    expect(within(lost).queryByTestId('quotation-recipient-chip')).toBeNull();
   });
 });
 

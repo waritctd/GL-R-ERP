@@ -16,7 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       // parties / addParty / openForProject: deal parties (deal-party-model.md). Default to "none"
       // (see the top-level beforeEach below) so every older test sees today's single-party deal.
-      tickets: { get: vi.fn(), create: vi.fn(), parties: vi.fn(), addParty: vi.fn(), openForProject: vi.fn() },
+      tickets: { get: vi.fn(), create: vi.fn(), parties: vi.fn(), addParty: vi.fn(), removeParty: vi.fn(), openForProject: vi.fn() },
       // A NEW quotation on a picked deal reads the deal's pricing requests (one pricing route per
       // deal). None here: every test in this file is about the editor itself.
       pricingRequests: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
@@ -904,6 +904,19 @@ describe('QuotationEditorPage inline deal creation', () => {
       expect(api.tickets.addParty).toHaveBeenCalledWith(18, { customerId: testCustomer.id, role: 'DESIGNER' });
       expect(api.tickets.create).not.toHaveBeenCalled();
       expect(await screen.findByText('navigated-to-99')).toBeTruthy();
+    });
+
+    it('when the deal refuses the quotation, the party this save added is taken back', async () => {
+      api.tickets.addParty.mockResolvedValue({ party: { id: 33 } });
+      api.tickets.removeParty.mockResolvedValue(null);
+      api.dealQuotations.create.mockRejectedValueOnce(Object.assign(new Error('ผู้รับนี้ไม่ตรงช่องทางของดีล'), { status: 409 }));
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      await screen.findByTestId('existing-deal-notice');
+      await fillOneValidItem();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.tickets.removeParty).toHaveBeenCalledWith(18, 33));
     });
 
     it('a customer already bidding on the deal is reused, not refused', async () => {
