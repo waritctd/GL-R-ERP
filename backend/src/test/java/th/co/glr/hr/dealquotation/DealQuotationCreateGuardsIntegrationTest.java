@@ -10,9 +10,12 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
+import th.co.glr.hr.ticket.DealRoute;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DirectQuotationLocks;
+import th.co.glr.hr.ticket.EntryChannel;
 import th.co.glr.hr.ticket.QuotationStatus;
+import th.co.glr.hr.ticket.TicketEventKind;
 
 /**
  * Quotation ↔ deal linking slice 2 — the two refusals on CREATING a direct quotation, through the
@@ -346,5 +349,99 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
             HttpStatus.CONFLICT);
         assertThat(e.getDetails()).containsEntry("liveQuotationId", revision.id())
             .containsEntry("docStatus", QuotationStatus.APPROVED);
+    }
+
+    // ── route (owner ruling 2026-11-07): a direct quotation may not be addressed to a party OFF the deal's
+    //    route. DealRoute decides (DESIGNER_LED all; OWNER_DIRECT skips the designer; BUYER_DIRECT skips designer
+    //    and owner; UNSPECIFIED / unknown has no route => allowed). BUYER -> QUOTE_BUYER is on EVERY route. ────
+
+    private static final String OWNER_DIRECT_DESIGNER_SENTENCE =
+        "ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน";
+
+    private void assertRouteRefused(long ticket, String recipient, String channel, String stage) {
+        ApiException e = refusal(() -> quotationService.create(ticket, draft(recipient), salesActor), HttpStatus.CONFLICT);
+        assertThat(e.getMessage()).as("%s on %s", recipient, channel).isEqualTo(DealRoute.refusalMessage(channel, stage));
+        assertThat(e.getDetails()).as("the route refusal carries no structured body").isEmpty();
+        assertThat(quotationCount(ticket)).as("nothing written").isZero();
+        assertThat(summary(ticket).salesStage()).as("stage unchanged").isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
+    }
+
+    @Test
+    void route_ownerDirect_refusesTheDesigner_withTheRouteSentence_andWritesNothing() {
+        long ticket = deal(salesActor, EntryChannel.OWNER_DIRECT);
+
+        ApiException e = refusal(() -> quotationService.create(ticket, draft("DESIGNER"), salesActor), HttpStatus.CONFLICT);
+
+        assertThat(e.getMessage()).isEqualTo(OWNER_DIRECT_DESIGNER_SENTENCE);
+        assertThat(e.getMessage()).isEqualTo(DealRoute.refusalMessage(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_DESIGN_SIDE));
+        assertThat(e.getDetails()).isEmpty();
+        assertThat(quotationCount(ticket)).isZero();
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
+    }
+
+    @Test
+    void route_ownerDirect_allowsTheOwnerAndTheBuyer() {
+        long owner = deal(salesActor, EntryChannel.OWNER_DIRECT);
+        assertThat(quotationService.create(owner, draft("OWNER"), salesActor).recipientType()).isEqualTo("OWNER");
+        assertThat(summary(owner).salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
+
+        long buyer = deal(salesActor, EntryChannel.OWNER_DIRECT);
+        assertThat(quotationService.create(buyer, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");
+    }
+
+    @Test
+    void route_buyerDirect_refusesTheDesignerAndTheOwner_butNotTheBuyer() {
+        assertRouteRefused(deal(salesActor, EntryChannel.BUYER_DIRECT), "DESIGNER", EntryChannel.BUYER_DIRECT,
+            DealStage.QUOTE_DESIGN_SIDE);
+        assertRouteRefused(deal(salesActor, EntryChannel.BUYER_DIRECT), "OWNER", EntryChannel.BUYER_DIRECT,
+            DealStage.QUOTE_OWNER);
+        assertThat(DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.QUOTE_OWNER))
+            .isEqualTo("ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน");
+
+        long buyer = deal(salesActor, EntryChannel.BUYER_DIRECT);
+        assertThat(quotationService.create(buyer, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");
+        assertThat(summary(buyer).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+    }
+
+    @Test
+    void route_designerLed_allowsAllThreeParties() {
+        for (String recipient : new String[] {"DESIGNER", "OWNER", "BUYER"}) {
+            long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+            assertThat(quotationService.create(ticket, draft(recipient), salesActor).recipientType()).isEqualTo(recipient);
+        }
+    }
+
+    /** A legacy deal (no stated channel) has NO route: gating it would brick it with no remedy (GLA-156). */
+    @Test
+    void route_unspecifiedChannel_allowsAllThreeParties() {
+        for (String recipient : new String[] {"DESIGNER", "OWNER", "BUYER"}) {
+            long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+            tickets.updateEntryChannel(ticket, EntryChannel.UNSPECIFIED);
+            assertThat(quotationService.create(ticket, draft(recipient), salesActor).recipientType()).isEqualTo(recipient);
+        }
+    }
+
+    /** Revision / reorder / approve / confirm-order are not a new route choice: a deal whose channel was changed
+     * AFTER the quotation was addressed must not strand the quotation's own lifecycle. */
+    @Test
+    void route_revisionReorderApproveAndConfirmOrder_ofAnOffRouteAddressedQuotation_stillWork() {
+        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+        DealQuotationDto designer = approved(ticket, salesActor, "DESIGNER");
+        tickets.updateEntryChannel(ticket, EntryChannel.OWNER_DIRECT); // the designer is now off-route
+
+        DealQuotationDto revision = quotationService.createRevision(designer.id(), salesActor);
+        assertThat(revision.recipientType()).isEqualTo("DESIGNER");
+        quotationService.submit(revision.id(), salesActor);
+        DealQuotationDto approvedRevision = quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(approvedRevision.docStatus()).isEqualTo(QuotationStatus.APPROVED);
+
+        DealQuotationDto reorder = quotationService.createReorder(approvedRevision.id(), salesActor);
+        assertThat(reorder.recipientType()).isEqualTo("DESIGNER");
+        quotationService.cancel(reorder.id(), new CancelRequest(null), salesActor);
+
+        quotationService.confirmOrderFromDirectQuotation(approvedRevision.id(), salesActor);
+        assertThat(summary(ticket).salesStage()).isNotEqualTo(DealStage.LEAD_APPROACH);
     }
 }

@@ -1024,6 +1024,23 @@ describe('QuotationEditorPage inline deal creation', () => {
       expect(await screen.findByText('navigated-to-99')).not.toBeNull();
     }, 10000);
 
+    // The deal carries the channel it was made with, and the server refuses a quotation to a party off that
+    // channel's route (owner ruling 2026-11-07). So a deal made for ONE channel may not be reused once the card
+    // says another: the retry would 409 with a route the card no longer shows.
+    it('a CHANGED ช่องทางรับงาน gets a deal of its own — the retry is never sent to the deal made with the old channel', async () => {
+      await saveAndBeRefused();
+      expect(api.tickets.create.mock.calls[0][0].entryChannel).toBe('DESIGNER_LED');
+
+      fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
+      fireEvent.click(await screen.findByRole('radio', { name: 'เจ้าของโครงการ' }));
+      await saveAgain();
+
+      expect(dealsQuotedOn()).toEqual([42, 43]);
+      expect(api.tickets.create).toHaveBeenCalledTimes(2);
+      expect(api.tickets.create.mock.calls[1][0]).toMatchObject({ entryChannel: 'OWNER_DIRECT' });
+      expect(await screen.findByText('navigated-to-99')).not.toBeNull();
+    }, 10000);
+
     // REGRESSION GUARD: what matters is what the form SAYS when saved, not whether it was touched in
     // between: the customer cleared and chosen again, with the same project, is still the customer and
     // project deal 42 was made for.

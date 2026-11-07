@@ -28,7 +28,7 @@ async function createQuotationAsSales() {
   retireLiveDirectQuotationsForTests(IN_SCOPE_TICKET);
   retireLivePricingRequestsForTests(IN_SCOPE_TICKET);
   // Slice 2 (develop): a DEAL_DIRECT create requires a recipient (DESIGNER/OWNER/BUYER).
-  const { quotation } = await api.dealQuotations.create(IN_SCOPE_TICKET, { recipientType: 'OWNER', recipientLabel: 'ผู้รับทดสอบ', items: [{
+  const { quotation } = await api.dealQuotations.create(IN_SCOPE_TICKET, { recipientType: 'BUYER', recipientLabel: 'ผู้รับทดสอบ', items: [{
     model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10, sqmPerPiece: 0.36,
     quantityMode: 'AREA', areaSqm: 20, wastageMode: 'NONE', wastageValue: 0, piecesPerBox: 3, unitPrice: 850,
     discountPct: 10, leadTimeMinDays: 30, leadTimeMaxDays: 45,

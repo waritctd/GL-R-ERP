@@ -215,18 +215,13 @@ describe('mock dealQuotations — the recipient MOVES the deal stage at create (
     expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(2);
   });
 
-  // The mock's autoAdvanceStage was missing the Java's ROUTE check, which this ruling makes
-  // reachable on a common path: OWNER_DIRECT's route skips ขั้น 4 (no designer to quote), so a
-  // designer-addressed quotation there must move NOTHING and still be created. Without the check
-  // the mock advanced to an off-route stage production refuses to enter — mock looser than
-  // production, the direction that matters.
-  it('does not advance to a stage off the deal route, and still creates the quotation', async () => {
+  // Owner ruling 2026-11-07 reversed the old "create it anyway, move nothing": a direct quotation may not be
+  // addressed to a party off the deal's route (the full matrix is the describe below).
+  it('a designer-addressed create on an owner-direct deal is refused, and moves nothing', async () => {
     const ticketId = await freshDeal('OWNER_DIRECT');
-    expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
 
-    const created = await createDirect(ticketId, 'DESIGNER');
+    await expect(createDirect(ticketId, 'DESIGNER')).rejects.toMatchObject({ status: 409 });
 
-    expect(created.recipientType).toBe('DESIGNER');
     expect((await summaryOf(ticketId)).salesStage).toBe('LEAD_APPROACH');
     expect((await eventsOf(ticketId)).filter((e) => e.kind === 'STAGE_CHANGED')).toHaveLength(0);
   });
@@ -567,5 +562,75 @@ describe('mock dealQuotations — issuing a pricing-route quotation supersedes t
     expect((await api.dealQuotations.get(issued.id)).quotation.docStatus).toBe('SUPERSEDED');
     const events = (await eventsOf(ticketId)).filter((e) => e.kind === 'DEAL_QUOTATION_SUPERSEDED');
     expect(events.map((e) => e.message)).toEqual([`ใบ ${issued.number} ถูกแทนที่ด้วย ${reissued.number}`]);
+  });
+});
+
+// Owner ruling 2026-11-07 — mirrors DealQuotationService#create/#update + DealRoute.refusalMessage verbatim. The Java
+// pins are DealQuotationCreateGuardsIntegrationTest (create) and DealQuotationRecipientIntegrationTest (update).
+describe('mock dealQuotations — a direct quotation may not be addressed to a party OFF the deal route (2026-11-07)', () => {
+  beforeEach(async () => { await asRole('sales'); });
+
+  const DESIGNER_ON_OWNER_DIRECT = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+  const OWNER_ON_BUYER_DIRECT = 'ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ 5 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+
+  it('create: owner-direct refuses the designer 409 with the route sentence and stores nothing', async () => {
+    const ticketId = await freshDeal('OWNER_DIRECT');
+    await expect(createDirect(ticketId, 'DESIGNER'))
+      .rejects.toMatchObject({ status: 409, message: DESIGNER_ON_OWNER_DIRECT });
+    expect((await api.dealQuotations.listForTicket(ticketId)).items).toHaveLength(0);
+  });
+
+  it('create: buyer-direct refuses the designer and the owner, accepts the buyer', async () => {
+    const a = await freshDeal('BUYER_DIRECT');
+    await expect(createDirect(a, 'OWNER')).rejects.toMatchObject({ status: 409, message: OWNER_ON_BUYER_DIRECT });
+    await expect(createDirect(a, 'DESIGNER'))
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้') });
+    expect((await api.dealQuotations.listForTicket(a)).items).toHaveLength(0);
+    expect((await createDirect(a, 'BUYER')).recipientType).toBe('BUYER');
+  });
+
+  it.each([
+    ['OWNER_DIRECT', 'OWNER'], ['OWNER_DIRECT', 'BUYER'],
+    ['DESIGNER_LED', 'DESIGNER'], ['DESIGNER_LED', 'OWNER'], ['DESIGNER_LED', 'BUYER'],
+  ])('create: %s allows %s', async (channel, recipient) => {
+    expect((await createDirect(await freshDeal(channel), recipient)).recipientType).toBe(recipient);
+  });
+
+  it('update: changing a DRAFT to an off-route party is refused with the route sentence; nothing changes', async () => {
+    const ticketId = await freshDeal('OWNER_DIRECT');
+    const draft = await createDirect(ticketId, 'OWNER');
+    await expect(api.dealQuotations.update(draft.id, { recipientType: 'DESIGNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, message: DESIGNER_ON_OWNER_DIRECT });
+    expect((await api.dealQuotations.get(draft.id)).quotation.recipientType).toBe('OWNER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_OWNER');
+  });
+
+  it('update: an UNCHANGED (or omitted) recipient on a draft addressed before the channel was corrected still saves', async () => {
+    const ticketId = await freshDeal('DESIGNER_LED');
+    const draft = await createDirect(ticketId, 'DESIGNER');
+    await api.tickets.setEntryChannel(ticketId, { value: 'BUYER_DIRECT' }); // designer + owner now off-route
+
+    expect((await api.dealQuotations.update(draft.id, { recipientType: 'DESIGNER', items: [TILE] })).quotation.recipientType)
+      .toBe('DESIGNER');
+    expect((await api.dealQuotations.update(draft.id, { items: [TILE] })).quotation.recipientType).toBe('DESIGNER');
+    await expect(api.dealQuotations.update(draft.id, { recipientType: 'OWNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, message: OWNER_ON_BUYER_DIRECT });
+    expect((await api.dealQuotations.update(draft.id, { recipientType: 'BUYER', items: [TILE] })).quotation.recipientType)
+      .toBe('BUYER');
+  });
+
+  it('a revision of an off-route-addressed quotation is not stranded when the channel is corrected afterwards', async () => {
+    const ticketId = await freshDeal('DESIGNER_LED');
+    const draft = await createDirect(ticketId, 'DESIGNER');
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+    await api.tickets.setEntryChannel(ticketId, { value: 'OWNER_DIRECT' });
+
+    const { quotation: revision } = await api.dealQuotations.createRevision(draft.id, {});
+    expect(revision.recipientType).toBe('DESIGNER');
+    expect((await api.dealQuotations.update(revision.id, { recipientType: 'DESIGNER', items: [TILE] })).quotation.recipientType)
+      .toBe('DESIGNER');
   });
 });

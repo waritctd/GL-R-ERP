@@ -339,18 +339,6 @@ export function recipientForEntryChannel(entryChannel) {
   return RECIPIENT_FOR_ENTRY_CHANNEL[entryChannel] ?? '';
 }
 
-/** "Off-route recipient -> allow + inline note". `route` is the deal's route as served
- * (`routeForChannel(catalog, channel)` from features/tickets/stageCatalog.js; this module doesn't
- * import it: mockApi imports this file, and stageCatalog imports the api). True only when a
- * recipient is chosen, the route is known (non-empty: an unloaded catalog reads as "no opinion",
- * never "everything off-route"), and the recipient's quote stage is not on it. A UI hint only:
- * nothing is blocked on it, and the server moves no stage from it. */
-export function isRecipientOffRoute(route, recipientCode) {
-  const stage = stageForQuotationRecipient(recipientCode);
-  if (!stage || !Array.isArray(route) || route.length === 0) return false;
-  return !route.some((row) => row?.code === stage);
-}
-
 // ── One pricing route per deal ──────────────────────────────────────────────────────────────────
 // The server refuses a คำขอราคา while a live direct quotation exists (DirectQuotationLocks). The
 // reverse: while the deal has a LIVE pricing request, no direct quotation may be started: the deal
@@ -1984,6 +1972,10 @@ export const QUOTATION_CHECK = Object.freeze({
   // One pricing route per deal: the picked deal has a live pricing request, which
   // DealQuotationService#create refuses (409).
   LIVE_PRICING_REQUEST: 'livePricingRequest',
+  // A NEW or CHANGED recipient off the deal's route, which DealQuotationService#create/#update refuse (409,
+  // DealRoute.refusalMessage). The message is that sentence, built from the served catalog
+  // (stageCatalog#recipientRouteRefusal) and passed in, so this module needs no route table.
+  RECIPIENT_OFF_ROUTE: 'recipientOffRoute',
   // ผู้ติดต่อ's Email is optional, so no "missing" check, only this one, for an address that is typed
   // but malformed, which DealQuotationService refuses on every save. Blocking (see
   // QUOTATION_BLOCKING_CHECKS).
@@ -1998,6 +1990,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.RECIPIENT,
   QUOTATION_CHECK.LIVE_DIRECT_QUOTATION,
   QUOTATION_CHECK.LIVE_PRICING_REQUEST,
+  QUOTATION_CHECK.RECIPIENT_OFF_ROUTE,
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
   QUOTATION_CHECK.ENTRY_CHANNEL,
@@ -2181,6 +2174,9 @@ export function buildQuotationChecklist({
   needsDeal = false,
   recipientRequired = false,
   recipientType = '',
+  // The route sentence for a NEW or CHANGED recipient off the deal's route (null/'' = none). The caller passes it
+  // only then: the server accepts a stored off-route recipient re-sent unchanged on a DRAFT.
+  offRouteRecipientMessage = null,
   liveDirectQuotation = null,
   dealStatus = 'draft',
   // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
@@ -2204,6 +2200,7 @@ export function buildQuotationChecklist({
   const blockingLive = blockingDirectQuotation(liveDirectQuotation, recipientType, dealStatus);
   if (blockingLive) push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(blockingLive));
   if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
+  if (offRouteRecipientMessage) push(QUOTATION_CHECK.RECIPIENT_OFF_ROUTE, offRouteRecipientMessage, QUOTATION_FIELD_IDS.recipient);
   if (recipientRequired && !quotationRecipientOption(recipientType)) {
     push(QUOTATION_CHECK.RECIPIENT, 'ต้องเลือกผู้รับใบเสนอราคา', QUOTATION_FIELD_IDS.recipient);
   }

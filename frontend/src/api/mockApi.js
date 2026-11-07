@@ -53,7 +53,7 @@ import {
   hasSpecialPricing,
   // The recipient table (code -> Thai label) and the live DEAL_DIRECT status set, shared with the
   // editor so the mock validates and labels recipients exactly as the pills do.
-  isLiveDirectQuotation, blocksNewDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
+  isLiveDirectQuotation, blocksNewDirectQuotation, quotationRecipientOption, stageForQuotationRecipient, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
   // V192.3: the SAME email shape check the editor runs before it saves — see
   // resolveDealQuotationOrderedByContact below.
   orderedByEmailError,
@@ -4272,6 +4272,13 @@ function mockRouteRefusal(entryChannel, stage) {
   const no = DEAL_STAGE_CATALOG.stages.find((s) => s.code === stage)?.no ?? '';
   return `ดีลนี้เป็น${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ดีลที่ระบุช่องทางไว้'}`
     + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+}
+
+/** Mirrors TicketService.requireQuotationRecipientOnRoute: a direct quotation may not be addressed to a party off
+ * the deal's route (409, DealRoute.refusalMessage). A channel with no route and a recipient with no stage refuse nothing. */
+function mockRequireRecipientOnRoute(entryChannel, recipientType) {
+  const stage = stageForQuotationRecipient(recipientType);
+  if (stage && !mockIsOnRoute(entryChannel, stage)) fail(mockRouteRefusal(entryChannel, stage), 409);
 }
 /**
  * The stages a manual move is closed to in mock mode — a literal mirror of the four
@@ -16942,6 +16949,8 @@ export const api = {
       // SUPERSEDED — quotationMeta.hasLivePricingRequest, the one definition), a direct quotation
       // may not be started. After the recipient 400, before the live-quotation guard.
       if (hasLivePricingRequest(mockPricingRequests, ticket.id)) fail(LIVE_PRICING_REQUEST_BLOCK_MESSAGE, 409);
+      // Then the deal's route (a property of the deal, so before the live-quotation guard, which is about its documents).
+      mockRequireRecipientOnRoute(ticket.entryChannel, recipientType);
       // V204: the quotation belongs to a party — the one named, else the deal's own customer's
       // party (preferring the recipient's role). Its customer/contact are what the document snapshots.
       let party;
@@ -17247,6 +17256,9 @@ export const api = {
         if (row.parentQuotationId != null && nextRecipientType !== row.recipientType) {
           fail(revisionRecipientRefusal(quotationRecipientOption(row.recipientType)?.label ?? row.recipientType), 409);
         }
+        // Mirrors DealQuotationService#update: only a CHANGE to a party off the deal's route is refused; the stored
+        // recipient re-sent unchanged (a draft addressed before the channel was corrected) still saves.
+        if (nextRecipientType !== row.recipientType) mockRequireRecipientOnRoute(ticket.entryChannel, nextRecipientType);
       }
       // A PRICING_REQUEST-origin quotation's items come ENTIRELY from createFromPricingRequest;
       // adding an extra row (of any line type) is refused for this origin — mirrors

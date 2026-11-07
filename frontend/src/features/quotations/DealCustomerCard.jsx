@@ -12,8 +12,8 @@ import { dealStageLabel, entryChannelLabel } from '../../utils/format.js';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealPicker } from './DealPicker.jsx';
-import { QUOTATION_RECIPIENT_OPTIONS, isRecipientOffRoute } from './quotationMeta.js';
-import { routeForChannel, useStageCatalog } from '../tickets/stageCatalog.js';
+import { QUOTATION_RECIPIENT_OPTIONS } from './quotationMeta.js';
+import { recipientRouteRefusal, useStageCatalog } from '../tickets/stageCatalog.js';
 
 // The app's one pill-choice voice (ช่องทางรับงาน below, and the ดีล / ผู้รับ choices): indigo tint
 // when chosen, --radius-md, 38px desktop / 44px phone. `whitespace-nowrap` keeps a Thai label on
@@ -38,18 +38,20 @@ const DEAL_MODES = [
  * This field does not move — or promise to move — the deal's stage (the deal-stage rule is owned
  * elsewhere).
  *
- * Off-route recipient: ALLOW + inline note. Every pill stays selectable on every deal.
- * `entryChannel` is the deal's channel (on the new-deal card: the one being chosen there); when
- * the chosen recipient's quote stage is not on that channel's route — READ from the served stage
- * catalog via routeForChannel, never a local table — one quiet info line says so under the pills.
- * No block, no modal. With no `entryChannel` there is no route to compare against, so no note.
+ * Off-route recipient (owner ruling 2026-11-07): the server 409s a direct quotation addressed to a party off the
+ * deal's route, so that party's pill is DISABLED and the reason is printed under the pills in the server's own
+ * sentence (DESIGN.md §14: a disabled action says why). `entryChannel` is the deal's channel (on the new-deal
+ * card: the one being chosen there); the route is READ from the served stage catalog, never a local table.
+ * With no `entryChannel`, or a channel with no route (UNSPECIFIED), every pill stays enabled. A stored
+ * recipient that is now off-route stays checked (the server accepts it unchanged) but cannot be re-picked.
  */
 export function QuotationRecipientField({ value, onChange, error, idPrefix = 'quotation-recipient', entryChannel = null }) {
   const { catalog } = useStageCatalog();
-  const offRoute = Boolean(entryChannel) && isRecipientOffRoute(routeForChannel(catalog, entryChannel), value);
+  const reasons = QUOTATION_RECIPIENT_OPTIONS.map((o) => (entryChannel ? recipientRouteRefusal(catalog, entryChannel, o.code) : null));
   const groupId = `${idPrefix}-group`;
+  const enabledIndexes = reasons.map((reason, index) => (reason ? -1 : index)).filter((index) => index >= 0);
   const checkedIndex = QUOTATION_RECIPIENT_OPTIONS.findIndex((o) => o.code === value);
-  const focusIndex = checkedIndex >= 0 ? checkedIndex : 0;
+  const focusIndex = enabledIndexes.includes(checkedIndex) ? checkedIndex : enabledIndexes[0];
   const optionRefs = useRef([]);
 
   function choose(index) {
@@ -59,14 +61,16 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
   }
 
   function handleKeyDown(event, index) {
-    const last = QUOTATION_RECIPIENT_OPTIONS.length - 1;
+    // Arrow keys step over the disabled (off-route) pills.
+    const at = enabledIndexes.indexOf(index);
+    const last = enabledIndexes.length - 1;
     const next = {
-      ArrowRight: index === last ? 0 : index + 1,
-      ArrowDown: index === last ? 0 : index + 1,
-      ArrowLeft: index === 0 ? last : index - 1,
-      ArrowUp: index === 0 ? last : index - 1,
-      Home: 0,
-      End: last,
+      ArrowRight: enabledIndexes[at === last ? 0 : at + 1],
+      ArrowDown: enabledIndexes[at === last ? 0 : at + 1],
+      ArrowLeft: enabledIndexes[at <= 0 ? last : at - 1],
+      ArrowUp: enabledIndexes[at <= 0 ? last : at - 1],
+      Home: enabledIndexes[0],
+      End: enabledIndexes[last],
     }[event.key];
     if (next === undefined) return;
     event.preventDefault();
@@ -89,8 +93,10 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
             type="button"
             role="radio"
             aria-checked={value === option.code}
+            disabled={Boolean(reasons[index])}
+            title={reasons[index] ?? undefined}
             tabIndex={index === focusIndex ? 0 : -1}
-            className={cn(PILL_BASE, value === option.code ? PILL_ON : PILL_OFF)}
+            className={cn(PILL_BASE, value === option.code ? PILL_ON : PILL_OFF, reasons[index] && 'cursor-not-allowed opacity-50')}
             onClick={() => choose(index)}
             onKeyDown={(event) => handleKeyDown(event, index)}
           >
@@ -98,16 +104,16 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
           </button>
         ))}
       </div>
-      {/* A persistent polite live region: the note is announced when it appears, and the empty
-          region takes no space when it does not. 13px (text-sm), info tone, icon + words — status
-          is text, never colour alone (DESIGN.md §2.7). */}
+      {/* A persistent polite live region: the reasons are announced when they appear, and the empty
+          region takes no space when there are none. 13px (text-sm), info tone, icon + words: status
+          is text, never colour alone (DESIGN.md §2.7). One line per disabled pill. */}
       <div role="status" aria-live="polite">
-        {offRoute ? (
-          <p className="mt-1.5 mb-0 flex items-start gap-1.5 text-sm text-info">
+        {reasons.filter(Boolean).map((reason) => (
+          <p key={reason} className="mt-1.5 mb-0 flex items-start gap-1.5 text-sm text-info">
             <Icon name="info" size={14} className="mt-[3px] shrink-0" />
-            <span>{OFF_ROUTE_RECIPIENT_NOTE}</span>
+            <span>{reason}</span>
           </p>
-        ) : null}
+        ))}
       </div>
     </FormField>
   );
@@ -185,8 +191,6 @@ export function ExistingDealNotice({
     </div>
   );
 }
-
-const OFF_ROUTE_RECIPIENT_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
 
 // ช่องทางรับงาน: the three real channels th.co.glr.hr.ticket.EntryChannel
 // accepts as INPUT. UNSPECIFIED is deliberately NOT offered — it is the stored default, and the
@@ -761,8 +765,8 @@ export function DealCustomerCard({
       {/* ผู้รับใบเสนอราคา* — both branches, below the deal choice and (on a new deal) below
           ช่องทางรับงาน. Required on a direct quotation (S2-B1). No stage promise: which stage the deal
           sits at is owned elsewhere (owner ruling 2026-09-30, slice-2 scope reduction). The route the
-          off-route note compares against is the channel being chosen here on a NEW deal, the picked
-          deal's own channel otherwise (owner ruling #1). */}
+          off-route pills are judged against is the channel being chosen here on a NEW deal, the picked
+          deal's own channel otherwise (owner ruling 2026-11-07). */}
       {pickOnly ? null : (
       <div className="mt-4">
         <QuotationRecipientField

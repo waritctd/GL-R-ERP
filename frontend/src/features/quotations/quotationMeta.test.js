@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import * as meta from './quotationMeta.js';
-import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
-import { routeForChannel } from '../tickets/stageCatalog.js';
 import { quotationStatusLabel } from '../../utils/format.js';
 import { API_ROUTES } from '../../api/routes.js';
 import {
@@ -1593,12 +1591,13 @@ describe('buildQuotationChecklist', () => {
     // live direct quotation).
     //
     // 'livePricingRequest' mirrors DealQuotationService#create's 409 on a deal holding a live
-    // pricing request.
+    // pricing request. 'recipientOffRoute' mirrors the 409 on a new or changed recipient off the deal's
+    // route (owner ruling 2026-11-07).
     // orderedByEmail: the server refuses a malformed ผู้ติดต่อ Email with a 400 on every save, so
     // the editor says so before the click. (A blank one is fine: the field is optional.)
     expect([...meta.QUOTATION_BLOCKING_CHECKS].sort()).toEqual(
       ['creditDaysInvalid', 'customer', 'deal', 'entryChannel', 'items', 'liveDirectQuotation', 'livePricingRequest',
-        'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient'],
+        'locationLabels', 'orderedByEmail', 'priceModeLanguage', 'project', 'recipient', 'recipientOffRoute'],
     );
     // The submit-only set: บันทึกร่าง still works, ส่งขออนุมัติ is disabled (QuotationEditorPage guards).
     expect([...meta.QUOTATION_SUBMIT_BLOCKING_CHECKS].sort()).toEqual(['creditDays', 'fullPaymentTerm', 'leadTime']);
@@ -1755,6 +1754,23 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
 
+  // Owner ruling 2026-11-07: the server 409s a direct quotation addressed to a party OFF the deal's route
+  // (DealRoute.refusalMessage), so the editor blocks the save with that same sentence instead of letting the rep
+  // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
+  // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
+  it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
+    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
+      offRouteRecipientMessage: sentence });
+    expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);
+    // On-route / no stated route / not passed: nothing extra.
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'OWNER',
+      offRouteRecipientMessage: null })).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER' })).toEqual([]);
+    expect(meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
+      offRouteRecipientMessage: '' })).toEqual([]);
+  });
+
   // The channel pre-fills the recipient on a new deal.
   it('owner ruling #2: each real entry channel names its recipient; UNSPECIFIED/unknown name none', () => {
     expect(meta.recipientForEntryChannel('DESIGNER_LED')).toBe('DESIGNER');
@@ -1762,20 +1778,6 @@ describe('buildQuotationChecklist', () => {
     expect(meta.recipientForEntryChannel('BUYER_DIRECT')).toBe('BUYER');
     expect(meta.recipientForEntryChannel('UNSPECIFIED')).toBe('');
     expect(meta.recipientForEntryChannel(null)).toBe('');
-  });
-
-  // The route is READ from the served catalog (routeForChannel), never a local table, so this is
-  // exercised against the guarded fixture mockApi serves.
-  it('owner ruling #1: a recipient is off-route exactly when its quote stage is not on the channel\'s served route', () => {
-    const offRoute = (channel, recipient) => meta.isRecipientOffRoute(routeForChannel(DEAL_STAGE_CATALOG, channel), recipient);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('DESIGNER_LED', r))).toEqual([false, false, false]);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('OWNER_DIRECT', r))).toEqual([true, false, false]);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('BUYER_DIRECT', r))).toEqual([true, true, false]);
-    expect(['DESIGNER', 'OWNER', 'BUYER'].map((r) => offRoute('UNSPECIFIED', r))).toEqual([false, false, false]);
-    // No recipient chosen, or the catalog not loaded yet (empty route): never a note.
-    expect(offRoute('BUYER_DIRECT', '')).toBe(false);
-    expect(meta.isRecipientOffRoute([], 'DESIGNER')).toBe(false);
-    expect(meta.isRecipientOffRoute(undefined, 'DESIGNER')).toBe(false);
   });
 
   // ผู้ออกแบบ and ฝ่าย are optional (also on the backend, never blocking). Wrong-way-round: neither a

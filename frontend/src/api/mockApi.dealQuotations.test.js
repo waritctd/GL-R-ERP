@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 // Two rules every create below depends on:
 //   - recipientType is REQUIRED on a DEAL_DIRECT create (400 otherwise). None of this file's cases
 //     is about the recipient (mockApi.quotationDealLink.test.js pins that), so each defaults it to
-//     DESIGNER; a payload's own recipientType still wins.
+//     BUYER (demo ticket 18 is BUYER_DIRECT, where only the buyer is on the route); a payload's own recipientType still wins.
 //   - A deal holds at most ONE live direct quotation, and a deal with a LIVE pricing request refuses
 //     a direct create (409). This file creates on demo ticket 18 repeatedly, and the seed keeps two
 //     live rows there (id 1 DRAFT, id 2 PENDING_APPROVAL) plus live คำขอราคา. So every test gets a
@@ -22,7 +22,7 @@ beforeEach(async () => {
 async function createOn18(payload) {
   retireLiveDirectQuotationsForTests(18);
   retireLivePricingRequestsForTests(18);
-  return api.dealQuotations.create(18, { recipientType: 'DESIGNER', ...payload });
+  return api.dealQuotations.create(18, { recipientType: 'BUYER', ...payload });
 }
 
 // Mirrors th.co.glr.hr.dealquotation (Quotation v2, QUOTATION-V2-PLAN.md). See

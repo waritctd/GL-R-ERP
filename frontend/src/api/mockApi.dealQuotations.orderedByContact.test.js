@@ -16,7 +16,7 @@ const salesUser = { role: 'sales' }; // id 6, owns demo ticket 18
 const createOn18 = (payload) => {
   retireLiveDirectQuotationsForTests(18);
   retireLivePricingRequestsForTests(18);
-  return api.dealQuotations.create(18, { recipientType: 'DESIGNER', ...payload });
+  return api.dealQuotations.create(18, { recipientType: 'BUYER', ...payload });
 };
 
 // The smallest body the real service accepts (see mockApi.dealQuotations.test.js's own ONE_ITEM).
