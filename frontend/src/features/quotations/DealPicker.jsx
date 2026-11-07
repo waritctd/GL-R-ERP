@@ -11,7 +11,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel } from '../../utils/format.js';
 import {
-  canCreateDealQuotation, dealQuotationStatusLabel, blocksNewDirectQuotation, hasLivePricingRequest, isLiveDirectQuotation,
+  canCreateDealQuotation, dealQuotationStatusLabel, blocksNewDirectQuotation, hasLivePricingRequest,
   LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from './quotationMeta.js';
 

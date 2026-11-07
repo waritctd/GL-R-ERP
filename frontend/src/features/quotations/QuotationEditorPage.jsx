@@ -646,7 +646,7 @@ export function QuotationEditorPage({ user, showToast }) {
     const requested = searchParams.get('recipient');
     setRecipientType((quotationRecipientOption(requested) && requested)
       || recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
-  }, [id, ticket]);
+  }, [id, ticket, searchParams]);
 
   function updateItem(clientId, patch) {
     setDirty(true);

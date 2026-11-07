@@ -220,6 +220,10 @@ export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest
     : null;
 }
 
+/** The on-route parties after `party`, in route order. */
+const partiesAfter = (party, offRouteParties) =>
+  PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(party) + 1).filter((next) => !offRouteParties.has(next));
+
 /**
  * Once a designer/owner quotation is sent, the rep picks the next party. The anchor is the request
  * furthest along the route whose quotation went out (with no row for it, QUOTATION_ISSUED alone
@@ -227,10 +231,6 @@ export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest
  * the choice back (a later party that said no is the anchor itself); a later party's private
  * DRAFT is sent instead. Null otherwise, and while the route is unknown.
  */
-/** The on-route parties after `party`, in route order. */
-const partiesAfter = (party, offRouteParties) =>
-  PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(party) + 1).filter((next) => !offRouteParties.has(next));
-
 function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
   const anchor = ownPrs
     .filter((pr) => pr.status === 'QUOTATION_ISSUED' && PARTY_ROUTE.includes(pr.recipientType)
