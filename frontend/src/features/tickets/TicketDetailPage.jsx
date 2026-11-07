@@ -1120,6 +1120,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
+  const confirmDirectSecondary = secondaryActions.find((action) => action.key === 'confirm_order_direct') ?? null;
   // The backend refuses a non-owner for both documents: no main button for them.
   const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'create_import_request'];
   // Like the quotation list above: with the deal's request list unread, a DRAFT may be hiding, so no create_pcr.
@@ -1207,7 +1208,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       // menu, later parties reading "ข้ามไปเสนอราคา<party>"; one left: a plain button. The menu
       // trigger reads the neutral "เสนอราคา". Each opens the price-request form with ผู้รับ pre-filled.
       const parties = workStateAction.parties;
-      const openFor = (party) => runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party }));
+      // A direct route choice opens the quotation editor addressed to the party instead.
+      const openFor = (party) => (workStateAction.direct
+        ? navigate(`/quotations/new?ticket=${ticketId}&recipient=${party}`)
+        : runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party })));
       stickyPrimaryAction = parties.length > 1 ? (
         <OverflowMenu
           items={parties.map((party, index) => ({
@@ -1465,6 +1469,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       disabled: reviseQuotationMutation.isPending,
       onSelect: () => (reviseSecondary.to ? navigate(reviseSecondary.to) : reviseQuotationMutation.mutate(reviseSecondary.quotationId)),
       testId: 'deal-quotation-revise',
+    },
+    confirmDirectSecondary && {
+      key: 'confirmOrderDirect',
+      label: confirmDirectSecondary.label,
+      disabled: confirmOrderDirectMutation.isPending,
+      onSelect: () => setConfirm({
+        kind: 'confirmOrderDirect', quotationId: confirmDirectSecondary.quotationId, number: confirmDirectSecondary.quotationNumber,
+      }),
     },
     can.revise && { key: 'revise', label: 'ขอแก้ไข', icon: 'pencil', onSelect: handleOpenRevise },
   ].filter(Boolean);

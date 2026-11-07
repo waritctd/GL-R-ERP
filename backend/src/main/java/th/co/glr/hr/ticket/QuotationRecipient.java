@@ -1,5 +1,6 @@
 package th.co.glr.hr.ticket;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -19,6 +20,16 @@ public final class QuotationRecipient {
      * accepted from a client.
      */
     public static final Set<String> ADDRESSABLE = Set.of(DESIGNER, OWNER, BUYER);
+
+    /** The quoting route, earliest party first. */
+    public static final List<String> ROUTE = List.of(DESIGNER, OWNER, BUYER);
+
+    /** True when {@code earlier} and {@code later} are both on the route and {@code earlier} comes strictly first. */
+    public static boolean isStrictlyEarlier(String earlier, String later) {
+        int a = ROUTE.indexOf(earlier);
+        int b = ROUTE.indexOf(later);
+        return a >= 0 && b >= 0 && a < b;
+    }
 
     /**
      * The Thai label written to {@code sales.quotation.recipient_label} for a direct quotation —

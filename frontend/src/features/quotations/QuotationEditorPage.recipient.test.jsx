@@ -270,6 +270,33 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ recipientType: 'DESIGNER' })));
   }, 10000);
 
+  // เสนอราคา<next party> on the deal page lands here: ?recipient= wins over the stage, and N6's relaxation
+  // (APPROVED quotation to an EARLIER party) leaves บันทึกร่าง enabled.
+  it('?recipient=OWNER pre-fills ผู้รับ over the stage, and an APPROVED designer quotation does not block saving it', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: { summary: ticketSummary({ salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' } }) },
+    });
+    api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
+    renderEditor('/quotations/new?ticket=18&recipient=OWNER', { idRoute: 'probe' });
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
+    expect(screen.queryByTestId('deal-picker-live-quotation')).toBeNull();
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ recipientType: 'OWNER' })));
+  }, 10000);
+
+  it('?recipient=OWNER on a deal past draft (order confirmed): the APPROVED designer quotation still blocks saving, WITH the reason', async () => {
+    api.tickets.get.mockResolvedValue({
+      ticket: { summary: ticketSummary({ status: 'quotation_issued', salesStage: 'QUOTE_DESIGN_SIDE', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' } }) },
+    });
+    renderEditor('/quotations/new?ticket=18&recipient=OWNER');
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
+    await fillCompleteQuotationItem();
+    await waitFor(() => expect(saveButton().disabled).toBe(true));
+    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1)');
+  }, 10000);
+
   it('N6: a deal with a live direct quotation disables บันทึกร่าง WITH the reason, beside the inline notice', async () => {
     api.tickets.get.mockResolvedValue({
       ticket: { summary: ticketSummary({ salesStage: 'QUOTE_OWNER', liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'OWNER' } }) },

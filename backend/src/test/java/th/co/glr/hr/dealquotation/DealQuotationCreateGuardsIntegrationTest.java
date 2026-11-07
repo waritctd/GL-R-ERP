@@ -10,6 +10,7 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.ApproveRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.CancelRequest;
+import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DirectQuotationLocks;
 import th.co.glr.hr.ticket.QuotationStatus;
 
@@ -184,6 +185,115 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
 
         assertThat(e.getDetails()).containsEntry("liveQuotationId", revision.id())
             .containsEntry("number", revision.number())
+            .containsEntry("docStatus", QuotationStatus.DRAFT);
+    }
+
+    // ── N6 relaxation: a LATER party may be quoted once every live direct quotation is APPROVED and
+    //    addressed to a strictly EARLIER party on the route DESIGNER < OWNER < BUYER ────────────────
+
+    @Test
+    void n6_approvedDesigner_allowsOwner_andMovesTheDealToQuoteOwner() {
+        long ticket = deal(salesActor);
+        DealQuotationDto designer = approved(ticket, salesActor, "DESIGNER");
+
+        DealQuotationDto owner = quotationService.create(ticket, draft("OWNER"), salesActor);
+
+        assertThat(owner.docStatus()).isEqualTo(QuotationStatus.DRAFT);
+        assertThat(owner.recipientType()).isEqualTo("OWNER");
+        assertThat(quotationService.get(designer.id(), salesActor).docStatus()).as("the earlier one is untouched")
+            .isEqualTo(QuotationStatus.APPROVED);
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
+    }
+
+    @Test
+    void n6_approvedDesigner_allowsBuyer_andApprovedOwner_allowsBuyer() {
+        long d = deal(salesActor);
+        approved(d, salesActor, "DESIGNER");
+        assertThat(quotationService.create(d, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");
+
+        long o = deal(salesActor);
+        approved(o, salesActor, "OWNER");
+        assertThat(quotationService.create(o, draft("BUYER"), salesActor).recipientType()).isEqualTo("BUYER");
+    }
+
+    @Test
+    void n6_approvedDesigner_stillRefusesDesigner_andApprovedOwner_refusesDesignerAndOwner() {
+        long d = deal(salesActor);
+        DealQuotationDto designer = approved(d, salesActor, "DESIGNER");
+        ApiException same = refusal(() -> quotationService.create(d, draft("DESIGNER"), salesActor), HttpStatus.CONFLICT);
+        assertThat(same.getDetails()).containsEntry("liveQuotationId", designer.id());
+        assertThat(quotationCount(d)).isEqualTo(1);
+
+        long o = deal(salesActor);
+        DealQuotationDto owner = approved(o, salesActor, "OWNER");
+        ApiException earlier = refusal(() -> quotationService.create(o, draft("DESIGNER"), salesActor), HttpStatus.CONFLICT);
+        assertThat(earlier.getMessage()).isEqualTo(DirectQuotationLocks.liveDirectQuotationMessage(owner.number()));
+        refusal(() -> quotationService.create(o, draft("OWNER"), salesActor), HttpStatus.CONFLICT);
+        assertThat(quotationCount(o)).isEqualTo(1);
+    }
+
+    @Test
+    void n6_aDraftOrPendingEarlierQuotation_stillRefusesALaterParty() {
+        long draftDeal = deal(salesActor);
+        DealQuotationDto draftQt = quotationService.create(draftDeal, draft("DESIGNER"), salesActor);
+        ApiException e1 = refusal(() -> quotationService.create(draftDeal, draft("OWNER"), salesActor), HttpStatus.CONFLICT);
+        assertThat(e1.getDetails()).containsEntry("liveQuotationId", draftQt.id())
+            .containsEntry("docStatus", QuotationStatus.DRAFT);
+
+        long pendingDeal = deal(salesActor);
+        DealQuotationDto pending = quotationService.create(pendingDeal, draft("DESIGNER"), salesActor);
+        quotationService.submit(pending.id(), salesActor);
+        ApiException e2 = refusal(() -> quotationService.create(pendingDeal, draft("OWNER"), salesActor), HttpStatus.CONFLICT);
+        assertThat(e2.getDetails()).containsEntry("docStatus", QuotationStatus.PENDING_APPROVAL);
+        assertThat(quotationCount(draftDeal)).isEqualTo(1);
+        assertThat(quotationCount(pendingDeal)).isEqualTo(1);
+    }
+
+    /** EVERY live row must qualify: APPROVED DESIGNER + a DRAFT OWNER is two live rows, the DRAFT one
+     * blocks even a BUYER create, and the 409 names the newest live one (the OWNER draft). */
+    @Test
+    void n6_twoLiveRows_oneNotApproved_refusesBuyer_namingTheNewest() {
+        long ticket = deal(salesActor);
+        approved(ticket, salesActor, "DESIGNER");
+        DealQuotationDto ownerDraft = quotationService.create(ticket, draft("OWNER"), salesActor);
+
+        ApiException e = refusal(() -> quotationService.create(ticket, draft("BUYER"), salesActor), HttpStatus.CONFLICT);
+
+        assertThat(e.getDetails()).containsEntry("liveQuotationId", ownerDraft.id())
+            .containsEntry("docStatus", QuotationStatus.DRAFT);
+        assertThat(quotationCount(ticket)).isEqualTo(2);
+    }
+
+    /** Once the order is confirmed from the APPROVED quotation the route is closed: a later-party draft could
+     * never be submitted, so the old 409 stands. */
+    @Test
+    void n6_afterTheOrderIsConfirmed_aLaterPartyIsStillRefused_andNothingIsWritten() {
+        long ticket = deal(salesActor);
+        DealQuotationDto designer = approved(ticket, salesActor, "DESIGNER");
+        quotationService.confirmOrderFromDirectQuotation(designer.id(), salesActor);
+
+        ApiException e = refusal(() -> quotationService.create(ticket, draft("OWNER"), salesActor), HttpStatus.CONFLICT);
+
+        assertThat(e.getDetails()).containsEntry("liveQuotationId", designer.id())
+            .containsEntry("docStatus", QuotationStatus.APPROVED);
+        assertThat(quotationCount(ticket)).isEqualTo(1);
+    }
+
+    /** The 409 names the newest live row that BLOCKS, not merely the newest: here the APPROVED DESIGNER revision
+     * (#3) is newest but would pass; the DRAFT OWNER (#2) is what refuses. */
+    @Test
+    void n6_namesTheNewestLiveRowThatBlocks_notJustTheNewest() {
+        long ticket = deal(salesActor);
+        DealQuotationDto designer = approved(ticket, salesActor, "DESIGNER");
+        DealQuotationDto ownerDraft = quotationService.create(ticket, draft("OWNER"), salesActor);
+        DealQuotationDto revision = quotationService.createRevision(designer.id(), salesActor);
+        quotationService.submit(revision.id(), salesActor);
+        quotationService.approve(revision.id(), new ApproveRequest(null), salesManagerActor);
+        assertThat(quotationService.get(ownerDraft.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.DRAFT);
+
+        ApiException e = refusal(() -> quotationService.create(ticket, draft("BUYER"), salesActor), HttpStatus.CONFLICT);
+
+        assertThat(e.getDetails()).containsEntry("liveQuotationId", ownerDraft.id())
             .containsEntry("docStatus", QuotationStatus.DRAFT);
     }
 

@@ -351,6 +351,60 @@ describe('mock dealQuotations — N6: one live direct quotation per deal (S2-B3)
       .rejects.toMatchObject({ status: 409, details: { liveQuotationId: live.id, docStatus: 'APPROVED' } });
   });
 
+  it('relaxed: an APPROVED quotation to an EARLIER party allows a later recipient (stage -> QUOTE_OWNER); same/earlier, DRAFT/PENDING, or a second live row still 409', async () => {
+    const ticketId = await freshDeal();
+    const designer = await createDirect(ticketId, 'DESIGNER');
+    await api.dealQuotations.submit(designer.id);
+    await asRole('sales_manager');
+    await api.dealQuotations.approve(designer.id);
+    await asRole('sales');
+    const create = (recipientType) => api.dealQuotations.create(ticketId, { recipientType, items: [TILE] });
+    await expect(create('DESIGNER')).rejects.toMatchObject({ status: 409, details: { liveQuotationId: designer.id } });
+    const { quotation: owner } = await create('OWNER');
+    expect(owner.recipientType).toBe('OWNER');
+    expect((await summaryOf(ticketId)).salesStage).toBe('QUOTE_OWNER');
+    // APPROVED DESIGNER + DRAFT OWNER: two live rows, the DRAFT one blocks BUYER and is the one named.
+    await expect(create('BUYER')).rejects.toMatchObject({ status: 409, details: { liveQuotationId: owner.id, docStatus: 'DRAFT' } });
+  });
+
+  it('relaxed: once the order is confirmed from the APPROVED quotation, a later party is refused again', async () => {
+    const ticketId = await freshDeal();
+    const { quotation: designer } = await api.dealQuotations.create(ticketId,
+      { recipientType: 'DESIGNER', depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [TILE] });
+    await api.dealQuotations.submit(designer.id);
+    await asRole('sales_manager');
+    await api.dealQuotations.approve(designer.id);
+    await asRole('sales');
+    await api.dealQuotations.promoteToDeal(designer.id);
+    await expect(api.dealQuotations.create(ticketId, { recipientType: 'OWNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, details: { liveQuotationId: designer.id, docStatus: 'APPROVED' } });
+    expect((await api.dealQuotations.listForTicket(ticketId)).items).toHaveLength(1);
+  });
+
+  it('relaxed: the 409 names the newest live row that BLOCKS, not merely the newest', async () => {
+    const ticketId = await freshDeal();
+    const designer = await createDirect(ticketId, 'DESIGNER');
+    await api.dealQuotations.submit(designer.id);
+    await asRole('sales_manager');
+    await api.dealQuotations.approve(designer.id);
+    await asRole('sales');
+    const { quotation: ownerDraft } = await api.dealQuotations.create(ticketId, { recipientType: 'OWNER', items: [TILE] });
+    const { quotation: revision } = await api.dealQuotations.createRevision(designer.id, {});
+    await api.dealQuotations.submit(revision.id);
+    await asRole('sales_manager');
+    await api.dealQuotations.approve(revision.id);
+    await asRole('sales');
+    await expect(api.dealQuotations.create(ticketId, { recipientType: 'BUYER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, details: { liveQuotationId: ownerDraft.id, docStatus: 'DRAFT' } });
+  });
+
+  it('relaxed: a DRAFT designer quotation still blocks an OWNER create', async () => {
+    const ticketId = await freshDeal();
+    const live = await createDirect(ticketId, 'DESIGNER');
+    await expect(api.dealQuotations.create(ticketId, { recipientType: 'OWNER', items: [TILE] }))
+      .rejects.toMatchObject({ status: 409, details: { liveQuotationId: live.id, docStatus: 'DRAFT' } });
+  });
+
   it('allowed again once the live one is CANCELLED', async () => {
     const ticketId = await freshDeal();
     const first = await createDirect(ticketId, 'DESIGNER');

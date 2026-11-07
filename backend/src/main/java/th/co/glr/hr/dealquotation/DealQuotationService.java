@@ -229,10 +229,10 @@ public class DealQuotationService {
         // One pricing route per deal: the reverse of DirectQuotationLocks#requireNoLiveDirectQuotation. Only for
         // #create; a revision or reorder is not a new route choice, and #createFromPricingRequest IS the pricing route.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
-        // One live direct quotation per deal. The 409 names the live one (liveQuotationId/number/docStatus, top-level in
-        // the body) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket so concurrent creates
-        // cannot both pass.
-        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
+        // One live direct quotation per deal, unless every live one is APPROVED and addressed to an earlier party. The
+        // 409 names the blocking one (liveQuotationId/number/docStatus, top-level in the body) so the client can offer
+        // "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket so concurrent creates cannot both pass.
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId, recipientType);
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
@@ -1304,7 +1304,7 @@ public class DealQuotationService {
         // land APPROVED. Same #lockTicket and "lock the ticket first" ordering as #createRevision/#createReorder, so no
         // deadlock (a transaction never holds a second ticket's lock).
         quotations.lockTicket(quotation.ticketId());
-        requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm-order takes it too
+        requireNoOtherDirectQuotationAfterConfirm(quotation); // under the lock: confirm-order takes the same advisory lock
         LocalDate approvalDate = LocalDate.now(BANGKOK);
         // A DATE-mode document WITH special pricing names its OWN validity_date (the rep's ภายในวันที่, verbatim; approval
         // never recomputes it); every other case (DAYS mode, or a stale DATE mode that lost its special pricing, which
@@ -1710,6 +1710,9 @@ public class DealQuotationService {
                 "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น");
         }
 
+        // Lock order: advisory (#lockTicket, as approve/create/revise take) THEN ticket row; never reverse (create holds the
+        // advisory lock, then updates the ticket row via the stage auto-advance).
+        quotations.lockTicket(ticketId);
         // Serialize every confirmation (and every other writer taking this lock) on this deal.
         tickets.lockTicketForUpdate(ticketId);
         TicketSummaryDto locked = requireTicketSummary(ticketId);

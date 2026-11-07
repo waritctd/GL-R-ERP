@@ -305,6 +305,22 @@ describe('resolveWorkState — live direct quotation (slice 2)', () => {
     expect(result.action).toMatchObject({ key: 'confirm_order_direct', label: 'ยืนยันคำสั่งซื้อ', quotationId: 77 });
   });
 
+  // Direct route choice (flow A): the เสนอราคา menu is primary, ยืนยันคำสั่งซื้อ drops to the ⋯ menu.
+  it('sales + APPROVED designer direct quotation (route known) -> primary quote_next_party, ⋯ keeps confirm_order_direct', () => {
+    const deal = baseDeal({ status: 'draft', liveDirectQuotation: { ...pending, docStatus: 'APPROVED', recipientType: 'DESIGNER' } });
+    const opts = { offRouteParties: new Set() };
+    expect(resolveWorkState({ role: 'sales' }, deal, [], opts).action).toMatchObject({ key: 'quote_next_party', direct: true });
+    expect(secondaryWorkActions({ role: 'sales' }, deal, [], opts))
+      .toEqual([expect.objectContaining({ key: 'confirm_order_direct', label: 'ยืนยันคำสั่งซื้อ', quotationId: 77 })]);
+  });
+
+  it('no confirm_order_direct secondary when it is already the primary (BUYER, or route unknown) or the role is not sales', () => {
+    const approved = (recipientType) => baseDeal({ status: 'draft', liveDirectQuotation: { ...pending, docStatus: 'APPROVED', recipientType } });
+    expect(secondaryWorkActions({ role: 'sales' }, approved('BUYER'), [], { offRouteParties: new Set() })).toEqual([]);
+    expect(secondaryWorkActions({ role: 'sales' }, approved('DESIGNER'), [], { offRouteParties: null })).toEqual([]);
+    expect(secondaryWorkActions({ role: 'ceo' }, approved('DESIGNER'), [], { offRouteParties: new Set() })).toEqual([]);
+  });
+
   it('an ON_HOLD deal still returns nothing — the lifecycle banner owns that state', () => {
     const result = resolveWorkState({ role: 'ceo' }, baseDeal({ lifecycle: 'ON_HOLD', liveDirectQuotation: pending }), []);
     expect(result).toEqual({ action: null });

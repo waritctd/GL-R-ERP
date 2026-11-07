@@ -220,6 +220,10 @@ export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest
     : null;
 }
 
+/** The on-route parties after `party`, in route order. */
+const partiesAfter = (party, offRouteParties) =>
+  PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(party) + 1).filter((next) => !offRouteParties.has(next));
+
 /**
  * Once a designer/owner quotation is sent, the rep picks the next party. The anchor is the request
  * furthest along the route whose quotation went out (with no row for it, QUOTATION_ISSUED alone
@@ -234,8 +238,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
     .sort(byRoute)
     .at(-1);
   if (!anchor || !isDesignerOrOwner(anchor) || offRouteParties == null) return null;
-  const parties = PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(anchor.recipientType) + 1)
-    .filter((party) => !offRouteParties.has(party));
+  const parties = partiesAfter(anchor.recipientType, offRouteParties);
   if (parties.length === 0) return null;
   const holding = ownPrs.filter((pr) => parties.includes(pr.recipientType) && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
   if (holding.length > 0) {
@@ -272,7 +275,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    mixed-origin case the server refuses. Keyed only on TicketSummaryDto.liveDirectQuotation (the
   //    newest live DEAL_DIRECT row, server-picked), so this stays a list-row-only computation; a
   //    non-live status is ignored.
-  const directAction = liveDirectQuotationAction(deal.liveDirectQuotation);
+  const directAction = directQuoteNextPartyAction(deal, offRouteParties) ?? liveDirectQuotationAction(deal.liveDirectQuotation);
   // confirmOrderFromDirectQuotation 409s unless the deal is still 'draft'; a deal already past it
   // is never offered that confirm and falls through to the ordinary cascade. A list row always
   // carries `status`.
@@ -511,6 +514,26 @@ function liveDirectQuotationAction(live) {
   const action = { key, label: ACTION_LABEL[key], quotationId: live.id, quotationNumber: live.number };
   if (key === SALES_ACTION.SUBMIT_DIRECT_QUOTATION) action.to = `/quotations/${live.id}`;
   return action;
+}
+
+/** An APPROVED designer/owner direct quotation on a 'draft' deal with a later on-route party: the same route
+ * choice as routeChoiceAction, flagged `direct` (ยืนยันคำสั่งซื้อ stays a secondary action). Null otherwise. */
+function directQuoteNextPartyAction(deal, offRouteParties) {
+  const live = deal.liveDirectQuotation;
+  if (live?.docStatus !== 'APPROVED' || (deal.status ?? 'draft') !== 'draft' || offRouteParties == null
+    || (live.recipientType !== 'DESIGNER' && live.recipientType !== 'OWNER')) return null;
+  const parties = partiesAfter(live.recipientType, offRouteParties);
+  if (parties.length === 0) return null;
+  return {
+    key: SALES_ACTION.QUOTE_NEXT_PARTY,
+    label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
+    parties,
+    anchorParty: live.recipientType,
+    anchorDeclined: false,
+    direct: true,
+    quotationId: live.id,
+    quotationNumber: live.number,
+  };
 }
 
 /**

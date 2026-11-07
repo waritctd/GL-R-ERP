@@ -643,8 +643,10 @@ export function QuotationEditorPage({ user, showToast }) {
     if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
     recipientSeededForTicket.current = ticket.id;
     if (recipientTouchedRef.current) return;
-    setRecipientType(recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
-  }, [id, ticket]);
+    const requested = searchParams.get('recipient');
+    setRecipientType((quotationRecipientOption(requested) && requested)
+      || recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
+  }, [id, ticket, searchParams]);
 
   function updateItem(clientId, patch) {
     setDirty(true);
@@ -1200,6 +1202,7 @@ export function QuotationEditorPage({ user, showToast }) {
     recipientRequired: !quotation,
     recipientType,
     liveDirectQuotation: !quotation && !isInlineCreate ? (ticket?.liveDirectQuotation ?? null) : null,
+    dealStatus: ticket?.status ?? 'draft',
     // One pricing route per deal: a NEW quotation on a picked deal that holds a live pricing request
     // (DealQuotationService#create 409s it).
     livePricingRequest: !quotation && !isInlineCreate && dealHasLivePricingRequest,
