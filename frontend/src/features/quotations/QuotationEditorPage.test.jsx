@@ -16,7 +16,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       // parties / addParty / openForProject: deal parties (deal-party-model.md). Default to "none"
       // (see the top-level beforeEach below) so every older test sees today's single-party deal.
-      tickets: { get: vi.fn(), create: vi.fn(), parties: vi.fn(), addParty: vi.fn(), openForProject: vi.fn() },
+      tickets: { get: vi.fn(), create: vi.fn(), parties: vi.fn(), addParty: vi.fn(), removeParty: vi.fn(), openForProject: vi.fn() },
       // A NEW quotation on a picked deal reads the deal's pricing requests (one pricing route per
       // deal). None here: every test in this file is about the editor itself.
       pricingRequests: { listForTicket: vi.fn().mockResolvedValue({ items: [] }) },
@@ -885,13 +885,14 @@ describe('QuotationEditorPage inline deal creation', () => {
       expect(notice.getByText('DL-2026-0280')).toBeTruthy();
       expect(notice.getByText('2 ผู้รับเหมา')).toBeTruthy();
       expect(notice.getByText('บริษัท ตัวอย่าง คอนสตรัคชั่น · บจก.สมมติ ก่อสร้าง')).toBeTruthy();
-      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในดีลเดิม`) }).checked).toBe(true);
-      expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย');
+      // The helper picked ผู้ออกแบบ: the notice names THAT role, not always "ผู้รับเหมา".
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้ออกแบบในดีลเดิม`) }).checked).toBe(true);
+      expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · เสนอแก่ผู้ออกแบบ');
       // Attaching makes no deal, so ช่องทางรับงาน is not asked.
       expect(screen.queryByRole('group', { name: 'ช่องทางรับงาน' })).toBeNull();
     });
 
-    it('saving adds the customer as a BUYER party, then creates the quotation for that party on the existing deal', async () => {
+    it('saving adds the customer in the recipient\'s role (a designer here), then creates the quotation for that party', async () => {
       api.tickets.addParty.mockResolvedValue({ party: { id: 31 } });
       renderInlineCreate();
       await selectCustomerAndProject({ channel: false });
@@ -900,14 +901,30 @@ describe('QuotationEditorPage inline deal creation', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
       await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ partyId: 31 })));
-      expect(api.tickets.addParty).toHaveBeenCalledWith(18, { customerId: testCustomer.id, role: 'BUYER' });
+      expect(api.tickets.addParty).toHaveBeenCalledWith(18, { customerId: testCustomer.id, role: 'DESIGNER' });
       expect(api.tickets.create).not.toHaveBeenCalled();
       expect(await screen.findByText('navigated-to-99')).toBeTruthy();
     });
 
+    it('when the deal refuses the quotation, the party this save added is taken back', async () => {
+      api.tickets.addParty.mockResolvedValue({ party: { id: 33 } });
+      api.tickets.removeParty.mockResolvedValue(null);
+      api.dealQuotations.create.mockRejectedValueOnce(Object.assign(new Error('ผู้รับนี้ไม่ตรงช่องทางของดีล'), { status: 409 }));
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      await screen.findByTestId('existing-deal-notice');
+      await fillOneValidItem();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.tickets.removeParty).toHaveBeenCalledWith(18, 33));
+    });
+
     it('a customer already bidding on the deal is reused, not refused', async () => {
       api.tickets.addParty.mockRejectedValue(Object.assign(new Error('อยู่ในดีลนี้แล้ว'), { status: 409 }));
-      api.tickets.parties.mockResolvedValue({ parties: [{ id: 44, customerId: testCustomer.id, role: 'BUYER' }] });
+      api.tickets.parties.mockResolvedValue({ parties: [
+        { id: 43, customerId: testCustomer.id, role: 'BUYER' },
+        { id: 44, customerId: testCustomer.id, role: 'DESIGNER' },
+      ] });
       renderInlineCreate();
       await selectCustomerAndProject({ channel: false });
       await screen.findByTestId('existing-deal-notice');
@@ -915,6 +932,20 @@ describe('QuotationEditorPage inline deal creation', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
       await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledWith(18, expect.objectContaining({ partyId: 44 })));
+    });
+
+    it('picking ผู้ซื้อ / ผู้รับเหมา adds the customer as a contractor (BUYER) and counts the bidders', async () => {
+      api.tickets.addParty.mockResolvedValue({ party: { id: 32 } });
+      renderInlineCreate();
+      await selectCustomerAndProject({ channel: false });
+      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
+      const notice = within(await screen.findByTestId('existing-deal-notice'));
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในดีลเดิม`) })).toBeTruthy();
+      expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย');
+      await fillOneValidItem();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
+      await waitFor(() => expect(api.tickets.addParty).toHaveBeenCalledWith(18, { customerId: testCustomer.id, role: 'BUYER' }));
     });
 
     it('สร้างดีลใหม่แยกต่างหาก keeps the inline-create path unchanged', async () => {
