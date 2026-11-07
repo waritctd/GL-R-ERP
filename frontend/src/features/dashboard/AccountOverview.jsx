@@ -29,7 +29,8 @@ function rowMeta(key, t) {
   if (key === 'confirmCloseReady') return `${t.code} · ชำระครบแล้ว`;
   if (key === 'recordInvoiceCommission') return `${t.code} · ปิดงานแล้ว · รอบันทึกใบกำกับ`;
   const step = moneyMilestoneOf(t.salesStage);
-  return step ? `${t.code} · ขั้น ${step.index} ${step.label}` : t.code;
+  if (step) return `${t.code} · ขั้น ${step.index} ${step.label}`;
+  return `${t.code} · ยังไม่ได้รับคำสั่งซื้อ`;
 }
 
 /**
@@ -77,7 +78,9 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
   const overdueTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'overdue') : null;
   const depositTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'depositPending') : null;
   const earliestDue = overdueTickets?.length ? Math.min(...overdueTickets.map(dueTime)) : Infinity;
+  // One definition per money figure: the server totals, same as the CEO and sales-manager pages.
   const received = dashboardSummary?.cashReceivedThisMonth ?? null;
+  const overdue = dashboardSummary?.overdueOutstanding ?? null;
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
   const today = formatThaiDate(new Date().toISOString());
@@ -93,20 +96,20 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
           <Figure
             danger
             label="เกินกำหนดชำระ"
-            value={money(overdueTickets && moneySum(overdueTickets, owed))}
-            caption={overdueTickets && overdueTickets.length > 0
+            value={money(overdue)}
+            caption={overdue == null || !overdueTickets ? '' : overdueTickets.length > 0
               ? `${overdueTickets.length} ดีล${earliestDue === Infinity ? '' : ` · เก่าสุดครบ ${formatThaiDate(earliestDue)}`}`
               : 'ไม่มีดีลเกินกำหนด'}
           />
           <Figure
             label="รอรับมัดจำ"
             value={money(depositTickets && moneySum(depositTickets, (t) => t.depositDue))}
-            caption={`ใบแจ้งมัดจำที่ออกแล้ว ${depositTickets?.length ?? 0} ใบ`}
+            caption={depositTickets ? `ใบแจ้งมัดจำที่ออกแล้ว ${depositTickets.length} ใบ` : ''}
           />
           <Figure
             label="รับแล้ว (เดือนนี้)"
             value={money(received)}
-            caption={received > 0 ? 'เงินที่บัญชียืนยันรับแล้ว' : 'ยังไม่มีรับเข้าเดือนนี้'}
+            caption={received == null ? '' : received > 0 ? 'เงินที่บัญชียืนยันรับแล้ว' : 'ยังไม่มีรับเข้าเดือนนี้'}
           />
         </dl>
       </section>
@@ -156,7 +159,7 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
                   <strong className="block truncate text-sm font-bold text-text">{t.customerName || t.title}</strong>
                   <span className="block truncate text-xs text-text-muted">{rowMeta('hold', t)}</span>
                 </div>
-                <span className="shrink-0 text-sm font-bold tabular-nums text-text">{formatMoney(owed(t))}</span>
+                <span className="shrink-0 text-sm font-bold tabular-nums text-text">{money(t.amountOutstanding)}</span>
               </div>
             ))}
             <p className="m-0 flex items-start gap-2 px-5 py-3 text-xs text-text-muted mobile:px-3.5">

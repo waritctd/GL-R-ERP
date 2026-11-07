@@ -169,15 +169,44 @@ describe('ImportOverview', () => {
       expect(within(screen.getByTestId('ceo-waiting-panel')).queryAllByTestId(/^ceo-waiting-row-/)).toHaveLength(2);
     });
 
-    it('counts a per-factory shipment on ขนส่ง (2 of 3 stored rows), not the deal-level status', async () => {
+    // Shipments are per factory, but this band counts DEALS: it must equal the นำเข้า group, and a deal
+    // with several in-transit rows counts once (in its furthest bucket), never once per row.
+    const transitRows = (ticketId, n) => Array.from({ length: n }, (_, i) => ({ id: i + 1, ticketId, status: 'ISSUED', importStep: 'IN_TRANSIT', factoryName: `โรงงาน ${i}` }));
+
+    it('a deal with 2 in-transit factory rows counts as 1 deal, equal to the นำเข้า group, filed under ขนส่ง', async () => {
       api.tickets.list.mockResolvedValue({ tickets: [{ ...TICKETS[0], id: 21, code: 'D-021', fulfillmentStatus: 'IR_ISSUED' }] });
-      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [
-        { id: 1, ticketId: 21, status: 'ISSUED', importStep: 'IN_TRANSIT', factoryName: 'โรงงาน ก' },
-        { id: 2, ticketId: 21, status: 'ISSUED', importStep: 'IN_TRANSIT', factoryName: 'โรงงาน ข' },
-        { id: 3, ticketId: 21, status: 'ISSUED', importStep: 'ORDERED', factoryName: 'โรงงาน ค' },
-      ] });
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [...transitRows(21, 2), { id: 3, ticketId: 21, status: 'ISSUED', importStep: 'ORDERED' }] });
       renderOverview();
-      await vi.waitFor(() => expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('ขนส่ง 2'));
+      await findGroup('import');
+      await vi.waitFor(() => expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('ออกใบขอซื้อ 0 · ขนส่ง 1 · ถึงคลัง 0'));
+      expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('1 ดีล');
+      expect(group('import').textContent).toContain('1 รายการ');
+    });
+
+    it('a SHIPPING deal that also has in-transit rows is counted once, not in two buckets', async () => {
+      api.tickets.list.mockResolvedValue({ tickets: [{ ...TICKETS[3], id: 22, code: 'D-022' }] }); // SHIPPING
+      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: transitRows(22, 2) });
+      renderOverview();
+      await findGroup('import');
+      await vi.waitFor(() => expect(within(group('import')).getByTestId('worklist-row-import-22')).not.toBeNull());
+      const text = figureRows('นำเข้า / ขนส่ง')[0];
+      expect(text).toContain('1 ดีล');
+      expect(text).toContain('ออกใบขอซื้อ 0 · ขนส่ง 0 · ถึงคลัง 1');
+      expect(group('import').textContent).toContain('1 รายการ');
+    });
+
+    it('prints no zero captions while a figure is "—" (loading or failed)', async () => {
+      api.tickets.list.mockImplementation(never);
+      api.pricingRequests.queue.mockImplementation(never);
+      const { unmount } = renderOverview();
+      expect(figureRows('กำลังขอราคา (ของฉัน)')[0]).toBe('กำลังขอราคา (ของฉัน)—');
+      expect(figureRows('นำเข้า / ขนส่ง')[0]).toBe('นำเข้า / ขนส่ง—');
+      unmount();
+      api.pricingRequests.queue.mockRejectedValue(new Error('boom'));
+      renderOverview();
+      await screen.findAllByText('โหลดไม่สำเร็จ');
+      expect(figureRows('กำลังขอราคา (ของฉัน)')[0]).toBe('กำลังขอราคา (ของฉัน)—');
+      expect(figureRows('รอรับเรื่อง')[0]).toContain('—');
     });
   });
 
@@ -190,6 +219,22 @@ describe('ImportOverview', () => {
       // 5 are mine; 121 (assigned to 99), 131 (mine but READY_FOR_CEO_REVIEW), 132, 141 never show up in this group
       ['121', '131', '132', '141', '101'].forEach((id) => expect(within(group('mine')).queryByTestId(`worklist-row-mine-${id}`), id).toBeNull());
       expectFigure('กำลังขอราคา (ของฉัน)', '5 คำขอ');
+    });
+
+    it('lists the oldest submission first, whatever the id or arrival order', async () => {
+      const at = (id, status, submittedAt, o = {}) => pcr(id, status, { submittedAt, ...o });
+      // arrives in id order 103,104,105 but was submitted 105 (oldest), 104, 103
+      serveQueue([
+        at(103, 'SUBMITTED', '2026-07-03'), at(104, 'SUBMITTED', '2026-07-02'), at(105, 'SUBMITTED', '2026-07-01'),
+        at(116, 'IMPORT_REVIEWING', '2026-07-03', { assignedImportId: 7 }),
+        at(117, 'IMPORT_REVIEWING', '2026-07-02', { assignedImportId: 7 }),
+        at(118, 'IMPORT_REVIEWING', '2026-07-01', { assignedImportId: 7 }),
+      ]);
+      renderOverview();
+      await findGroup('pickup');
+      const ids = (key) => within(group(key)).getAllByTestId(/^worklist-row-/).map((el) => el.dataset.testid.split('-').pop());
+      expect(ids('pickup')).toEqual(['105', '104', '103']);
+      expect(ids('mine')).toEqual(['118', '117', '116']);
     });
 
     it('reads 0 when nothing is assigned to me, even though other people have open requests', async () => {

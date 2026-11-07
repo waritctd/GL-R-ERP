@@ -9,7 +9,7 @@ import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatThaiDate, fulfilmentStatusLabel, greetingName, pricingRequestStatusLabel } from '../../utils/format.js';
 import { pricingRequestRecipientLabel } from '../pricingRequests/pricingRequestMeta.js';
-import { nextFulfilmentActionCode, nextImportAction } from '../tickets/importActions.js';
+import { nextImportAction } from '../tickets/importActions.js';
 import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
 
 /**
@@ -103,15 +103,16 @@ export function ImportOverview({ user, employee }) {
       return stage(a) - stage(b) || new Date(a.ticket.updatedAt || 0) - new Date(b.ticket.updatedAt || 0);
     }), [tickets]);
 
+  // Band breakdown: each deal of the นำเข้า group once, in its furthest bucket (an in-transit factory
+  // shipment makes it at least ขนส่ง). Per-factory shipments are the กำลังขนส่ง panel's business.
   const fulfilment = useMemo(() => {
-    const counts = { procurement: 0, shipping: 0, goodsReceived: 0 };
-    tickets.forEach((ticket) => {
-      const bucket = FULFILMENT_ACTION_TO_BUCKET[nextFulfilmentActionCode(ticket)];
-      if (bucket) counts[bucket] += 1;
+    const counts = [0, 0, 0];
+    importRows.forEach(({ ticket, action }) => {
+      const byAction = BUCKET_ORDER.indexOf(FULFILMENT_ACTION_TO_BUCKET[action.code]);
+      counts[Math.max(byAction, inTransitShipments.has(ticket.id) ? 1 : -1)] += 1;
     });
-    inTransitShipments.forEach((n) => { counts.shipping += n; });
     return counts;
-  }, [tickets, inTransitShipments]);
+  }, [importRows, inTransitShipments]);
 
   const inTransit = useMemo(
     () => tickets.filter((t) => IN_TRANSIT_STATUSES.includes(t.fulfillmentStatus) || inTransitShipments.has(t.id)),
@@ -155,7 +156,6 @@ export function ImportOverview({ user, employee }) {
   const total = groups.reduce((sum, g) => sum + g.n, 0);
   const allEmpty = groups.every((g) => g.n === 0 && !g.isFailed);
 
-  const fulfilmentTotal = fulfilment.procurement + fulfilment.shipping + fulfilment.goodsReceived;
   const mineReviewing = mine.filter((pr) => pr.status === 'IMPORT_REVIEWING').length;
   const pricingFigure = (n) => (queueReady ? count(n, 'คำขอ') : '—');
 
@@ -172,13 +172,13 @@ export function ImportOverview({ user, employee }) {
           <Figure
             label="กำลังขอราคา (ของฉัน)"
             value={pricingFigure(mine.length)}
-            caption={`รับเรื่อง ${mineReviewing} · เจรจากับโรงงาน ${mine.length - mineReviewing}`}
+            caption={queueReady ? `รับเรื่อง ${mineReviewing} · เจรจากับโรงงาน ${mine.length - mineReviewing}` : ''}
           />
           <Figure label="รอ CEO ตั้งราคา" value={pricingFigure(withCeo.length)} caption="ส่งต่อแล้ว ไม่ต้องทำอะไร" />
           <Figure
             label="นำเข้า / ขนส่ง"
-            value={ticketsReady ? count(fulfilmentTotal, 'ดีล') : '—'}
-            caption={`ออกใบขอซื้อ ${fulfilment.procurement} · ขนส่ง ${fulfilment.shipping} · ถึงคลัง ${fulfilment.goodsReceived}`}
+            value={ticketsReady ? count(importRows.length, 'ดีล') : '—'}
+            caption={ticketsReady ? `ออกใบขอซื้อ ${fulfilment[0]} · ขนส่ง ${fulfilment[1]} · ถึงคลัง ${fulfilment[2]}` : ''}
           />
         </dl>
       </section>
