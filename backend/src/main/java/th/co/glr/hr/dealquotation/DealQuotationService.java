@@ -224,7 +224,11 @@ public class DealQuotationService {
         requireEditAccess(actor, ticket);
         // Precedence (mirrored by mockApi.dealQuotations.create): authz 403 -> recipient 400 -> one-pricing-route 409 ->
         // live-quotation 409, all before anything is resolved or written.
-        String recipientType = requireRecipientForCreate(request.recipientType());
+        // V204: a partyId names the ผู้รับเหมา this document is for. The party fixes the recipient (its role), the
+        // customer snapshot (ITS customer, not the deal's) and the number family. Resolved before the lock so a bad id
+        // is a 400, not a wait.
+        DealQuotationRepository.PartyRef party = resolvePartyForCreate(ticketId, request.partyId());
+        String recipientType = party != null ? party.role() : requireRecipientForCreate(request.recipientType());
         quotations.lockTicket(ticketId);
         // One pricing route per deal: the reverse of DirectQuotationLocks#requireNoLiveDirectQuotation. Only for
         // #create; a revision or reorder is not a new route choice, and #createFromPricingRequest IS the pricing route.
@@ -232,8 +236,13 @@ public class DealQuotationService {
         // One live direct quotation per deal. The 409 names the live one (liveQuotationId/number/docStatus, top-level in
         // the body) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket so concurrent creates
         // cannot both pass.
-        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
-        ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
+        if (party != null) {
+            // Per party: a sibling bidder's live document on this deal does not block this party's first one.
+            th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForParty(tickets, ticketId, party.partyId());
+        } else {
+            th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
+        }
+        ContactSnapshot contact = resolveContact(request.contactId(), null, ticket, partyCustomerId(party));
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());
         // #create only makes a DEAL_DIRECT document, so only the language half of the rule can bite.
@@ -247,7 +256,7 @@ public class DealQuotationService {
         boolean specialPricing = DealQuotationRenderAdapter.hasSpecialPricingForNewItems(priceMode, items);
         LocalDate validityUntil = requireValidityUntilForMode(validityMode, request.validityUntil(),
             LocalDate.now(BANGKOK), specialPricing);
-        CustomerSnapshot customerSnapshot = customerSnapshot(ticket);
+        CustomerSnapshot customerSnapshot = customerSnapshot(ticket, partyCustomerId(party));
         // Print-only ผู้พิมพ์/พนักงานขาย name override, validated against the same eligible union the options endpoint
         // lists, so create never persists an id no client could have picked.
         Long printedByDisplayId = requireEligibleDisplayEmployeeId(request.printedByDisplayId());
@@ -265,7 +274,9 @@ public class DealQuotationService {
         // Every document carries the revision suffix, including the first. The base number belongs to the DEAL
         // (.design/quote-stage-gates/VERSIONING.md): its family is continued, and a fresh base is minted only when it has
         // none. Serialised by #lockTicket so concurrent creates cannot race the number's UNIQUE constraint.
-        DealQuotationRepository.QuotationNumber quotationNumber = quotations.nextNumberOnDeal(ticketId);
+        DealQuotationRepository.QuotationNumber quotationNumber = party != null
+            ? quotations.nextNumberOnDealForParty(ticketId, party.partyId())
+            : quotations.nextNumberOnDeal(ticketId);
         long id = quotations.insertDraft(new InsertDraftParams(
             ticketId, quotationNumber.number(), actor.id(), ticket.createdById(),
             customerSnapshot.name(), customerSnapshot.address(),
@@ -289,7 +300,16 @@ public class DealQuotationService {
             // ordered_by_name = the picked contact's name (null when none), written on every DRAFT save; stored only, never
             // printed (the ผู้สั่งซื้อ slot is always dotted). request.orderedByName() is ignored.
             contact.name(),
-            orderedByPhone, orderedByEmail));
+            orderedByPhone, orderedByEmail,
+            // V204: the party this document is for; a deal with exactly one party (every pre-V204 deal) attaches to it.
+            party != null ? Long.valueOf(party.partyId())
+                : quotations.findDefaultPartyId(ticketId, ticket.customerId(), recipientType).orElse(null)));
+        // The named party, or the default one, now has a document: ACTIVE -> QUOTED.
+        Long quotedPartyId = party != null ? Long.valueOf(party.partyId())
+            : quotations.findDefaultPartyId(ticketId, ticket.customerId(), recipientType).orElse(null);
+        if (quotedPartyId != null) {
+            quotations.markPartyQuoted(quotedPartyId);
+        }
         advanceDealToRecipientStage(ticketId, recipientType, actor);
         // A brand-new document prints its project unless the request says otherwise, so only an explicit true needs
         // writing (the column DEFAULT is FALSE). A statement of its own, see DealQuotationRepository#updateHideProjectName.
@@ -476,7 +496,9 @@ public class DealQuotationService {
             "PRICING_REQUEST", summary.recipientType(), summary.recipientLabel(),
             summary.id(), decision.id(),
             // ordered_by_name = the recipient contact's name, as #create writes it (never printed); no phone or email.
-            contact.name(), null, null));
+            contact.name(), null, null,
+            // V204: a PRICING_REQUEST-origin document belongs to the deal's one party when it has exactly one.
+            quotations.findDefaultPartyId(summary.ticketId(), ticket.customerId(), summary.recipientType()).orElse(null)));
         // The same creation-time advance #create performs, on the recipient carried over from the source คำขอราคา; this
         // is the call that gets a PCR-route deal to ขั้น 4.
         advanceDealToRecipientStage(summary.ticketId(), summary.recipientType(), actor);
@@ -831,7 +853,7 @@ public class DealQuotationService {
         // ordered_by_name below.
         ContactSnapshot contact = Boolean.TRUE.equals(request.clearContact())
             ? new ContactSnapshot(null, null, null, null)
-            : resolveContact(request.contactId(), existing.contactId(), ticket);
+            : resolveContact(request.contactId(), existing.contactId(), ticket, partyCustomerIdOf(existing.partyId()));
         // A MISSING priceMode on UPDATE keeps the STORED one. #resolvePriceMode's blank->NET default is right on CREATE
         // and catastrophic here: a client that omits the field (an old client, or a UI that PUTs only what it edited)
         // would silently REPRICE the document: every SPECIAL_SQM tile row back to list price, special_price_sqm NULL,
@@ -891,7 +913,7 @@ public class DealQuotationService {
         // customer row on every DRAFT save, because the deal card edits เลขที่ผู้เสียภาษี / โทร. in place and promises "the
         // values on screen at save time". updateHeader's WHERE keeps it DRAFT-only, so an issued/approved document stays
         // frozen.
-        int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket),
+        int rows = quotations.updateHeader(id, contact, customerSnapshot(ticket, partyCustomerIdOf(existing.partyId())),
             blankToNull(request.deptCode()), blankToNull(request.unitCode()),
             request.offerDate(), request.depositPercent(), remainderMode,
             creditDays, request.validityDays(), validityMode, validityUntil,
@@ -1696,6 +1718,16 @@ public class DealQuotationService {
      */
     @Transactional
     public PromoteToDealResultDto confirmOrderFromDirectQuotation(long quotationId, UserPrincipal actor) {
+        return confirmOrderFromDirectQuotation(quotationId, actor, Set.of());
+    }
+
+    /**
+     * {@link #confirmOrderFromDirectQuotation(long, UserPrincipal)} for a bid outcome (V204, {@code dealparty}):
+     * the open documents of {@code keepPartyIds} (contractors recorded as "ยังรอผล") are NOT cancelled with the
+     * deal's other open direct quotations. The same transaction; an empty set is the plain confirmation.
+     */
+    @Transactional
+    public PromoteToDealResultDto confirmOrderFromDirectQuotation(long quotationId, UserPrincipal actor, Set<Long> keepPartyIds) {
         if (ticketService == null) {
             // Same defensive shape as #approveAndIssuePricingRequestOrigin: only reachable if the bean is wired without
             // #wireTicketService.
@@ -1746,7 +1778,7 @@ public class DealQuotationService {
         // The agreed order is this quotation: the deal's other open direct quotations can never be submitted or approved now
         // (see requireNoOtherDirectQuotationAfterConfirm), so cancel them rather than strand them.
         for (DealQuotationRepository.CancelledQuotation cancelled
-                : quotations.cancelOtherOpenDirectQuotations(ticketId, quotationId)) {
+                : quotations.cancelOtherOpenDirectQuotations(ticketId, quotationId, keepPartyIds)) {
             tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.CANCELLED, null, null,
                 "ยกเลิกใบเสนอราคา " + cancelled.number() + " อัตโนมัติ เพราะยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number());
             if (cancelled.wasPending()) {
@@ -2078,7 +2110,9 @@ public class DealQuotationService {
             prSource ? source.pricingRequestId() : null, sourceDecisionId,
             // The copy inherits the source's manual buyer name VERBATIM, and the phone and email recorded for that person
             // (stored values, already checked when saved).
-            source.orderedByName(), source.orderedByPhone(), source.orderedByEmail()));
+            source.orderedByName(), source.orderedByPhone(), source.orderedByEmail(),
+            // V204: a revision or reorder stays with its source's party.
+            source.partyId()));
         // The copy's items point at the source's (immutable, shared) picture rows, matched by seq. Shared by revisions and
         // reorder clones.
         quotations.copyPictureLinks(source.id(), newId);
@@ -2115,6 +2149,9 @@ public class DealQuotationService {
      */
     private void requireNoOtherDirectQuotationAfterConfirm(DealQuotationDto quotation) {
         if (isPricingRequestOrigin(quotation)
+                // V204: a contractor recorded as "ยังรอผล" is still bidding after the winner's order was confirmed; its own
+                // document may still be submitted and approved, and a later bid outcome forks it to a child deal.
+                || Set.of("ACTIVE", "QUOTED", "NEGOTIATING").contains(quotation.partyStatus())
                 || !tickets.hasPromotionFromQuotationEvent(quotation.ticketId())
                 || tickets.isOrderConfirmedFromQuotation(quotation.ticketId(), quotation.id())) {
             return;
@@ -2344,6 +2381,49 @@ public class DealQuotationService {
      * never gets a cascade, by design: see V167 on why an issued document stays frozen). It falls back to the ticket's
      * frozen name only when the row is gone, like address/taxId/phone below.
      */
+    // ── V204 deal party helpers (docs/decisions/deal-party-model.md) ─────────────────────────────
+
+    /** The party a CREATE names, checked to belong to this deal and to still be in the running. Null when none named. */
+    private DealQuotationRepository.PartyRef resolvePartyForCreate(long ticketId, Long partyId) {
+        if (partyId == null) {
+            return null;
+        }
+        DealQuotationRepository.PartyRef party = quotations.findParty(partyId)
+            .filter(p -> p.ticketId() == ticketId)
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้รับเหมารายนี้ในดีล"));
+        if (!QuotationRecipient.isAddressable(party.role())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับใบเสนอราคาไม่ถูกต้อง");
+        }
+        if (Set.of("NOT_AWARDED", "WITHDRAWN", "AWARDED_SPLIT").contains(party.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ผู้รับเหมารายนี้ไม่ได้อยู่ในการประมูลแล้ว จึงออกใบเสนอราคาให้ไม่ได้");
+        }
+        return party;
+    }
+
+    private static Long partyCustomerId(DealQuotationRepository.PartyRef party) {
+        return party == null ? null : party.customerId();
+    }
+
+    /** The customer of the party a stored row is for, for the UPDATE path; null when the row has no party. */
+    private Long partyCustomerIdOf(Long partyId) {
+        return partyId == null ? null
+            : quotations.findParty(partyId).map(DealQuotationRepository.PartyRef::customerId).orElse(null);
+    }
+
+    /**
+     * {@link #customerSnapshot(TicketSummaryDto)} for a document addressed to a party whose customer is NOT the
+     * deal's own (a sibling bidder): the snapshot comes from that customer's live row. The deal's customer, or
+     * no party, keeps the pre-V204 behaviour.
+     */
+    private CustomerSnapshot customerSnapshot(TicketSummaryDto ticket, Long partyCustomerId) {
+        if (partyCustomerId == null || (ticket.customerId() != null && partyCustomerId.longValue() == ticket.customerId())) {
+            return customerSnapshot(ticket);
+        }
+        CustomerDto customer = customers.findById(partyCustomerId)
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าของผู้รับเหมารายนี้"));
+        return new CustomerSnapshot(customer.name(), customer.address(), customer.taxId(), customer.phone());
+    }
+
     private CustomerSnapshot customerSnapshot(TicketSummaryDto ticket) {
         CustomerDto customer = ticket.customerId() != null
             ? customers.findById(ticket.customerId()).orElse(null) : null;
@@ -2370,12 +2450,20 @@ public class DealQuotationService {
      * (stored only, never printed: the ผู้สั่งซื้อ slot is always dotted); the free-text name is not taken from the request.
      */
     private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket) {
+        return resolveContact(requestedContactId, existingContactId, ticket, null);
+    }
+
+    /** {@link #resolveContact(Long, Long, TicketSummaryDto)} for a document addressed to a party: the contact must
+     * belong to THAT party's customer ({@code partyCustomerId}), which for a sibling bidder is not the deal's. */
+    private ContactSnapshot resolveContact(Long requestedContactId, Long existingContactId, TicketSummaryDto ticket,
+                                           Long partyCustomerId) {
+        Long expectedCustomerId = partyCustomerId != null ? partyCustomerId : ticket.customerId();
         Long contactId = requestedContactId != null ? requestedContactId : existingContactId;
         if (contactId == null) {
             return new ContactSnapshot(null, null, null, null);
         }
         ContactDto contact = contacts.findById(contactId)
-            .filter(c -> ticket.customerId() != null && c.customerId() == ticket.customerId())
+            .filter(c -> expectedCustomerId != null && c.customerId() == expectedCustomerId.longValue())
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุผู้สั่งซื้อ"));
         String name = blankToNull(contact.fullName());
         if (name == null) {

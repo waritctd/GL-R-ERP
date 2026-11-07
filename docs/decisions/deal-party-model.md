@@ -240,12 +240,38 @@ its project name, not its placeholder customer.
    `promoteToDeal` is called by `bid-outcome`. The outcome dialog ships here.
 4. **Reconcile the backlog.** A merge action for the 23 existing groups: a `quotation_only`
    ticket carries nothing but its quotation, so merging moves the quotation and party onto the
-   surviving deal and cancels the empty container (`ticket_event` `CANCELLED` with a
-   `MERGED_INTO` note). Sales manager confirms each proposal.
+   surviving deal and cancels the empty container (`DEAL_MERGED_INTO` event naming the survivor).
+   Shipped as migration V205 with a strict rule; see Implementation status.
 
 Dashboard and forecast switch to per-deal counting in slice 2 (they already sum per ticket; the
 change is that siblings become one ticket). Commission is invoice-based and keyed by ticket, so it
 is unchanged.
+
+## Implementation status (2026-11-07)
+
+Built on branch `claude/keen-cannon-m416h7`:
+
+| Slice | State | Where |
+|---|---|---|
+| 1. Project is the site | Done: `customer_id` nullable, generated `name_key`. Customer merge tool and tax-ID uniqueness are **not** built. | V204 |
+| 2. Parties, `quotation.party_id`, backfill | Done. Every new deal gets its customer as first BUYER party. | V204, `TicketRepository#create` |
+| 3. Entry point and outcome | Done: per-party quotation (own customer snapshot, number family, live-quotation lock, approval sweep), `bid-outcome` with one or more winners, open-deal lookup for the editor. | `dealparty/`, `DealQuotationService` |
+| 4. Backlog | Done as an automatic, strict migration instead of a per-group confirmation, because the owner asked for the existing deals to be corrected. Only groups made entirely of pure quotation-only containers merge. | V205 |
+
+V205 against production data on 2026-11-07 (grouped by deal owner and project row name):
+21 of 23 multi-customer groups merge. Left for a person to decide: "the base patong sai 3"
+(two orders already confirmed for different contractors, plus open bids) and "บ้านพวงทอง"
+(contains an ordinary pipeline deal). Same-company duplicates typed as two customers become two
+parties on one deal; merging the customer rows is still a manual step.
+
+Behaviour decided while building, beyond the rules above:
+
+- A quotation created without a party attaches to the deal's own customer's party, preferring
+  the quotation's recipient role, else the deal's sole party.
+- Approval supersedes other live quotations of the same party only, so each bidder keeps one
+  live offer.
+- After the winner's order is confirmed, a bidder recorded as "ยังรอผล" may still submit and
+  approve, and a later outcome forks it to a child deal; there is never a second primary.
 
 ## Non-goals
 

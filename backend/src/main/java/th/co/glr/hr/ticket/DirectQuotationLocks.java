@@ -89,13 +89,23 @@ public final class DirectQuotationLocks {
      * Same "live" definition as {@link #requireNoLiveDirectQuotation}; called ONLY by
      * {@code DealQuotationService#create}.
      */
+    /** {@link #requireNoLiveDirectQuotationForCreate} per deal party (V204): only THIS party's live
+     * document blocks a new one for it; a sibling bidder's does not. */
+    public static void requireNoLiveDirectQuotationForParty(TicketRepository tickets, long ticketId, long partyId) {
+        tickets.findLiveDirectQuotationForParty(ticketId, partyId).ifPresent(live -> refuseLive(live));
+    }
+
     public static void requireNoLiveDirectQuotationForCreate(TicketRepository tickets, long ticketId) {
-        tickets.findLiveDirectQuotation(ticketId).ifPresent(live -> {
+        tickets.findLiveDirectQuotation(ticketId).ifPresent(live -> refuseLive(live));
+    }
+
+    private static void refuseLive(LiveDirectQuotationDto live) {
+        {
             java.util.Map<String, Object> details = new java.util.LinkedHashMap<>();
             details.put("liveQuotationId", live.id());
             details.put("number", live.number());
             details.put("docStatus", live.docStatus());
             throw new ApiException(HttpStatus.CONFLICT, liveDirectQuotationMessage(live.number()), details);
-        });
+        }
     }
 }

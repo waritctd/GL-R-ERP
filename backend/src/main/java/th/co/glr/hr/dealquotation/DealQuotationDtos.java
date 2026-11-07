@@ -246,7 +246,19 @@ public final class DealQuotationDtos {
          * /api/deal-quotations} LISTS (shown read-only) but that no read-by-id
          * or mutation path on this engine will ever serve (they all 404 it). {@code false} for
          * {@code DEAL_DIRECT} and {@code PRICING_REQUEST}. */
-        boolean readOnly
+        boolean readOnly,
+        // ── Deal party (V204, docs/decisions/deal-party-model.md) ──
+        /** {@code sales.quotation.party_id}: the deal party this document is addressed to. Null only on a
+         * row older than V204 whose ticket had no customer. */
+        Long partyId,
+        /** {@code sales.deal_party.status} of that party, read LIVE (ACTIVE / QUOTED / NEGOTIATING / AWARDED /
+         * AWARDED_SPLIT / NOT_AWARDED / WITHDRAWN); null when {@link #partyId} is null. */
+        String partyStatus,
+        /** {@code sales.deal_party.is_headline}: this party's quotation is the deal's headline amount. */
+        boolean partyHeadline,
+        /** BUYER parties on the deal, read live. More than one means sibling bids share this deal, so the
+         * register groups them under the project. */
+        int dealBuyerCount
     ) {
         /** The shape without {@link #ticketCode}/{@link #dealStage}/{@link #readOnly} —
          * kept so every existing construction site (tests, mostly) compiles unchanged, the same
@@ -285,7 +297,7 @@ public final class DealQuotationDtos {
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
-                removedCeoItems, orderedByName, false, null, null, null, null, null, null, false);
+                removedCeoItems, orderedByName, false, null, null, null, null, null, null, false, null, null, false, 0);
         }
 
         /** The shape with {@link #recipientType}/{@link #recipientLabel} but without
@@ -327,7 +339,7 @@ public final class DealQuotationDtos {
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
-                removedCeoItems, orderedByName, false, null, null, recipientType, recipientLabel, null, null, false);
+                removedCeoItems, orderedByName, false, null, null, recipientType, recipientLabel, null, null, false, null, null, false, 0);
         }
 
         /** The pre-link shape from the sales-feedback rounds (main's canonical: through {@link
@@ -369,12 +381,12 @@ public final class DealQuotationDtos {
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, itemsRemovedFromCeoCount,
                 removedCeoItems, orderedByName, hideProjectName, orderedByPhone, orderedByEmail,
-                null, null, null, null, false);
+                null, null, null, null, false, null, null, false, 0);
         }
 
         /** The account view -- number, totals and each line's NET price stay; list price, discount and CEO pricing metadata are emptied. */
         public DealQuotationDto withoutPriceInternals() {
-            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+            return new DealQuotationDto(id, number, ticketId, docStatus, revisionNo, parentQuotationId, createdById, createdByName, createdByNameEn, salesRepId, salesRepName, salesRepNameEn, salesRepPhone, submittedAt, approvedById, approvedByName, approvedByNameEn, approvedAt, approvalNote, quotationDate, customerName, customerAddress, customerTaxId, customerPhone, contactId, contactName, contactPhone, contactEmail, projectName, deptCode, unitCode, offerDate, depositPercent, remainderMode, creditDays, validityDays, validityDate, validityMode, validityUntil, customerNotes, null, documentLanguage, subtotalAmount, vatAmount, grandTotal, currency, approverHasSignature, printedByDisplayId, printedByDisplayName, printedByDisplayNameEn, salesRepDisplayId, salesRepDisplayName, salesRepDisplayNameEn, salesRepDisplayPhone, omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber, derivedFromQuotationStatus, items == null ? null : items.stream().map(DealQuotationItemDto::withoutPriceInternals).toList(), createdAt, updatedAt, origin, pricingRequestId, false, null, pricingRequestCode, 0, List.of(), orderedByName, hideProjectName, orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
         }
 
         /** This DTO carrying {@link #removedCeoItems} — same device as {@code
@@ -397,7 +409,7 @@ public final class DealQuotationDtos {
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
                 itemsRemovedFromCeoCount, removedItems, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
         }
 
         /** This DTO carrying {@code value} as its {@link #orderedByName} — same appended-field
@@ -418,7 +430,7 @@ public final class DealQuotationDtos {
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
                 itemsRemovedFromCeoCount, removedCeoItems, value, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
         }
 
         /** This DTO carrying {@code value} as its {@link #hideProjectName} — the same
@@ -440,7 +452,7 @@ public final class DealQuotationDtos {
                 derivedFromQuotationNumber, derivedFromQuotationStatus, items, createdAt, updatedAt, origin,
                 pricingRequestId, priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode,
                 itemsRemovedFromCeoCount, removedCeoItems, orderedByName, value,
-                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly);
+                orderedByPhone, orderedByEmail, recipientType, recipientLabel, ticketCode, dealStage, readOnly, partyId, partyStatus, partyHeadline, dealBuyerCount);
         }
 
         /** The shape without {@link #itemsRemovedFromCeoCount} — kept so every existing
@@ -478,7 +490,7 @@ public final class DealQuotationDtos {
                 omitContactHonorific, fullPaymentTerm, derivedFromQuotationId, derivedFromQuotationNumber,
                 derivedFromQuotationStatus, items, createdAt, updatedAt, origin, pricingRequestId,
                 priceModeChangedFromCeo, ceoPriceMode, pricingRequestCode, 0, List.of(), null, false, null, null,
-                null, null, null, null, false);
+                null, null, null, null, false, null, null, false, 0);
         }
 
         /** The shape without {@link #origin}/{@link #pricingRequestId}/CEO-comparison
