@@ -164,6 +164,9 @@ class FinanceRoutesWiringProbeIntegrationTest {
         assertThat(postAs("/api/finance/deals/" + a + "/billing", "{\"dueDate\":\"2026-10-31\"}", account).getStatus())
             .isGreaterThanOrEqualTo(400);
 
+        // 2026-11-07: final payment opens at DELIVERY_SCHEDULING (the S15 PROCUREMENT deal is refused).
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERY_SCHEDULING' WHERE ticket_id = :id",
+            new MapSqlParameterSource("id", a));
         d = okDeal(postAs("/api/finance/deals/" + a + "/final-payment", null, account), a, "final-payment");
         assertThat(d.get("money").get("paymentStatus").asText()).isEqualTo("FULLY_PAID");
 
