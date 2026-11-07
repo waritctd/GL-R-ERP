@@ -124,6 +124,7 @@ export function groupQuotationRows(rows) {
     if (emitted.has(row.ticketId)) continue;
     emitted.add(row.ticketId);
     const headline = members.find((m) => m.partyHeadline) ?? null;
+    const searchText = members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''} ${m.docStatus ?? ''}`).join(' ');
     out.push({
       isGroup: true,
       id: `group-${row.ticketId}`,
@@ -134,29 +135,57 @@ export function groupQuotationRows(rows) {
       decided: members.some((m) => m.partyStatus === 'AWARDED' || m.partyStatus === 'AWARDED_SPLIT'),
       headlineAmount: headline?.grandTotal ?? null,
       // What a search over the group header matches: any of its rows' own text.
-      searchText: members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''}`).join(' '),
+      searchText,
     });
-    members.forEach((m) => out.push({ ...m, inGroup: true }));
+    // Numbered per contractor: one party's quotations sit together under one number, the ยอดหลัก
+    // party first, the rest in server order.
+    const byParty = new Map();
+    for (const m of members) {
+      const key = m.partyId ?? `quotation-${m.id}`;
+      if (!byParty.has(key)) byParty.set(key, []);
+      byParty.get(key).push(m);
+    }
+    const parties = [...byParty.values()].sort((a, b) => Number(b.some((m) => m.partyHeadline)) - Number(a.some((m) => m.partyHeadline)));
+    const ordered = parties.flatMap((party, p) => party.map((m) => ({ ...m, groupIndex: p + 1 })));
+    ordered.forEach((m, i) => out.push({
+      ...m, inGroup: true, groupSize: ordered.length, groupSearchText: searchText,
+      ...(i === 0 ? { groupFirst: true } : {}), ...(i === ordered.length - 1 ? { groupLast: true } : {}),
+    }));
   }
   return out;
 }
 
 function GroupRowContent({ row }) {
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs" data-testid="quotation-group-row">
-      <strong className="text-sm font-extrabold text-text">{row.projectName ?? row.ticketCode ?? '-'}</strong>
-      <StatusBadge tone="info">{`${row.buyerCount} ผู้รับเหมา`}</StatusBadge>
-      {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
-      <span className="text-text-muted">
+    <span className="flex min-w-0 flex-col gap-1" data-testid="quotation-group-row">
+      <span className="flex min-w-0 items-center justify-between gap-3 text-xs">
+        <span className="flex items-center gap-2 font-bold text-info">
+          {`ดีลเดียวกัน · ${row.buyerCount} ผู้รับเหมา`}
+          {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
+        </span>
+        {row.ticketId != null ? (
+          <Link to={`/tickets/${row.ticketId}`} className="inline-flex min-h-8 items-center font-bold text-info underline mobile:min-h-[44px]">
+            {`${row.ticketCode ?? `#${row.ticketId}`} →`}
+          </Link>
+        ) : null}
+      </span>
+      {row.projectName ? <strong className="min-w-0 truncate text-md font-extrabold text-text">{row.projectName}</strong> : null}
+      <span className="text-xs text-text-muted">
         {row.decided
           ? 'บันทึกผลประมูลแล้ว'
           : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`}
       </span>
-      {row.ticketId != null ? (
-        <Link to={`/tickets/${row.ticketId}`} className="ml-auto inline-flex min-h-8 items-center font-bold text-info underline mobile:min-h-[44px]">
-          {`ดีล ${row.ticketCode ?? `#${row.ticketId}`} →`}
-        </Link>
-      ) : null}
+    </span>
+  );
+}
+
+function GroupIndexCircle({ n }) {
+  return (
+    <span
+      data-testid="quotation-group-index"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-info-bg text-2xs font-bold text-info"
+    >
+      {n}
     </span>
   );
 }
@@ -179,9 +208,11 @@ const COLUMNS = [
     sortable: true,
     searchAccessor: (row) => (row.isGroup ? row.searchText : row.number),
     render: (row) => (row.isGroup ? <GroupRowContent row={row} /> : (
-      <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
-        <code>{row.number}</code>
-      </Link>
+      <span className="inline-flex items-center">
+        <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
+          <code>{row.number}</code>
+        </Link>
+      </span>
     )),
   },
   {
@@ -197,7 +228,10 @@ const COLUMNS = [
     // `layer(legacy)`), so only the wrapping changes.
     render: (row) => (row.isGroup ? null : (
       <span className="flex flex-col gap-0.5">
-        <span className="font-bold">{row.customerName ?? '-'}</span>
+        <span className="flex items-center gap-2 font-bold">
+          {row.inGroup ? <GroupIndexCircle n={row.groupIndex} /> : null}
+          {row.customerName ?? '-'}
+        </span>
         {row.inGroup
           ? <PartyChipLine row={row} />
           : row.projectName ? <span className="text-2xs text-text-muted">{row.projectName}</span> : null}
@@ -241,19 +275,40 @@ const COLUMNS = [
 ];
 
 // Grouped: no column sorts (see GROUP_PREF_KEY's comment).
-const GROUPED_COLUMNS = COLUMNS.map((column) => ({ ...column, sortable: false }));
+// Every row of a group answers a search with the whole group's text, so a match keeps the group whole.
+const GROUPED_COLUMNS = COLUMNS.map((column) => ({
+  ...column,
+  sortable: false,
+  searchAccessor: (row) => {
+    if (row.inGroup) return column.key === 'number' ? row.groupSearchText : null;
+    return column.searchAccessor ? column.searchAccessor(row) : null;
+  },
+}));
 
-// The group row: its first cell spans the whole grid, the other five are hidden. A NOT_AWARDED bid
-// is dimmed.
-function quotationRowClassName(row) {
-  if (row.isGroup) return 'bg-surface-subtle [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden';
-  return row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : '';
+// One group = header row + member rows read as ONE box. Desktop (<tr>): [&>td] selectors give the
+// header a tinted 2px top edge, members an inset 4px info rail, the last member a 2px bottom edge.
+// Mobile (<li> cards, gap 10px in .record-card-list): the same rows are joined by cancelling that
+// gap with a negative margin and sharing one border colour. A NOT_AWARDED bid is dimmed.
+export function quotationRowClassName(row) {
+  if (row.isGroup) {
+    return 'bg-info-bg-alt [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden border-t-2 border-t-info-border mobile:border-t mobile:border-info-border mobile:rounded-b-none mobile:py-1.5';
+  }
+  const dim = row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : '';
+  if (!row.inGroup) return dim;
+  return [
+    dim,
+    'shadow-[inset_4px_0_0_var(--color-info)]',
+    // A page boundary can split a group: the first card on a page drops the pull-up, the last closes its corners.
+    'mobile:-mt-[10px] mobile:first:mt-0 mobile:border-info-border mobile:border-t-0 mobile:shadow-none mobile:last:rounded-b-md',
+    row.groupFirst ? '' : 'mobile:border-t mobile:[border-top-style:dashed]',
+    row.groupLast ? 'mobile:rounded-t-none mobile:rounded-b-md border-b-2 border-b-info-border mobile:border-b' : 'mobile:rounded-none',
+  ].filter(Boolean).join(' ');
 }
 
 function QuotationCard({ row }) {
   if (row.isGroup) return <GroupRowContent row={row} />;
   const status = dealQuotationStatusLabel(row.docStatus);
-  return (
+  const body = (
     <>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <Link to={`/quotations/${row.id}`} className="min-w-0 truncate text-xs text-info underline" onClick={(event) => event.stopPropagation()}>
@@ -272,6 +327,13 @@ function QuotationCard({ row }) {
       </span>
       <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(row.grandTotal)}</span>
     </>
+  );
+  if (!row.inGroup) return body;
+  return (
+    <div className="flex min-w-0 gap-3">
+      <GroupIndexCircle n={row.groupIndex} />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">{body}</div>
+    </div>
   );
 }
 

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { QuotationListPage } from './QuotationListPage.jsx';
+import { QuotationListPage, groupQuotationRows, quotationRowClassName } from './QuotationListPage.jsx';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
@@ -297,15 +297,16 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     const { container } = renderListPage(salesUser);
     const group = await screen.findByTestId('quotation-group-row');
     expect(group.textContent).toContain('S26 HOTEL');
-    expect(group.textContent).toContain('3 ผู้รับเหมา');
+    expect(group.textContent).toContain('ดีลเดียวกัน · 3 ผู้รับเหมา');
     expect(group.textContent).toContain('รอผลประมูล · ยอดหลัก');
-    expect(within(group).getByRole('link', { name: 'ดีล DL-2026-0280 →' }).getAttribute('href')).toBe('/tickets/18');
+    expect(within(group).getByRole('link', { name: 'DL-2026-0280 →' }).getAttribute('href')).toBe('/tickets/18');
     expect(screen.getByTestId('quotation-group-toggle').getAttribute('aria-pressed')).toBe('true');
     // Order: the group header where its newest row was, its three bids, then the single-bidder row.
     const numbers = [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent);
     expect(numbers[0]).toContain('S26 HOTEL');
-    expect(numbers[1]).toContain('QT-2026-0280-2');
-    expect(numbers[2]).toContain('QT-2026-0270-4');
+    // The ยอดหลัก bid leads its group; the rest keep server order.
+    expect(numbers[1]).toContain('QT-2026-0270-4');
+    expect(numbers[2]).toContain('QT-2026-0280-2');
     expect(numbers[3]).toContain('QT-2026-0340-1');
     expect(numbers[4]).toContain('QT-2026-0339-2');
   });
@@ -322,6 +323,102 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     expect(within(lostRow).getByText('ไม่ได้งาน')).toBeTruthy();
     // The single-bidder row keeps its project line.
     expect(within(screen.getByText('QT-2026-0339-2').closest('tr')).getByText('บ้านคุณตัวอย่าง')).toBeTruthy();
+  });
+
+  it('groupQuotationRows: headline first, 1-based groupIndex, groupSize, groupLast on the final member', () => {
+    const rows = [
+      bid({ id: 3, partyStatus: 'QUOTED' }),
+      bid({ id: 1, partyHeadline: true }),
+      bid({ id: 4 }),
+    ];
+    const members = groupQuotationRows(rows).filter((r) => r.inGroup);
+    expect(members.map((m) => m.id)).toEqual([1, 3, 4]);
+    expect(members.map((m) => m.groupIndex)).toEqual([1, 2, 3]);
+    expect(members.every((m) => m.groupSize === 3)).toBe(true);
+    expect(members.map((m) => !!m.groupLast)).toEqual([false, false, true]);
+  });
+
+  it('groupQuotationRows numbers contractors, not quotations: one party\'s quotations sit together under one number', () => {
+    const rows = [
+      bid({ id: 2, partyId: 10, partyHeadline: true }),
+      bid({ id: 4, partyId: 20 }),
+      bid({ id: 3, partyId: 30 }),
+      bid({ id: 1, partyId: 10, partyHeadline: true }),
+    ];
+    const members = groupQuotationRows(rows).filter((r) => r.inGroup);
+    expect(members.map((m) => m.id)).toEqual([2, 1, 4, 3]);
+    expect(members.map((m) => m.groupIndex)).toEqual([1, 1, 2, 3]);
+    expect(members.map((m) => !!m.groupLast)).toEqual([false, false, false, true]);
+  });
+
+  it('desktop rail and closing edge sit on the row, not on each cell', () => {
+    const rows = groupQuotationRows([bid({ id: 1, partyHeadline: true }), bid({ id: 3 })]);
+    const head = quotationRowClassName(rows[0]);
+    const last = quotationRowClassName(rows[rows.length - 1]);
+    expect(head).not.toContain('[&>td]:border-t');
+    expect(head).toContain('border-t-2');
+    expect(last).not.toContain('[&>td]:border-b');
+    expect(last).toContain('border-b-2');
+    expect(last).not.toContain('[&>td:first-child]:shadow');
+    expect(last).toContain('shadow-[inset_4px_0_0_var(--color-info)]');
+  });
+
+  it('every member after the first gets the dashed divider, even a second quotation of the same contractor', () => {
+    const members = groupQuotationRows([bid({ id: 1, partyId: 10, partyHeadline: true }), bid({ id: 2, partyId: 10 }), bid({ id: 3, partyId: 20 })])
+      .filter((r) => r.inGroup);
+    expect(quotationRowClassName(members[0])).not.toContain('border-top-style:dashed');
+    expect(quotationRowClassName(members[1])).toContain('border-top-style:dashed');
+  });
+
+  it('a member that opens or closes a page still looks like a card edge (group split by pagination)', () => {
+    const [, first] = groupQuotationRows([bid({ id: 1, partyHeadline: true }), bid({ id: 3 }), bid({ id: 4 })]);
+    const f = quotationRowClassName(first);
+    expect(f).toContain('mobile:first:mt-0');
+    expect(f).toContain('mobile:last:rounded-b-md');
+  });
+
+  it('search keeps a group whole: a status or customer match on one bid shows the header and every bid', async () => {
+    renderListPage(salesUser);
+    await screen.findByTestId('quotation-group-row');
+    fireEvent.change(screen.getByPlaceholderText(/ค้นหา/), { target: { value: 'บจก.ทิ้งท้าย' } });
+    await waitFor(() => expect(screen.queryByText('บริษัท เดี่ยว จำกัด')).toBeNull());
+    expect(screen.getByTestId('quotation-group-row')).toBeTruthy();
+    expect(screen.getAllByTestId('quotation-group-index').map((c) => c.textContent)).toEqual(['1', '2', '3']);
+  });
+
+  it('last member box: no rounded top corners on mobile', () => {
+    const rows = groupQuotationRows([bid({ id: 1, partyHeadline: true }), bid({ id: 3 })]);
+    expect(quotationRowClassName(rows[rows.length - 1])).toContain('mobile:rounded-t-none');
+  });
+
+  it('row classes join a group into one box: header + members share the info rail/border; only the last member closes it', () => {
+    const [head, first, , last] = groupQuotationRows([bid({ id: 1, partyHeadline: true }), bid({ id: 3 }), bid({ id: 4 })]);
+    const h = quotationRowClassName(head);
+    expect(h).toContain('border-info-border');
+    expect(h).toContain('bg-info-bg-alt');
+    expect(h).toContain('mobile:rounded-b-none');
+    const f = quotationRowClassName(first);
+    expect(f).toContain('mobile:rounded-none');
+    expect(f).toContain('mobile:-mt-[10px]');
+    expect(f).toContain('border-info-border');
+    expect(f).not.toContain('mobile:rounded-b-md');
+    expect(quotationRowClassName(last)).toContain('mobile:rounded-b-md');
+    expect(quotationRowClassName(last)).toContain('border-b-2');
+  });
+
+  it('header: deal code link right of the title line, project name in the customer-name style, no separate count badge', async () => {
+    renderListPage(salesUser);
+    const group = await screen.findByTestId('quotation-group-row');
+    expect(group.textContent).not.toMatch(/^3 ผู้รับเหมา/);
+    expect(within(group).getByText('S26 HOTEL').className).toContain('text-md font-extrabold');
+    expect(group.innerHTML).not.toMatch(/text-\[\d+px\]/);
+  });
+
+  it('a grouped member carries its numbered circle', async () => {
+    renderListPage(salesUser);
+    await screen.findByTestId('quotation-group-row');
+    const circles = screen.getAllByTestId('quotation-group-index').map((c) => c.textContent);
+    expect(circles).toEqual(['1', '2', '3']);
   });
 
   it('turning it off removes the group row and remembers the choice', async () => {
