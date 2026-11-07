@@ -119,6 +119,9 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
   );
 }
 
+/** The noun for each ผู้รับใบเสนอราคา role, as it reads after "เป็น" / "เสนอแก่". */
+const RECIPIENT_ROLE_NOUN = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้รับเหมา' };
+
 /**
  * "โครงการนี้มีดีลของคุณอยู่แล้ว" (deal-party-model.md, prototype screen 4). The rep picked a project
  * that already has one of their own open, pre-outcome deals (GET /tickets/open-for-project): one
@@ -126,17 +129,22 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
  * is never automatic: "สร้างดีลใหม่แยกต่างหาก" keeps today's path for a genuinely separate job.
  */
 export function ExistingDealNotice({
-  deal, customerName, repName, choice, onChoice, moreCount = 0,
+  deal, customerName, recipientType = 'BUYER', repName, choice, onChoice, moreCount = 0,
 }) {
   const stage = dealStageLabel(deal.salesStage);
   const buyers = (deal.parties ?? []).filter((p) => p.role === 'BUYER');
+  // Not every quotation is for a contractor: the role is the ผู้รับใบเสนอราคา the rep picked.
+  const roleLabel = RECIPIENT_ROLE_NOUN[recipientType] ?? RECIPIENT_ROLE_NOUN.BUYER;
+  const isBuyer = (recipientType || 'BUYER') === 'BUYER';
   const alreadyBidding = buyers.some((p) => p.customerName === customerName);
   const resultCount = (deal.buyerCount ?? buyers.length) + (alreadyBidding ? 0 : 1);
   const choices = [
     {
       value: 'existing',
-      title: `เพิ่ม ${customerName} เป็นผู้รับเหมาในดีลเดิม (แนะนำ)`,
-      hint: 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย',
+      title: `เพิ่ม ${customerName} เป็น${roleLabel}ในดีลเดิม (แนะนำ)`,
+      hint: isBuyer
+        ? 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย'
+        : 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง',
     },
     {
       value: 'new',
@@ -184,7 +192,7 @@ export function ExistingDealNotice({
       </div>
       <p className="m-0 text-xs font-bold text-info-dark" data-testid="existing-deal-result">
         {choice === 'existing'
-          ? `จะสร้างใบเสนอราคาใหม่ภายใต้ ${deal.code} · ผู้รับเหมา ${resultCount} ราย`
+          ? `จะสร้างใบเสนอราคาใหม่ภายใต้ ${deal.code}${isBuyer ? ` · ผู้รับเหมา ${resultCount} ราย` : ` · เสนอแก่${roleLabel}`}`
           : 'จะสร้างดีลใหม่และใบเสนอราคาใหม่ · ดีลนี้จะนับแยกใน pipeline'}
         {moreCount > 0 ? ` (โครงการนี้มีดีลของคุณอีก ${moreCount} ดีล)` : ''}
       </p>
