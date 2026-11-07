@@ -245,7 +245,7 @@ describe('nextAccountAction', () => {
 describe('accountMoneyBucket', () => {
   it('buckets match nextAccountAction’s own key ordering', () => {
     expect(accountMoneyBucket(ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }))).toBe('depositPending');
-    expect(accountMoneyBucket(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT' }))).toBe('finalPaymentPending');
+    expect(accountMoneyBucket(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage: 'DELIVERED' }))).toBe('finalPaymentPending');
     expect(accountMoneyBucket(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', overdue: true, amountOutstanding: 500 }))).toBe('overdue');
     expect(accountMoneyBucket(ticket({
       paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED', amountOutstanding: 0, invoiceOnFile: true,

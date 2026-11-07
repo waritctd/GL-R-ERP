@@ -1504,7 +1504,7 @@ class TicketServiceTest {
 
         assertThat(actionCodes(10L, accountActor)).doesNotContain("FINAL_PAYMENT");
         assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
-        verify(ticketRepo, never()).insertPaymentReceipt(anyLong(), anyString(), any(), any(), any(), any(), any(), any());
+        verify(ticketRepo, never()).insertPaymentReceipt(anyLong(), anyString(), any(), anyLong(), any(), any(), any(), any());
         verify(ticketRepo, never()).advancePaymentStatus(anyLong(), anyString(), anyString(), any());
     }
 

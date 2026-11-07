@@ -68,10 +68,12 @@ import th.co.glr.hr.pricingrequest.UnitBasis;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.support.RecordingSalesMailer;
 import th.co.glr.hr.ticket.CreateTicketRequest;
+import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
+import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
@@ -203,6 +205,8 @@ class RemainingInvoiceServiceIntegrationTest extends AbstractPostgresIntegration
         assertThat(tickets.payableAmount(ticketId)).isEqualByComparingTo(depositNoticeTotal.add(issued.grandTotal()));
         assertThat(tickets.findSummaryById(ticketId).orElseThrow().amountOutstanding()).isEqualByComparingTo(issued.grandTotal());
 
+        // Owner ruling 2026-11-07: final payment opens at DELIVERY_SCHEDULING.
+        tickets.updateSalesStage(ticketId, DealStage.DELIVERY_SCHEDULING);
         ticketService.confirmFinalPayment(ticketId, accountActor);
 
         assertThat(jdbc.queryForObject(

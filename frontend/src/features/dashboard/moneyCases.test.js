@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { nextAccountAction } from '../tickets/accountActions.js';
+import { accountOwesStep } from '../tickets/accountActions.js';
 import { moneyMilestoneOf } from '../finance/moneyMilestone.js';
 
 // Anti-drift: the same deal shapes drive DashboardMoneyTotalsIntegrationTest (the SQL behind
@@ -29,13 +29,7 @@ function inAccountScope(t) {
     && moneyMilestoneOf(t.salesStage) != null;
   return live || PENDING.has(t.paymentStatus) || t.overdue === true;
 }
-// 2026-11-07: nextAccountAction no longer offers รับชำระส่วนที่เหลือ before DELIVERY_SCHEDULING, but ค้างรับ
-// (SQL ACCOUNT_HAS_TODO) must keep counting a balance still owed while goods are in transit. So this pin asks
-// the "does account owe/await a step on this deal" question with the final-payment stage gate lifted.
-const BEFORE_DELIVERY = ['ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT'];
-const ownedByAccount = (t) => (BEFORE_DELIVERY.includes(t.salesStage)
-  ? { ...t, salesStage: 'DELIVERY_SCHEDULING' } : t);
-const countsInOutstanding = (t) => inAccountScope(t) && nextAccountAction(ownedByAccount(t)) != null;
+const countsInOutstanding = (t) => inAccountScope(t) && accountOwesStep(t);
 
 describe('dashboard money case table (JS side)', () => {
   it('has the cases the SQL test builds', () => {

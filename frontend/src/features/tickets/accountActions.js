@@ -34,8 +34,19 @@ function finalPaymentDue(ticket) {
 }
 
 // The one predicate behind the รับชำระส่วนที่เหลือ to-do step; accountMoneyBucket reuses it.
+// Owner ruling 2026-11-07: closed until money-milestone 3 (PROCUREMENT) is done. Unknown/null stage = closed.
+const PAST_PROCUREMENT = new Set(['DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID']);
 function offersFinalPayment(ticket) {
-  return ticket.status === 'quotation_issued' && finalPaymentDue(ticket);
+  return ticket.status === 'quotation_issued' && finalPaymentDue(ticket) && PAST_PROCUREMENT.has(ticket.salesStage);
+}
+
+// "Does account still owe/await a step on this deal", ignoring the final-payment stage gate: a balance owed
+// while goods are in transit stays in ค้างรับ. Mirrors the SQL ACCOUNT_HAS_TODO, not what the deal page offers.
+const BEFORE_DELIVERY = new Set(['ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT']);
+export function accountOwesStep(ticket) {
+  if (!ticket) return false;
+  const lifted = BEFORE_DELIVERY.has(ticket.salesStage) ? { ...ticket, salesStage: 'DELIVERY_SCHEDULING' } : ticket;
+  return nextAccountAction(lifted) != null;
 }
 
 // Mirrors TicketService#requireClosePrerequisites (the predicate behind

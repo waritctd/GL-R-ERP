@@ -494,6 +494,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             .extracting(TicketResponses.TicketActionDto::action).doesNotContain("ISSUE_DEPOSIT_NOTICE");
         ticketService.requireImportRequestIssuable(after); // a REQUIRED deal 409s here with no deposit
         // canConfirmFinalPaymentNow refuses a REQUIRED deal at CUSTOMER_CONFIRMED.
+        // Owner ruling 2026-11-07: final payment opens at DELIVERY_SCHEDULING.
+        tickets.updateSalesStage(deal, DealStage.DELIVERY_SCHEDULING);
         assertThat(ticketService.confirmFinalPayment(deal, accountActor).summary().paymentStatus())
             .isEqualTo("FULLY_PAID");
         assertThat(summary(deal).salesStage()).isNotEqualTo(DealStage.DEPOSIT_RECEIVED);

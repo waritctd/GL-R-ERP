@@ -146,7 +146,7 @@ describe('AccountOverview', () => {
     // Deposit-bypassed deals are offered the same step.
     const bypassed = {
       ...noActionTicket, id: 105, code: 'PR-2026-0105', customerName: 'บริษัท อี จำกัด',
-      depositPolicy: 'CREDIT_CUSTOMER', paymentStatus: null, amountOutstanding: 25000,
+      depositPolicy: 'CREDIT_CUSTOMER', paymentStatus: null, salesStage: 'DELIVERY_SCHEDULING', amountOutstanding: 25000,
     };
     serve([depositPaid, bypassed]);
     renderOverview();

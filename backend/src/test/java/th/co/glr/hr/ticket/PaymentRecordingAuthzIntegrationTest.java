@@ -248,6 +248,8 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         advancePaymentStatus(ticketId, PaymentTrack.CUSTOMER_CONFIRMED, PaymentTrack.DEPOSIT_NOTICE_ISSUED);
         advancePaymentStatus(ticketId, PaymentTrack.DEPOSIT_NOTICE_ISSUED, PaymentTrack.DEPOSIT_PAID);
         advancePaymentStatus(ticketId, PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT);
+        // 2026-11-07: FINAL_PAYMENT is only advertised from DELIVERY_SCHEDULING on.
+        tickets.updateSalesStage(ticketId, th.co.glr.hr.ticket.DealStage.DELIVERY_SCHEDULING);
         return ticketId;
     }
 
