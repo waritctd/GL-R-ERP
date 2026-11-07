@@ -403,6 +403,18 @@ export function isLiveDirectQuotation(live) {
   return Boolean(live) && LIVE_DIRECT_QUOTATION_STATUSES.has(live.docStatus);
 }
 
+const QUOTATION_ROUTE = QUOTATION_RECIPIENT_OPTIONS.map((option) => option.code);
+
+/** N6 blocks unless the live quotation is APPROVED, addressed to a party strictly EARLIER on the route than
+ * `recipientType`, and the deal is still in 'draft' (no order confirmed yet) — the server's DirectQuotationLocks rule. */
+export function blocksNewDirectQuotation(live, recipientType, dealStatus = 'draft') {
+  if (!isLiveDirectQuotation(live)) return false;
+  if (dealStatus !== 'draft') return true;
+  const liveIndex = QUOTATION_ROUTE.indexOf(live.recipientType);
+  const nextIndex = QUOTATION_ROUTE.indexOf(recipientType);
+  return !(live.docStatus === 'APPROVED' && liveIndex >= 0 && nextIndex > liveIndex);
+}
+
 /** N6's reason, word for word the server's 409: the editor disables บันทึกร่าง with it BEFORE the rep
  * reaches that refusal (DESIGN.md §14: a disabled action says why). */
 function liveDirectQuotationBlockMessage(live) {
@@ -2135,6 +2147,7 @@ export function buildQuotationChecklist({
   recipientRequired = false,
   recipientType = '',
   liveDirectQuotation = null,
+  dealStatus = 'draft',
   // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
   livePricingRequest = false,
   // V192.3: ผู้ติดต่อ's Email as typed. Blank (the default) is fine — see #orderedByEmailError.
@@ -2153,7 +2166,7 @@ export function buildQuotationChecklist({
   };
 
   if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
-  if (isLiveDirectQuotation(liveDirectQuotation)) {
+  if (blocksNewDirectQuotation(liveDirectQuotation, recipientType, dealStatus)) {
     push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(liveDirectQuotation));
   }
   if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);

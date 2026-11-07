@@ -11,7 +11,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel } from '../../utils/format.js';
 import {
-  canCreateDealQuotation, dealQuotationStatusLabel, hasLivePricingRequest, isLiveDirectQuotation,
+  canCreateDealQuotation, dealQuotationStatusLabel, blocksNewDirectQuotation, hasLivePricingRequest, isLiveDirectQuotation,
   LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from './quotationMeta.js';
 
@@ -85,7 +85,7 @@ function DealIdentity({ deal }) {
  * direct quotation (TicketSummaryDto.liveDirectQuotation, S2-B4), an inline notice says so — never
  * a modal (DESIGN.md §16) — with the way forward: open that quotation, or (APPROVED) revise it.
  */
-export function DealPicker({ user, selected = null, error, showToast }) {
+export function DealPicker({ user, selected = null, recipientType = '', error, showToast }) {
   const [, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -152,7 +152,8 @@ export function DealPicker({ user, selected = null, error, showToast }) {
     }
   }
 
-  const live = selected && isLiveDirectQuotation(selected.liveDirectQuotation) ? selected.liveDirectQuotation : null;
+  const live = selected && blocksNewDirectQuotation(selected.liveDirectQuotation, recipientType, selected.status ?? 'draft')
+    ? selected.liveDirectQuotation : null;
   const livePricingRequest = useDealHasLivePricingRequest(selected?.id ?? null, Boolean(selected));
   const canRevise = live?.docStatus === 'APPROVED' && canCreateDealQuotation(user, selected);
   const reviseMutation = useMutation({

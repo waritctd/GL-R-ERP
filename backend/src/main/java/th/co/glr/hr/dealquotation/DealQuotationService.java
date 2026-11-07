@@ -229,10 +229,10 @@ public class DealQuotationService {
         // One pricing route per deal: the reverse of DirectQuotationLocks#requireNoLiveDirectQuotation. Only for
         // #create; a revision or reorder is not a new route choice, and #createFromPricingRequest IS the pricing route.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
-        // One live direct quotation per deal. The 409 names the live one (liveQuotationId/number/docStatus, top-level in
+        // One live direct quotation per deal, unless every live one is APPROVED and addressed to an earlier party. The 409 names the live one (liveQuotationId/number/docStatus, top-level in
         // the body) so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket so concurrent creates
         // cannot both pass.
-        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId);
+        th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotationForCreate(tickets, ticketId, recipientType);
         ContactSnapshot contact = resolveContact(request.contactId(), null, ticket);
         String priceMode = resolvePriceMode(request.priceMode());
         String documentLanguage = resolveDocumentLanguage(request.documentLanguage());

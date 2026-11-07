@@ -2682,6 +2682,53 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(screen.getByTestId('deal-stage-next').textContent).toContain('9.'));
       expect(screen.getByTestId('deal-stage-next').textContent).not.toContain('8.');
     });
+
+    // Direct path (no pricing request): an APPROVED designer direct quotation offers the same menu; a party
+    // opens the quotation editor pre-addressed (?recipient=), not the pricing-request form.
+    it('an APPROVED designer direct quotation: เสนอราคา menu is primary, ยืนยันคำสั่งซื้อ sits in ⋯, and picking the owner opens /quotations/new?ticket=701&recipient=OWNER', async () => {
+      deal({ requests: [], quotations: [] });
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', createdById: 1, status: 'draft', entryChannel: 'DESIGNER_LED',
+            designerName: 'สมชาย ผู้ออกแบบ', ownerName: 'บริษัท เจ้าของ จำกัด', buyerName: 'ผู้รับเหมา ข.',
+            liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' },
+          },
+        }),
+      });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      const primary = await primaryWithAction('quote_next_party');
+      expect(primary.getAttribute('aria-haspopup')).toBe('menu');
+      // A direct quotation is approved, not "sent".
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบอนุมัติแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+      expect(actionBarOf(primary).textContent).not.toContain('ส่งแล้ว');
+
+      fireEvent.click(primary);
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'เสนอราคาเจ้าของโครงการ' }));
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/quotations/new?ticket=701&recipient=OWNER'));
+    });
+
+    it('the ⋯ ยืนยันคำสั่งซื้อ beside the direct route choice opens the confirm dialog and confirms quotation 77', async () => {
+      deal({ requests: [], quotations: [{ id: 77, number: 'QT-2026-0077-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'DESIGNER', depositPercent: 0 }] });
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', createdById: 1, status: 'draft', entryChannel: 'DESIGNER_LED',
+            liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' },
+          },
+        }),
+      });
+      api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await primaryWithAction('quote_next_party');
+
+      fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'ยืนยันคำสั่งซื้อ' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+      await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(77));
+    });
   });
 
   // A PR sitting at QUOTATION_ISSUED must not fall through salesActions.js's cascade to
@@ -4684,7 +4731,7 @@ describe('TicketDetailPage', () => {
     });
 
     it('APPROVED: "ยืนยันคำสั่งซื้อ" confirms first (same copy as the editor), then calls the direct-quotation confirm endpoint', async () => {
-      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED', recipientType: 'BUYER' } });
       // The dialog reads the % off the deal's quotation list (the live summary carries none).
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED', depositPercent: 0 }] });
       api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
@@ -4708,7 +4755,7 @@ describe('TicketDetailPage', () => {
 
     // F9: until the deal's quotation row is read, the deposit wording is unknown (it may be 0%): no confirm yet.
     it('while the deal\'s quotation list is unread, the confirm dialog cannot be confirmed', async () => {
-      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED', recipientType: 'BUYER' } });
       api.dealQuotations.listForTicket.mockReturnValue(new Promise(() => {}));
       renderTicketDetailPage(salesOwnerUser);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
@@ -4721,7 +4768,7 @@ describe('TicketDetailPage', () => {
     });
 
     it('the list loading WITHOUT the quotation\'s row keeps the confirm disabled', async () => {
-      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED', recipientType: 'BUYER' } });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
       renderTicketDetailPage(salesOwnerUser);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
@@ -4732,7 +4779,7 @@ describe('TicketDetailPage', () => {
     });
 
     it('a double-click on the dialog\'s confirm sends ONE confirm request (VW-05), same as the pricing-request door', async () => {
-      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED', recipientType: 'BUYER' } });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED' }] }); // the confirm waits for the row
       api.dealQuotations.promoteToDeal.mockReturnValue(new Promise(() => {})); // in flight: never settles
       renderTicketDetailPage(salesOwnerUser);
@@ -4747,7 +4794,7 @@ describe('TicketDetailPage', () => {
     });
 
     it('a refused confirm surfaces the server\'s own Thai message', async () => {
-      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED' } });
+      activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED', recipientType: 'BUYER' } });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED' }] }); // the confirm waits for the row
       api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error('ดีลไม่ได้อยู่ในสถานะ ACTIVE'), { status: 409 }));
       const showToast = vi.fn();
@@ -4940,13 +4987,13 @@ describe('TicketDetailPage', () => {
       expect(await reviseMenuItem()).toBeNull();
     });
 
-    it('cascade order unchanged: a still-draft deal with an APPROVED direct quotation keeps ยืนยันคำสั่งซื้อ as its primary', async () => {
+    it('cascade order unchanged: a still-draft deal with an APPROVED BUYER direct quotation keeps ยืนยันคำสั่งซื้อ as its primary', async () => {
       directApprovedDeal();
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({
           summary: {
             lifecycle: 'ACTIVE', salesStage: 'PRESENTATION', status: 'draft', createdById: 1,
-            liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' },
+            liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'BUYER' },
           },
         }),
       });
