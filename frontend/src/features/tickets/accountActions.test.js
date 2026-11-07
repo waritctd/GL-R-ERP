@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountMoneyBucket, accountOwesStep, nextAccountAction } from './accountActions.js';
+import { accountMoneyBucket, accountOwesStep, awaitingGoodsForFinalPayment, nextAccountAction } from './accountActions.js';
 
 function ticket(overrides = {}) {
   return {
@@ -276,5 +276,38 @@ describe('accountMoneyBucket', () => {
     const closedPaid = { salesStage: 'CLOSED_PAID', paymentStatus: 'FULLY_PAID', amountOutstanding: 0 };
     expect(accountMoneyBucket(ticket({ ...closedPaid, commissionRecorded: true }))).toBeNull();
     expect(accountMoneyBucket(ticket({ ...closedPaid, commissionRecorded: false }))).toBe('commissionPending');
+  });
+});
+
+// The รอสินค้าเข้า panel: owed money the final-payment stage gate is holding (not overdue, no CTA yet).
+describe('awaitingGoodsForFinalPayment', () => {
+  const held = (o = {}) => ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage: 'PROCUREMENT', ...o });
+
+  it.each([
+    ['DEPOSIT_PAID', { paymentStatus: 'DEPOSIT_PAID' }],
+    ['AWAITING_FINAL_PAYMENT', { paymentStatus: 'AWAITING_FINAL_PAYMENT' }],
+    ['deposit-bypass + CUSTOMER_CONFIRMED', { depositPolicy: 'WAIVED', paymentStatus: 'CUSTOMER_CONFIRMED' }],
+  ])('%s before DELIVERY_SCHEDULING is held', (_n, o) => {
+    const t = held(o);
+    expect(nextAccountAction(t, 'account')).toBeNull(); // the premise: no CTA yet
+    expect(awaitingGoodsForFinalPayment(t)).toBe(true);
+  });
+
+  it.each(['DELIVERY_SCHEDULING', 'DELIVERED'])('once the deal is at %s the gate is open, so it is not held', (salesStage) => {
+    expect(awaitingGoodsForFinalPayment(held({ salesStage }))).toBe(false);
+  });
+
+  it('an overdue balance is chased, not held', () => {
+    expect(awaitingGoodsForFinalPayment(held({ overdue: true, amountOutstanding: 5000 }))).toBe(false);
+  });
+
+  it('a deal with no final-payment state (deposit notice only, nothing pending, not issued) is not held', () => {
+    expect(awaitingGoodsForFinalPayment(held({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }))).toBe(false);
+    expect(awaitingGoodsForFinalPayment(held({ paymentStatus: 'CUSTOMER_CONFIRMED' }))).toBe(false);
+    expect(awaitingGoodsForFinalPayment(held({ status: 'draft' }))).toBe(false);
+  });
+
+  it('null input is not held', () => {
+    expect(awaitingGoodsForFinalPayment(null)).toBe(false);
   });
 });
