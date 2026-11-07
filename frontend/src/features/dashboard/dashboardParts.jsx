@@ -30,12 +30,12 @@ export const WORKLIST_MAX_ROWS = 3;
 /**
  * One group of a landing page's grouped worklist (CeoOverview's pattern). `rows` is null while its
  * own source loads (small skeleton, aria-busy); `failed` says so instead of loading forever.
- * `count` may exceed rows.length. row = { testId, entity, meta, amount?, ctaLabel, ctaVariant?, to }.
+ * `count` may exceed rows.length. `override` styles the CEO's own-decision group. row = { testId, entity, meta, amount?, ctaLabel, ctaVariant?, to }.
  */
-export function WorklistGroup({ groupKey, label, dot, summary, tint, rows, count, failed: hasFailed, to, onOpen }) {
+export function WorklistGroup({ groupKey, label, dot, summary, tint, override = false, rows, count, failed: hasFailed, to, onOpen }) {
   if (!hasFailed && rows !== null && count === 0) return null;
   const shown = rows?.slice(0, WORKLIST_MAX_ROWS) ?? [];
-  const more = count - shown.length;
+  const more = (rows?.length ?? 0) - shown.length; // count may exceed rows (CEO commission: one row for several records)
   const openAll = (
     <Button type="button" variant="text" size="sm" onClick={() => onOpen(to)} className="shrink-0 mobile:min-h-[44px]">
       ดูทั้งหมด →
@@ -45,7 +45,7 @@ export function WorklistGroup({ groupKey, label, dot, summary, tint, rows, count
     <div
       data-testid={`worklist-group-${groupKey}`}
       aria-busy={rows === null && !hasFailed ? 'true' : undefined}
-      className={`border-b border-border last:border-b-0 ${tint ?? ''}`}
+      className={`border-b border-border last:border-b-0 ${override ? 'bg-override/5' : (tint ?? '')}`}
     >
       {hasFailed ? (
         <div className="flex items-center justify-between gap-3 px-5 py-3 mobile:px-3.5">
@@ -77,7 +77,13 @@ export function WorklistGroup({ groupKey, label, dot, summary, tint, rows, count
               </div>
               <div className="flex shrink-0 items-center gap-3 mobile:w-full mobile:justify-between">
                 {row.amount != null ? <span className="text-sm font-bold tabular-nums text-text">{row.amount}</span> : null}
-                <Button type="button" variant={row.ctaVariant ?? 'secondary'} size="sm" onClick={() => onOpen(row.to)} className="mobile:min-h-[44px]">
+                <Button
+                  type="button"
+                  variant={override ? 'primary' : (row.ctaVariant ?? 'secondary')}
+                  size="sm"
+                  onClick={() => onOpen(row.to)}
+                  className={override ? '!border-override !bg-override mobile:min-h-[44px]' : 'mobile:min-h-[44px]'}
+                >
                   {row.ctaLabel}
                 </Button>
               </div>

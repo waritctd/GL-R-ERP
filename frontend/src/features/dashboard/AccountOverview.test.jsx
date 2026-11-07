@@ -179,15 +179,28 @@ describe('AccountOverview', () => {
       expect(figureRows('ค้างรับทั้งหมด')[0]).toContain('ยอดคงค้างรวม (หน้าการเงิน)');
     });
 
-    it('เกินกำหนดชำระ is the summary\'s overdueOutstanding (as on the CEO page), with the count and earliest due date from the list', async () => {
-      // HELD_OVERDUE is overdue with a balance: it counts in the caption (and is the earliest) even though the gate holds its final payment.
-      serve([...SCOPED, HELD_OVERDUE]);
-      renderOverview();
+    it('เกินกำหนดชำระ is the summary\'s overdueOutstanding (as on the CEO page), never a sum of the loaded rows', async () => {
+      renderOverview(); // server 555,000.25 vs 200,000.00 in the list
       await findGroup('chaseOverdue');
       expectFigure('เกินกำหนดชำระ', '฿555,000.25');
-      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('207,000.00'); // never a sum of the loaded rows
-      expectFigure('เกินกำหนดชำระ', '5 ดีล');
-      expectFigure('เกินกำหนดชำระ', formatThaiDate('2026-05-01'));
+      expect(figureRows('เกินกำหนดชำระ')[0]).not.toContain('200,000.00');
+    });
+
+    it('when the listed overdue rows add up to the server figure, the caption names the count and earliest due date', async () => {
+      renderOverview({ ...SUMMARY, overdueOutstanding: 200000 });
+      await findGroup('chaseOverdue');
+      expectFigure('เกินกำหนดชำระ', '฿200,000.00');
+      expectFigure('เกินกำหนดชำระ', '4 ดีล');
+      expectFigure('เกินกำหนดชำระ', formatThaiDate('2026-06-01'));
+    });
+
+    it('when the list cannot account for the server figure (cap / scope), the caption claims no count and points to the finance page', async () => {
+      serve([...SCOPED, HELD_OVERDUE]); // list adds up to 207,000.00, server says 555,000.25
+      renderOverview();
+      await findGroup('chaseOverdue');
+      const text = figureRows('เกินกำหนดชำระ')[0];
+      expect(text).toContain('ดูรายการทั้งหมดในหน้าการเงิน');
+      expect(text).not.toMatch(/\d ดีล/);
     });
 
     it('รอรับมัดจำ sums depositDue (not the deal outstanding) and counts the issued notices', async () => {
@@ -395,6 +408,19 @@ describe('AccountOverview', () => {
       [301, 701, 702, 101, 201].forEach((id) => expect(within(panel()).queryByTestId(`awaiting-goods-row-${id}`), String(id)).toBeNull());
       // …and none of the held deals appears as a worklist row
       expect(screen.queryByTestId('worklist-row-confirmFinalPayment-601')).toBeNull();
+    });
+
+    it('shows the panel title with โหลดไม่สำเร็จ when the scoped deal list failed, and nothing while it is still loading', async () => {
+      api.tickets.list.mockImplementation(never);
+      const { unmount } = renderOverview();
+      expect(screen.queryByTestId('awaiting-goods-panel')).toBeNull();
+      unmount();
+      api.tickets.list.mockImplementation((params = {}) => (params.salesStage === 'CLOSED_PAID'
+        ? Promise.resolve({ tickets: [] }) : Promise.reject(new Error('boom'))));
+      renderOverview();
+      const failedPanel = await screen.findByTestId('awaiting-goods-panel');
+      expect(failedPanel.textContent).toContain('รอสินค้าเข้า');
+      expect(failedPanel.textContent).toContain('โหลดไม่สำเร็จ');
     });
 
     it('is hidden entirely when no deal is held', async () => {

@@ -1,5 +1,6 @@
 import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
+import { isPastProcurement } from '../features/finance/moneyMilestone.js';
 import { accountOwesStep } from '../features/tickets/accountActions.js';
 import { isOwnerOrKeyer } from '../features/tickets/dealOwnership.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
@@ -7650,7 +7651,7 @@ async function mockConfirmDepositPaid(id) {
 
 // Owner ruling 2026-11-07 (mirrors TicketService#canConfirmFinalPaymentNow): closed until DELIVERY_SCHEDULING+.
 function mockPastProcurement(ticket) {
-  return ['DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID'].includes(ticket.salesStage);
+  return isPastProcurement(ticket.salesStage);
 }
 
 async function mockConfirmFinalPayment(id) {

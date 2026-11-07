@@ -53,10 +53,10 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
     const map = Object.fromEntries(GROUPS.map((g) => [g.key, []]));
     allTickets.forEach((ticket) => {
       const action = nextAccountAction(ticket, user?.role);
-      if (action) map[action.key].push(ticket);
+      if (action) map[action.key].push({ ticket, action });
     });
     // Earliest due first, then the largest balance.
-    Object.values(map).forEach((list) => list.sort((a, b) => dueTime(a) - dueTime(b) || owed(b) - owed(a)));
+    Object.values(map).forEach((list) => list.sort((a, b) => dueTime(a.ticket) - dueTime(b.ticket) || owed(b.ticket) - owed(a.ticket)));
     return map;
   }, [allTickets, user?.role]);
 
@@ -74,13 +74,23 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
   const allEmpty = groups.every((g) => g.count === 0 && !g.isFailed);
 
   // Band: the two summary figures arrive with the page; the deal-derived ones wait for the scoped list.
-  const dealsReady = scopedQuery.data !== undefined;
-  const overdueTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'overdue') : null;
-  const depositTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'depositPending') : null;
-  const earliestDue = overdueTickets?.length ? Math.min(...overdueTickets.map(dueTime)) : Infinity;
   // One definition per money figure: the server totals, same as the CEO and sales-manager pages.
   const received = dashboardSummary?.cashReceivedThisMonth ?? null;
   const overdue = dashboardSummary?.overdueOutstanding ?? null;
+  const dealsReady = scopedQuery.data !== undefined;
+  const scopedFailed = failed(scopedQuery);
+  const overdueTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'overdue') : null;
+  const depositTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'depositPending') : null;
+  const earliestDue = overdueTickets?.length ? Math.min(...overdueTickets.map(dueTime)) : Infinity;
+  // The value is the server total; the list is capped and scoped, so it may not add up to it. Only claim
+  // a count when it does, otherwise point at the page that has them all.
+  const listAddsUp = overdueTickets != null && overdue != null && Math.abs(moneySum(overdueTickets, owed) - Number(overdue)) < 0.005;
+  let overdueCaption = '';
+  if (overdue != null && overdueTickets) {
+    if (!listAddsUp) overdueCaption = 'ดูรายการทั้งหมดในหน้าการเงิน';
+    else if (overdueTickets.length === 0) overdueCaption = 'ไม่มีดีลเกินกำหนด';
+    else overdueCaption = `${overdueTickets.length} ดีล${earliestDue === Infinity ? '' : ` · เก่าสุดครบ ${formatThaiDate(earliestDue)}`}`;
+  }
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
   const today = formatThaiDate(new Date().toISOString());
@@ -97,9 +107,7 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
             danger
             label="เกินกำหนดชำระ"
             value={money(overdue)}
-            caption={overdue == null || !overdueTickets ? '' : overdueTickets.length > 0
-              ? `${overdueTickets.length} ดีล${earliestDue === Infinity ? '' : ` · เก่าสุดครบ ${formatThaiDate(earliestDue)}`}`
-              : 'ไม่มีดีลเกินกำหนด'}
+            caption={overdueCaption}
           />
           <Figure
             label="รอรับมัดจำ"
@@ -132,28 +140,30 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
               failed={g.isFailed}
               to={`/finance?action=${g.key}`}
               onOpen={onOpen}
-              summary={`${g.count} ดีล · ${g.sumLabel} ${formatMoney(moneySum(g.list ?? [], (t) => t[g.field]))}`}
-              rows={g.list?.map((t) => ({
+              summary={`${g.count} ดีล · ${g.sumLabel} ${formatMoney(moneySum(g.list ?? [], ({ ticket }) => ticket[g.field]))}`}
+              rows={g.list?.map(({ ticket: t, action }) => ({
                 testId: `worklist-row-${g.key}-${t.id}`,
                 entity: t.customerName || t.title,
                 meta: rowMeta(g.key, t),
                 amount: formatMoney(Number(t[g.field] ?? 0)),
-                ctaLabel: nextAccountAction(t, user?.role).label,
+                ctaLabel: action.label,
                 ctaVariant: g.cta,
-                to: nextAccountAction(t, user?.role).to,
+                to: action.to,
               })) ?? null}
             />
           ))}
         </Panel>
 
-        {dealsReady && held.length > 0 ? (
+        {scopedFailed || (dealsReady && held.length > 0) ? (
           <Panel
             flush
             data-testid="awaiting-goods-panel"
             title="รอสินค้าเข้า"
-            actions={<span className="text-xs font-semibold text-text-muted">{held.length} ดีล · {formatMoney(moneySum(held, owed))}</span>}
+            actions={scopedFailed
+              ? <small className="font-semibold text-danger">โหลดไม่สำเร็จ</small>
+              : <span className="text-xs font-semibold text-text-muted">{held.length} ดีล · {formatMoney(moneySum(held, owed))}</span>}
           >
-            {held.map((t) => (
+            {scopedFailed ? null : held.map((t) => (
               <div key={t.id} data-testid={`awaiting-goods-row-${t.id}`} className="flex items-center justify-between gap-3 border-b border-border px-5 py-2 mobile:px-3.5">
                 <div className="min-w-0">
                   <strong className="block truncate text-sm font-bold text-text">{t.customerName || t.title}</strong>

@@ -17,6 +17,8 @@
 // (see backend/.../ticket/TicketSummaryDto.java), so one helper serves both
 // the Overview's list-derived rows and a single ticket's `can.*` computation.
 
+import { isPastProcurement } from '../finance/moneyMilestone.js';
+
 // Mirrors backend DepositPolicy.bypassesDepositNotice() exactly (dealMoneyStatus.js
 // has the same triple) — kept as its own small copy.
 const DEPOSIT_POLICY_BYPASSES_NOTICE = new Set(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER']);
@@ -35,9 +37,8 @@ function finalPaymentDue(ticket) {
 
 // The one predicate behind the รับชำระส่วนที่เหลือ to-do step; accountMoneyBucket reuses it.
 // Owner ruling 2026-11-07: closed until money-milestone 3 (PROCUREMENT) is done. Unknown/null stage = closed.
-const PAST_PROCUREMENT = new Set(['DELIVERY_SCHEDULING', 'DELIVERED', 'CLOSED_PAID']);
 function offersFinalPayment(ticket) {
-  return ticket.status === 'quotation_issued' && finalPaymentDue(ticket) && PAST_PROCUREMENT.has(ticket.salesStage);
+  return ticket.status === 'quotation_issued' && finalPaymentDue(ticket) && isPastProcurement(ticket.salesStage);
 }
 
 // "Does account still owe/await a step on this deal", ignoring the final-payment stage gate: a balance owed
@@ -45,7 +46,7 @@ function offersFinalPayment(ticket) {
 export function accountOwesStep(ticket) {
   if (!ticket) return false;
   // SQL ACCOUNT_HAS_TODO has no stage condition: lift EVERY stage the gate would close (incl. null/unknown).
-  const lifted = !PAST_PROCUREMENT.has(ticket.salesStage) ? { ...ticket, salesStage: 'DELIVERY_SCHEDULING' } : ticket;
+  const lifted = !isPastProcurement(ticket.salesStage) ? { ...ticket, salesStage: 'DELIVERY_SCHEDULING' } : ticket;
   return nextAccountAction(lifted) != null;
 }
 

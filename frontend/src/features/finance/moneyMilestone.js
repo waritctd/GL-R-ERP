@@ -47,3 +47,8 @@ export function isMilestoneSkipped(step, depositPolicy) {
   return step != null && step.index === DEPOSIT_RECEIVED.index
     && depositPolicy != null && DEPOSIT_BYPASS_POLICIES.has(depositPolicy);
 }
+
+/** The final-payment gate (owner ruling 2026-11-07): open once the deal is past PROCUREMENT, i.e. milestone 4+. Unknown/null = closed. */
+export function isPastProcurement(salesStage) {
+  return (moneyMilestoneOf(salesStage)?.index ?? 0) >= 4;
+}
