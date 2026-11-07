@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { nextAccountAction } from '../tickets/accountActions.js';
+import { accountOwesStep } from '../tickets/accountActions.js';
 import { moneyMilestoneOf } from '../finance/moneyMilestone.js';
 
 // Anti-drift: the same deal shapes drive DashboardMoneyTotalsIntegrationTest (the SQL behind
-// /api/dashboard/summary). The JS rule here is what /finance's rows use -- account's list scope
-// (TicketRepository.appendRoleScope("account")) plus nextAccountAction -- so if the two sides ever
+// /api/dashboard/summary). The JS rule here is the owed-to-account predicate behind ค้างรับ -- account's list scope
+// (TicketRepository.appendRoleScope("account")) plus accountOwesStep -- so if the two sides ever
 // disagree about a shape, one of the two tests goes red.
 // vitest runs from frontend/ (see the repo's vitest note), so the backend resource is one level up.
 const table = JSON.parse(readFileSync(
@@ -29,7 +29,7 @@ function inAccountScope(t) {
     && moneyMilestoneOf(t.salesStage) != null;
   return live || PENDING.has(t.paymentStatus) || t.overdue === true;
 }
-const countsInOutstanding = (t) => inAccountScope(t) && nextAccountAction(t) != null;
+const countsInOutstanding = (t) => inAccountScope(t) && accountOwesStep(t);
 
 describe('dashboard money case table (JS side)', () => {
   it('has the cases the SQL test builds', () => {
@@ -38,7 +38,7 @@ describe('dashboard money case table (JS side)', () => {
 
   it.each(table.cases.map((c) => [c.name, c]))('%s', (_name, c) => {
     const t = ticketOf(c);
-    // Outstanding only: the JS side of this rule is production code (nextAccountAction). The forecast rule has
+    // Outstanding only: the JS side of this rule is production code (accountOwesStep). The forecast rule has
     // no production JS twin any more (the server sums it), so DashboardMoneyTotalsIntegrationTest alone pins it.
     expect(countsInOutstanding(t), 'countsInOutstanding').toBe(c.countsInOutstanding);
   });

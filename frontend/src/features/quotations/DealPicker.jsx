@@ -11,7 +11,8 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { dealStageLabel } from '../../utils/format.js';
 import {
-  canCreateDealQuotation, dealQuotationStatusLabel, hasLivePricingRequest, isLiveDirectQuotation,
+  canCreateDealQuotation, dealQuotationStatusLabel, blocksNewDirectQuotation, hasLivePricingRequest,
+  isLiveDirectQuotation,
   LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from './quotationMeta.js';
 
@@ -86,7 +87,7 @@ function DealIdentity({ deal }) {
  * a modal (DESIGN.md §16) — with the way forward: open that quotation, or (APPROVED) revise it.
  */
 export function DealPicker({
-  user, selected = null, error, showToast,
+  user, selected = null, recipientType = '', error, showToast,
   // V204: the live direct quotation of the PARTY this new quotation is for (QuotationEditorPage
   // resolves it from the deal's parties). The create-time block is per party, so another
   // contractor's live quotation must not show here. Undefined = fall back to the deal-wide field.
@@ -158,8 +159,13 @@ export function DealPicker({
     }
   }
 
+  // V204: a per-party override (the party's own live quotation) wins; otherwise develop's route rule decides.
   const liveSource = liveOverride !== undefined ? liveOverride : selected?.liveDirectQuotation;
-  const live = selected && isLiveDirectQuotation(liveSource) ? liveSource : null;
+  const live = !selected ? null
+    : liveOverride !== undefined
+      ? (isLiveDirectQuotation(liveSource) ? liveSource : null)
+      : (blocksNewDirectQuotation(selected.liveDirectQuotation, recipientType, selected.status ?? 'draft')
+        ? selected.liveDirectQuotation : null);
   const livePricingRequest = useDealHasLivePricingRequest(selected?.id ?? null, Boolean(selected));
   const canRevise = live?.docStatus === 'APPROVED' && canCreateDealQuotation(user, selected);
   const reviseMutation = useMutation({

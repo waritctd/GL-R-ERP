@@ -471,7 +471,7 @@ export function DealCustomerCard({
       ) : null}
 
       {!creating ? (
-        <DealPicker user={user} selected={selectedDeal} liveOverride={selectedDealLive} error={errors?.deal} showToast={showToast} />
+        <DealPicker user={user} selected={selectedDeal} recipientType={value.recipientType} liveOverride={selectedDealLive} error={errors?.deal} showToast={showToast} />
       ) : null}
 
       {creating ? (

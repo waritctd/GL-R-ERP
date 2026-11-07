@@ -351,6 +351,14 @@ export function QuotationEditorPage({ user, showToast }) {
     ticketIdParam ? Number(ticketIdParam) : null,
     !id && Boolean(ticketIdParam),
   );
+  // N6 over EVERY live direct quotation: the summary serves only the newest, the server checks them all. The
+  // deal page's own list query (same key); a role that cannot read it (403) falls back to the summary's row.
+  const dealRowsQuery = useQuery({
+    queryKey: queryKeys.dealQuotationsByTicket(Number(ticketIdParam)),
+    queryFn: () => api.dealQuotations.listForTicket(Number(ticketIdParam)).then((r) => r?.items ?? []),
+    enabled: !id && Boolean(ticketIdParam),
+    retry: false,
+  });
   function changeDealMode(next) {
     setDealModeChoice(next);
     if (next === 'create' && ticketIdParam) {
@@ -685,8 +693,10 @@ export function QuotationEditorPage({ user, showToast }) {
     if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
     recipientSeededForTicket.current = ticket.id;
     if (recipientTouchedRef.current) return;
-    setRecipientType(recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
-  }, [id, ticket]);
+    const requested = searchParams.get('recipient');
+    setRecipientType((quotationRecipientOption(requested) && requested)
+      || recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
+  }, [id, ticket, searchParams]);
 
   function updateItem(clientId, patch) {
     setDirty(true);
@@ -1217,6 +1227,13 @@ export function QuotationEditorPage({ user, showToast }) {
   const pickedDealLiveQuotation = dealParties !== undefined && (targetParty || partyParam)
     ? liveQuotationOfParty(targetParty)
     : (ticket?.liveDirectQuotation ?? null);
+  // V204: with the parties read, only THIS party's live quotation can block (the server's lock is per party);
+  // before that, every live row on the deal (the server checks all of them) as the route rule needs.
+  const dealLiveRows = [ticket?.liveDirectQuotation, ...(dealRowsQuery.data ?? []).filter((q) => q.origin === 'DEAL_DIRECT')].filter(Boolean);
+  const checklistLiveRows = dealParties !== undefined && (targetParty || partyParam)
+    ? [pickedDealLiveQuotation].filter(Boolean)
+    : dealLiveRows;
+  const checklistDealStatus = ticket?.status ?? 'draft';
   const checklistProjectName = isInlineCreate ? null : (quotation ? quotation.projectName : (ticket ? ticket.projectName : undefined));
   const duplicateGroupIndex = duplicateGroupIds.size
     ? groups.findIndex((g) => duplicateGroupIds.has(g.groupId)) : null;
@@ -1250,7 +1267,8 @@ export function QuotationEditorPage({ user, showToast }) {
     needsDeal,
     recipientRequired: !quotation,
     recipientType,
-    liveDirectQuotation: !quotation && !isInlineCreate ? pickedDealLiveQuotation : null,
+    liveDirectQuotation: !quotation && !isInlineCreate ? checklistLiveRows : null,
+    dealStatus: checklistDealStatus,
     // One pricing route per deal: a NEW quotation on a picked deal that holds a live pricing request
     // (DealQuotationService#create 409s it).
     livePricingRequest: !quotation && !isInlineCreate && dealHasLivePricingRequest,
@@ -1260,7 +1278,7 @@ export function QuotationEditorPage({ user, showToast }) {
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, attachingToDeal, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, pickedDealLiveQuotation, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
+    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;

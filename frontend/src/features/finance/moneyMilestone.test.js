@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
-import { MONEY_TRACK, isMilestoneSkipped, moneyMilestoneOf } from './moneyMilestone.js';
+import { MONEY_TRACK, isMilestoneSkipped, isPastProcurement, moneyMilestoneOf } from './moneyMilestone.js';
 
 // Pins the mirror of th.co.glr.hr.ticket.MoneyMilestone (backend). The stage list comes from the
 // guarded catalog fixture (which stageCatalog.test.js pins against DealStage.java), so a stage added
@@ -60,5 +60,14 @@ describe('moneyMilestone (mirrors MoneyMilestone.java)', () => {
     expect(isMilestoneSkipped(deposit, 'REQUIRED')).toBe(false);
     expect(isMilestoneSkipped(deposit, null)).toBe(false);
     expect(isMilestoneSkipped(null, 'WAIVED')).toBe(false);
+  });
+});
+
+// The final-payment gate (TicketService#canConfirmFinalPaymentNow): open from money milestone 4 on.
+describe('isPastProcurement', () => {
+  it.each([['DELIVERY_SCHEDULING', true], ['DELIVERED', true], ['CLOSED_PAID', true],
+    ['PROCUREMENT', false], ['DEPOSIT_RECEIVED', false], ['ORDER_RECEIVED', false], ['QUOTE_BUYER', false],
+    ['NOT_A_STAGE', false], [null, false], [undefined, false]])('%s -> %s', (stage, expected) => {
+    expect(isPastProcurement(stage)).toBe(expected);
   });
 });

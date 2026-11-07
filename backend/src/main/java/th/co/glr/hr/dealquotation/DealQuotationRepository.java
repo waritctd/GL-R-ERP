@@ -81,7 +81,7 @@ public class DealQuotationRepository {
     }
 
     /** Advisory-lock class id for {@link #lockTicket}; differs from PDFT/FACT. */
-    private static final int TICKET_LOCK_CLASS_ID = 0x54494B54; // "TIKT", arbitrary but stable
+    static final int TICKET_LOCK_CLASS_ID = 0x54494B54; // "TIKT", arbitrary but stable
 
     /**
      * Serializes every mutating operation this feature performs against a given deal, against each

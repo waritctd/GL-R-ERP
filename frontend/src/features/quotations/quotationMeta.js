@@ -423,6 +423,31 @@ export function liveQuotationOfParty(party) {
   return isLiveDirectQuotation(live) ? live : null;
 }
 
+/** The quote route in S-order (DESIGNER → OWNER → BUYER). */
+export const QUOTATION_ROUTE = QUOTATION_RECIPIENT_OPTIONS.map((option) => option.code);
+
+function rowBlocksNewDirectQuotation(live, recipientType, dealStatus) {
+  if (!isLiveDirectQuotation(live)) return false;
+  if (dealStatus !== 'draft') return true;
+  const liveIndex = QUOTATION_ROUTE.indexOf(live.recipientType);
+  const nextIndex = QUOTATION_ROUTE.indexOf(recipientType);
+  return !(live.docStatus === 'APPROVED' && liveIndex >= 0 && nextIndex > liveIndex);
+}
+
+/** The newest live row (highest id) that blocks a new quotation to `recipientType`, or null. `live` is one
+ * row or every row the deal holds (the server checks all of them; the deal summary serves only the newest). */
+export function blockingDirectQuotation(live, recipientType, dealStatus = 'draft') {
+  return [live].flat().filter(Boolean)
+    .filter((row) => rowBlocksNewDirectQuotation(row, recipientType, dealStatus))
+    .reduce((newest, row) => (newest == null || (row.id ?? 0) > (newest.id ?? 0) ? row : newest), null);
+}
+
+/** N6 blocks unless every live quotation is APPROVED, addressed to a party strictly EARLIER on the route than
+ * `recipientType`, and the deal is still in 'draft' (no order confirmed yet) — the server's DirectQuotationLocks rule. */
+export function blocksNewDirectQuotation(live, recipientType, dealStatus = 'draft') {
+  return blockingDirectQuotation(live, recipientType, dealStatus) != null;
+}
+
 /** N6's reason, word for word the server's 409: the editor disables บันทึกร่าง with it BEFORE the rep
  * reaches that refusal (DESIGN.md §14: a disabled action says why). */
 function liveDirectQuotationBlockMessage(live) {
@@ -439,6 +464,8 @@ export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
   tail: (depositPercent) => (depositPercent != null && Number(depositPercent) === 0
     ? 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — ใบเสนอราคานี้ไม่เก็บมัดจำ สั่งสินค้าและส่งมอบได้เลย การดำเนินการนี้ย้อนกลับไม่ได้'
     : 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้'),
+  // The deal's OTHER open direct quotations (DRAFT / PENDING_APPROVAL), which the confirm cancels (empty when none).
+  cancels: (numbers) => (numbers?.length ? `ใบเสนอราคาที่ยังเปิดอยู่ ${numbers.join(', ')} จะถูกยกเลิกอัตโนมัติ` : ''),
 });
 
 // An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
@@ -2149,12 +2176,13 @@ export function buildQuotationChecklist({
   // `needsDeal`: the "เลือกดีลที่มีอยู่" branch with nothing picked yet. `recipientRequired`: a NEW
   // DEAL_DIRECT quotation (the server 400s one without a recipient); never set for an existing row or
   // a PRICING_REQUEST one. `liveDirectQuotation`: the picked deal's
-  // TicketSummaryDto.liveDirectQuotation on a NEW quotation (N6). All default to "never triggers", so
+  // TicketSummaryDto.liveDirectQuotation on a NEW quotation (N6), or an array of every live row. All default to "never triggers", so
   // existing callers keep their checklist.
   needsDeal = false,
   recipientRequired = false,
   recipientType = '',
   liveDirectQuotation = null,
+  dealStatus = 'draft',
   // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
   livePricingRequest = false,
   // V192.3: ผู้ติดต่อ's Email as typed. Blank (the default) is fine — see #orderedByEmailError.
@@ -2173,9 +2201,8 @@ export function buildQuotationChecklist({
   };
 
   if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
-  if (isLiveDirectQuotation(liveDirectQuotation)) {
-    push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(liveDirectQuotation));
-  }
+  const blockingLive = blockingDirectQuotation(liveDirectQuotation, recipientType, dealStatus);
+  if (blockingLive) push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(blockingLive));
   if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
   if (recipientRequired && !quotationRecipientOption(recipientType)) {
     push(QUOTATION_CHECK.RECIPIENT, 'ต้องเลือกผู้รับใบเสนอราคา', QUOTATION_FIELD_IDS.recipient);

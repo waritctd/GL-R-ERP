@@ -7,7 +7,7 @@ package th.co.glr.hr.ticket;
  *
  * <p>"Live" is the ONE definition shared with {@link DirectQuotationLocks} and N6: a
  * {@code DEAL_DIRECT} row whose {@code doc_status} is {@code DRAFT}, {@code PENDING_APPROVAL} or
- * {@code APPROVED} ({@link TicketRepository#findLiveDirectQuotation}). {@code recipientType} is the
+ * {@code APPROVED} ({@link TicketRepository#findLiveDirectQuotations}). {@code recipientType} is the
  * raw {@code sales.quotation.recipient_type} — {@code UNSPECIFIED} on every pre-slice-2 row.
  *
  * <p>Disclosure: number / status / recipient only — never an amount. Any ticket reader already

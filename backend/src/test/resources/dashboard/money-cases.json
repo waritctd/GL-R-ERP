@@ -55,6 +55,19 @@
    "countsInForecast": false
   },
   {
+   "name": "awaiting final payment at NEGOTIATION: pending payment status keeps it in scope and owed",
+   "lifecycle": "ACTIVE",
+   "status": "quotation_issued",
+   "salesStage": "NEGOTIATION",
+   "paymentStatus": "AWAITING_FINAL_PAYMENT",
+   "depositPolicy": "REQUIRED",
+   "overdue": false,
+   "commission": false,
+   "paid": 50000,
+   "countsInOutstanding": true,
+   "countsInForecast": true
+  },
+  {
    "name": "deposit bypassed (NOT_REQUIRED) at ORDER_RECEIVED",
    "lifecycle": "ACTIVE",
    "status": "quotation_issued",
