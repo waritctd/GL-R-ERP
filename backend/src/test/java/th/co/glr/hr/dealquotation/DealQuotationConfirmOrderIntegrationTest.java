@@ -493,15 +493,17 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(ticketService.actions(deal, salesActor).availableActions())
             .extracting(TicketResponses.TicketActionDto::action).doesNotContain("ISSUE_DEPOSIT_NOTICE");
         ticketService.requireImportRequestIssuable(after); // a REQUIRED deal 409s here with no deposit
+        // The 0% walk never touches DEPOSIT_RECEIVED: check BEFORE the stage bump below (stage still
+        // ORDER_RECEIVED, no events), so these assertions are not vacuous.
+        assertThat(summary(deal).salesStage()).isNotEqualTo(DealStage.DEPOSIT_RECEIVED);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id"
+            + " AND (to_status = 'DEPOSIT_RECEIVED' OR from_status = 'DEPOSIT_RECEIVED')",
+            Map.of("id", deal), Integer.class)).isZero();
         // canConfirmFinalPaymentNow refuses a REQUIRED deal at CUSTOMER_CONFIRMED.
         // Owner ruling 2026-11-07: final payment opens at DELIVERY_SCHEDULING.
         tickets.updateSalesStage(deal, DealStage.DELIVERY_SCHEDULING);
         assertThat(ticketService.confirmFinalPayment(deal, accountActor).summary().paymentStatus())
             .isEqualTo("FULLY_PAID");
-        assertThat(summary(deal).salesStage()).isNotEqualTo(DealStage.DEPOSIT_RECEIVED);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id"
-            + " AND (to_status = 'DEPOSIT_RECEIVED' OR from_status = 'DEPOSIT_RECEIVED')",
-            Map.of("id", deal), Integer.class)).isZero();
     }
 
     /**

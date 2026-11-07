@@ -42,10 +42,10 @@ function offersFinalPayment(ticket) {
 
 // "Does account still owe/await a step on this deal", ignoring the final-payment stage gate: a balance owed
 // while goods are in transit stays in ค้างรับ. Mirrors the SQL ACCOUNT_HAS_TODO, not what the deal page offers.
-const BEFORE_DELIVERY = new Set(['ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT']);
 export function accountOwesStep(ticket) {
   if (!ticket) return false;
-  const lifted = BEFORE_DELIVERY.has(ticket.salesStage) ? { ...ticket, salesStage: 'DELIVERY_SCHEDULING' } : ticket;
+  // SQL ACCOUNT_HAS_TODO has no stage condition: lift EVERY stage the gate would close (incl. null/unknown).
+  const lifted = !PAST_PROCUREMENT.has(ticket.salesStage) ? { ...ticket, salesStage: 'DELIVERY_SCHEDULING' } : ticket;
   return nextAccountAction(lifted) != null;
 }
 

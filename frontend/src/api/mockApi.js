@@ -1,6 +1,6 @@
 import thaiLocations from '../data/thai-locations.json';
 import { formatThaiAddress } from '../features/locations/thaiAddress.js';
-import { nextAccountAction } from '../features/tickets/accountActions.js';
+import { accountOwesStep } from '../features/tickets/accountActions.js';
 import { isOwnerOrKeyer } from '../features/tickets/dealOwnership.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
@@ -3707,12 +3707,12 @@ function derivePaymentFields(ticket) {
 }
 
 // Mirrors DashboardRepository#financeOutstanding: outstanding on deals in account's list scope that have an
-// account to-do (nextAccountAction as the account viewer).
+// account to-do (accountOwesStep: the final-payment stage gate must not shrink ค้างรับ).
 function mockFinanceOutstanding() {
   return moneyValue(db.tickets
     .filter(accountListScopeIncludes)
     .map((t) => ({ ...t, ...derivePaymentFields(t), commissionRecorded: hasRecordedCommission(t) }))
-    .filter((t) => nextAccountAction(t) != null)
+    .filter((t) => accountOwesStep(t))
     .reduce((sum, t) => sum + Number(t.amountOutstanding ?? 0), 0));
 }
 

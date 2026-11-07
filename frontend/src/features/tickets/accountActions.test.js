@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountMoneyBucket, nextAccountAction } from './accountActions.js';
+import { accountMoneyBucket, accountOwesStep, nextAccountAction } from './accountActions.js';
 
 function ticket(overrides = {}) {
   return {
@@ -239,6 +239,23 @@ describe('nextAccountAction', () => {
       });
       expect(nextAccountAction(t, 'ceo').key).toBe('recordInvoiceCommission');
     });
+  });
+});
+
+// ค้างรับ's SQL (ACCOUNT_HAS_TODO) has no stage condition, so accountOwesStep must not depend on the stage
+// for an AWAITING_FINAL_PAYMENT / DEPOSIT_PAID deal, whatever stage it sits at (incl. null).
+describe('accountOwesStep (ค้างรับ: owed regardless of the final-payment stage gate)', () => {
+  const stages = ['QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED', 'DEPOSIT_RECEIVED', 'PROCUREMENT',
+    'DELIVERY_SCHEDULING', 'DELIVERED', null, undefined];
+  it.each(stages.map((s) => [String(s), s]))('AWAITING_FINAL_PAYMENT @ %s is owed', (_n, salesStage) => {
+    expect(accountOwesStep(ticket({ paymentStatus: 'AWAITING_FINAL_PAYMENT', salesStage }))).toBe(true);
+  });
+  it.each(stages.map((s) => [String(s), s]))('DEPOSIT_PAID @ %s is owed', (_n, salesStage) => {
+    expect(accountOwesStep(ticket({ paymentStatus: 'DEPOSIT_PAID', salesStage }))).toBe(true);
+  });
+  it('nothing pending is not owed, and null input is not owed', () => {
+    expect(accountOwesStep(ticket({ paymentStatus: 'CUSTOMER_CONFIRMED' }))).toBe(false);
+    expect(accountOwesStep(null)).toBe(false);
   });
 });
 
