@@ -293,27 +293,33 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     });
   });
 
-  it('is on by default: one group row per multi-bidder deal, its bids pulled together beneath it', async () => {
+  const s26Group = async () => (await screen.findAllByTestId('quotation-group-row')).find((g) => g.textContent.includes('S26 HOTEL'));
+
+  it('always on: every deal gets a group row led by the deal, its quotations beneath it', async () => {
     const { container } = renderListPage(salesUser);
-    const group = await screen.findByTestId('quotation-group-row');
+    const group = await s26Group();
+    expect(within(group).getByTestId('quotation-group-deal').textContent).toContain('ดีล DL-2026-0280');
     expect(group.textContent).toContain('S26 HOTEL');
-    expect(group.textContent).toContain('ดีลเดียวกัน · 3 ผู้รับเหมา');
-    expect(group.textContent).toContain('รอผลประมูล · ยอดหลัก');
-    expect(within(group).getByRole('link', { name: 'DL-2026-0280 →' }).getAttribute('href')).toBe('/tickets/18');
-    expect(screen.getByTestId('quotation-group-toggle').getAttribute('aria-pressed')).toBe('true');
-    // Order: the group header where its newest row was, its three bids, then the single-bidder row.
+    const summary = within(group).getByTestId('quotation-group-summary').textContent;
+    expect(summary).toContain('ใบเสนอราคา 3 รายการ');
+    expect(summary).toContain('3 ผู้รับเหมา');
+    expect(summary).toContain('รอผลประมูล · ยอดหลัก');
+    expect(within(group).getByRole('link', { name: 'เปิดดีล DL-2026-0280' }).getAttribute('href')).toBe('/tickets/18');
+    // Order: each group header where its newest row was, then its quotations; the single-quotation deal too.
     const numbers = [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent);
     expect(numbers[0]).toContain('S26 HOTEL');
     // The ยอดหลัก bid leads its group; the rest keep server order.
     expect(numbers[1]).toContain('QT-2026-0270-4');
     expect(numbers[2]).toContain('QT-2026-0280-2');
     expect(numbers[3]).toContain('QT-2026-0340-1');
-    expect(numbers[4]).toContain('QT-2026-0339-2');
+    expect(numbers[4]).toContain('บ้านคุณตัวอย่าง');
+    expect(numbers[4]).toContain('ใบเสนอราคา 1 รายการ');
+    expect(numbers[5]).toContain('QT-2026-0339-2');
   });
 
   it('a grouped bid shows its outcome chip and ★ ยอดหลัก instead of the project name; NOT_AWARDED is dimmed', async () => {
     renderListPage(salesUser);
-    await screen.findByTestId('quotation-group-row');
+    await s26Group();
     const headlineRow = screen.getByText('QT-2026-0270-4').closest('tr');
     expect(within(headlineRow).getByText('★ ยอดหลัก')).toBeTruthy();
     expect(within(headlineRow).getByText('เสนอราคาแล้ว')).toBeTruthy();
@@ -321,8 +327,8 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     const lostRow = screen.getByText('QT-2026-0340-1').closest('tr');
     expect(lostRow.className).toContain('opacity-60');
     expect(within(lostRow).getByText('ไม่ได้งาน')).toBeTruthy();
-    // The single-bidder row keeps its project line.
-    expect(within(screen.getByText('QT-2026-0339-2').closest('tr')).getByText('บ้านคุณตัวอย่าง')).toBeTruthy();
+    // A single-quotation deal's project is in its own header, not repeated on the row.
+    expect(within(screen.getByText('QT-2026-0339-2').closest('tr')).queryByText('บ้านคุณตัวอย่าง')).toBeNull();
   });
 
   it('groupQuotationRows: headline first, 1-based groupIndex, groupSize, groupLast on the final member', () => {
@@ -379,10 +385,10 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
 
   it('search keeps a group whole: a status or customer match on one bid shows the header and every bid', async () => {
     renderListPage(salesUser);
-    await screen.findByTestId('quotation-group-row');
+    await s26Group();
     fireEvent.change(screen.getByPlaceholderText(/ค้นหา/), { target: { value: 'บจก.ทิ้งท้าย' } });
     await waitFor(() => expect(screen.queryByText('บริษัท เดี่ยว จำกัด')).toBeNull());
-    expect(screen.getByTestId('quotation-group-row')).toBeTruthy();
+    expect(screen.getAllByTestId('quotation-group-row')).toHaveLength(1);
     expect(screen.getAllByTestId('quotation-group-index').map((c) => c.textContent)).toEqual(['1', '2', '3']);
   });
 
@@ -408,7 +414,7 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
 
   it('header: deal code link right of the title line, project name in the customer-name style, no separate count badge', async () => {
     renderListPage(salesUser);
-    const group = await screen.findByTestId('quotation-group-row');
+    const group = await s26Group();
     expect(group.textContent).not.toMatch(/^3 ผู้รับเหมา/);
     expect(within(group).getByText('S26 HOTEL').className).toContain('text-md font-extrabold');
     expect(group.innerHTML).not.toMatch(/text-\[\d+px\]/);
@@ -416,21 +422,30 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
 
   it('a grouped member carries its numbered circle', async () => {
     renderListPage(salesUser);
-    await screen.findByTestId('quotation-group-row');
+    await s26Group();
     const circles = screen.getAllByTestId('quotation-group-index').map((c) => c.textContent);
     expect(circles).toEqual(['1', '2', '3']);
   });
 
-  it('turning it off removes the group row and remembers the choice', async () => {
-    const { unmount } = renderListPage(salesUser);
-    fireEvent.click(await screen.findByTestId('quotation-group-toggle'));
-    await waitFor(() => expect(screen.queryByTestId('quotation-group-row')).toBeNull());
-    expect(within(screen.getByText('QT-2026-0270-4').closest('tr')).getByText('S26 HOTEL')).toBeTruthy();
-    unmount();
+  it('has no grouping switch and no expand-all switch: grouping is always on', async () => {
     renderListPage(salesUser);
-    await screen.findByText('QT-2026-0270-4');
-    expect(screen.getByTestId('quotation-group-toggle').getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(screen.getByTestId('quotation-group-toggle'));
+    await s26Group();
+    expect(screen.queryByTestId('quotation-group-toggle')).toBeNull();
+    expect(screen.queryByTestId('quotation-expand-toggle')).toBeNull();
+    expect(screen.queryByText('จัดกลุ่มตามโครงการ')).toBeNull();
+  });
+
+  it('on a phone a member card is indented behind a connector line; an older version one step further', () => {
+    const rows = groupQuotationRows([
+      row({ id: 2, number: 'QT-2026-0500-2', ticketId: 50, partyId: 1, docStatus: 'APPROVED' }),
+      row({ id: 1, number: 'QT-2026-0500-1', ticketId: 50, partyId: 1, docStatus: 'SUPERSEDED' }),
+    ]);
+    const [, current, older] = rows;
+    expect(quotationRowClassName(current)).toContain('mobile:before:bg-info-border');
+    expect(quotationRowClassName(current)).toContain('mobile:pl-9');
+    expect(quotationRowClassName(older)).toContain('mobile:pl-12');
+    // The line ends at the last card's branch instead of running past it.
+    expect(quotationRowClassName(older)).toContain('mobile:before:h-6');
   });
 });
 
@@ -450,14 +465,22 @@ describe('QuotationListPage — revisions of one document fold into the version 
     api.dealQuotations.list.mockResolvedValue({ items: chain });
   });
 
-  it('groupQuotationRows: one contractor with five versions is ONE group with ONE row, the approved newest in force', () => {
+  it('groupQuotationRows: one contractor with five versions is ONE group, the approved newest in force, older versions open beneath it', () => {
     const out = groupQuotationRows(chain);
     expect(out.filter((r) => r.isGroup)).toHaveLength(1);
     const members = out.filter((r) => r.inGroup);
+    expect(members.map((m) => m.number)).toEqual(['QT-2026-0303-5', 'QT-2026-0303-4', 'QT-2026-0303-3', 'QT-2026-0303-2', 'QT-2026-0303-1']);
+    expect(members[0]).toMatchObject({ olderCount: 4, versionNo: 5, versionsOpen: true });
+    expect(members.slice(1).every((m) => m.isOlderVersion)).toBe(true);
+    expect(quotationRowClassName(members[1])).toContain('bg-surface-muted');
+    expect(members[4].groupLast).toBe(true);
+    expect(out.find((r) => r.isGroup)).toMatchObject({ buyerCount: 1, versionCount: 5, documentCount: 1 });
+  });
+
+  it('a collapsed document shows only its version in force', () => {
+    const members = groupQuotationRows(chain, { collapsed: new Set(['307:QT-2026-0303']) }).filter((r) => r.inGroup);
     expect(members.map((m) => m.number)).toEqual(['QT-2026-0303-5']);
-    expect(members[0].olderCount).toBe(4);
-    expect(members[0].versionNo).toBe(5);
-    expect(out.find((r) => r.isGroup)).toMatchObject({ buyerCount: 1, versionCount: 5 });
+    expect(members[0].versionsOpen).toBe(false);
   });
 
   it('the version in force is the newest APPROVED one, not just the newest', () => {
@@ -467,51 +490,33 @@ describe('QuotationListPage — revisions of one document fold into the version 
     expect(inForce.olderCount).toBe(2);
   });
 
-  it('opening a document lists its older versions newest first, dimmed, after the row in force', () => {
-    const out = groupQuotationRows(chain, { expanded: new Set(['307:QT-2026-0303']) });
-    const members = out.filter((r) => r.inGroup);
-    expect(members.map((m) => m.number)).toEqual(['QT-2026-0303-5', 'QT-2026-0303-4', 'QT-2026-0303-3', 'QT-2026-0303-2', 'QT-2026-0303-1']);
-    expect(members.slice(1).every((m) => m.isOlderVersion)).toBe(true);
-    expect(quotationRowClassName(members[1])).toContain('bg-surface-muted');
-    expect(members[4].groupLast).toBe(true);
-    expect(groupQuotationRows(chain, { expandAll: true }).filter((r) => r.inGroup)).toHaveLength(5);
-  });
-
   it('a number without a revision suffix is never folded with its neighbours', () => {
     const rows = [row({ id: 1, number: 'QT-2026-0901', ticketId: 9, partyId: 1 }), row({ id: 2, number: 'QT-2026-0902', ticketId: 9, partyId: 1 })];
-    expect(groupQuotationRows(rows).filter((r) => r.inGroup)).toHaveLength(2);
+    expect(groupQuotationRows(rows).filter((r) => r.inGroup).every((r) => !r.isOlderVersion)).toBe(true);
   });
 
-  it('a deal with a single quotation row stays ungrouped', () => {
-    expect(groupQuotationRows([rev(5)]).some((r) => r.isGroup)).toBe(false);
+  it('a deal with a single quotation row still gets its group row', () => {
+    const out = groupQuotationRows([rev(5)]);
+    expect(out[0]).toMatchObject({ isGroup: true, documentCount: 1, versionCount: 1 });
+    expect(out[1]).toMatchObject({ inGroup: true, number: 'QT-2026-0303-5', groupFirst: true, groupLast: true });
   });
 
-  it('renders a header for a one-contractor deal, no numbered circle, and a version button that opens the older versions', async () => {
+  it('renders a one-contractor deal with no numbered circle; older versions start open and the button hides them', async () => {
     renderListPage(salesUser);
     const group = await screen.findByTestId('quotation-group-row');
     expect(group.textContent).toContain('Toscana House');
-    expect(group.textContent).toContain('5 ฉบับ');
-    expect(group.textContent).not.toContain('ผู้รับเหมา');
+    expect(within(group).getByTestId('quotation-group-summary').textContent).toBe('ใบเสนอราคา 1 รายการ (5 เวอร์ชัน)');
     expect(screen.queryByTestId('quotation-group-index')).toBeNull();
-    expect(screen.getByText('QT-2026-0303-5')).toBeTruthy();
-    expect(screen.queryByText('QT-2026-0303-4')).toBeNull();
+    expect(screen.getByText('QT-2026-0303-4')).toBeTruthy();
     const toggle = screen.getByTestId('quotation-versions-toggle');
-    expect(toggle.textContent).toContain('เวอร์ชันก่อนหน้า 4');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toContain('ซ่อนเวอร์ชันก่อนหน้า 4');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
     fireEvent.click(toggle);
-    await screen.findByText('QT-2026-0303-4');
-    expect(screen.getByText('QT-2026-0303-1')).toBeTruthy();
-    expect(screen.getByTestId('quotation-versions-toggle').getAttribute('aria-expanded')).toBe('true');
-    fireEvent.click(screen.getByTestId('quotation-versions-toggle'));
     await waitFor(() => expect(screen.queryByText('QT-2026-0303-4')).toBeNull());
-  });
-
-  it('ขยายทุกเวอร์ชัน opens every document at once', async () => {
-    renderListPage(salesUser);
-    await screen.findByTestId('quotation-group-row');
-    fireEvent.click(screen.getByTestId('quotation-expand-toggle'));
+    expect(screen.getByTestId('quotation-versions-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('quotation-versions-toggle').textContent).toContain('เวอร์ชันก่อนหน้า 4');
+    fireEvent.click(screen.getByTestId('quotation-versions-toggle'));
     await screen.findByText('QT-2026-0303-1');
-    expect(screen.getByTestId('quotation-expand-toggle').getAttribute('aria-pressed')).toBe('true');
   });
 
   it('a search for an older version\'s number still finds its group', async () => {

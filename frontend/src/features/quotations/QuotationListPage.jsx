@@ -83,34 +83,17 @@ const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(
 // editor's own อนุมัติ/ไม่อนุมัติ button gate.
 
 // ── "จัดกลุ่มตามโครงการ" (deal-party-model.md, prototype screen 1) ─────────────────────────────
-// EVERY deal holding more than one quotation row is listed together under a thin group row: a project
-// quoted to several contractors, and one contractor's revisions of a single document alike. The rows
+// EVERY quotation sits under its deal's group row, a deal with a single quotation included, so every row
+// reads the same way: the deal (and its project) on top, its quotations nested beneath. Grouping is always on. The rows
 // of a group come out inside DataTable's own row mechanism (a synthetic row whose first cell spans the
 // grid, the rest hidden), so search, pagination and the mobile cards all keep working. Grouping turns
 // column sorting off: a sort would scatter a group's rows away from their header.
 //
-// Revisions of one document (the same number with a `-<n>` suffix: QT-2026-0303-1 … -5) fold into ONE
-// row, the version in force (the newest approved one, else the newest), with its older versions behind
-// a "เวอร์ชันก่อนหน้า N" button, or all open at once with "ขยายทุกเวอร์ชัน".
-const GROUP_PREF_KEY = 'glr.quotations.groupByProject';
+// Revisions of one document (the same number with a `-<n>` suffix: QT-2026-0303-1 … -5) are listed under
+// the version in force (the newest approved one, else the newest). They are OPEN by default; the
+// document's "ซ่อนเวอร์ชันก่อนหน้า N" button folds them away.
 const IN_FORCE_STATUSES = new Set(['APPROVED', 'ACCEPTED', 'ISSUED', 'SENT']);
 const EMPTY_SET = new Set();
-
-function readGroupPref() {
-  try {
-    return globalThis.localStorage?.getItem(GROUP_PREF_KEY) !== 'off';
-  } catch {
-    return true;
-  }
-}
-
-function writeGroupPref(on) {
-  try {
-    globalThis.localStorage?.setItem(GROUP_PREF_KEY, on ? 'on' : 'off');
-  } catch {
-    // A browser that refuses storage just forgets the choice.
-  }
-}
 
 // Only a 1-2 digit tail is a revision suffix: a bare number such as QT-2026-0901 ends in a 4-digit
 // running sequence and must never be folded with its neighbours (same rule as dealDocumentVersions.js).
@@ -130,10 +113,10 @@ function splitInForce(versions) {
 
 /**
  * The rows in server order, each deal's rows pulled together under a group row placed where its newest row
- * was. Member rows are copied with `inGroup: true`. `expanded` is a Set of document keys whose older versions
- * are open, `expandAll` opens every one, `onToggleVersions(docKey)` is what a row's version button calls.
+ * was. Member rows are copied with `inGroup: true`. Older versions are open unless their document key is in
+ * `collapsed`; `onToggleVersions(docKey)` is what a row's version button calls.
  */
-export function groupQuotationRows(rows, { expanded = EMPTY_SET, expandAll = false, onToggleVersions = null } = {}) {
+export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersions = null } = {}) {
   const byTicket = new Map();
   for (const row of rows) {
     if (row.ticketId == null) continue;
@@ -144,7 +127,7 @@ export function groupQuotationRows(rows, { expanded = EMPTY_SET, expandAll = fal
   const emitted = new Set();
   for (const row of rows) {
     const members = byTicket.get(row.ticketId);
-    if (!members || members.length < 2) { out.push(row); continue; }
+    if (!members) { out.push(row); continue; }
     if (emitted.has(row.ticketId)) continue;
     emitted.add(row.ticketId);
     const headline = members.find((m) => m.partyHeadline) ?? null;
@@ -183,7 +166,7 @@ export function groupQuotationRows(rows, { expanded = EMPTY_SET, expandAll = fal
       }
       for (const [docKey, versions] of docs) {
         const { inForce, older } = splitInForce(versions);
-        const open = expandAll || expanded.has(docKey);
+        const open = !collapsed.has(docKey);
         const base = { inGroup: true, groupIndex: p + 1, groupContractors: parties.length, docKey };
         ordered.push({
           ...inForce, ...base,
@@ -193,6 +176,8 @@ export function groupQuotationRows(rows, { expanded = EMPTY_SET, expandAll = fal
         if (open) for (const o of older) ordered.push({ ...o, ...base, isOlderVersion: true, versionNo: versionOf(o) });
       }
     });
+    // The header counts documents (a revision chain is one), so it can say how many quotations the deal holds.
+    out[out.length - 1].documentCount = ordered.filter((m) => !m.isOlderVersion).length;
     ordered.forEach((m, i) => out.push({
       ...m, groupSize: ordered.length, groupSearchText: searchText,
       ...(i === 0 ? { groupFirst: true } : {}), ...(i === ordered.length - 1 ? { groupLast: true } : {}),
@@ -201,29 +186,44 @@ export function groupQuotationRows(rows, { expanded = EMPTY_SET, expandAll = fal
   return out;
 }
 
+/** What the deal holds, for the header's third line: quotations, contractors, bid state. */
+function groupSummary(row) {
+  const docs = row.documentCount ?? 1;
+  const parts = [`ใบเสนอราคา ${docs} รายการ${row.versionCount > docs ? ` (${row.versionCount} เวอร์ชัน)` : ''}`];
+  if (row.buyerCount > 1) {
+    parts.push(`${row.buyerCount} ผู้รับเหมา`);
+    parts.push(row.decided
+      ? 'บันทึกผลประมูลแล้ว'
+      : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`);
+  }
+  return parts.join(' · ');
+}
+
+// The deal is the container: its label leads ("ดีล DL-…" with the deal icon), the project is the title, and
+// the third line says what sits beneath it, so on a phone the cards below read as this deal's quotations.
 function GroupRowContent({ row }) {
   return (
-    <span className="flex min-w-0 flex-col gap-1" data-testid="quotation-group-row">
-      <span className="flex min-w-0 items-center justify-between gap-3 text-xs">
-        <span className="flex items-center gap-2 font-bold text-info">
-          {row.buyerCount > 1 ? `ดีลเดียวกัน · ${row.buyerCount} ผู้รับเหมา` : 'ดีลเดียวกัน'}
-          {row.versionCount > row.buyerCount ? <span className="font-normal text-text-muted">{`${row.versionCount} ฉบับ`}</span> : null}
+    <span className="flex min-w-0 flex-col gap-0.5" data-testid="quotation-group-row">
+      <span className="flex min-w-0 items-center justify-between gap-3">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-2xs font-extrabold uppercase tracking-wide text-info" data-testid="quotation-group-deal">
+          <Icon name="briefcase" size={14} />
+          <span className="truncate">{`ดีล ${row.ticketCode ?? `#${row.ticketId}`}`}</span>
           {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
         </span>
         {row.ticketId != null ? (
-          <Link to={`/tickets/${row.ticketId}`} className="inline-flex min-h-8 items-center font-bold text-info underline mobile:min-h-[44px]">
-            {`${row.ticketCode ?? `#${row.ticketId}`} →`}
+          <Link
+            to={`/tickets/${row.ticketId}`}
+            aria-label={`เปิดดีล ${row.ticketCode ?? row.ticketId}`}
+            className="inline-flex min-h-8 shrink-0 items-center text-xs font-bold text-info underline mobile:min-h-[44px]"
+          >
+            เปิดดีล →
           </Link>
         ) : null}
       </span>
-      {row.projectName ? <strong className="min-w-0 truncate text-md font-extrabold text-text">{row.projectName}</strong> : null}
-      {row.buyerCount > 1 ? (
-        <span className="text-xs text-text-muted">
-          {row.decided
-            ? 'บันทึกผลประมูลแล้ว'
-            : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`}
-        </span>
-      ) : null}
+      <strong className="min-w-0 text-md font-extrabold leading-snug text-text [overflow-wrap:anywhere]">
+        {row.projectName ?? 'ไม่ระบุโครงการ'}
+      </strong>
+      <span className="text-xs text-text-muted" data-testid="quotation-group-summary">{groupSummary(row)}</span>
     </span>
   );
 }
@@ -246,7 +246,7 @@ function VersionControls({ row }) {
         )}
         onClick={(event) => { event.stopPropagation(); row.onToggleVersions?.(); }}
       >
-        {`เวอร์ชันก่อนหน้า ${row.olderCount}`}
+        {row.versionsOpen ? `ซ่อนเวอร์ชันก่อนหน้า ${row.olderCount}` : `เวอร์ชันก่อนหน้า ${row.olderCount}`}
         <Icon name={row.versionsOpen ? 'chevronUp' : 'chevronDown'} size={10} />
       </button>
       {row.versionNo != null ? <span className="font-mono text-2xs text-text-muted">{`ใช้อยู่: v${row.versionNo}`}</span> : null}
@@ -365,9 +365,14 @@ const GROUPED_COLUMNS = COLUMNS.map((column) => ({
 // header a tinted 2px top edge, members an inset 4px info rail, the last member a 2px bottom edge.
 // Mobile (<li> cards, gap 10px in .record-card-list): the same rows are joined by cancelling that
 // gap with a negative margin and sharing one border colour. A NOT_AWARDED bid is dimmed.
+// One group = header row + member rows read as ONE box. Desktop (<tr>): the header gets a tinted 2px top edge,
+// members an inset 4px info rail, the last member a 2px bottom edge. Mobile (<li> cards, gap 10px in
+// .record-card-list): the rows are joined into one box by cancelling that gap with a negative margin and sharing
+// one border colour, and every member is INDENTED behind a vertical connector in the deal's colour, so the
+// cards read as children of the deal header above them. An older version sits one step further in, dimmed.
 export function quotationRowClassName(row) {
   if (row.isGroup) {
-    return 'bg-info-bg-alt [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden border-t-2 border-t-info-border mobile:border-t mobile:border-info-border mobile:rounded-b-none mobile:py-1.5';
+    return 'bg-info-bg-alt [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden border-t-2 border-t-info-border mobile:border-t mobile:border-info-border mobile:rounded-b-none mobile:py-2.5';
   }
   const dim = row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : row.isOlderVersion ? 'bg-surface-muted text-text-muted' : '';
   if (!row.inGroup) return dim;
@@ -376,6 +381,12 @@ export function quotationRowClassName(row) {
     'shadow-[inset_4px_0_0_var(--color-info)]',
     // A page boundary can split a group: the first card on a page drops the pull-up, the last closes its corners.
     'mobile:-mt-[10px] mobile:first:mt-0 mobile:border-info-border mobile:border-t-0 mobile:shadow-none mobile:last:rounded-b-md',
+    // The connector: a 2px line down the card's left, inside the shared border, with the content indented past it.
+    'mobile:relative mobile:before:absolute mobile:before:top-0 mobile:before:bottom-0 mobile:before:w-0.5 mobile:before:bg-info-border',
+    // …and a short branch from the line into the card at its first text line; the last card's line ends at its branch.
+    'mobile:after:absolute mobile:after:top-6 mobile:after:h-0.5 mobile:after:w-3 mobile:after:bg-info-border',
+    row.isOlderVersion ? 'mobile:pl-12 mobile:before:left-8 mobile:after:left-8' : 'mobile:pl-9 mobile:before:left-4 mobile:after:left-4',
+    row.groupLast ? 'mobile:before:bottom-auto mobile:before:h-6' : '',
     row.groupFirst ? '' : 'mobile:border-t mobile:[border-top-style:dashed]',
     row.groupLast ? 'mobile:rounded-t-none mobile:rounded-b-md border-b-2 border-b-info-border mobile:border-b' : 'mobile:rounded-none',
   ].filter(Boolean).join(' ');
@@ -469,26 +480,17 @@ export function QuotationListPage({ user }) {
   // The filters sit in a plain row ABOVE DataTable's own search input (see the JSX below, shared by
   // every breakpoint), so column headers stay plain text at every width and `columns` does not
   // diverge by role.
-  const [groupByProject, setGroupByProject] = useState(readGroupPref);
-  function toggleGrouping() {
-    setGroupByProject((on) => {
-      writeGroupPref(!on);
-      return !on;
-    });
-  }
-  const columns = groupByProject ? GROUPED_COLUMNS : COLUMNS;
-  // Which documents have their older versions open (a Set of docKeys), or every one with ขยายทุกเวอร์ชัน.
-  const [openVersions, setOpenVersions] = useState(() => new Set());
-  const [expandAll, setExpandAll] = useState(false);
-  const toggleVersions = (docKey) => setOpenVersions((current) => {
+  const columns = GROUPED_COLUMNS;
+  // Older versions are open by default; this Set holds the documents the rep folded away.
+  const [collapsedVersions, setCollapsedVersions] = useState(() => new Set());
+  const toggleVersions = (docKey) => setCollapsedVersions((current) => {
     const next = new Set(current);
     if (!next.delete(docKey)) next.add(docKey);
     return next;
   });
   const tableRows = useMemo(
-    () => (groupByProject ? groupQuotationRows(filteredRows, { expanded: openVersions, expandAll, onToggleVersions: toggleVersions }) : filteredRows),
-    // toggleVersions only closes over setOpenVersions, which is stable.
-    [groupByProject, filteredRows, openVersions, expandAll],
+    () => groupQuotationRows(filteredRows, { collapsed: collapsedVersions, onToggleVersions: toggleVersions }),
+    [filteredRows, collapsedVersions],
   );
 
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
@@ -571,35 +573,6 @@ export function QuotationListPage({ user }) {
           );
         })}
       </div>
-      {/* A view switch, not a tab: one pressed/unpressed button beside the tablist. Remembered per
-          browser (localStorage, guarded). */}
-      <button
-        type="button"
-        aria-pressed={groupByProject}
-        data-testid="quotation-group-toggle"
-        className={`ml-auto inline-flex min-h-8 mobile:min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-          groupByProject ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-        }`}
-        onClick={toggleGrouping}
-      >
-        จัดกลุ่มตามโครงการ
-        <span className={`rounded-full px-1.5 text-2xs ${groupByProject ? 'bg-primary/15' : 'bg-surface-subtle text-text-muted'}`}>
-          {groupByProject ? 'เปิด' : 'ปิด'}
-        </span>
-      </button>
-      {groupByProject ? (
-        <button
-          type="button"
-          aria-pressed={expandAll}
-          data-testid="quotation-expand-toggle"
-          className={`inline-flex min-h-8 mobile:min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
-            expandAll ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
-          }`}
-          onClick={() => setExpandAll((on) => !on)}
-        >
-          ขยายทุกเวอร์ชัน
-        </button>
-      ) : null}
       </div>
       <div id="quotation-list-panel" role="tabpanel">
         {/* Filter row: พนักงานขาย/ยอดรวม for see-all roles (sales_manager/ceo), อีเมลลูกค้า for everyone -- moved OUT of the
@@ -666,7 +639,7 @@ export function QuotationListPage({ user }) {
           columns={columns}
           rows={tableRows}
           // Group rows count as rows in the footer, so the "(กรองจาก M)" denominator counts them too.
-          unfilteredTotal={groupByProject ? groupQuotationRows(rows).length : rows.length}
+          unfilteredTotal={groupQuotationRows(rows).length}
           getRowKey={(row) => row.id}
           gridClassName={LIST_TABLE_GRID}
           rowClassName={quotationRowClassName}
