@@ -121,10 +121,22 @@ UPDATE sales.deal_party p
   FROM v205_member m
  WHERE p.ticket_id = m.ticket_id AND m.ticket_id <> m.survivor_id;
 
+-- quotation_version is numbered per (ticket, recipient_type) (ux_quotation_ticket_recipient_version), so moved
+-- rows are renumbered above the survivor's current maximum, in their original creation order. The printed
+-- number (sales.quotation.number) is untouched.
 UPDATE sales.quotation q
-   SET ticket_id = m.survivor_id, updated_at = now()
-  FROM v205_member m
- WHERE q.ticket_id = m.ticket_id AND m.ticket_id <> m.survivor_id;
+   SET ticket_id = r.survivor_id,
+       quotation_version = r.base_version + r.seq,
+       updated_at = now()
+  FROM (
+    SELECT q2.quotation_id, m.survivor_id,
+           ROW_NUMBER() OVER (PARTITION BY m.survivor_id, q2.recipient_type ORDER BY q2.quotation_id) AS seq,
+           COALESCE((SELECT MAX(s.quotation_version) FROM sales.quotation s
+                      WHERE s.ticket_id = m.survivor_id AND s.recipient_type = q2.recipient_type), 0) AS base_version
+      FROM sales.quotation q2
+      JOIN v205_member m ON m.ticket_id = q2.ticket_id
+     WHERE m.ticket_id <> m.survivor_id) r
+ WHERE q.quotation_id = r.quotation_id;
 
 -- Every party now on a survivor that has a live quotation is QUOTED (a merged ACTIVE row would otherwise stay
 -- ACTIVE with a document).

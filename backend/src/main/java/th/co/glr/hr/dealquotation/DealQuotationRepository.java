@@ -457,6 +457,14 @@ public class DealQuotationRepository {
         return findSolePartyId(ticketId);
     }
 
+    /** The party whose quotation became the confirmed order has won (V204); the bid outcome also sets it. */
+    public int markPartyAwarded(long partyId) {
+        return jdbc.update("""
+            UPDATE sales.deal_party SET status = 'AWARDED', not_awarded_reason = NULL, updated_at = now()
+             WHERE party_id = :id AND status <> 'AWARDED'
+            """, Map.of("id", partyId));
+    }
+
     /** ACTIVE -> QUOTED once the party's first document exists; every other status is left alone. */
     public int markPartyQuoted(long partyId) {
         return jdbc.update("""

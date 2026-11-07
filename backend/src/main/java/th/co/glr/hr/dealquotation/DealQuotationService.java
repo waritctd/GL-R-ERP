@@ -1775,6 +1775,10 @@ public class DealQuotationService {
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
             TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, TicketStatus.DRAFT, TicketStatus.QUOTATION_ISSUED,
             "ยืนยันคำสั่งซื้อจากใบเสนอราคา " + fresh.number(), RelatedDocumentType.QUOTATION, quotationId);
+        // V204: the confirmed quotation's party has won, whichever path confirmed it.
+        if (fresh.partyId() != null) {
+            quotations.markPartyAwarded(fresh.partyId());
+        }
         // The agreed order is this quotation: the deal's other open direct quotations can never be submitted or approved now
         // (see requireNoOtherDirectQuotationAfterConfirm), so cancel them rather than strand them.
         for (DealQuotationRepository.CancelledQuotation cancelled
