@@ -318,11 +318,11 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     expect(numbers[5]).toContain('QT-2026-0339-2');
   });
 
-  it('a grouped bid shows its outcome chip and ★ ยอดหลัก instead of the project name; NOT_AWARDED is dimmed', async () => {
+  it('a grouped bid shows its outcome chip (no ★ ยอดหลัก tag: too busy) instead of the project name; NOT_AWARDED is dimmed', async () => {
     renderListPage(salesUser);
     await s26Group();
     const headlineRow = screen.getByText('QT-2026-0270-4').closest('tr');
-    expect(within(headlineRow).getByText('★ ยอดหลัก')).toBeTruthy();
+    expect(within(headlineRow).queryByText('★ ยอดหลัก')).toBeNull();
     expect(within(headlineRow).getByText('เสนอราคาแล้ว')).toBeTruthy();
     expect(within(headlineRow).queryByText('S26 HOTEL')).toBeNull();
     const lostRow = screen.getByText('QT-2026-0340-1').closest('tr');

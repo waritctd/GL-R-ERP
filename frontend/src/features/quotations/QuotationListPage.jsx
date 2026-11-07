@@ -330,7 +330,6 @@ function PartyChipLine({ row }) {
     <span className="flex flex-wrap items-center gap-1.5">
       {!row.isOlderVersion ? <RecipientChip role={row.recipientType} /> : null}
       {row.partyStatus && !row.isOlderVersion && isBidRow(row) ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
-      {row.partyHeadline && !row.isOlderVersion ? <span className="text-2xs font-bold text-warning-dark">★ ยอดหลัก</span> : null}
       <VersionControls row={row} />
     </span>
   );

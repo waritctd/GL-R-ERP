@@ -20,12 +20,14 @@ import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
- * V205 (docs/decisions/deal-party-model.md, slice 4): the sibling-bid backlog folds into one deal per rep and
- * project, but ONLY when every ticket in the group is a pure quotation-only container. Runs the file verbatim,
- * twice, against data built through the real services.
+ * V205 and V206 (docs/decisions/deal-party-model.md, slice 4): the sibling-bid backlog folds into one deal per rep
+ * and project, but ONLY when every ticket in the group is a pure quotation-only container. V205 needs one owner,
+ * one keyer and two customers; V206 relaxes that to "one rep on every quotation" (an admin-typed deal, a second
+ * keyer, a customer quoted twice). Runs each file verbatim, twice, against data built through the real services.
  */
 class DealPartyMergeMigrationIntegrationTest extends AbstractDealDirectQuotationIntegrationTest {
     private static final String V205 = "db/migration/V205__merge_sibling_bid_deals.sql";
+    private static final String V206 = "db/migration/V206__merge_sibling_deals_same_rep.sql";
     private static final String SITE = "โครงการ ประมูลหลายราย";
 
     private TicketRepository tickets;
@@ -116,6 +118,104 @@ class DealPartyMergeMigrationIntegrationTest extends AbstractDealDirectQuotation
         assertThat(status(theirs)).isEqualTo("draft");
     }
 
+    // ---- V206 ----
+
+    @Test
+    void v206_adminTypedDealAndRepsDeal_foldIntoTheRepsDeal_evenWhenTheAdminsHasTheLowerId() {
+        CustomerDto a = customer("บจก.ผู้รับเหมา เค");
+        CustomerDto b = customer("บจก.ผู้รับเหมา แอล");
+        long typed = container(a, SITE + " v206a", otherRep);   // an admin owns it (created_by) but the rep quoted it
+        long repsDeal = container(b, SITE + " v206a", salesActor);
+        long q1 = quote(typed, otherRep);
+        long q2 = quote(repsDeal);
+        nameRep(salesActor, q1, q2);
+
+        migrate(V206);
+        assertThat(status(repsDeal)).isEqualTo("draft");
+        assertThat(status(typed)).isEqualTo("cancelled");
+        assertThat(List.of(ticketOf(q1), ticketOf(q2))).containsOnly(repsDeal);
+        assertThat(count("SELECT COUNT(*) FROM sales.deal_party WHERE ticket_id = :id", repsDeal)).isEqualTo(2);
+        long ownerAfter = jdbc.queryForObject("SELECT created_by FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", repsDeal), Long.class);
+        assertThat(ownerAfter).isEqualTo(salesActor.id());
+        migrate(V206);
+        assertThat(ticketOf(q1)).isEqualTo(repsDeal);
+        assertThat(count("SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'DEAL_MERGED_INTO'", typed)).isEqualTo(1);
+    }
+
+    @Test
+    void v206_aCustomerQuotedTwiceOnTheProject_endsAsOnePartyWithBothQuotations() {
+        CustomerDto a = customer("บจก.ผู้รับเหมา เอ็ม");
+        long t1 = container(a, SITE + " v206b", salesActor);
+        long t2 = container(a, SITE + " v206b", salesActor);
+        long q1 = quote(t1);
+        long q2 = quote(t2);
+        nameRep(salesActor, q1, q2);
+
+        migrate(V206);
+        assertThat(status(t2)).isEqualTo("cancelled");
+        assertThat(List.of(ticketOf(q1), ticketOf(q2))).containsOnly(t1);
+        assertThat(count("SELECT COUNT(*) FROM sales.deal_party WHERE ticket_id = :id", t1)).isEqualTo(1);
+        assertThat(partyOf(q1)).isEqualTo(partyOf(q2));
+        assertThat(count("SELECT COUNT(DISTINCT quotation_version) FROM sales.quotation WHERE ticket_id = :id", t1)).isEqualTo(2);
+    }
+
+    @Test
+    void v206_differentRepsOnTheProject_areLeftWhole() {
+        CustomerDto a = customer("บจก.ผู้รับเหมา เอ็น");
+        CustomerDto b = customer("บจก.ผู้รับเหมา โอ");
+        long mine = container(a, SITE + " v206c", salesActor);
+        long theirs = container(b, SITE + " v206c", otherRep);
+        long q1 = quote(mine);
+        long q2 = quote(theirs, otherRep);
+        nameRep(salesActor, q1);
+        nameRep(otherRep, q2);
+
+        migrate(V206);
+        assertThat(status(mine)).isEqualTo("draft");
+        assertThat(status(theirs)).isEqualTo("draft");
+        assertThat(ticketOf(q2)).isEqualTo(theirs);
+    }
+
+    @Test
+    void v206_whenTheQuotingRepOwnsNoneOfTheDeals_theGroupIsLeftWhole() {
+        CustomerDto a = customer("บจก.ผู้รับเหมา พี");
+        CustomerDto b = customer("บจก.ผู้รับเหมา คิว");
+        long t1 = container(a, SITE + " v206d", otherRep);
+        long t2 = container(b, SITE + " v206d", otherRep);
+        long q1 = quote(t1, otherRep);
+        long q2 = quote(t2, otherRep);
+        nameRep(salesActor, q1, q2);
+
+        migrate(V206);
+        assertThat(status(t1)).isEqualTo("draft");
+        assertThat(status(t2)).isEqualTo("draft");
+    }
+
+    @Test
+    void v206_aGroupWithAnOrdinaryDeal_isLeftWhole() {
+        CustomerDto a = customer("บจก.ผู้รับเหมา อาร์");
+        CustomerDto b = customer("บจก.ผู้รับเหมา เอส");
+        long t1 = container(a, SITE + " v206e", salesActor);
+        long ordinary = container(b, SITE + " v206e", salesActor);
+        long q1 = quote(t1);
+        long q2 = quote(ordinary);
+        nameRep(salesActor, q1, q2);
+        jdbc.update("UPDATE sales.ticket SET quotation_only = FALSE WHERE ticket_id = :id", Map.of("id", ordinary));
+
+        migrate(V206);
+        assertThat(status(t1)).isEqualTo("draft");
+        assertThat(status(ordinary)).isEqualTo("draft");
+    }
+
+    /** The rep a quotation names (sales_rep_display_id wins over sales_rep_id), set explicitly so the test says who. */
+    private void nameRep(UserPrincipal rep, long... quotationIds) {
+        for (long id : quotationIds) {
+            jdbc.update("UPDATE sales.quotation SET sales_rep_display_id = :rep WHERE quotation_id = :id",
+                Map.of("rep", rep.id(), "id", id));
+        }
+    }
+
     private void assertMerged(long t1, long t2, long t3, long q1, long q2, long q3, CustomerDto a, CustomerDto b) {
         assertThat(status(t1)).isEqualTo("draft");
         assertThat(status(t2)).isEqualTo("cancelled");
@@ -154,7 +254,11 @@ class DealPartyMergeMigrationIntegrationTest extends AbstractDealDirectQuotation
     }
 
     private long quote(long ticketId) {
-        return quotationService.create(ticketId, draft().withRecipientType("BUYER"), salesActor).id();
+        return quote(ticketId, salesActor);
+    }
+
+    private long quote(long ticketId, UserPrincipal actor) {
+        return quotationService.create(ticketId, draft().withRecipientType("BUYER"), actor).id();
     }
 
     private String status(long ticketId) {
@@ -181,8 +285,12 @@ class DealPartyMergeMigrationIntegrationTest extends AbstractDealDirectQuotation
     }
 
     private void migrate() {
-        ClassPathResource resource = new ClassPathResource(V205);
-        assertThat(resource.exists()).as("migration file %s must exist on the classpath", V205).isTrue();
+        migrate(V205);
+    }
+
+    private void migrate(String file) {
+        ClassPathResource resource = new ClassPathResource(file);
+        assertThat(resource.exists()).as("migration file %s must exist on the classpath", file).isTrue();
         try {
             // Flyway runs each file in a transaction, which is what drops the ON COMMIT DROP temp tables; do the same.
             String sql = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
