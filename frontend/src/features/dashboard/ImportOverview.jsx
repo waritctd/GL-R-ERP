@@ -1,169 +1,54 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
-import { EmptyState } from '../../components/common/EmptyState.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { cn } from '../../utils/cn.js';
-import { formatThaiDate, fulfilmentStatusLabel, greetingName } from '../../utils/format.js';
+import { formatThaiDate, fulfilmentStatusLabel, greetingName, pricingRequestStatusLabel } from '../../utils/format.js';
+import { pricingRequestRecipientLabel } from '../pricingRequests/pricingRequestMeta.js';
 import { nextFulfilmentActionCode, nextImportAction } from '../tickets/importActions.js';
+import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
 
 /**
- * Import's landing view (role-scoped-views plan, docs/role-scoped-views.md —
- * "1. Import"). Replaces the generic EmployeeDashboard/TicketDashboard for
- * the import role: Import's job is procurement -> delivery on the deals
- * already in its worklist, not browsing the whole deal pipeline (which stays
- * gated behind canViewDealPipeline — see AppShell.jsx/permissions.js).
+ * Import's landing: a count band, then one worklist (new requests to claim, my requests with the
+ * factory, fulfilment steps), with shipments and the requests waiting on the CEO on the right.
  *
- * Data is derived CLIENT-SIDE from the same two calls TicketDashboard already
- * makes (api.tickets.list + api.pricingRequests.queue) — no dashboard summary
- * endpoint, no backend change. Both queries are already role-scoped server
- * (mock) side (import only ever sees its own worklist slice — see
- * importListScopeIncludes / PRICING_REQUEST_VIEWER_ROLES in mockApi.js), so
- * every count/row below is already the correct audience; this component only
- * buckets and sorts what it's given.
+ * Data comes from the two calls this page always made (api.tickets.list + api.pricingRequests.queue),
+ * both already role-scoped server side; no new endpoint. "Mine" follows the queue page's งานของฉัน tab:
+ * assigned to me and still in an import-side status (the retired COSTING_IN_PROGRESS included, for the
+ * deploy-before-migration window), so the band and /pricing-requests agree.
  */
 
-// Pricing-request statuses still "in flight" toward a price — used only for
-// the ตั้งราคา conveyor-pulse COUNT (an awareness gauge across every pricing
-// request touching Import's deals, not just the ones Import can act on right
-// now). DRAFT never reaches here (mockApi's draft-privacy filter keeps it out
-// of the queue for import); QUOTATION_ACCEPTED/QUOTATION_ISSUED/SUPERSEDED/
-// CANCELLED are excluded because pricing is resolved (or dead) by then.
-//
-// THREE retired statuses are kept in this list ON PURPOSE — same reasoning as the queue page's
-// merged เจรจาราคากับโรงงาน chip and utils/format.js's label map:
-//   - COSTING_IN_PROGRESS  (V140 merged it into AWAITING_FACTORY_RESPONSE)
-//   - MORE_INFO_REQUIRED   (V140 deleted it with the ขอข้อมูลเพิ่มเติม round-trip)
-//   - COSTING_REVISION_REQUIRED (V141 retired it — the CEO owns costing, and returnToImport now
-//     sends the request straight to AWAITING_FACTORY_RESPONSE)
-//
-// The reason is the same for all three and it is ONLY this: the frontend and backend deploy
-// separately, so a new frontend can be live against a backend that still writes the value, on a
-// database the migration has not run on yet. Dropping a value would silently undercount this
-// gauge for that whole window. They are inert once the migrations have run everywhere, at which
-// point all three places can drop all three together.
-//
-// COSTING_REVISION_REQUIRED was NOT covered by this comment until issue #750 — it was dropped a
-// migration later than the other two, so it sat here reading as if the decision above had already
-// been made for it. It had not been. It is made now, deliberately, and on the narrower of the two
-// available grounds: unlike utils/format.js's label map, this list counts LIVE pricing requests
-// from api.pricingRequests.queue, so V141 §5's preserved pricing_request_event history is not a
-// reason to keep it here — only the deploy-before-migration window is.
-const PRICING_IN_FLIGHT_STATUSES = [
-  'SUBMITTED', 'IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS',
-  'READY_FOR_CEO_REVIEW', 'CEO_REVIEWING', 'COSTING_REVISION_REQUIRED', 'MORE_INFO_REQUIRED',
-];
+const MY_WORK_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'];
+const CEO_STATUSES = ['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
 
-// fulfillmentStatus values that mean "physically in transit" — the same set
-// both the "ขนส่ง" conveyor bucket and the "กำลังขนส่ง" tracker use.
+// fulfillmentStatus values that mean "physically in transit".
 //
-// CUSTOMS_CLEARANCE used to sit third here and was removed as dead (issue #749): commit 7991b9f1
-// deleted it from FulfilmentStatus.java as a zero-reference constant, and no code path has ever
-// written it into sales.ticket.fulfillment_status, so the literal could never match a real row.
-// PR #715 removed the same value from utils/format.js's fulfilmentStatusLabel and from
-// features/tickets/stageMeta.js and left a "do not re-add" note in both; this was the third copy
-// it missed. Do not re-add it here for symmetry with the names in FactoryPurchaseOrderStatus or
-// V77's header comment — those describe the factory PO's own sequence, not this column.
+// CUSTOMS_CLEARANCE used to sit third here and was removed as dead (issue #749): nothing has ever
+// written it into sales.ticket.fulfillment_status. Do not re-add it for symmetry with the factory PO
+// statuses; those describe the factory PO's own sequence, not this column.
 const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING'];
 
-// The four mutually-exclusive buckets a deal can sit in. They do NOT all come
-// from the same source, which is what the previous wording ("a 5th, computed
-// separately") was reaching for and got wrong in both directions: `pricing` is
-// counted off the PricingRequest side (PRICING_IN_FLIGHT_STATUSES, see
-// bucketCounts) while the other three come from fulfillmentStatus via
-// FULFILMENT_ACTION_TO_BUCKET. There is no fifth. Order matters: it is the
-// conveyor's left-to-right order and the worklist's tie-break sort.
-//
-// `delivery` (recordDelivery) used to be a fifth stage bucket here. Owner
-// ruling 2026-08-17 moved stage 13-14 (ส่งมอบสินค้า) PROMPTING to Sales — this
-// dashboard no longer counts or filters on it, though the underlying
-// capability is untouched (additive, #818; see nextImportAction's own
-// comment in importActions.js). nextFulfilmentActionCode can still return
-// 'recordDelivery'; FULFILMENT_ACTION_TO_BUCKET below simply has no entry
-// for that code any more, so bucketCounts silently skips it below rather
-// than tracking a bucket this page no longer shows.
-const STAGE_BUCKETS = [
-  { key: 'pricing', label: 'ตั้งราคา', tone: 'amber' },
-  { key: 'procurement', label: 'จัดซื้อ/นำเข้า', tone: 'blue' },
-  { key: 'shipping', label: 'ขนส่ง', tone: 'blue' },
-  { key: 'goodsReceived', label: 'รับเข้าคลัง', tone: 'teal' },
-];
-
+// Fulfilment steps the page counts, in conveyor order (also the worklist tie-break). Delivery
+// (recordDelivery) is Sales' prompt now (owner ruling 2026-08-17): it has no entry here and no row.
 const FULFILMENT_ACTION_TO_BUCKET = {
   issueImportRequest: 'procurement',
   markIrSent: 'procurement',
   markShipping: 'shipping',
   markGoodsReceived: 'goodsReceived',
 };
+const BUCKET_ORDER = ['procurement', 'shipping', 'goodsReceived'];
 
-/** Which conveyor bucket a worklist row belongs to (see nextImportAction). */
-function bucketOfAction(action) {
-  if (!action) return null;
-  if (action.code === 'pickupPricingRequest') return 'pricing';
-  return FULFILMENT_ACTION_TO_BUCKET[action.code] ?? null;
-}
-
-function PulseTile({ label, count, tone, active, onClick }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        'flex min-h-[64px] min-w-[92px] flex-1 flex-col items-start gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors',
-        active ? 'border-primary bg-primary/10' : 'border-border bg-surface hover:bg-surface-hover',
-      )}
-    >
-      <span
-        className={cn(
-          'text-2xl font-extrabold leading-none',
-          // WCAG AA fix (fix/ui-contrast-tokens): --color-accent (#14b8a6)
-          // as text-on-white measures 2.49:1, failing even the 3.0:1 large-
-          // text floor this 26px/800 number qualifies for. --color-accent-
-          // dark (#0f766e, already an existing token) clears 5.47:1; kept
-          // --color-accent itself unchanged since every other consumer
-          // uses it as a background/fill, not text.
-          tone === 'teal' ? 'text-accent-dark' : tone === 'danger' ? 'text-danger' : 'text-text',
-        )}
-      >
-        {count}
-      </span>
-      <span className="text-2xs font-bold uppercase tracking-wide text-text-muted">{label}</span>
-    </button>
-  );
-}
-
-function WorklistRow({ ticket, action, navigate }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-            {ticket.customerName || ticket.title}
-          </strong>
-          {ticket.overdue ? <StatusBadge tone="danger">เกินกำหนด</StatusBadge> : null}
-        </div>
-        <span className="block truncate text-2xs text-text-muted">
-          <code>{ticket.code}</code>
-          {ticket.fulfillmentStatus ? ` · ${fulfilmentStatusLabel(ticket.fulfillmentStatus).label}` : ''}
-          {ticket.dueDate ? ` · กำหนด ${formatThaiDate(ticket.dueDate)}` : ''}
-        </span>
-      </div>
-      <Button type="button" size="sm" onClick={() => navigate(action.to)} className="shrink-0">
-        {action.label}
-      </Button>
-    </div>
-  );
-}
+const byOldest = (a, b) => String(a.submittedAt ?? '').localeCompare(String(b.submittedAt ?? '')) || a.id - b.id;
+const pcrName = (pr) => pr.customerName || pr.ticketCode || pr.requestCode;
+const count = (n, unit) => `${n} ${unit}`;
 
 export function ImportOverview({ user, employee }) {
   const navigate = useNavigate();
-  const [activeBucket, setActiveBucket] = useState(null);
+  const onOpen = (to) => navigate(to);
 
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
@@ -173,12 +58,12 @@ export function ImportOverview({ user, employee }) {
     queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
     queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r?.items ?? []),
   });
-
+  const ticketsReady = ticketsQuery.data !== undefined;
+  const queueReady = pricingQueueQuery.data !== undefined;
   const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const pricingRequests = useMemo(() => pricingQueueQuery.data ?? [], [pricingQueueQuery.data]);
-  const loading = ticketsQuery.isLoading || pricingQueueQuery.isLoading;
 
-  // W3-02: shipments are PER FACTORY (one stored ใบขอซื้อ row each), so the ขนส่ง tile and the
+  // W3-02: shipments are PER FACTORY (one stored ใบขอซื้อ row each), so the ขนส่ง count and the
   // กำลังขนส่ง list read the rows exactly as /fulfilment does — same candidate filter, same query key.
   const candidateIds = useMemo(() => tickets
     .filter((t) => t.fulfillmentStatus != null
@@ -201,160 +86,179 @@ export function ImportOverview({ user, employee }) {
     return byTicket;
   }, [candidateIds, rowsQueries]);
 
-  const prByTicket = useMemo(() => {
-    const map = new Map();
-    pricingRequests.forEach((pr) => {
-      const list = map.get(pr.ticketId) ?? [];
-      list.push(pr);
-      map.set(pr.ticketId, list);
-    });
-    return map;
-  }, [pricingRequests]);
+  const pickup = useMemo(() => pricingRequests.filter((pr) => pr.status === 'SUBMITTED').sort(byOldest), [pricingRequests]);
+  const mine = useMemo(() => pricingRequests
+    .filter((pr) => MY_WORK_STATUSES.includes(pr.status) && pr.assignedImportId != null && Number(pr.assignedImportId) === Number(user?.id))
+    .sort(byOldest), [pricingRequests, user?.id]);
+  const withCeo = useMemo(() => pricingRequests.filter((pr) => CEO_STATUSES.includes(pr.status)), [pricingRequests]);
 
-  // One row per in-scope deal with something for Import to do right now —
-  // nextImportAction is the SAME helper DealFulfilmentPanel's `can.*` gates
-  // derive from, so this worklist can never disagree with the panel that
-  // actually performs the mutation.
-  //
-  // The CTA now hands off to งานนำเข้า (/fulfilment) for the four import-chain
-  // steps instead of deep-linking /tickets/:id — the destination lives in
-  // nextImportAction, not here, so both surfaces move together. This dashboard
-  // stays the AT-A-GLANCE summary and deliberately grows no mutating buttons of
-  // its own: duplicating the workspace is exactly what killed /procurement
-  // (ebaf6888). Division of labour: this page says what is happening (five
-  // buckets, both streams), /fulfilment does the next thing (four stages, one
-  // stream). Delivery is no longer one of the "what is happening" buckets
-  // either (owner ruling 2026-08-17): nextImportAction now returns null for
-  // a delivery-ready deal, so it never produces a row here — Sales' own
-  // worklist (salesActions.js) is where that prompt lives now.
-  const worklistRows = useMemo(() => {
-    const rows = tickets
-      .map((ticket) => ({ ticket, action: nextImportAction(ticket, prByTicket.get(ticket.id) ?? []) }))
-      .filter((row) => row.action);
-    const stageOrder = (bucketKey) => {
-      if (bucketKey === 'pricing') return 0;
-      const idx = STAGE_BUCKETS.findIndex((b) => b.key === bucketKey);
-      return idx < 0 ? STAGE_BUCKETS.length : idx;
-    };
-    return rows.sort((a, b) => {
+  // Fulfilment rows only: nextImportAction gets no pricing requests, so its pick-up branch never fires
+  // (those requests are the first two groups). Same helper DealFulfilmentPanel's `can.*` derive from.
+  const importRows = useMemo(() => tickets
+    .map((ticket) => ({ ticket, action: nextImportAction(ticket, []) }))
+    .filter((row) => row.action)
+    .sort((a, b) => {
       if (Boolean(a.ticket.overdue) !== Boolean(b.ticket.overdue)) return a.ticket.overdue ? -1 : 1;
-      const stageDiff = stageOrder(bucketOfAction(a.action)) - stageOrder(bucketOfAction(b.action));
-      if (stageDiff !== 0) return stageDiff;
-      return new Date(a.ticket.updatedAt || 0) - new Date(b.ticket.updatedAt || 0);
-    });
-  }, [tickets, prByTicket]);
+      const stage = (row) => BUCKET_ORDER.indexOf(FULFILMENT_ACTION_TO_BUCKET[row.action.code]);
+      return stage(a) - stage(b) || new Date(a.ticket.updatedAt || 0) - new Date(b.ticket.updatedAt || 0);
+    }), [tickets]);
 
-  const bucketCounts = useMemo(() => {
-    const counts = { overdue: 0, pricing: 0, procurement: 0, shipping: 0, goodsReceived: 0 };
-    counts.overdue = tickets.filter((t) => t.overdue).length;
-    counts.pricing = pricingRequests.filter((pr) => PRICING_IN_FLIGHT_STATUSES.includes(pr.status)).length;
+  const fulfilment = useMemo(() => {
+    const counts = { procurement: 0, shipping: 0, goodsReceived: 0 };
     tickets.forEach((ticket) => {
-      const code = nextFulfilmentActionCode(ticket);
-      const bucket = FULFILMENT_ACTION_TO_BUCKET[code];
+      const bucket = FULFILMENT_ACTION_TO_BUCKET[nextFulfilmentActionCode(ticket)];
       if (bucket) counts[bucket] += 1;
     });
     inTransitShipments.forEach((n) => { counts.shipping += n; });
     return counts;
-  }, [tickets, pricingRequests, inTransitShipments]);
+  }, [tickets, inTransitShipments]);
 
   const inTransit = useMemo(
     () => tickets.filter((t) => IN_TRANSIT_STATUSES.includes(t.fulfillmentStatus) || inTransitShipments.has(t.id)),
     [tickets, inTransitShipments],
   );
 
-  const filteredRows = useMemo(() => {
-    if (!activeBucket) return worklistRows;
-    if (activeBucket === 'overdue') return worklistRows.filter((row) => row.ticket.overdue);
-    return worklistRows.filter((row) => bucketOfAction(row.action) === activeBucket);
-  }, [worklistRows, activeBucket]);
+  const queueFailed = failed(pricingQueueQuery);
+  const groups = [
+    {
+      key: 'pickup', label: 'รับเรื่องใหม่', dot: 'bg-warning', to: '/pricing-requests',
+      list: queueReady ? pickup : null, isFailed: queueFailed,
+      toRow: (pr) => ({
+        testId: `worklist-row-pickup-${pr.id}`,
+        entity: pcrName(pr),
+        meta: [pr.requestCode, pr.ticketCode, pricingRequestRecipientLabel(pr.recipientType)].filter(Boolean).join(' · '),
+        ctaLabel: 'รับเรื่อง', ctaVariant: 'primary', to: `/pricing-requests/${pr.id}`,
+      }),
+    },
+    {
+      key: 'mine', label: 'ขอราคากับโรงงาน', dot: 'bg-primary', to: '/pricing-requests',
+      list: queueReady ? mine : null, isFailed: queueFailed,
+      toRow: (pr) => ({
+        testId: `worklist-row-mine-${pr.id}`,
+        entity: pcrName(pr),
+        meta: `${pr.requestCode} · ${pricingRequestStatusLabel(pr.status).label}`,
+        ctaLabel: 'เปิดคำขอ', to: `/pricing-requests/${pr.id}`,
+      }),
+    },
+    {
+      key: 'import', label: 'นำเข้า', dot: 'bg-accent', to: '/fulfilment',
+      list: ticketsReady ? importRows : null, isFailed: failed(ticketsQuery),
+      toRow: ({ ticket, action }) => ({
+        testId: `worklist-row-import-${ticket.id}`,
+        entity: ticket.customerName || ticket.title,
+        meta: `${ticket.code}${ticket.fulfillmentStatus ? ` · ${fulfilmentStatusLabel(ticket.fulfillmentStatus).label}` : ''}${ticket.dueDate ? ` · กำหนด ${formatThaiDate(ticket.dueDate)}` : ''}`,
+        ctaLabel: action.label, to: action.to,
+      }),
+    },
+  ].map((g) => ({ ...g, n: g.list?.length ?? 0 }));
+  const settled = groups.every((g) => g.list !== null || g.isFailed);
+  const total = groups.reduce((sum, g) => sum + g.n, 0);
+  const allEmpty = groups.every((g) => g.n === 0 && !g.isFailed);
 
-  function toggleBucket(key) {
-    setActiveBucket((current) => (current === key ? null : key));
-  }
+  const fulfilmentTotal = fulfilment.procurement + fulfilment.shipping + fulfilment.goodsReceived;
+  const mineReviewing = mine.filter((pr) => pr.status === 'IMPORT_REVIEWING').length;
+  const pricingFigure = (n) => (queueReady ? count(n, 'คำขอ') : '—');
 
+  const today = formatThaiDate(new Date().toISOString());
   const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
     <PageStack>
-      <PageHeader title={greeting} subtitle="ภาพรวมงานนำเข้า — จัดซื้อและขนส่ง" />
+      <PageHeader title="ภาพรวมงานนำเข้า" subtitle={`${greeting} · ${today}`} />
 
-      <Panel title="สถานะงานทั้งหมด" className="!p-4">
-        <div className="flex flex-wrap gap-2 mobile-xs:flex-nowrap mobile-xs:overflow-x-auto mobile-xs:pb-1">
-          <PulseTile
-            label="เกินกำหนด"
-            count={bucketCounts.overdue}
-            tone="danger"
-            active={activeBucket === 'overdue'}
-            onClick={() => toggleBucket('overdue')}
+      <section className="rounded-md border border-border bg-surface p-5 mobile:p-3.5" aria-label="งานนำเข้าตอนนี้">
+        <dl className="m-0 grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-x-6 nav-drawer:grid-cols-2 nav-drawer:gap-y-4 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
+          <Figure lead label="รอรับเรื่อง" value={pricingFigure(pickup.length)} caption="ยังไม่มีใครรับ" />
+          <Figure
+            label="กำลังขอราคา (ของฉัน)"
+            value={pricingFigure(mine.length)}
+            caption={`รับเรื่อง ${mineReviewing} · เจรจากับโรงงาน ${mine.length - mineReviewing}`}
           />
-          {STAGE_BUCKETS.map((bucket) => (
-            <PulseTile
-              key={bucket.key}
-              label={bucket.label}
-              count={bucketCounts[bucket.key]}
-              tone={bucket.tone}
-              active={activeBucket === bucket.key}
-              onClick={() => toggleBucket(bucket.key)}
+          <Figure label="รอ CEO ตั้งราคา" value={pricingFigure(withCeo.length)} caption="ส่งต่อแล้ว ไม่ต้องทำอะไร" />
+          <Figure
+            label="นำเข้า / ขนส่ง"
+            value={ticketsReady ? count(fulfilmentTotal, 'ดีล') : '—'}
+            caption={`ออกใบขอซื้อ ${fulfilment.procurement} · ขนส่ง ${fulfilment.shipping} · ถึงคลัง ${fulfilment.goodsReceived}`}
+          />
+        </dl>
+      </section>
+
+      <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
+        <Panel flush title="สิ่งที่ต้องทำ" actions={settled ? <WorklistTotal total={total} /> : null}>
+          {settled && allEmpty ? (
+            <div className="flex items-center gap-3 p-5 text-text-muted">
+              <Icon name="check" size={18} />
+              <span className="text-sm font-bold">ไม่มีงานที่ต้องดำเนินการตอนนี้</span>
+            </div>
+          ) : groups.map((g) => (
+            <WorklistGroup
+              key={g.key}
+              groupKey={g.key}
+              label={g.label}
+              dot={g.dot}
+              count={g.n}
+              failed={g.isFailed}
+              to={g.to}
+              onOpen={onOpen}
+              summary={count(g.n, 'รายการ')}
+              rows={g.list?.map(g.toRow) ?? null}
             />
           ))}
+        </Panel>
+
+        <div className="grid gap-[18px]">
+          {ticketsReady ? (
+            <Panel
+              flush
+              data-testid="in-transit-panel"
+              title="กำลังขนส่ง"
+              actions={<span className="text-xs font-semibold text-text-muted">{inTransit.length}</span>}
+            >
+              {inTransit.length === 0 ? (
+                <p className="m-0 flex items-center gap-2 px-5 py-3 text-sm text-text-muted mobile:px-3.5">
+                  <Icon name="truck" size={16} />
+                  ไม่มีสินค้าระหว่างขนส่งตอนนี้
+                </p>
+              ) : inTransit.map((ticket) => {
+                const status = fulfilmentStatusLabel(ticket.fulfillmentStatus);
+                return (
+                  <button
+                    key={ticket.id}
+                    type="button"
+                    onClick={() => navigate(`/import/deals/${ticket.id}`)}
+                    className="flex w-full items-center justify-between gap-3 border-0 border-t border-border-subtle bg-transparent px-5 py-3 text-left text-text first:border-t-0 hover:bg-surface-hover mobile:min-h-[44px] mobile:px-3.5"
+                  >
+                    <span className="min-w-0">
+                      <strong className="block truncate text-sm text-text">{ticket.customerName || ticket.title}</strong>
+                      <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
+                    </span>
+                    <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  </button>
+                );
+              })}
+            </Panel>
+          ) : null}
+
+          {queueReady && withCeo.length > 0 ? (
+            <Panel
+              flush
+              data-testid="ceo-waiting-panel"
+              title="รอ CEO ตั้งราคา"
+              actions={<span className="text-xs font-semibold text-text-muted">{withCeo.length}</span>}
+            >
+              {withCeo.map((pr) => (
+                <div key={pr.id} data-testid={`ceo-waiting-row-${pr.id}`} className="flex items-center justify-between gap-3 border-t border-border-subtle px-5 py-2 first:border-t-0 mobile:px-3.5">
+                  <div className="min-w-0">
+                    <strong className="block truncate text-sm font-bold text-text">{pcrName(pr)}</strong>
+                    <span className="block truncate text-xs text-text-muted">{[pr.requestCode, pr.ticketCode].filter(Boolean).join(' · ')}</span>
+                  </div>
+                  <StatusBadge tone="info">รอ CEO</StatusBadge>
+                </div>
+              ))}
+            </Panel>
+          ) : null}
         </div>
-      </Panel>
-
-      <Panel
-        title="สิ่งที่ต้องทำ"
-        actions={activeBucket ? (
-          <Button type="button" variant="text" onClick={() => setActiveBucket(null)}>ล้างตัวกรอง</Button>
-        ) : null}
-        className="!p-0 overflow-hidden"
-      >
-        {loading ? (
-          <p className="px-4 py-6 text-sm text-text-muted">กำลังโหลดงานของฝ่ายนำเข้า…</p>
-        ) : filteredRows.length === 0 ? (
-          <EmptyState
-            icon="check"
-            title="ไม่มีงานที่ต้องดำเนินการตอนนี้"
-            description={activeBucket ? 'ลองล้างตัวกรองเพื่อดูงานอื่น' : 'งานของฝ่ายนำเข้าทั้งหมดดำเนินการครบแล้ว'}
-          />
-        ) : (
-          <div className="flex flex-col">
-            {filteredRows.map(({ ticket, action }) => (
-              <WorklistRow key={ticket.id} ticket={ticket} action={action} navigate={navigate} />
-            ))}
-          </div>
-        )}
-      </Panel>
-
-      {/* "คิวของฉัน" used to sit beside this panel — a two-row launcher into
-          /pricing-requests and /procurement, described in its own comment as
-          "the two workspaces the worklist above feeds into". /procurement is
-          gone (owner ruling 2026-08-11, see AppShell.jsx), and the surviving
-          row duplicated a permanent sidebar item, so the whole panel went
-          rather than leaving a one-row shortcut list behind. */}
-      <Panel title="กำลังขนส่ง" flush>
-        {inTransit.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-text-muted">ไม่มีสินค้าระหว่างขนส่งตอนนี้</p>
-        ) : (
-          <div className="flex flex-col">
-            {inTransit.map((ticket) => {
-              const status = fulfilmentStatusLabel(ticket.fulfillmentStatus);
-              return (
-                <button
-                  key={ticket.id}
-                  type="button"
-                  onClick={() => navigate(`/import/deals/${ticket.id}`)}
-                  className="flex items-center justify-between gap-3 border-0 border-t border-border-subtle bg-transparent px-4 py-3 text-left text-text first:border-t-0 hover:bg-surface-hover"
-                >
-                  <span className="min-w-0">
-                    <strong className="block truncate text-sm text-text">{ticket.customerName || ticket.title}</strong>
-                    <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
-                  </span>
-                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </Panel>
+      </div>
     </PageStack>
   );
 }

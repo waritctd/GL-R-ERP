@@ -1,264 +1,171 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Bento Grid · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (spans follow the fixed bucket importance order, never the data; every tile shows a real count and amount) */
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Panel, PageStack } from '../../components/common/Layout.jsx';
-import { SkeletonCard, SkeletonText } from '../../components/common/Skeleton.jsx';
-import { STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
-import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { cn } from '../../utils/cn.js';
-import { formatMoney, formatThaiDate, greetingName, ticketStatusLabel } from '../../utils/format.js';
-import { accountMoneyBucket, nextAccountAction } from '../tickets/accountActions.js';
-import { dedupeById, rowAmount, useAccountTickets } from '../finance/accountTickets.js';
+import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
+import { accountMoneyBucket, awaitingGoodsForFinalPayment, nextAccountAction } from '../tickets/accountActions.js';
+import { dedupeById, useAccountTickets } from '../finance/accountTickets.js';
+import { moneyMilestoneOf } from '../finance/moneyMilestone.js';
+import { Figure, WorklistGroup, WorklistTotal, failed, moneySum } from './dashboardParts.jsx';
 
-// Money-pulse bucket meta (Bento Grid). `span` encodes IMPORTANCE, not data: overdue is the 2x2 lead
-// tile, the deposit step is double-wide, the commission step is the slim closing strip.
-// Order matches the plan's original layout:
-// overdue leads (most urgent), then the two payment-confirmation steps, then
-// close-ready, then the folded commission step. `amountField` picks which
-// ticket money field the bucket sums: the deposit notice total (depositDue)
-// for รอรับมัดจำ, outstanding balance for เกินกำหนด and รอชำระส่วนที่เหลือ,
-// deal value (amountPayable) for the two "money is already secured, just
-// needs admin follow-through" buckets where amountOutstanding is 0 by
-// definition.
-const MONEY_BUCKETS = [
-  { key: 'overdue', label: 'เกินกำหนด', icon: 'triangleAlert', tone: 'rose', amountField: 'amountOutstanding', span: 'col-span-2 row-span-2 nav-drawer:row-span-1' },
-  { key: 'depositPending', label: 'รอรับมัดจำ', icon: 'clock', tone: 'amber', amountField: 'depositDue', span: 'col-span-2 nav-drawer:col-span-1' },
-  { key: 'finalPaymentPending', label: 'รอชำระส่วนที่เหลือ', icon: 'badgeDollar', tone: 'teal', amountField: 'amountOutstanding', live: true },
-  { key: 'closeReady', label: 'รอปิดงาน', icon: 'check', tone: 'indigo', amountField: 'amountPayable', span: 'nav-drawer:col-span-2' },
-  { key: 'commissionPending', label: 'บันทึกใบกำกับ', icon: 'fileText', tone: 'blue', amountField: 'amountPayable', span: 'col-span-4 nav-drawer:col-span-2' },
+// Worklist groups in money order, keyed by nextAccountAction's own key (also the /finance ?action= value).
+// `field` is the ticket money the group sums and each row shows: the balance owed, the deposit notice
+// total, or (close / invoice, where nothing is owed) the deal value.
+const GROUPS = [
+  { key: 'chaseOverdue', label: 'ติดตามชำระ', dot: 'bg-danger', tint: 'bg-danger-bg', field: 'amountOutstanding', sumLabel: 'ค้าง', cta: 'danger' },
+  { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', dot: 'bg-warning', field: 'depositDue', sumLabel: 'มัดจำ', cta: 'success' },
+  { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', dot: 'bg-accent', field: 'amountOutstanding', sumLabel: 'ค้าง', cta: 'success' },
+  { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', dot: 'bg-primary', field: 'amountPayable', sumLabel: 'มูลค่าดีล', cta: 'primary' },
+  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ', dot: 'bg-info', field: 'amountPayable', sumLabel: 'มูลค่าดีล', cta: 'text' },
 ];
 
-const CTA_VARIANT = {
-  confirmDeposit: 'success',
-  confirmFinalPayment: 'success',
-  chaseOverdue: 'danger',
-  confirmCloseReady: 'primary',
-  recordInvoiceCommission: 'text',
-};
+const money = (value) => (value == null ? '—' : formatMoney(value));
+const dueTime = (t) => (t.dueDate ? new Date(t.dueDate).getTime() : Infinity);
+const owed = (t) => Number(t.amountOutstanding ?? 0);
+
+function rowMeta(key, t) {
+  if (key === 'chaseOverdue') return `${t.code} · เกินกำหนด${t.dueDate ? ` · ครบ ${formatThaiDate(t.dueDate)}` : ''}`;
+  if (key === 'confirmCloseReady') return `${t.code} · ชำระครบแล้ว`;
+  if (key === 'recordInvoiceCommission') return `${t.code} · ปิดงานแล้ว · รอบันทึกใบกำกับ`;
+  const step = moneyMilestoneOf(t.salesStage);
+  return step ? `${t.code} · ขั้น ${step.index} ${step.label}` : t.code;
+}
 
 /**
- * Account (ฝ่ายบัญชี) role-scoped landing: money pulse + "สิ่งที่ต้องทำ"
- * worklist, mirrors ImportOverview's conveyor-pulse pattern but keyed on
- * money buckets instead of pipeline stages. See docs/role-scoped-views.md.
- *
- * KNOWN DATA GAP (documented, not silently worked around — see
- * accountActions.js's own doc comment and CommissionPage.jsx's identical
- * note above its own eligibleTickets fetch): the account role's server-side
- * ticket-list scope (TicketRepository.appendRoleScope / mockApi's
- * accountListScopeIncludes) only ever returns deals with a payment action
- * pending (DEPOSIT_NOTICE_ISSUED/AWAITING_FINAL_PAYMENT) or an overdue
- * balance — never a close-ready or CLOSED_PAID deal (both have
- * amountOutstanding = 0 by definition, so neither condition is ever true).
- * That scope was a deliberate, reviewed authz decision (handoff 100), not a
- * bug this branch introduces, and per CLAUDE.md this task must never loosen
- * it. Consequence: "รอปิดงาน"/"บันทึกใบกำกับ" below will read 0 under the
- * current backend scope even when such deals exist — the salesStage=
- * CLOSED_PAID query is kept anyway (mirrors CommissionPage's own
- * "eligibleTickets" picker) so this becomes correct for free if that scope
- * is ever widened. Flagged in the branch's handoff as a follow-up decision
- * for the plan owner, not fixed here.
+ * Account (ฝ่ายบัญชี) landing: a money band, then one worklist grouped by next action. Deals the
+ * final-payment stage gate holds (owed, goods not yet delivered) sit in รอสินค้าเข้า with no button.
+ * Only account reaches this page (App.jsx), so nextAccountAction is called without a viewer role.
  */
 export function AccountOverview({ user, employee, dashboardSummary, showToast }) {
   const navigate = useNavigate();
-
   const { scopedQuery, closedPaidQuery } = useAccountTickets(showToast);
-
-  const loading = scopedQuery.isLoading || closedPaidQuery.isLoading;
 
   const allTickets = useMemo(
     () => dedupeById(scopedQuery.data ?? [], closedPaidQuery.data ?? []),
     [scopedQuery.data, closedPaidQuery.data],
   );
+  // A group waits on its own source: everything but the CLOSED_PAID-only invoice step needs just the scoped list.
+  const sources = (key) => (key === 'recordInvoiceCommission' ? [scopedQuery, closedPaidQuery] : [scopedQuery]);
 
-  const buckets = useMemo(() => {
-    const counts = Object.fromEntries(MONEY_BUCKETS.map((b) => [b.key, { count: 0, amount: 0 }]));
+  const byAction = useMemo(() => {
+    const map = Object.fromEntries(GROUPS.map((g) => [g.key, []]));
     allTickets.forEach((ticket) => {
-      const key = accountMoneyBucket(ticket);
-      if (!key || !counts[key]) return;
-      const meta = MONEY_BUCKETS.find((b) => b.key === key);
-      counts[key].count += 1;
-      counts[key].amount += Number(ticket[meta.amountField] ?? 0);
+      const action = nextAccountAction(ticket, user?.role);
+      if (action) map[action.key].push(ticket);
     });
-    return counts;
-  }, [allTickets]);
-
-  const worklist = useMemo(() => {
-    // GLA-118 (owner ruling 2026-09-20, part A): pass the viewer's role so the CEO (who reaches
-    // this page too) never gets offered confirmDeposit/confirmFinalPayment — those are account
-    // only now, no CEO fallback. See nextAccountAction's own `viewerRole` Javadoc.
-    const rows = allTickets
-      .map((ticket) => ({ ticket, action: nextAccountAction(ticket, user?.role) }))
-      .filter((row) => row.action != null);
-    // Overdue-first, then earliest due date, then largest balance.
-    return rows.sort((a, b) => {
-      if (a.action.urgent !== b.action.urgent) return a.action.urgent ? -1 : 1;
-      const dueA = a.ticket.dueDate ? new Date(a.ticket.dueDate).getTime() : Infinity;
-      const dueB = b.ticket.dueDate ? new Date(b.ticket.dueDate).getTime() : Infinity;
-      if (dueA !== dueB) return dueA - dueB;
-      return rowAmount(b.ticket) - rowAmount(a.ticket);
-    });
+    // Earliest due first, then the largest balance.
+    Object.values(map).forEach((list) => list.sort((a, b) => dueTime(a) - dueTime(b) || owed(b) - owed(a)));
+    return map;
   }, [allTickets, user?.role]);
 
-  // ค้างรับ is /finance's คงค้างรวม (the summary's server total); รับแล้ว is the server's receipts for this Bangkok month.
-  const monthSummary = useMemo(() => ({
-    receivedThisMonth: dashboardSummary?.cashReceivedThisMonth ?? null,
-    outstandingTotal: dashboardSummary?.financeOutstanding ?? null,
-    overdueTotal: allTickets.reduce((sum, t) => sum + (t.overdue ? Number(t.amountOutstanding ?? 0) : 0), 0),
-  }), [allTickets, dashboardSummary?.cashReceivedThisMonth, dashboardSummary?.financeOutstanding]);
+  const held = useMemo(() => allTickets.filter(awaitingGoodsForFinalPayment), [allTickets]);
+
+  const groups = GROUPS.map((g) => {
+    const qs = sources(g.key);
+    const isFailed = qs.some(failed);
+    const loaded = qs.every((q) => q.data !== undefined);
+    const list = byAction[g.key];
+    return { ...g, isFailed, list: loaded ? list : null, count: loaded ? list.length : 0 };
+  });
+  const settled = groups.every((g) => g.list !== null || g.isFailed);
+  const total = groups.reduce((sum, g) => sum + g.count, 0);
+  const allEmpty = groups.every((g) => g.count === 0 && !g.isFailed);
+
+  // Band: the two summary figures arrive with the page; the deal-derived ones wait for the scoped list.
+  const dealsReady = scopedQuery.data !== undefined;
+  const overdueTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'overdue') : null;
+  const depositTickets = dealsReady ? allTickets.filter((t) => accountMoneyBucket(t) === 'depositPending') : null;
+  const earliestDue = overdueTickets?.length ? Math.min(...overdueTickets.map(dueTime)) : Infinity;
+  const received = dashboardSummary?.cashReceivedThisMonth ?? null;
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
   const today = formatThaiDate(new Date().toISOString());
+  const onOpen = (to) => navigate(to);
 
   return (
     <PageStack>
-      <PageHeader
-        title={`สวัสดี ${greetingName(firstName)}`}
-        subtitle={`ภาพรวมการเงิน · ${today} — เงินที่ต้องรับ / ยืนยัน / ปิดงาน`}
-      />
+      <PageHeader title="ภาพรวมการเงิน" subtitle={`สวัสดี, ${greetingName(firstName)} · ${today}`} />
 
-      {loading ? (
-        <div aria-busy="true" aria-label="กำลังโหลดข้อมูลการเงิน">
-          <div className="grid grid-cols-4 gap-3 nav-drawer:grid-cols-2">
-            {MONEY_BUCKETS.map((b) => <SkeletonCard key={b.key} lines={1} />)}
-          </div>
-          <Panel className="mt-[14px]">
-            <SkeletonText lines={5} />
-          </Panel>
-        </div>
-      ) : (
-        <>
-          {/* Money pulse — Bento Grid. 4 columns on desktop, 2 at <=1040px; overdue leads. */}
-          <div className="grid grid-cols-4 gap-3 nav-drawer:grid-cols-2 mobile:gap-2.5">
-            {MONEY_BUCKETS.map((b) => {
-              const bucket = buckets[b.key];
-              const lead = b.key === 'overdue';
-              const alarming = lead && bucket.count > 0;
-              const slim = b.key === 'commissionPending';
-              return (
-                <div
-                  key={b.key}
-                  className={cn(
-                    'grid min-w-0 content-between gap-3 rounded-md border bg-surface p-4 mobile:p-3',
-                    alarming ? 'border-danger-border bg-danger-bg' : 'border-border',
-                    slim && 'grid-cols-[auto_minmax(0,1fr)_auto] items-center content-center',
-                    b.span,
-                  )}
-                >
-                  <div className={cn(STAT_ICON_TILE_CLASSES, '!mb-0', STAT_TONE_CLASSES[b.tone])}>
-                    <Icon name={b.icon} size={lead ? 24 : 21} />
-                  </div>
-                  <div className="grid min-w-0 gap-1">
-                    <div className={cn(
-                      'font-extrabold leading-[1.1] tabular-nums [overflow-wrap:anywhere]',
-                      lead ? 'text-[length:var(--text-4xl)] mobile:text-[length:var(--text-2xl)]' : 'text-[length:var(--text-2xl)] mobile:text-[length:var(--text-lg)]',
-                      alarming ? 'text-danger-dark' : 'text-text',
-                    )}
-                    >
-                      {formatMoney(bucket.amount)}
-                    </div>
-                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-bold text-text">
-                      {b.label}
-                      {/* DESIGN.md "Rationed Teal Rule": teal marks what is live — here,
-                          the one bucket in active money-motion right now. */}
-                      {b.live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" /> : null}
-                    </div>
-                  </div>
-                  <div className={cn('text-[length:var(--text-sm)] font-bold tabular-nums', alarming ? 'text-danger-dark' : 'text-text-muted', slim && 'text-right')}>
-                    {bucket.count} ดีล
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+      <section className="rounded-md border border-border bg-surface p-5 mobile:p-3.5" aria-label="การเงินเดือนนี้">
+        <dl className="m-0 grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-x-6 nav-drawer:grid-cols-2 nav-drawer:gap-y-4 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
+          <Figure lead label="ค้างรับทั้งหมด" value={money(dashboardSummary?.financeOutstanding)} caption="ยอดคงค้างรวม (หน้าการเงิน)" />
+          <Figure
+            danger
+            label="เกินกำหนดชำระ"
+            value={money(overdueTickets && moneySum(overdueTickets, owed))}
+            caption={overdueTickets && overdueTickets.length > 0
+              ? `${overdueTickets.length} ดีล${earliestDue === Infinity ? '' : ` · เก่าสุดครบ ${formatThaiDate(earliestDue)}`}`
+              : 'ไม่มีดีลเกินกำหนด'}
+          />
+          <Figure
+            label="รอรับมัดจำ"
+            value={money(depositTickets && moneySum(depositTickets, (t) => t.depositDue))}
+            caption={`ใบแจ้งมัดจำที่ออกแล้ว ${depositTickets?.length ?? 0} ใบ`}
+          />
+          <Figure
+            label="รับแล้ว (เดือนนี้)"
+            value={money(received)}
+            caption={received > 0 ? 'เงินที่บัญชียืนยันรับแล้ว' : 'ยังไม่มีรับเข้าเดือนนี้'}
+          />
+        </dl>
+      </section>
 
-          <div className="grid gap-[18px] items-start grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
-            {/* "สิ่งที่ต้องทำ" money worklist — overdue-first. */}
-            <Panel title="สิ่งที่ต้องทำ" flush>
-              {worklist.length === 0 ? (
-                <div className="flex items-center gap-3 p-5 text-text-muted">
-                  <Icon name="check" size={18} />
-                  <span className="text-sm font-bold">ไม่มีรายการที่ต้องดำเนินการตอนนี้</span>
-                </div>
-              ) : (
-                <div className="flex flex-col">
-                  {worklist.map(({ ticket, action }) => {
-                    const st = ticketStatusLabel(ticket.status);
-                    return (
-                      <div
-                        key={ticket.id}
-                        className="flex items-center justify-between gap-3 border-t border-border px-5 py-3 first:border-t-0 mobile:flex-col mobile:items-stretch mobile:gap-2.5 mobile:p-4"
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-3 mobile:flex-col mobile:items-start mobile:gap-1.5">
-                          <span className={`h-2 w-2 shrink-0 rounded-full ${action.urgent ? 'bg-danger' : 'bg-info'}`} aria-hidden="true" />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <strong className="min-w-0 truncate text-sm font-extrabold text-text">
-                                {ticket.customerName || ticket.title}
-                              </strong>
-                              <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
-                            </div>
-                            <code className="block text-2xs text-text-muted">{ticket.code}</code>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-3 mobile:w-full mobile:justify-between">
-                          <strong className="tabular-nums text-sm text-text">{formatMoney(rowAmount(ticket))}</strong>
-                          <Button
-                            type="button"
-                            variant={CTA_VARIANT[action.key] ?? 'secondary'}
-                            className="mobile:flex-1 mobile:min-h-11"
-                            onClick={() => navigate(action.to)}
-                          >
-                            {action.label}
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Panel>
-
-            {/* Right rail — month money summary + คิวของฉัน link. */}
-            <div className="grid gap-[18px]">
-              <Panel title="สรุปเดือนนี้">
-                <dl className="m-0 grid gap-2.5">
-                  {[
-                    ['รับแล้ว (เดือนนี้)', monthSummary.receivedThisMonth, 'text-success'],
-                    ['ค้างรับ', monthSummary.outstandingTotal, 'text-text'],
-                    ['เกินกำหนด', monthSummary.overdueTotal, 'text-danger'],
-                  ].map(([label, value, tone]) => (
-                    <div key={label} className="flex items-baseline justify-between gap-3">
-                      <dt className="!text-xs !text-text-muted">{label}</dt>
-                      <dd className={`m-0 tabular-nums !text-md !font-extrabold ${tone}`}>{value == null ? '—' : formatMoney(value)}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </Panel>
-
-              <button
-                type="button"
-                onClick={() => navigate('/finance')}
-                className="bg-surface border border-border rounded-md p-4 w-full text-left cursor-pointer flex items-center justify-between gap-3 transition-colors hover:border-primary/50 hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
-              >
-                <span className="flex items-center gap-3">
-                  <span className={cn(STAT_ICON_TILE_CLASSES, '!mb-0', STAT_TONE_CLASSES.indigo)}>
-                    <Icon name="badgeDollar" size={19} />
-                  </span>
-                  <span>
-                    <span className="block !text-sm !font-bold !text-text">คิวของฉัน</span>
-                    <span className="block !text-xs !text-text-muted">งานการเงินทั้งหมด</span>
-                  </span>
-                </span>
-                <Icon name="chevronRight" size={16} className="text-text-faint" />
-              </button>
+      <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
+        <Panel flush title="สิ่งที่ต้องทำ" actions={settled ? <WorklistTotal total={total} /> : null}>
+          {settled && allEmpty ? (
+            <div className="flex items-center gap-3 p-5 text-text-muted">
+              <Icon name="check" size={18} />
+              <span className="text-sm font-bold">ไม่มีรายการที่ต้องดำเนินการตอนนี้</span>
             </div>
-          </div>
-        </>
-      )}
+          ) : groups.map((g) => (
+            <WorklistGroup
+              key={g.key}
+              groupKey={g.key}
+              label={g.label}
+              dot={g.dot}
+              tint={g.tint}
+              count={g.count}
+              failed={g.isFailed}
+              to={`/finance?action=${g.key}`}
+              onOpen={onOpen}
+              summary={`${g.count} ดีล · ${g.sumLabel} ${formatMoney(moneySum(g.list ?? [], (t) => t[g.field]))}`}
+              rows={g.list?.map((t) => ({
+                testId: `worklist-row-${g.key}-${t.id}`,
+                entity: t.customerName || t.title,
+                meta: rowMeta(g.key, t),
+                amount: formatMoney(Number(t[g.field] ?? 0)),
+                ctaLabel: nextAccountAction(t, user?.role).label,
+                ctaVariant: g.cta,
+                to: nextAccountAction(t, user?.role).to,
+              })) ?? null}
+            />
+          ))}
+        </Panel>
+
+        {dealsReady && held.length > 0 ? (
+          <Panel
+            flush
+            data-testid="awaiting-goods-panel"
+            title="รอสินค้าเข้า"
+            actions={<span className="text-xs font-semibold text-text-muted">{held.length} ดีล · {formatMoney(moneySum(held, owed))}</span>}
+          >
+            {held.map((t) => (
+              <div key={t.id} data-testid={`awaiting-goods-row-${t.id}`} className="flex items-center justify-between gap-3 border-b border-border px-5 py-2 mobile:px-3.5">
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm font-bold text-text">{t.customerName || t.title}</strong>
+                  <span className="block truncate text-xs text-text-muted">{rowMeta('hold', t)}</span>
+                </div>
+                <span className="shrink-0 text-sm font-bold tabular-nums text-text">{formatMoney(owed(t))}</span>
+              </div>
+            ))}
+            <p className="m-0 flex items-start gap-2 px-5 py-3 text-xs text-text-muted mobile:px-3.5">
+              <Icon name="lock" size={14} className="mt-0.5 shrink-0" />
+              <span>รับชำระส่วนที่เหลือได้เมื่อดีลถึงขั้น 4 ส่งมอบ</span>
+            </p>
+          </Panel>
+        ) : null}
+      </div>
     </PageStack>
   );
 }

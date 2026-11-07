@@ -49,6 +49,12 @@ export function accountOwesStep(ticket) {
   return nextAccountAction(lifted) != null;
 }
 
+// Owed money that only the final-payment stage gate is holding back (not overdue, so not chased):
+// the landing's รอสินค้าเข้า panel. Shows no action, only that goods are still on the way.
+export function awaitingGoodsForFinalPayment(ticket) {
+  return accountOwesStep(ticket) && nextAccountAction(ticket) == null && finalPaymentDue(ticket);
+}
+
 // Mirrors TicketService#requireClosePrerequisites (the predicate behind
 // closeReady()/canConfirmClose): dual-track deals need FULLY_PAID + a fully
 // delivered fulfilment status + no outstanding balance + the invoice on

@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportOverview } from './ImportOverview.jsx';
 import { api } from '../../api/index.js';
@@ -88,7 +88,12 @@ function renderOverview() {
 }
 
 const group = (key) => screen.getByTestId(`worklist-group-${key}`);
-const findGroup = (key) => screen.findByTestId(`worklist-group-${key}`);
+// Resolves once the group has settled (rows or failed), not merely once its loading skeleton is mounted.
+const findGroup = (key) => waitFor(() => {
+  const el = screen.getByTestId(`worklist-group-${key}`);
+  expect(el.getAttribute('aria-busy')).toBeNull();
+  return el;
+});
 const probe = () => screen.getByTestId('location-probe').textContent;
 const cta = (key, id) => within(screen.getByTestId(`worklist-row-${key}-${id}`)).getByRole('button');
 
@@ -128,7 +133,7 @@ describe('ImportOverview', () => {
       renderOverview();
       await findGroup('import');
       const failed = await screen.findAllByText('โหลดไม่สำเร็จ');
-      expect(failed.map((el) => el.closest('[data-testid^="worklist-group-"]').dataset.testid).sort()).toEqual(['mine', 'pickup']);
+      expect(failed.map((el) => el.closest('[data-testid^="worklist-group-"]').dataset.testid.replace('worklist-group-', '')).sort()).toEqual(['mine', 'pickup']);
       expect(group('import').getAttribute('aria-busy')).toBeNull();
       expect(within(group('import')).getByTestId('worklist-row-import-2')).not.toBeNull();
     });
