@@ -1753,28 +1753,30 @@ export function QuotationEditorPage({ user, showToast }) {
     navigate(`/quotations/${quotationRes.quotation.id}`, { replace: true });
   }
 
-  // "เพิ่ม {customer} เป็นผู้รับเหมาในดีลเดิม": the customer joins the existing deal as a BUYER party
-  // (reusing its party when it already has one: the add then answers 409), and the quotation is
-  // created on that deal for that party.
+  // "เพิ่ม {customer} เป็น{ผู้รับ}ในดีลเดิม": the customer joins the existing deal as a party in the ROLE the
+  // rep picked under ผู้รับใบเสนอราคา (a designer, owner or contractor, not always a contractor), reusing
+  // its party when it already holds that role (the add then answers 409). The server takes the quotation's
+  // recipient from the party, so the role here IS the recipient the document is saved with.
   async function handleAttachCreate() {
     setCreatingDeal(true);
     try {
       const deal = existingDeal;
-      const madeFor = `${deal.id}/${dealForm.customer.id}`;
+      const role = recipientType || 'BUYER';
+      const madeFor = `${deal.id}/${dealForm.customer.id}/${role}`;
       let partyId = attachedPartyIds[madeFor];
       if (!partyId) {
         try {
           const res = await api.tickets.addParty(deal.id, {
-            customerId: dealForm.customer.id, role: 'BUYER', ...(contact?.id ? { contactId: contact.id } : {}),
+            customerId: dealForm.customer.id, role, ...(contact?.id ? { contactId: contact.id } : {}),
           });
           partyId = res?.party?.id;
         } catch (error) {
           if (error?.status !== 409) throw error;
           const res = await api.tickets.parties(deal.id);
-          partyId = (res?.parties ?? []).find((p) => Number(p.customerId) === Number(dealForm.customer.id) && p.role === 'BUYER')?.id;
+          partyId = (res?.parties ?? []).find((p) => Number(p.customerId) === Number(dealForm.customer.id) && p.role === role)?.id;
           if (!partyId) throw error;
         }
-        if (!partyId) throw new Error('เพิ่มผู้รับเหมาในดีลไม่สำเร็จ');
+        if (!partyId) throw new Error('เพิ่มผู้รับใบเสนอราคาในดีลไม่สำเร็จ');
         setAttachedPartyIds((made) => ({ ...made, [madeFor]: partyId }));
       }
       const quotationRes = await api.dealQuotations.create(deal.id, { ...buildUpsertPayload(), partyId });
@@ -2396,6 +2398,7 @@ export function QuotationEditorPage({ user, showToast }) {
                 <ExistingDealNotice
                   deal={existingDeal}
                   customerName={dealForm.customer?.name}
+                  recipientType={recipientType}
                   repName={user?.name}
                   choice={attachChoice}
                   onChoice={(next) => { setAttachChoice(next); setDirty(true); }}

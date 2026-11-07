@@ -111,6 +111,16 @@ function splitInForce(versions) {
   return { inForce, older: newestFirst.filter((v) => v !== inForce) };
 }
 
+const KNOWN_ROLES = ['DESIGNER', 'OWNER', 'BUYER'];
+
+function countRoles(members) {
+  const seen = { DESIGNER: new Set(), OWNER: new Set(), BUYER: new Set() };
+  for (const m of members) {
+    if (seen[m.recipientType]) seen[m.recipientType].add(m.partyId ?? m.customerName ?? m.id);
+  }
+  return Object.fromEntries(KNOWN_ROLES.map((r) => [r, seen[r].size]));
+}
+
 /**
  * The rows in server order, each deal's rows pulled together under a group row placed where its newest row
  * was. Member rows are copied with `inGroup: true`. Older versions are open unless their document key is in
@@ -148,6 +158,9 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
       ticketCode: row.ticketCode,
       projectName: members.find((m) => m.projectName)?.projectName ?? null,
       buyerCount: parties.length,
+      // Who the deal's quotations are for, by role: distinct parties per DESIGNER / OWNER / BUYER. A row whose
+      // recipient was never recorded (UNSPECIFIED, every quotation from before the field existed) counts nowhere.
+      roleCounts: countRoles(members),
       versionCount: members.length,
       decided: members.some((m) => m.partyStatus === 'AWARDED' || m.partyStatus === 'AWARDED_SPLIT'),
       headlineAmount: headline?.grandTotal ?? null,
@@ -186,17 +199,49 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
   return out;
 }
 
-/** What the deal holds, for the header's third line: quotations, contractors, bid state. */
-function groupSummary(row) {
+// Who a quotation is for. Not every quotation goes to a contractor: a designer and the project owner are
+// quoted too, each with its own colour and icon so the role reads at a glance. A quotation whose recipient
+// was never recorded (UNSPECIFIED) gets no chip at all (owner ruling 2026-11-08: "just label the one you can").
+const RECIPIENT_CHIP = {
+  DESIGNER: { label: 'ผู้ออกแบบ', icon: 'pencil', className: 'border-warning-border bg-warning-bg-soft text-warning' },
+  OWNER: { label: 'เจ้าของโครงการ', icon: 'home', className: 'border-transparent bg-phase-4-bg text-phase-4' },
+  BUYER: { label: 'ผู้รับเหมา', icon: 'building', className: 'border-transparent bg-phase-3-bg text-phase-3' },
+};
+
+export function RecipientChip({ role, count = null }) {
+  const chip = RECIPIENT_CHIP[role];
+  if (!chip) return null;
+  return (
+    <span
+      data-testid="quotation-recipient-chip"
+      data-role={role}
+      className={cn('inline-flex min-h-5 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-2xs font-extrabold', chip.className)}
+    >
+      <Icon name={chip.icon} size={11} />
+      {chip.label}
+      {count != null && count > 1 ? <span className="font-bold">{`×${count}`}</span> : null}
+    </span>
+  );
+}
+
+/** What the deal holds, for the header's third line: how many quotations, for whom, and the bid state. */
+function GroupSummary({ row }) {
   const docs = row.documentCount ?? 1;
-  const parts = [`ใบเสนอราคา ${docs} รายการ${row.versionCount > docs ? ` (${row.versionCount} เวอร์ชัน)` : ''}`];
-  if (row.buyerCount > 1) {
-    parts.push(`${row.buyerCount} ผู้รับเหมา`);
-    parts.push(row.decided
-      ? 'บันทึกผลประมูลแล้ว'
-      : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`);
-  }
-  return parts.join(' · ');
+  const counts = row.roleCounts ?? {};
+  const contractors = counts.BUYER ?? 0;
+  return (
+    <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted" data-testid="quotation-group-summary">
+      <span>{`ใบเสนอราคา ${docs} รายการ${row.versionCount > docs ? ` (${row.versionCount} เวอร์ชัน)` : ''}`}</span>
+      {KNOWN_ROLES.filter((r) => counts[r]).map((r) => <RecipientChip key={r} role={r} count={counts[r]} />)}
+      {contractors > 1 ? (
+        <span>
+          {row.decided
+            ? 'บันทึกผลประมูลแล้ว'
+            : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 // The deal is the container: its label leads ("ดีล DL-…" with the deal icon), the project is the title, and
@@ -223,7 +268,7 @@ function GroupRowContent({ row }) {
       <strong className="min-w-0 text-md font-extrabold leading-snug text-text [overflow-wrap:anywhere]">
         {row.projectName ?? 'ไม่ระบุโครงการ'}
       </strong>
-      <span className="text-xs text-text-muted" data-testid="quotation-group-summary">{groupSummary(row)}</span>
+      <GroupSummary row={row} />
     </span>
   );
 }
@@ -270,7 +315,8 @@ function PartyChipLine({ row }) {
   const chip = partyStatusLabel(row.partyStatus);
   return (
     <span className="flex flex-wrap items-center gap-1.5">
-      {row.partyStatus && !row.isOlderVersion ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
+      {!row.isOlderVersion ? <RecipientChip role={row.recipientType} /> : null}
+      {row.partyStatus && !row.isOlderVersion && row.recipientType === 'BUYER' ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
       {row.partyHeadline && !row.isOlderVersion ? <span className="text-2xs font-bold text-warning-dark">★ ยอดหลัก</span> : null}
       <VersionControls row={row} />
     </span>
@@ -293,7 +339,7 @@ const COLUMNS = [
   },
   {
     key: 'customer',
-    header: 'ลูกค้า / โครงการ',
+    header: 'ลูกค้า / ผู้รับใบเสนอราคา',
     searchAccessor: (row) => (row.isGroup ? row.searchText : `${row.customerName ?? ''} ${row.projectName ?? ''}`),
     // <span>, NOT <div>, and that is load-bearing rather than a style preference. styles.css
     // clips on the CELL — `.data-row > td` is `white-space: nowrap; text-overflow: ellipsis` — and
