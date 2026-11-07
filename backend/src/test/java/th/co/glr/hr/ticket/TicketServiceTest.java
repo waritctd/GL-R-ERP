@@ -1472,7 +1472,8 @@ class TicketServiceTest {
 
     @Test
     void confirmFinalPayment_byAccount_completesPaymentTrack() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED",
+            DealStage.DELIVERY_SCHEDULING, null);
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
         when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
             new BigDecimal("1000.00"));
@@ -1484,6 +1485,40 @@ class TicketServiceTest {
             eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
         verify(ticketRepo).advancePaymentStatus(
             10L, DepositPolicy.REQUIRED, "AWAITING_FINAL_PAYMENT", PaymentTrack.FULLY_PAID);
+    }
+
+    // Owner ruling 2026-11-07: รับชำระส่วนที่เหลือ is closed until the deal finished money-milestone 3
+    // (PROCUREMENT), i.e. reached DELIVERY_SCHEDULING or later. Generic RECORD_PAYMENT stays ungated.
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} @ {1}: FINAL_PAYMENT hidden, confirmFinalPayment 409")
+    @org.junit.jupiter.params.provider.CsvSource({
+        "DEPOSIT_PAID,ORDER_RECEIVED,REQUIRED",
+        "DEPOSIT_PAID,DEPOSIT_RECEIVED,REQUIRED",
+        "DEPOSIT_PAID,PROCUREMENT,REQUIRED",
+        "AWAITING_FINAL_PAYMENT,PROCUREMENT,REQUIRED",
+        "CUSTOMER_CONFIRMED,ORDER_RECEIVED,WAIVED",
+        "CUSTOMER_CONFIRMED,PROCUREMENT,NOT_REQUIRED"
+    })
+    void finalPayment_beforeDeliveryScheduling_isHiddenAndRefused(String paymentStatus, String stage, String policy) {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), paymentStatus, "SHIPPING",
+            stage, null, DealLifecycle.ACTIVE, policy);
+
+        assertThat(actionCodes(10L, accountActor)).doesNotContain("FINAL_PAYMENT");
+        assertConflict(() -> service.confirmFinalPayment(10L, accountActor));
+        verify(ticketRepo, never()).insertPaymentReceipt(anyLong(), anyString(), any(), anyLong(), any(), any(), any(), any());
+        verify(ticketRepo, never()).advancePaymentStatus(anyLong(), anyString(), anyString(), any());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} @ {1}: FINAL_PAYMENT offered")
+    @org.junit.jupiter.params.provider.CsvSource({
+        "DEPOSIT_PAID,DELIVERY_SCHEDULING",
+        "DEPOSIT_PAID,DELIVERED",
+        "AWAITING_FINAL_PAYMENT,DELIVERY_SCHEDULING",
+        "AWAITING_FINAL_PAYMENT,DELIVERED"
+    })
+    void finalPayment_atDeliverySchedulingOrLater_isStillOffered(String paymentStatus, String stage) {
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), paymentStatus, "SHIPPING", stage, null);
+
+        assertThat(actionCodes(10L, accountActor)).contains("FINAL_PAYMENT");
     }
 
     @Test
@@ -1501,7 +1536,9 @@ class TicketServiceTest {
 
     @Test
     void confirmFinalPayment_fromDepositPaidBeforeGoodsReceived_isAllowed() {
-        stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", "SHIPPING");
+        // Goods still shipping, but the deal has finished milestone 3 (S18 DELIVERY_SCHEDULING).
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "SHIPPING",
+            DealStage.DELIVERY_SCHEDULING, null);
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
         when(ticketRepo.sumPaid(10L)).thenReturn(new BigDecimal("500.00"), new BigDecimal("500.00"),
             new BigDecimal("1000.00"));
@@ -2395,7 +2432,8 @@ class TicketServiceTest {
      */
     @Test
     void actions_neverOffersFinalPaymentToCeo_onlyToAccount() {
-        stubTicketWithTracks(52L, 1L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED");
+        stubDeal(52L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "AWAITING_FINAL_PAYMENT", "GOODS_RECEIVED",
+            DealStage.DELIVERY_SCHEDULING, null);
 
         assertThat(actionCodes(52L, ceoActor)).doesNotContain("FINAL_PAYMENT");
         assertThat(actionCodes(52L, accountActor)).contains("FINAL_PAYMENT");

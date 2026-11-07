@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deal Party Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700;800&display=swap">
+<style>
+/* Layout: the real GL&R shell (dark sidebar ≥1041px, light workspace) with four screens
+   switched by hash. Tokens mirror frontend/src/index.css so the mock reads as the real app.
+   The app is light-only by design, so this page commits to that one look. */
+:root {
+  --font-sans: 'Sarabun', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-2xs: 11px; --text-xs: 12px; --text-sm: 13px; --text-md: 14px; --text-lg: 16px; --text-xl: 22px;
+  --radius-sm: 3px; --radius-md: 8px; --radius-lg: 20px; --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(15,23,42,.03);
+  --shadow-md: 0 18px 44px rgba(2,6,23,.28);
+  --color-primary: #4f46e5; --color-primary-hover: #6366f1; --color-primary-bg: #e0e7ff;
+  --color-success-dark: #15803d; --color-success-bg: #dcfce7; --color-success-border: #a7f3d0;
+  --color-warning: #b45309; --color-warning-bg: #fef3c7; --color-warning-bg-soft: #fffbeb; --color-warning-border: #fbbf24;
+  --color-danger: #dc2626; --color-danger-dark: #b91c1c; --color-danger-bg: #fee2e2; --color-danger-border: #fecaca;
+  --color-info: #1d4ed8; --color-info-dark: #4338ca; --color-info-bg: #dbeafe; --color-info-bg-alt: #eef2ff; --color-info-border: #bfdbfe;
+  --color-link: #2563eb; --color-ring: #2563eb;
+  --color-phase-3: #4f46e5; --color-phase-3-bg: #eef2ff; --color-phase-4: #0f766e; --color-phase-4-bg: #ccfbf1;
+  --color-bg: #eef1f6; --color-surface: #fff; --color-surface-muted: #f8fafc; --color-surface-subtle: #f1f5f9;
+  --color-text: #0f172a; --color-text-secondary: #334155; --color-text-muted: #5c6b80; --color-icon-muted: #475569;
+  --color-border: #e6eaf0; --color-border-strong: #d9e0ea; --color-border-input: #dfe5ee; --color-border-subtle: #e2e8f0;
+  --color-sidebar-bg: #0b1220; --color-sidebar-text: #cbd5e1; --color-faint: #94a3b8;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-sans); font-size: var(--text-md); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: var(--color-link); }
+button { font: inherit; cursor: pointer; }
+code { font-family: var(--font-mono); }
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--color-ring); border-radius: var(--radius-sm); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Prototype chrome */
+.proto-bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--color-sidebar-bg); color: var(--color-sidebar-text); padding-block: 8px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--color-sidebar-bg); }
+.proto-bar .tag { font-size: var(--text-2xs); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--color-faint); }
+.proto-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.proto-tabs a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px; border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 700; color: var(--color-sidebar-text); text-decoration: none; border: 1px solid rgba(255,255,255,.14); }
+.proto-tabs a[aria-current="page"] { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+
+/* App shell */
+.shell { display: grid; grid-template-columns: 1fr; min-height: calc(100% - 48px); }
+.sidebar { display: none; background: var(--color-sidebar-bg); color: var(--color-sidebar-text); padding: 20px 14px; }
+.brand { display: flex; flex-direction: column; gap: 2px; padding: 0 10px 18px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 14px; }
+.brand strong { color: #fff; font-size: var(--text-lg); letter-spacing: .02em; }
+.brand small { color: var(--color-faint); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .1em; }
+.nav-group { font-size: var(--text-2xs); font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--color-faint); padding: 14px 10px 6px; }
+.nav-item { display: flex; justify-content: space-between; align-items: center; padding: 9px 10px; border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: 600; color: var(--color-sidebar-text); text-decoration: none; }
+.nav-item.active { background: rgba(255,255,255,.08); color: #fff; box-shadow: inset 3px 0 0 var(--color-ring); }
+.nav-item small { color: var(--color-faint); font-weight: 500; font-size: var(--text-2xs); }
+.workspace { min-width: 0; }
+.topbar { height: 56px; display: flex; align-items: center; gap: 12px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.topbar .crumb { font-size: var(--text-sm); color: var(--color-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .crumb b { color: var(--color-text); }
+.avatar { margin-left: auto; width: 32px; height: 32px; border-radius: 50%; background: var(--color-primary-bg); color: var(--color-info-dark); font-weight: 800; font-size: var(--text-xs); display: grid; place-items: center; flex-shrink: 0; }
+.page { padding-block: 16px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 12px; max-width: 1180px; }
+.screen[hidden] { display: none !important; }
+
+/* Primitives (mirror StatusBadge, Button, cards) */
+.status-badge { display: inline-flex; align-items: center; justify-content: center; gap: 5px; width: fit-content; min-height: 26px; padding: 3px 10px; border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 800; white-space: nowrap; }
+.status-success { background: var(--color-success-bg); color: var(--color-success-dark); }
+.status-warning { background: var(--color-warning-bg); color: var(--color-warning); }
+.status-danger { background: var(--color-danger-bg); color: var(--color-danger-dark); }
+.status-neutral { background: var(--color-surface-subtle); color: var(--color-icon-muted); }
+.status-info { background: var(--color-info-bg); color: var(--color-info); }
+.status-indigo { background: var(--color-info-bg-alt); color: var(--color-info-dark); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 14px; border-radius: var(--radius-md); border: 1px solid transparent; font-size: var(--text-sm); font-weight: 700; text-decoration: none; }
+.btn-primary { background: var(--color-primary); color: #fff; }
+.btn-primary:hover { background: var(--color-primary-hover); }
+.btn-secondary { background: var(--color-surface); color: var(--color-icon-muted); border-color: var(--color-border-input); }
+.btn-danger { background: var(--color-surface); color: var(--color-danger); border-color: var(--color-danger-border); }
+.btn-sm { min-height: 32px; padding: 0 10px; font-size: var(--text-xs); }
+.card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--color-border); }
+.card-head h2 { margin: 0; font-size: var(--text-md); font-weight: 800; }
+.card-head .hint { font-size: var(--text-xs); color: var(--color-text-muted); }
+.eyebrow { font-size: var(--text-2xs); font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--color-text-muted); }
+.money { font-variant-numeric: tabular-nums; font-weight: 800; }
+.page-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.page-title h1 { margin: 0; font-size: var(--text-xl); font-weight: 800; }
+.page-title p { margin: 2px 0 0; font-size: var(--text-xs); color: var(--color-text-muted); }
+
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; }
+.filter-bar .pill { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 12px; border-radius: var(--radius-pill); border: 1px solid var(--color-border); background: var(--color-surface); font-size: var(--text-xs); font-weight: 700; color: var(--color-text-secondary); }
+.filter-bar .pill.on { background: var(--color-primary-bg); border-color: var(--color-primary); color: var(--color-info-dark); }
+.filter-bar .pill .n { background: var(--color-surface-subtle); border-radius: var(--radius-pill); padding: 0 6px; font-size: var(--text-2xs); color: var(--color-text-muted); }
+.filter-bar .pill.on .n { background: rgba(79,70,229,.15); color: inherit; }
+.chip { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 0 8px; border-radius: var(--radius-pill); font-size: var(--text-2xs); font-weight: 800; border: 1px solid transparent; }
+.chip-buyer { background: var(--color-phase-3-bg); color: var(--color-phase-3); }
+.chip-owner { background: var(--color-phase-4-bg); color: var(--color-phase-4); }
+.chip-designer { background: var(--color-warning-bg-soft); color: var(--color-warning); border-color: var(--color-warning-border); }
+.chip-outline { background: var(--color-surface); border-color: var(--color-border-strong); color: var(--color-text-secondary); }
+.headline-star { color: var(--color-warning); font-size: var(--text-2xs); font-weight: 800; }
+/* Screen 1: the real list is a table on desktop; phone collapses each row to the app's card */
+.qtable-wrap { overflow: hidden; }
+.qtable { width: 100%; border-collapse: collapse; }
+.qtable th { text-align: left; font-size: var(--text-xs); font-weight: 600; color: var(--color-text-muted); padding: 12px 16px; background: var(--color-surface-muted); border-bottom: 1px solid var(--color-border); }
+.qtable th.r, .qtable td.r { text-align: right; }
+.qtable td { padding: 14px 16px; border-bottom: 1px solid var(--color-border); vertical-align: middle; font-size: var(--text-md); }
+.qtable tr:last-child td { border-bottom: 0; }
+.qtable td strong { display: block; font-weight: 800; line-height: 1.3; }
+.qtable td .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; font-size: var(--text-xs); }
+.qtable td .sub.muted { color: var(--color-text-muted); }
+.qtable .num { font-family: var(--font-mono); font-size: var(--text-xs); }
+.qtable .money { font-size: var(--text-md); }
+.qtable tr.dim td { color: var(--color-text-muted); }
+.qtable tr.dim strong { color: var(--color-text-secondary); }
+.qtable tr.grp td { padding: 6px 16px; background: var(--color-info-bg-alt); border-bottom: 1px solid var(--color-info-border); box-shadow: inset 3px 0 0 var(--color-primary); }
+.grp-in { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: var(--text-xs); color: var(--color-text-secondary); }
+.grp-in .name { font-weight: 800; font-size: var(--text-sm); color: var(--color-info-dark); }
+.grp-in .meta { color: var(--color-text-muted); }
+.grp-in .deal-link { margin-left: auto; font-weight: 700; }
+.chip-won { background: var(--color-success-bg); color: var(--color-success-dark); }
+@media (max-width: 639px) {
+  .qtable, .qtable tbody, .qtable tr, .qtable td { display: block; }
+  .qtable thead { display: none; }
+  .qtable-wrap { background: transparent; border: 0; box-shadow: none; }
+  .qtable tr { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); margin-bottom: 8px; padding: 12px 16px; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+  .qtable tr.grp { background: var(--color-info-bg-alt); border-color: var(--color-info-border); display: block; padding: 8px 12px; }
+  .qtable tr.grp td { box-shadow: none; background: transparent; }
+  .qtable td { padding: 0; border: 0; }
+  .qtable td[data-l="เลขที่"] { grid-column: 1; grid-row: 1; }
+  .qtable td[data-l="สถานะ"] { grid-column: 2; grid-row: 1; justify-self: end; }
+  .qtable td[data-l="ลูกค้า"] { grid-column: 1 / -1; grid-row: 2; margin-top: 6px; }
+  .qtable td[data-l="พนักงานขาย"], .qtable td[data-l="วันที่"] { font-size: var(--text-xs); color: var(--color-text-muted); grid-row: 3; }
+  .qtable td[data-l="พนักงานขาย"] { grid-column: 1; }
+  .qtable td[data-l="วันที่"] { grid-column: 2; justify-self: end; }
+  .qtable td[data-l="ยอดรวม"] { grid-column: 1 / -1; grid-row: 4; text-align: left; margin-top: 2px; }
+  .qtable td[data-l="วันที่"]::before { content: "· "; }
+}
+
+/* Screen 2: deal page, same blocks as TicketDetailPage */
+.crumbs { display: flex; gap: 8px; font-size: var(--text-xs); color: var(--color-text-muted); }
+.crumbs a { font-weight: 600; text-decoration: none; }
+.dh { overflow: hidden; }
+.dh-strip { height: 22px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.dh-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+.dh-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.dh-bar code { background: var(--color-surface-subtle); border-radius: 4px; padding: 3px 8px; font-size: var(--text-xs); color: var(--color-text-muted); }
+.dh-bar h1 { margin: 0; font-size: var(--text-xl); font-weight: 800; flex: 1; min-width: 10rem; overflow-wrap: anywhere; }
+.btn-icon { width: 42px; min-height: 42px; padding: 0; }
+.dh-acts { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.dh-acts .cta { min-height: 42px; padding: 0 18px; font-size: var(--text-md); box-shadow: 0 4px 12px rgba(79,70,229,.28); }
+@media (max-width: 639px) { .dh-acts { width: 100%; margin-left: 0; } .dh-acts .cta { flex: 1; min-height: 46px; } }
+.dh-meta { margin: 0; font-size: var(--text-xs); color: var(--color-text-muted); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.dh-meta b { color: var(--color-text-secondary); }
+.dh-chips { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+.dh-chips dt { font-size: var(--text-2xs); font-weight: 700; color: var(--color-text-muted); }
+.dh-chips dd { margin: 4px 0 0; font-size: var(--text-sm); min-width: 0; }
+.dh-chips dd .status-badge { white-space: normal; }
+.banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--color-info-border); background: #eff6ff; border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: 700; color: var(--color-info); }
+.banner svg { flex-shrink: 0; }
+.banner span { flex: 1; min-width: 0; }
+.banner .more { margin-left: auto; letter-spacing: .1em; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; border-top: 1px solid var(--color-border); padding: 0 12px; }
+.tabs a { display: flex; flex-direction: column; gap: 1px; padding: 10px 12px; text-decoration: none; color: var(--color-text-secondary); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs a b { font-size: var(--text-sm); font-weight: 700; }
+.tabs a small { font-size: var(--text-2xs); color: var(--color-text-muted); }
+.tabs a[aria-selected="true"] { color: var(--color-info); border-bottom-color: var(--color-info); }
+.tabs a[aria-selected="true"] b { color: var(--color-info); }
+.pipe { padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 14px; }
+.pipe-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pipe-head h2 { margin: 0; font-size: var(--text-md); font-weight: 800; }
+.pipe-head a { font-size: var(--text-xs); font-weight: 700; text-decoration: none; }
+.pipe-body { display: grid; grid-template-columns: 48px 1fr; gap: 14px; align-items: start; padding-left: 12px; }
+.pipe-num { width: 48px; height: 48px; border-radius: var(--radius-md); background: var(--color-ring); color: #fff; font-size: var(--text-lg); font-weight: 800; display: grid; place-items: center; }
+.pipe-txt { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-xs); color: var(--color-text-secondary); min-width: 0; }
+.pipe-txt strong { font-size: var(--text-lg); font-weight: 800; color: var(--color-text); }
+.pipe-bar { height: 6px; border-radius: 3px; background: var(--color-border-subtle); margin: 6px 0 2px; overflow: hidden; }
+.pipe-bar i { display: block; height: 100%; background: var(--color-ring); border-radius: 3px; }
+.pipe-next { margin: 0; font-size: var(--text-sm); padding-left: 12px; }
+.card-title { display: flex; align-items: center; gap: 10px; color: var(--color-icon-muted); }
+.card-title h2 { margin: 0; font-size: var(--text-sm); font-weight: 800; color: var(--color-text); }
+.card-title small { display: block; font-size: var(--text-2xs); color: var(--color-text-muted); }
+.card-head { justify-content: space-between; }
+.head-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.kv { display: grid; grid-template-columns: 1fr; padding: 4px 16px 10px; }
+.kv > div { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--color-border-subtle); font-size: var(--text-sm); }
+.kv > div:last-child { border-bottom: 0; }
+.kv > div > span { color: var(--color-text-muted); }
+.kv > div > b { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+.kv.two-col { gap: 0 32px; }
+.card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 0 16px 16px; }
+.muted { color: var(--color-text-muted); font-weight: 500; }
+.small { font-size: var(--text-xs); }
+.two { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.danger { background: #fef2f2; border: 1px solid var(--color-danger-border); border-radius: var(--radius-md); padding: 14px 16px; color: var(--color-danger-dark); display: flex; flex-direction: column; gap: 6px; }
+.danger b { font-size: var(--text-sm); }
+.danger p { margin: 0; font-size: var(--text-xs); }
+.danger .acts { display: flex; gap: 8px; margin-top: 4px; }
+.bid-wrap { overflow: hidden; }
+.bids { width: 100%; border-collapse: collapse; }
+.bids th { text-align: left; font-size: var(--text-xs); font-weight: 600; color: var(--color-text-muted); padding: 10px 16px; background: var(--color-surface-muted); border-bottom: 1px solid var(--color-border); }
+.bids th.r, .bids td.r { text-align: right; }
+.bids td { padding: 12px 16px; border-bottom: 1px solid var(--color-border); vertical-align: middle; font-size: var(--text-sm); }
+.bids tr:last-child td { border-bottom: 0; }
+.bids td strong { display: block; font-weight: 800; }
+.bids td .sub { display: block; margin-top: 3px; font-size: var(--text-xs); color: var(--color-text-muted); }
+.bids td.r .sub { text-align: right; }
+.bids .num { font-family: var(--font-mono); font-size: var(--text-xs); }
+.bids .acts { white-space: nowrap; }
+.bids .acts .btn + .btn { margin-left: 6px; }
+.chip-warn { background: var(--color-warning-bg); color: var(--color-warning); }
+@media (max-width: 639px) {
+  .bids, .bids tbody, .bids tr, .bids td { display: block; }
+  .bids thead { display: none; }
+  .bids tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; padding: 12px 16px; border-bottom: 1px solid var(--color-border); }
+  .bids td { padding: 0; border: 0; }
+  .bids td[data-l="ผู้รับเหมา"] { grid-column: 1 / -1; }
+  .bids td[data-l="ใบเสนอราคา"] { grid-column: 1; }
+  .bids td[data-l="ยอดรวม"] { grid-column: 2; text-align: right; }
+  .bids td[data-l="ผล"] { grid-column: 1; }
+  .bids td.acts { grid-column: 1 / -1; text-align: left; margin-top: 4px; }
+  .bids .acts .btn { min-height: 40px; }
+}
+@media (min-width: 640px) {
+  .dh-chips { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .two { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .kv.two-col { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (min-width: 1041px) {
+  .dh-chips { grid-template-columns: repeat(5, minmax(0,1fr)); }
+}
+
+/* Screen 3: award dialog */
+.scrim { position: fixed; inset: 0; background: rgba(2,6,23,.55); z-index: 30; display: grid; place-items: end center; padding: 0; }
+.dialog { background: var(--color-surface); width: 100%; max-width: 560px; max-height: calc(100% - env(safe-area-inset-top, 0px) - 24px); overflow: auto; border-radius: var(--radius-lg) var(--radius-lg) 0 0; box-shadow: var(--shadow-md); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.dialog header { padding: 18px 20px 10px; display: flex; flex-direction: column; gap: 4px; }
+.dialog header h2 { margin: 0; font-size: var(--text-lg); font-weight: 800; }
+.dialog header p { margin: 0; font-size: var(--text-sm); color: var(--color-text-muted); }
+.dialog .body { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 14px; }
+.note { display: grid; grid-template-columns: 18px 1fr; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--color-info-bg-alt); border: 1px solid var(--color-info-border); font-size: var(--text-sm); color: var(--color-info-dark); }
+.note svg { width: 18px; height: 18px; margin-top: 2px; }
+.fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.fieldset legend { font-size: var(--text-sm); font-weight: 800; padding: 0; margin-bottom: 4px; }
+.fieldset .hint { font-size: var(--text-xs); color: var(--color-text-muted); }
+.other { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.other .name { font-weight: 800; font-size: var(--text-sm); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.other .name span { font-weight: 500; color: var(--color-text-muted); font-size: var(--text-xs); }
+.radios { display: flex; flex-wrap: wrap; gap: 6px; }
+.radios label { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: var(--radius-pill); border: 1px solid var(--color-border-strong); font-size: var(--text-xs); font-weight: 700; color: var(--color-text-secondary); cursor: pointer; background: var(--color-surface); }
+.radios input { accent-color: var(--color-primary); margin: 0; }
+.radios label:has(input:checked) { background: var(--color-primary-bg); border-color: var(--color-primary); color: var(--color-info-dark); }
+.split-hint { font-size: var(--text-xs); color: var(--color-warning); background: var(--color-warning-bg-soft); border: 1px solid var(--color-warning-border); border-radius: var(--radius-md); padding: 8px 10px; }
+.dialog footer { position: sticky; bottom: 0; background: var(--color-surface); border-top: 1px solid var(--color-border); padding: 12px 20px; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.dialog footer .btn { min-height: 44px; }
+
+.winners { display: flex; flex-direction: column; gap: 8px; }
+.win { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface); cursor: pointer; min-height: 56px; }
+.win input { width: 20px; height: 20px; margin: 0; accent-color: var(--color-primary); }
+.win-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.win-body b { font-size: var(--text-sm); font-weight: 800; overflow-wrap: anywhere; }
+.win-body .sub { font-size: var(--text-xs); color: var(--color-text-muted); }
+.win-body .num { font-family: var(--font-mono); }
+.win .money { font-size: var(--text-sm); }
+.win:has(input:checked) { border-color: var(--color-success-border); background: #f0fdf4; box-shadow: inset 3px 0 0 var(--color-success-dark); }
+.split-list { display: flex; flex-direction: column; gap: 6px; }
+.split-row { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-sm); background: var(--color-surface); }
+.split-row input { margin: 0; accent-color: var(--color-primary); }
+.split-row b { display: block; font-weight: 800; }
+.split-row .sub { font-size: var(--text-xs); color: var(--color-text-muted); }
+.split-row code { font-size: var(--text-xs); background: var(--color-surface-subtle); padding: 2px 8px; border-radius: 4px; color: var(--color-text-secondary); white-space: nowrap; }
+.split-row:has(input:checked) code { background: var(--color-primary-bg); color: var(--color-info-dark); }
+.note.warn { background: var(--color-warning-bg-soft); border-color: var(--color-warning-border); color: var(--color-warning); }
+
+/* Screen 4: editor prompt */
+.form-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: var(--text-sm); font-weight: 700; color: var(--color-text-secondary); }
+.field .input { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px; border: 1px solid var(--color-border-input); border-radius: var(--radius-md); background: var(--color-surface); font-size: var(--text-lg); }
+.field .input.done { border-color: var(--color-success-border); }
+.field .input .tick { color: var(--color-success-dark); font-weight: 800; font-size: var(--text-xs); }
+.existing { border: 1px solid var(--color-info-border); background: var(--color-info-bg-alt); border-radius: var(--radius-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.existing .t { font-weight: 800; font-size: var(--text-sm); color: var(--color-info-dark); display: flex; gap: 8px; align-items: center; }
+.existing .t svg { width: 16px; height: 16px; flex-shrink: 0; }
+.existing .deal { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: var(--text-xs); color: var(--color-text-secondary); background: var(--color-surface); border-radius: var(--radius-md); padding: 8px 10px; border: 1px solid var(--color-border); }
+.existing .deal code { background: var(--color-surface-subtle); padding: 1px 6px; border-radius: 4px; }
+.existing .choices { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.choice { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: start; padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--color-border-strong); background: var(--color-surface); cursor: pointer; }
+.choice input { margin: 3px 0 0; accent-color: var(--color-primary); }
+.choice b { font-size: var(--text-sm); display: block; }
+.choice span { font-size: var(--text-xs); color: var(--color-text-muted); }
+.choice:has(input:checked) { border-color: var(--color-primary); box-shadow: 0 0 0 1px var(--color-primary); }
+.result { font-size: var(--text-xs); color: var(--color-text-muted); }
+
+@media (min-width: 640px) {
+  .deal-header dl { grid-template-columns: repeat(4, minmax(0,1fr)); }
+  .summary-rows { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .existing .choices { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .scrim { place-items: center; padding: 24px; }
+  .dialog { border-radius: var(--radius-lg); }
+}
+@media (min-width: 1041px) {
+  .shell { grid-template-columns: 232px 1fr; }
+  .sidebar { display: block; }
+}
+@media (prefers-reduced-motion: no-preference) { .btn, .pill, .choice { transition: background-color .15s ease-out, border-color .15s ease-out; } }
+</style>
+
+<div class="proto-bar">
+  <span class="tag">ต้นแบบ · ข้อมูลตัวอย่าง</span>
+  <nav class="proto-tabs" aria-label="หน้าจอต้นแบบ">
+    <a href="#list" data-screen="list">1 · รายการใบเสนอราคา</a>
+    <a href="#deal" data-screen="deal">2 · หน้าดีล</a>
+    <a href="#award" data-screen="award">3 · บันทึกผลประมูล</a>
+    <a href="#new" data-screen="new">4 · สร้างใบเสนอราคา</a>
+  </nav>
+</div>
+
+<div class="shell">
+  <aside class="sidebar" aria-label="เมนูหลัก">
+    <div class="brand"><strong>GL&amp;R ERP</strong><small>Sales workspace</small></div>
+    <div class="nav-group">งานขาย</div>
+    <a class="nav-item" href="#deal" data-nav="deal">ดีล <small>Deals</small></a>
+    <a class="nav-item" href="#list" data-nav="list">ใบเสนอราคา <small>Quotations</small></a>
+    <a class="nav-item" href="#list">คำขอราคา <small>Pricing requests</small></a>
+    <a class="nav-item" href="#list">ลูกค้า <small>Customers</small></a>
+    <div class="nav-group">การเงิน</div>
+    <a class="nav-item" href="#list">ใบแจ้งหนี้ <small>Invoices</small></a>
+    <a class="nav-item" href="#list">ค่าคอมมิชชั่น <small>Commission</small></a>
+  </aside>
+
+  <main class="workspace">
+    <div class="topbar">
+      <span class="crumb" id="crumb">งานขาย / <b>ใบเสนอราคา</b></span>
+      <span class="avatar" aria-label="สมหญิง ใจดี">สญ</span>
+    </div>
+
+    <!-- ========== Screen 1: quotation list, table with a group row per project ========== -->
+    <section class="page screen" id="screen-list" aria-labelledby="h-list">
+      <div class="page-title">
+        <div><h1 id="h-list">ใบเสนอราคา</h1><p>ใบเสนอราคาที่รอการอนุมัติ และทั้งหมด · โครงการเดียวกันอยู่ใต้ดีลเดียว</p></div>
+        <a class="btn btn-primary btn-sm" href="#new">+ สร้างใบเสนอราคา</a>
+      </div>
+      <div class="card filter-bar" role="tablist" aria-label="สถานะใบเสนอราคา">
+        <span class="eyebrow">สถานะ</span>
+        <span class="pill on">ทั้งหมด <span class="n">491</span></span>
+        <span class="pill">รออนุมัติ <span class="n">0</span></span>
+        <span class="pill">ฉบับแก้ <span class="n">11</span></span>
+        <span class="pill">ยกเลิก <span class="n">73</span></span>
+        <span class="pill">อนุมัติแล้ว <span class="n">257</span></span>
+        <span class="pill" style="margin-left:auto">จัดกลุ่มตามโครงการ <span class="n">เปิด</span></span>
+      </div>
+      <div class="card qtable-wrap">
+        <table class="qtable">
+          <thead>
+            <tr><th>เลขที่</th><th>ลูกค้า / โครงการ</th><th>พนักงานขาย</th><th class="r">ยอดรวม</th><th>สถานะ</th><th>วันที่</th></tr>
+          </thead>
+          <tbody>
+            <tr class="grp"><td colspan="6"><div class="grp-in"><span class="name">S26 HOTEL</span><span class="chip chip-buyer">3 ผู้รับเหมา</span><span class="meta">รอผลประมูล · ยอดหลัก ฿512,900.00</span><a class="deal-link" href="#deal">ดีล DL-2026-0280 →</a></div></td></tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0270-4</a></td>
+              <td data-l="ลูกค้า"><strong>บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด</strong><span class="sub"><span class="chip chip-outline">เสนอราคาแล้ว</span><span class="headline-star">★ ยอดหลัก</span></span></td>
+              <td data-l="พนักงานขาย">สมหญิง ใจดี</td>
+              <td data-l="ยอดรวม" class="r money">฿512,900.00</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">28 ต.ค. 2569</td>
+            </tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0280-2</a></td>
+              <td data-l="ลูกค้า"><strong>บจก.สมมติ ก่อสร้าง</strong><span class="sub"><span class="chip chip-outline">เสนอราคาแล้ว</span></span></td>
+              <td data-l="พนักงานขาย">สมหญิง ใจดี</td>
+              <td data-l="ยอดรวม" class="r money">฿491,400.03</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">6 พ.ย. 2569</td>
+            </tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0340-1</a></td>
+              <td data-l="ลูกค้า"><strong>บจก.เดโม เอ็นจิเนียริ่ง</strong><span class="sub"><span class="chip chip-outline">กำลังต่อรอง</span></span></td>
+              <td data-l="พนักงานขาย">สมหญิง ใจดี</td>
+              <td data-l="ยอดรวม" class="r money">฿491,400.03</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">6 พ.ย. 2569</td>
+            </tr>
+
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0339-2</a></td>
+              <td data-l="ลูกค้า"><strong>บริษัท ตัวอย่าง เฮ้าส์ จำกัด</strong><span class="sub muted">บ้านคุณตัวอย่าง</span></td>
+              <td data-l="พนักงานขาย">สมชาย รักงาน</td>
+              <td data-l="ยอดรวม" class="r money">฿95,439.46</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">6 พ.ย. 2569</td>
+            </tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0339-1</a></td>
+              <td data-l="ลูกค้า"><strong>บริษัท ตัวอย่าง เฮ้าส์ จำกัด</strong><span class="sub muted">บ้านคุณตัวอย่าง</span></td>
+              <td data-l="พนักงานขาย">สมชาย รักงาน</td>
+              <td data-l="ยอดรวม" class="r money">฿95,439.46</td>
+              <td data-l="สถานะ"><span class="status-badge status-neutral">ฉบับที่ไม่ได้ใช้แล้ว</span></td>
+              <td data-l="วันที่">6 พ.ย. 2569</td>
+            </tr>
+
+            <tr class="grp"><td colspan="6"><div class="grp-in"><span class="name">บ้านพักอาศัย คุณตัวอย่าง</span><span class="chip chip-buyer">2 ผู้รับเหมา</span><span class="chip chip-outline">ตัดสินแล้ว</span><span class="meta">รับคำสั่งซื้อ</span><a class="deal-link" href="#deal">ดีล DL-2026-0183 →</a></div></td></tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0183-1</a></td>
+              <td data-l="ลูกค้า"><strong>บริษัท ทดสอบ เดคอร์ จำกัด</strong><span class="sub"><span class="chip chip-won">ได้งาน</span></span></td>
+              <td data-l="พนักงานขาย">สมชาย รักงาน</td>
+              <td data-l="ยอดรวม" class="r money">฿188,250.00</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">12 ต.ค. 2569</td>
+            </tr>
+            <tr class="dim">
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0193-1</a></td>
+              <td data-l="ลูกค้า"><strong>บริษัท ตัวอย่าง อินทีเรีย จำกัด</strong><span class="sub"><span class="chip chip-outline">ไม่ได้งาน · ผู้รับเหมารายอื่นได้งาน</span></span></td>
+              <td data-l="พนักงานขาย">สมชาย รักงาน</td>
+              <td data-l="ยอดรวม" class="r money">฿201,000.00</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">14 ต.ค. 2569</td>
+            </tr>
+
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0337-1</a></td>
+              <td data-l="ลูกค้า"><strong>บริษัท ตัวอย่าง เดคคอเรชั่น จำกัด</strong><span class="sub muted">SK65 House</span></td>
+              <td data-l="พนักงานขาย">สุดา ขยัน</td>
+              <td data-l="ยอดรวม" class="r money">฿18,673.92</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">6 พ.ย. 2569</td>
+            </tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0336-1</a></td>
+              <td data-l="ลูกค้า"><strong>DEMO CONSULTANT CO., LTD.</strong><span class="sub muted">คอนโด ตัวอย่าง ตึก 1-5</span></td>
+              <td data-l="พนักงานขาย">ปราง ตั้งใจ</td>
+              <td data-l="ยอดรวม" class="r money">฿2,047,578.75</td>
+              <td data-l="สถานะ"><span class="status-badge status-success">อนุมัติแล้ว</span></td>
+              <td data-l="วันที่">6 พ.ย. 2569</td>
+            </tr>
+            <tr>
+              <td data-l="เลขที่"><a class="num" href="#deal">QT-2026-0301-1</a></td>
+              <td data-l="ลูกค้า"><strong>หจก.ตัวอย่าง ซัพพลาย</strong><span class="sub muted">SHOWROOM BANGNA</span></td>
+              <td data-l="พนักงานขาย">สมหญิง ใจดี</td>
+              <td data-l="ยอดรวม" class="r money">฿74,300.00</td>
+              <td data-l="สถานะ"><span class="status-badge status-warning">รออนุมัติ</span></td>
+              <td data-l="วันที่">5 พ.ย. 2569</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ========== Screen 2: deal page (mirrors TicketDetailPage) ========== -->
+    <section class="page screen" id="screen-deal" aria-labelledby="h-deal" hidden>
+      <nav class="crumbs" aria-label="breadcrumb"><a href="#list">ดีล</a><span>›</span><span>DL-2026-0280</span></nav>
+
+      <div class="card dh">
+        <div class="dh-strip"></div>
+        <div class="dh-body">
+          <div class="dh-bar">
+            <code>DL-2026-0280</code>
+            <span class="status-badge status-success">กำลังดำเนินการ</span>
+            <h1 id="h-deal">GRAND RIVER HOTEL</h1>
+            <div class="dh-acts"><button class="btn btn-primary cta" type="button" data-open-award><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>บันทึกผลประมูล</button>
+            <button class="btn btn-secondary btn-icon" type="button" aria-label="รีเฟรช" title="รีเฟรช"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg></button></div>
+          </div>
+          <p class="dh-meta">สร้างโดย <b>สมหญิง ใจดี</b> · 20 ต.ค. 2569 <span class="sep">เจ้าหน้าที่นำเข้าที่ดูแล <b>คุณนำเข้า พานิช</b></span> <span class="sep">อัปเดตล่าสุด <b>6 พ.ย. 2569</b></span></p>
+          <dl class="dh-chips">
+            <div><dt>ขั้นตอนดีล</dt><dd><span class="status-badge status-info">เสนอราคาผู้ซื้อ/ผู้รับเหมา</span></dd></div>
+            <div><dt>ลูกค้าผู้ชำระเงิน</dt><dd><span class="status-badge status-warning">รอผลประมูล · 3 ราย</span></dd></div>
+            <div><dt>การชำระเงิน</dt><dd><span class="status-badge status-neutral">ยังไม่ถึงขั้นชำระ</span></dd></div>
+            <div><dt>การนำเข้า</dt><dd><span class="status-badge status-neutral">ยังไม่ออกใบขอซื้อ</span></dd></div>
+            <div><dt>มูลค่าดีล</dt><dd class="money">฿512,900.00 <span class="headline-star">★ ยอดหลัก</span></dd></div>
+          </dl>
+          <div class="banner">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            <span>รอผลประมูล · ผู้รับเหมา 3 ราย เสนอราคาแล้ว · กด "บันทึกผลประมูล" เมื่อทราบผล เลือกผู้ชนะได้มากกว่า 1 ราย</span>
+            <button class="btn btn-secondary btn-icon more" type="button" aria-label="เมนูเพิ่มเติม">···</button>
+          </div>
+        </div>
+        <div class="tabs" role="tablist">
+          <a role="tab" aria-selected="true" href="#deal"><b>ดีล</b><small>ข้อมูลดีล</small></a>
+          <a role="tab" href="#deal"><b>สินค้าและราคา</b><small>รายการและราคา</small></a>
+          <a role="tab" href="#deal"><b>เอกสาร</b><small>เอกสารของดีล</small></a>
+          <a role="tab" href="#deal"><b>การเงิน</b><small>ยอดชำระ</small></a>
+          <a role="tab" href="#deal"><b>จัดซื้อ-ส่งมอบ</b><small>นำเข้าและจัดส่ง</small></a>
+          <a role="tab" href="#deal"><b>ประวัติ</b><small>กิจกรรมและไฟล์แนบ</small></a>
+        </div>
+      </div>
+
+      <div class="card pipe">
+        <div class="pipe-head"><h2>สถานะดีล (Pipeline)</h2><a href="#deal">ดูขั้นตอนทั้งหมด (11 ขั้น)</a></div>
+        <div class="pipe-body">
+          <span class="pipe-num">8</span>
+          <div class="pipe-txt">
+            <strong>เสนอราคาผู้ซื้อ/ผู้รับเหมา</strong>
+            <span>ผู้รับผิดชอบ: ฝ่ายขาย</span>
+            <span>เส้นทาง · ผู้ออกแบบนำ · 11 ขั้น</span>
+            <span>เฟส 3 จาก 5 · ประมูลและเจรจา</span>
+            <div class="pipe-bar"><i style="width:36%"></i></div>
+            <span class="muted">อยู่ในขั้นนี้ 17 วัน</span>
+          </div>
+        </div>
+        <p class="pipe-next">ถัดไป: <b>9. เจรจา ติดตามใบสั่งซื้อ/มัดจำ</b> · ย้ายให้อัตโนมัติเมื่อบันทึกผลประมูล</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg><div><h2>ผู้รับเหมาที่เสนอราคา</h2><small>ผู้ซื้อ · หนึ่งแถวต่อผู้รับเหมา ใบเสนอราคาแยกกัน นับใน pipeline ครั้งเดียว</small></div></div>
+          <button class="btn btn-secondary btn-sm" type="button">+ เพิ่มผู้รับเหมา</button>
+        </div>
+        <div class="bid-wrap">
+          <table class="bids">
+            <thead><tr><th>ผู้รับเหมา</th><th>ใบเสนอราคา</th><th class="r">ยอดรวม</th><th>ผล</th><th class="r"><span class="sr-only">การทำงาน</span></th></tr></thead>
+            <tbody>
+              <tr>
+                <td data-l="ผู้รับเหมา"><strong>บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด</strong><span class="sub">คุณประมูล หนึ่ง · 08x-xxx-xxxx</span></td>
+                <td data-l="ใบเสนอราคา"><a class="num" href="#list">QT-2026-0270-4</a><span class="sub"><span class="status-badge status-success">อนุมัติแล้ว</span></span></td>
+                <td data-l="ยอดรวม" class="r"><span class="money">฿512,900.00</span><span class="sub headline-star">★ ยอดหลัก</span></td>
+                <td data-l="ผล"><span class="chip chip-outline">เสนอราคาแล้ว</span></td>
+                <td class="r acts"><a class="btn btn-secondary btn-sm" href="#new">แก้ไขราคา</a></td>
+              </tr>
+              <tr>
+                <td data-l="ผู้รับเหมา"><strong>บจก.สมมติ ก่อสร้าง</strong><span class="sub">คุณประมูล สอง</span></td>
+                <td data-l="ใบเสนอราคา"><a class="num" href="#list">QT-2026-0280-2</a><span class="sub"><span class="status-badge status-success">อนุมัติแล้ว</span></span></td>
+                <td data-l="ยอดรวม" class="r"><span class="money">฿491,400.03</span></td>
+                <td data-l="ผล"><span class="chip chip-outline">เสนอราคาแล้ว</span></td>
+                <td class="r acts"><a class="btn btn-secondary btn-sm" href="#new">แก้ไขราคา</a></td>
+              </tr>
+              <tr>
+                <td data-l="ผู้รับเหมา"><strong>บจก.เดโม เอ็นจิเนียริ่ง</strong><span class="sub">คุณประมูล สาม · 08x-xxx-xxxx</span></td>
+                <td data-l="ใบเสนอราคา"><a class="num" href="#list">QT-2026-0340-1</a><span class="sub"><span class="status-badge status-success">อนุมัติแล้ว</span></span></td>
+                <td data-l="ยอดรวม" class="r"><span class="money">฿491,400.03</span></td>
+                <td data-l="ผล"><span class="chip chip-warn">กำลังต่อรอง</span></td>
+                <td class="r acts"><a class="btn btn-secondary btn-sm" href="#new">แก้ไขราคา</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="two">
+        <div class="card">
+          <div class="card-head"><div class="card-title"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg><div><h2>วันสำคัญ</h2><small>Key dates</small></div></div></div>
+          <div class="kv">
+            <div><span>ติดตามครั้งถัดไป</span><b>12 พ.ย. 2569</b></div>
+            <div><span>ติดตามล่าสุด</span><b>6 พ.ย. 2569</b></div>
+            <div><span>ใบเสนอราคาหมดอายุ</span><b>20 พ.ย. 2569 (QT-2026-0270-4)</b></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><div class="card-title"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-5-6.3"/></svg><div><h2>ผู้เกี่ยวข้อง</h2><small>ทีมและคู่ค้าในดีล</small></div></div></div>
+          <div class="kv">
+            <div><span>เจ้าของดีล</span><b>สมหญิง ใจดี</b></div>
+            <div><span>ผู้ร่วมดีล</span><b>สมชาย รักงาน <small class="muted">(ผ่าน บจก.เดโม)</small></b></div>
+            <div><span><span class="chip chip-designer">ผู้ออกแบบ</span></span><b>บริษัท ดีไซน์ สตูดิโอ ตัวอย่าง จำกัด</b></div>
+            <div><span><span class="chip chip-owner">เจ้าของโครงการ</span></span><b>บริษัท ริเวอร์ โฮลดิ้ง จำกัด</b></div>
+            <div><span>บัญชี</span><b>ยังไม่ระบุ</b></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>การติดตามดีล</h2><span class="status-badge status-success" style="margin-left:auto">✓ พร้อมเลื่อนสถานะ</span></div>
+        <div class="kv two-col">
+          <div><span>Win probability</span><b>50% <small class="muted">(ค่าเริ่มต้นตามขั้นดีล)</small></b></div>
+          <div><span>วันติดตามครั้งถัดไป</span><b>12 พ.ย. 2569</b></div>
+          <div><span>ช่องทางเข้าดีล</span><b>ผู้ออกแบบนำ</b></div>
+          <div><span>ประมูล</span><b>ต้องประมูล</b></div>
+        </div>
+        <div class="card-foot"><button class="btn btn-secondary" type="button">✎ แก้ไขข้อมูลติดตาม</button><span class="muted small">ช่อง ดีไซเนอร์ / เจ้าของโครงการ / ผู้ซื้อ เดิม ย้ายไปอยู่ใน "ผู้เกี่ยวข้อง" และ "ผู้รับเหมาที่เสนอราคา"</span></div>
+      </div>
+
+      <div class="danger">
+        <b>จัดการดีล</b>
+        <p>การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
+        <div class="acts"><button class="btn btn-danger" type="button">เสียงาน</button><button class="btn btn-danger" type="button">ยกเลิก</button></div>
+      </div>
+    </section>
+
+    <!-- ========== Screen 4: quotation editor, project already has a deal ========== -->
+    <section class="page screen" id="screen-new" aria-labelledby="h-new" hidden>
+      <div class="page-title"><div><h1 id="h-new">สร้างใบเสนอราคา</h1><p>เลือกโครงการที่มีดีลอยู่แล้ว ระบบเสนอให้ต่อดีลเดิม</p></div></div>
+      <form class="card form-card" id="new-form">
+        <div class="field">
+          <label for="f-customer">ลูกค้า *</label>
+          <div class="input done" id="f-customer" tabindex="0" role="button" aria-label="ลูกค้า: บจก.เดโม เอ็นจิเนียริ่ง"><span>บจก.เดโม เอ็นจิเนียริ่ง</span><span class="tick">✓</span></div>
+        </div>
+        <div class="field">
+          <label for="f-project">โครงการ *</label>
+          <div class="input done" id="f-project" tabindex="0" role="button" aria-label="โครงการ: GRAND RIVER HOTEL"><span>GRAND RIVER HOTEL</span><span class="tick">✓</span></div>
+        </div>
+
+        <div class="existing" role="group" aria-labelledby="existing-t">
+          <div class="t" id="existing-t">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+            โครงการนี้มีดีลของคุณอยู่แล้ว
+          </div>
+          <div class="deal">
+            <code>DL-2026-0280</code>
+            <span>GRAND RIVER HOTEL</span>
+            <span>สมหญิง ใจดี</span>
+            <span class="chip chip-buyer">2 ผู้รับเหมา</span>
+            <span>บริษัท ตัวอย่าง คอนสตรัคชั่น · บจก.สมมติ ก่อสร้าง</span>
+            <span class="status-badge status-indigo">S8 เสนอราคาผู้ซื้อ</span>
+          </div>
+          <div class="choices">
+            <label class="choice"><input type="radio" name="attach" id="attach-existing" value="existing" checked><span><b>เพิ่ม บจก.เดโม เอ็นจิเนียริ่ง เป็นผู้รับเหมาในดีลเดิม (แนะนำ)</b><span>ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย</span></span></label>
+            <label class="choice"><input type="radio" name="attach" id="attach-new" value="new"><span><b>สร้างดีลใหม่แยกต่างหาก</b><span>ใช้เมื่อเป็นคนละงาน คนละขอบเขต แม้ชื่อโครงการเหมือนกัน</span></span></label>
+          </div>
+          <div class="result" id="attach-result">จะสร้าง QT-2026-0341-1 ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย</div>
+        </div>
+
+        <div class="field">
+          <label for="f-recipient">เสนอแก่ *</label>
+          <div class="radios" id="f-recipient" role="radiogroup" aria-label="เสนอแก่">
+            <label><input type="radio" name="recipient" id="r-designer">ผู้ออกแบบ</label>
+            <label><input type="radio" name="recipient" id="r-owner">เจ้าของโครงการ</label>
+            <label><input type="radio" name="recipient" id="r-buyer" checked>ผู้ซื้อ / ผู้รับเหมา</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-contact">ผู้ติดต่อ</label>
+          <div class="input" id="f-contact" tabindex="0" role="button" aria-label="ผู้ติดต่อ: ยังไม่เลือก"><span style="color:var(--color-text-muted)">เลือกผู้ติดต่อของ บจก.เดโม เอ็นจิเนียริ่ง</span><span class="tick" style="color:var(--color-text-muted)">▾</span></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+          <a class="btn btn-secondary" href="#deal">ยกเลิก</a>
+          <button class="btn btn-primary" type="submit">ไปที่รายการสินค้า →</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<!-- ========== Screen 3: record bid outcome (multi-select winners) ========== -->
+<div class="scrim" id="award" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="award-t">
+    <header>
+      <h2 id="award-t">บันทึกผลประมูล</h2>
+      <p>DL-2026-0280 · GRAND RIVER HOTEL · เลือกผู้รับเหมาที่ได้งาน (เลือกได้มากกว่า 1 ราย)</p>
+    </header>
+    <div class="body">
+      <fieldset class="fieldset">
+        <legend>ผู้รับเหมาที่ได้งาน</legend>
+        <div class="winners" id="winners">
+          <label class="win" data-id="p1" data-name="บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด" data-amt="฿512,900.00">
+            <input type="checkbox" id="w-p1">
+            <span class="win-body"><b>บริษัท ตัวอย่าง คอนสตรัคชั่น จำกัด</b><span class="sub"><span class="num">QT-2026-0270-4</span> · อนุมัติแล้ว · 28 ต.ค. 2569</span></span>
+            <span class="money">฿512,900.00</span>
+          </label>
+          <label class="win" data-id="p2" data-name="บจก.สมมติ ก่อสร้าง" data-amt="฿491,400.03">
+            <input type="checkbox" id="w-p2" checked>
+            <span class="win-body"><b>บจก.สมมติ ก่อสร้าง</b><span class="sub"><span class="num">QT-2026-0280-2</span> · อนุมัติแล้ว · 6 พ.ย. 2569</span></span>
+            <span class="money">฿491,400.03</span>
+          </label>
+          <label class="win" data-id="p3" data-name="บจก.เดโม เอ็นจิเนียริ่ง" data-amt="฿491,400.03">
+            <input type="checkbox" id="w-p3">
+            <span class="win-body"><b>บจก.เดโม เอ็นจิเนียริ่ง</b><span class="sub"><span class="num">QT-2026-0340-1</span> · อนุมัติแล้ว · 6 พ.ย. 2569</span></span>
+            <span class="money">฿491,400.03</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <fieldset class="fieldset" id="split-box" hidden>
+        <legend>ได้งานมากกว่า 1 ราย · แยกดีล</legend>
+        <span class="hint">ใบแจ้งหนี้ มัดจำ และคอมมิชชั่นคิดต่อลูกค้า ระบบจึงแยกเป็นหนึ่งดีลต่อผู้รับเหมาที่ได้งาน ทุกดีลยังอยู่ใต้โครงการเดียวกันและนับผลชนะครั้งเดียว</span>
+        <div class="split-list" id="split-list"></div>
+      </fieldset>
+
+      <fieldset class="fieldset" id="others-box">
+        <legend>ผู้รับเหมาที่ไม่ได้เลือก <span class="muted small" id="others-count"></span></legend>
+        <div class="radios" role="radiogroup" aria-label="ผลของรายที่ไม่ได้เลือก">
+          <label><input type="radio" name="others" id="others-lost" checked>ไม่ได้งาน</label>
+          <label><input type="radio" name="others" id="others-wait">ยังรอผล</label>
+        </div>
+        <div class="radios" role="radiogroup" aria-label="เหตุผลที่ไม่ได้งาน" id="why-group">
+          <label><input type="radio" name="why" id="why-other" checked>ผู้รับเหมารายอื่นได้งาน</label>
+          <label><input type="radio" name="why" id="why-price">ราคา</label>
+          <label><input type="radio" name="why" id="why-lead">ระยะเวลาส่ง</label>
+          <label><input type="radio" name="why" id="why-terms">เงื่อนไขชำระ</label>
+        </div>
+      </fieldset>
+
+      <div class="note" id="outcome-note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+        <div id="outcome-text"></div>
+      </div>
+    </div>
+    <footer>
+      <button class="btn btn-secondary" type="button" data-close-award>ยกเลิก</button>
+      <button class="btn btn-primary" type="button" data-confirm-award id="confirm-btn">บันทึกผล</button>
+    </footer>
+  </div>
+</div>
+
+<script>
+(function () {
+  var screens = ['list', 'deal', 'new'];
+  var crumbs = { list: 'งานขาย / <b>ใบเสนอราคา</b>', deal: 'งานขาย / ดีล / <b>DL-2026-0280</b>', new: 'งานขาย / ใบเสนอราคา / <b>สร้างใหม่</b>' };
+  var award = document.getElementById('award');
+  function show(name) {
+    var screen = name === 'award' ? 'deal' : name;
+    if (screens.indexOf(screen) < 0) screen = 'list';
+    screens.forEach(function (s) { document.getElementById('screen-' + s).hidden = s !== screen; });
+    document.getElementById('crumb').innerHTML = crumbs[screen];
+    document.querySelectorAll('.proto-tabs a').forEach(function (a) {
+      if (a.dataset.screen === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    document.querySelectorAll('[data-nav]').forEach(function (a) { a.classList.toggle('active', a.dataset.nav === screen); });
+    award.hidden = name !== 'award';
+    window.scrollTo(0, 0);
+  }
+  function route() { show((location.hash || '#list').slice(1)); }
+  window.addEventListener('hashchange', route);
+  route();
+
+  document.querySelectorAll('[data-open-award]').forEach(function (b) { b.addEventListener('click', function () { location.hash = 'award'; }); });
+  document.querySelectorAll('[data-close-award]').forEach(function (b) { b.addEventListener('click', function () { location.hash = 'deal'; }); });
+  award.addEventListener('click', function (e) { if (e.target === award) location.hash = 'deal'; });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !award.hidden) location.hash = 'deal'; });
+  document.querySelector('[data-confirm-award]').addEventListener('click', function () {
+    var btn = this; btn.textContent = 'บันทึกแล้ว ✓'; btn.disabled = true;
+    setTimeout(function () { btn.textContent = 'บันทึกผล'; btn.disabled = false; location.hash = 'deal'; }, 700);
+  });
+  // Bid outcome: one or more winners; a second winner forks a child deal for its own bill-to
+  var winners = Array.prototype.slice.call(document.querySelectorAll('#winners .win'));
+  var splitBox = document.getElementById('split-box'), splitList = document.getElementById('split-list');
+  var othersBox = document.getElementById('others-box'), othersCount = document.getElementById('others-count');
+  var whyGroup = document.getElementById('why-group'), outcomeText = document.getElementById('outcome-text'), outcomeNote = document.getElementById('outcome-note');
+  var confirmBtn = document.getElementById('confirm-btn');
+  var primaryId = null;
+  function suffix(i) { return String.fromCharCode(65 + i); }
+  function renderOutcome() {
+    var won = winners.filter(function (w) { return w.querySelector('input').checked; });
+    var lost = winners.length - won.length;
+    if (won.length && (!primaryId || !won.some(function (w) { return w.dataset.id === primaryId; }))) primaryId = won[0].dataset.id;
+    splitBox.hidden = won.length < 2;
+    if (won.length >= 2) {
+      var k = 0;
+      splitList.innerHTML = won.map(function (w) {
+        var isP = w.dataset.id === primaryId;
+        var code = isP ? 'DL-2026-0280' : 'DL-2026-0280-' + suffix(k++);
+        return '<label class="split-row"><input type="radio" name="primary" value="' + w.dataset.id + '"' + (isP ? ' checked' : '') +
+          '><span><b>' + w.dataset.name + '</b><span class="sub">' + (isP ? 'ดีลหลัก · เก็บเลขเดิม ประวัติ และเอกสารทั้งหมด' : 'ดีลลูก · ใบเสนอราคาของรายนี้ย้ายตาม') + '</span></span><code>' + code + '</code></label>';
+      }).join('');
+      splitList.querySelectorAll('input[name=primary]').forEach(function (r) { r.addEventListener('change', function () { primaryId = r.value; renderOutcome(); }); });
+    }
+    othersBox.hidden = lost === 0;
+    othersCount.textContent = lost ? '(' + lost + ' ราย)' : '';
+    whyGroup.hidden = !document.getElementById('others-lost').checked;
+    confirmBtn.disabled = won.length === 0;
+    outcomeNote.classList.toggle('warn', won.length === 0);
+    if (!won.length) { outcomeText.textContent = 'ยังไม่ได้เลือกผู้รับเหมาที่ได้งาน · ถ้าแพ้ทั้งโครงการ ให้ใช้ "เสียงาน" ที่ท้ายหน้าดีลแทน'; return; }
+    var wait = document.getElementById('others-wait').checked;
+    var parts = [];
+    won.forEach(function (w, i) {
+      var isP = w.dataset.id === primaryId;
+      parts.push((isP ? 'DL-2026-0280' : 'DL-2026-0280-' + suffix(won.filter(function (x, j) { return j < i && x.dataset.id !== primaryId; }).length)) + ' → ' + w.dataset.name + ' (' + w.dataset.amt + ')');
+    });
+    var html = '<b>ได้งาน ' + won.length + ' ราย</b> · ทุกดีลย้ายไปขั้น S10 รับคำสั่งซื้อ<br>' + parts.join('<br>');
+    if (lost) html += '<br>' + (wait ? 'อีก ' + lost + ' ราย ยังรอผล (ดีลหลักยังเปิดรับผลเพิ่มได้)' : 'อีก ' + lost + ' ราย บันทึกเป็น ไม่ได้งาน');
+    outcomeText.innerHTML = html;
+  }
+  winners.forEach(function (w) { w.querySelector('input').addEventListener('change', renderOutcome); });
+  document.querySelectorAll('input[name=others]').forEach(function (r) { r.addEventListener('change', renderOutcome); });
+  renderOutcome();
+
+  var result = document.getElementById('attach-result');
+  document.querySelectorAll('input[name=attach]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      result.textContent = r.value === 'existing'
+        ? 'จะสร้าง QT-2026-0341-1 ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย'
+        : 'จะสร้างดีลใหม่ DL-2026-0355 และ QT-2026-0341-1 · ดีลนี้จะนับแยกใน pipeline';
+    });
+  });
+  document.getElementById('new-form').addEventListener('submit', function (e) { e.preventDefault(); location.hash = 'deal'; });
+})();
+</script>
+
+</html>

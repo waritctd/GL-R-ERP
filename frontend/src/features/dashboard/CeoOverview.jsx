@@ -1,16 +1,15 @@
-import { memo, useCallback, useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { bangkokMonthStartIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { isManualKind } from '../commissions/commissionRecord.js';
-import { Figure, failed } from './dashboardParts.jsx';
+import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
@@ -56,8 +55,6 @@ function formatWorkDate(value) {
   }).format(date);
 }
 
-const MAX_ROWS = 3;
-
 // Group header dot + the page the group's "ดูทั้งหมด" / "อีก N รายการ" open. Price takes the
 // override colour so the CEO's own pricing decision stands out from the approvals below it.
 const GROUP_META = {
@@ -72,98 +69,6 @@ const GROUP_META = {
   ot: { label: 'OT', dot: 'bg-warning', to: '/employee-requests?tab=ot' },
   leave: { label: 'ลา', dot: 'bg-text-muted', to: '/leave' },
 };
-
-/**
- * One row of a worklist group. Deliberately a plain row (not a whole-row
- * <button>) so the CTA can stay a real, separately-labelled button per domain
- * (ตั้งราคา / ตรวจปิดงาน / อนุมัติ) instead of one generic "ไปที่หน้า" click
- * target — mirrors the QueueCard pattern in PricingRequestQueuePage.jsx (a
- * nested interactive control needs its own element, never a parent <button>).
- */
-function WorklistRow({ row, override, onOpen }) {
-  return (
-    <div data-testid={row.testId} className="flex items-center justify-between gap-3 px-5 py-2 mobile:px-3.5 mobile:py-2.5">
-      <div className="min-w-0">
-        <strong className="block truncate text-sm font-bold text-text">{row.entity}</strong>
-        <span className="block truncate text-xs text-text-muted">{row.meta}</span>
-      </div>
-      <Button
-        type="button"
-        variant={override ? 'primary' : 'secondary'}
-        size="sm"
-        onClick={() => onOpen(row.to)}
-        className={override ? '!border-override !bg-override mobile:min-h-[44px]' : 'mobile:min-h-[44px]'}
-      >
-        {row.ctaLabel}
-      </Button>
-    </div>
-  );
-}
-
-/**
- * One worklist group. `rows` is null while its own query is loading: the group
- * keeps its testid and shows a small skeleton (aria-busy) instead of holding
- * the whole page back. `count` can exceed rows.length (the commission group is
- * ONE row standing in for several records). `failed` means its query errored
- * (after the client's own retry): the group says so instead of loading forever.
- */
-const WorklistGroup = memo(function WorklistGroup({ groupKey, rows, count, failed, onOpen }) {
-  const meta = GROUP_META[groupKey];
-  const override = groupKey === 'price';
-  if (!failed && rows !== null && count === 0) return null;
-  const shown = rows?.slice(0, MAX_ROWS) ?? [];
-  const more = (rows?.length ?? 0) - shown.length;
-  // One root element for both states, so a node already handed out while loading stays the
-  // live group once its rows land.
-  return (
-    <div
-      data-testid={`worklist-group-${groupKey}`}
-      aria-busy={rows === null && !failed ? 'true' : undefined}
-      className={`border-b border-border last:border-b-0 ${override ? 'bg-override/5' : ''}`}
-    >
-      {failed ? (
-        <div className="flex items-center justify-between gap-3 px-5 py-3 mobile:px-3.5">
-          <span className="text-sm font-extrabold text-text">
-            {meta.label} <small className="font-semibold text-danger">โหลดไม่สำเร็จ</small>
-          </span>
-          <Button type="button" variant="text" size="sm" onClick={() => onOpen(meta.to)} className="shrink-0 mobile:min-h-[44px]">
-            ดูทั้งหมด →
-          </Button>
-        </div>
-      ) : rows === null ? (
-        <div className="grid gap-2 px-5 py-3 mobile:px-3.5" role="status" aria-label={`กำลังโหลด${meta.label}`}>
-          <Skeleton width="30%" height={14} />
-          <Skeleton height={36} />
-        </div>
-      ) : (
-        <>
-          <div className="flex items-center justify-between gap-3 px-5 pb-1 pt-3 mobile:px-3.5">
-            <div className="flex min-w-0 items-center gap-2 text-sm font-extrabold text-text">
-              <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${meta.dot}`} />
-              <span>{meta.label}</span>
-              <small className="shrink-0 font-semibold text-text-muted">{count} รายการ</small>
-              {meta.sub ? <small className="truncate font-semibold text-text-muted">· {meta.sub}</small> : null}
-            </div>
-            <Button type="button" variant="text" size="sm" onClick={() => onOpen(meta.to)} className="shrink-0 mobile:min-h-[44px]">
-              ดูทั้งหมด →
-            </Button>
-          </div>
-          {shown.map((row) => (
-            <WorklistRow key={row.testId} row={row} override={override} onOpen={onOpen} />
-          ))}
-          {more > 0 ? (
-            <div className="px-5 pt-0.5 mobile:px-3.5">
-              <Button type="button" variant="text" size="sm" onClick={() => onOpen(meta.to)} className="mobile:min-h-[44px]">
-                อีก {more} รายการ
-              </Button>
-            </div>
-          ) : null}
-          <div className="pb-2" />
-        </>
-      )}
-    </div>
-  );
-});
 
 export function CeoOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
@@ -398,10 +303,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
           title="รอคุณตัดสินใจ"
           actions={
             allLoaded ? (
-              <span className="rounded-full bg-text px-2.5 py-px text-xs font-extrabold text-surface">
-                <span data-testid="worklist-total" aria-hidden="true">{total}</span>
-                <span className="sr-only">รวม {total} รายการ</span>
-              </span>
+              <WorklistTotal total={total} />
             ) : null
           }
         >
@@ -417,8 +319,20 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
               <span className="text-sm font-bold">ไม่มีรายการที่รอการตัดสินใจจากคุณตอนนี้</span>
             </div>
           ) : (
-            groups.map(([key, rows, count, failed]) => (
-              <WorklistGroup key={key} groupKey={key} rows={rows} count={count} failed={failed} onOpen={onOpen} />
+            groups.map(([key, rows, count, isFailed]) => (
+              <WorklistGroup
+                key={key}
+                groupKey={key}
+                label={GROUP_META[key].label}
+                dot={GROUP_META[key].dot}
+                override={key === 'price'}
+                summary={GROUP_META[key].sub ? `${count} รายการ · ${GROUP_META[key].sub}` : `${count} รายการ`}
+                rows={rows}
+                count={count}
+                failed={isFailed}
+                to={GROUP_META[key].to}
+                onOpen={onOpen}
+              />
             ))
           )}
         </Panel>

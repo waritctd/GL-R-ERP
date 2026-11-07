@@ -1795,7 +1795,7 @@ public class TicketService {
         requireActive(s);
         if (!canConfirmFinalPaymentNow(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
+                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
         }
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
@@ -2132,9 +2132,12 @@ public class TicketService {
         // change; see the branch report.
         boolean depositBypassed = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
             && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
-        return "AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
+        // Owner ruling 2026-11-07: closed until money-milestone 3 is done (DELIVERY_SCHEDULING or later).
+        // A null/unknown stage indexes -1, so it fails closed.
+        boolean pastProcurement = DealStage.indexOf(s.salesStage()) >= DealStage.indexOf(DealStage.DELIVERY_SCHEDULING);
+        return pastProcurement && ("AWAITING_FINAL_PAYMENT".equals(s.paymentStatus())
             || "DEPOSIT_PAID".equals(s.paymentStatus())
-            || depositBypassed;
+            || depositBypassed);
     }
 
     // ── Deal pipeline (V50): 14-stage journey on the ticket itself ──────────
@@ -2687,6 +2690,20 @@ public class TicketService {
     }
 
     /**
+     * A direct quotation may not be addressed to a party OFF the deal's route (owner ruling 2026-11-07): 409 with
+     * {@link DealRoute#refusalMessage}, the same sentence a manual move into that stage gets. A channel with no
+     * route (UNSPECIFIED / unknown / null) and a recipient with no stage refuse nothing. Callers gate only
+     * brand-new documents and a CHANGED recipient on a DRAFT; revisions, reorders and the pricing-request path
+     * keep what they have.
+     */
+    public static void requireQuotationRecipientOnRoute(String entryChannel, String recipientType) {
+        String stage = stageForQuotationRecipient(recipientType);
+        if (stage != null && !DealRoute.isOnRoute(entryChannel, stage)) {
+            throw new ApiException(HttpStatus.CONFLICT, DealRoute.refusalMessage(entryChannel, stage));
+        }
+    }
+
+    /**
      * The inverse of {@link #stageForQuotationRecipient}: the recipient a quote stage claims has
      * been quoted, or {@code null} for every stage that claims nothing of the kind.
      *
@@ -2754,7 +2771,9 @@ public class TicketService {
             return;
         }
         // An off-route target is a silent no-op, exactly like a non-forward one above — never a
-        // throw, which would fail an unrelated caller (e.g. quotation creation). Reachable ONLY for
+        // throw, which would fail an unrelated caller. A direct quotation to an off-route party is refused up front
+        // (requireQuotationRecipientOnRoute); what reaches here is the pricing-request path and a deal whose
+        // channel was corrected after the quotation was addressed. Reachable ONLY for
         // party-axis stages: DealRoute.ROUTE_VARIABLE (S4–S8) is the only set an off-route table
         // may contain, so an OPERATIONAL advance (ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT,
         // DELIVERY_SCHEDULING, DELIVERED, CLOSED_PAID) can never vanish here with its fact already

@@ -579,7 +579,12 @@ public final class DealQuotationRequests {
          * name. Optional; null/false has no effect. Ignored on CREATE (nothing to clear).
          */
         Boolean clearContact,
-        @NotEmpty List<@Valid ItemInput> items
+        @NotEmpty List<@Valid ItemInput> items,
+        /** V204 (docs/decisions/deal-party-model.md): the {@code sales.deal_party} this document is for. CREATE
+         * only: the party must belong to the deal; it fixes the recipient (its role), the customer/contact
+         * snapshot (its customer, not the deal's) and the number family. Null keeps the pre-V204 behaviour
+         * (the deal's own customer). Ignored on UPDATE: a document never changes party. */
+        Long partyId
     ) {
         /** The pre-clearContact canonical shape (no {@link #clearContact}) — kept so every existing
          * construction site (tests, mostly) compiles unchanged. Defaults it to null: no clearing. */
@@ -597,7 +602,7 @@ public final class DealQuotationRequests {
                 creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, null, items);
+                orderedByPhone, orderedByEmail, recipientType, null, items, null);
         }
 
         /** The shape without {@link #recipientType} — kept so every
@@ -657,12 +662,20 @@ public final class DealQuotationRequests {
         }
 
         /** Copy with only {@link #recipientType} replaced — every other field unchanged. */
+        /** This request addressed to a deal party (V204). */
+        public UpsertDealQuotationRequest withPartyId(Long newPartyId) {
+            return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent, remainderMode,
+                creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode, documentLanguage, currency,
+                printedByDisplayId, salesRepDisplayId, projectName, omitContactHonorific, fullPaymentTerm, orderedByName,
+                hideProjectName, orderedByPhone, orderedByEmail, recipientType, clearContact, items, newPartyId);
+        }
+
         public UpsertDealQuotationRequest withRecipientType(String newRecipientType) {
             return new UpsertDealQuotationRequest(contactId, deptCode, unitCode, offerDate, depositPercent,
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, newRecipientType, clearContact, items);
+                orderedByPhone, orderedByEmail, newRecipientType, clearContact, items, partyId);
         }
 
         /** Copy with only {@link #hideProjectName} replaced — every other field unchanged. */
@@ -671,7 +684,7 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, newHideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, clearContact, items);
+                orderedByPhone, orderedByEmail, recipientType, clearContact, items, partyId);
         }
 
         /** Copy with only {@link #clearContact} replaced — every other field unchanged. */
@@ -680,7 +693,7 @@ public final class DealQuotationRequests {
                 remainderMode, creditDays, validityDays, validityMode, validityUntil, customerNotes, priceMode,
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, projectName,
                 omitContactHonorific, fullPaymentTerm, orderedByName, hideProjectName,
-                orderedByPhone, orderedByEmail, recipientType, newClearContact, items);
+                orderedByPhone, orderedByEmail, recipientType, newClearContact, items, partyId);
         }
 
         /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept

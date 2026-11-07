@@ -121,6 +121,10 @@ function lastChipSpanClass(count) {
  */
 export function DealStateHeader({
   summary, pricingRequests = [], importRequests, role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false, onMenuOpenChange,
+  // deal-party-model.md: `{ projectName, count }` while the deal has several bidding contractors and
+  // none awarded. The deal's customer_id is then only a placeholder, so the header is titled by the
+  // project and says the bill-to is waiting on the bid. Optional: every other caller is unchanged.
+  awaitingBid = null,
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const stage = dealStageLabel(summary.salesStage, summary.entryChannel);
@@ -151,6 +155,9 @@ export function DealStateHeader({
   const canViewPricingRequests = CAN_VIEW_PRICING_REQUESTS_ROLES.includes(role);
   const chips = [
     { key: 'stage', label: 'ขั้นตอนดีล', value: stage.label, tone: stage.tone },
+    awaitingBid && {
+      key: 'billTo', label: 'ลูกค้าผู้ชำระเงิน', value: `รอผลประมูล · ${awaitingBid.count} ราย`, tone: 'warning',
+    },
     canViewPricingRequests && {
       key: 'pricing',
       label: 'คำขอราคา',
@@ -210,7 +217,7 @@ export function DealStateHeader({
             condensed ? 'text-base' : 'text-xl sm:text-2xl'
           }`}
         >
-          {summary.customerName || summary.title}
+          {awaitingBid?.projectName || summary.customerName || summary.title}
         </h1>
         {condensed && bannerText ? (
           <span className="hidden min-w-0 max-w-[22rem] truncate text-xs font-bold text-info xl:block">{bannerText}</span>
@@ -238,7 +245,7 @@ export function DealStateHeader({
       >
         <div className="flex min-h-0 flex-col gap-4 overflow-hidden mobile:gap-3">
           <div className="min-w-0">
-            {summary.projectName ? (
+            {summary.projectName && !awaitingBid?.projectName ? (
               <p className="m-0 truncate text-sm text-text-muted">{summary.projectName}</p>
             ) : null}
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted sm:gap-4">

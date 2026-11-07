@@ -339,18 +339,6 @@ export function recipientForEntryChannel(entryChannel) {
   return RECIPIENT_FOR_ENTRY_CHANNEL[entryChannel] ?? '';
 }
 
-/** "Off-route recipient -> allow + inline note". `route` is the deal's route as served
- * (`routeForChannel(catalog, channel)` from features/tickets/stageCatalog.js; this module doesn't
- * import it: mockApi imports this file, and stageCatalog imports the api). True only when a
- * recipient is chosen, the route is known (non-empty: an unloaded catalog reads as "no opinion",
- * never "everything off-route"), and the recipient's quote stage is not on it. A UI hint only:
- * nothing is blocked on it, and the server moves no stage from it. */
-export function isRecipientOffRoute(route, recipientCode) {
-  const stage = stageForQuotationRecipient(recipientCode);
-  if (!stage || !Array.isArray(route) || route.length === 0) return false;
-  return !route.some((row) => row?.code === stage);
-}
-
 // ── One pricing route per deal ──────────────────────────────────────────────────────────────────
 // The server refuses a คำขอราคา while a live direct quotation exists (DirectQuotationLocks). The
 // reverse: while the deal has a LIVE pricing request, no direct quotation may be started: the deal
@@ -403,6 +391,51 @@ export function isLiveDirectQuotation(live) {
   return Boolean(live) && LIVE_DIRECT_QUOTATION_STATUSES.has(live.docStatus);
 }
 
+/**
+ * V204 deal parties (docs/decisions/deal-party-model.md): which party a NEW quotation on a deal will
+ * belong to. The named one (`?party=`), else — as DealQuotationService#create defaults it — the deal's
+ * own customer's party, preferring the recipient's role. Null when the parties are not known.
+ */
+export function quotationTargetParty(parties, { partyId = null, customerId = null, recipientType = null } = {}) {
+  if (!Array.isArray(parties)) return null;
+  if (partyId != null) return parties.find((p) => Number(p.id) === Number(partyId)) ?? null;
+  const own = parties.filter((p) => customerId != null && Number(p.customerId) === Number(customerId));
+  return own.find((p) => p.role === recipientType) ?? own[0] ?? null;
+}
+
+/** The live direct quotation of ONE party (the create-time 409 is per party since V204), in the
+ * `{ id, number, docStatus }` shape TicketSummaryDto.liveDirectQuotation carries, or null. */
+export function liveQuotationOfParty(party) {
+  if (!party || party.latestQuotationId == null) return null;
+  const live = { id: party.latestQuotationId, number: party.latestQuotationNumber, docStatus: party.latestQuotationStatus };
+  return isLiveDirectQuotation(live) ? live : null;
+}
+
+/** The quote route in S-order (DESIGNER → OWNER → BUYER). */
+export const QUOTATION_ROUTE = QUOTATION_RECIPIENT_OPTIONS.map((option) => option.code);
+
+function rowBlocksNewDirectQuotation(live, recipientType, dealStatus) {
+  if (!isLiveDirectQuotation(live)) return false;
+  if (dealStatus !== 'draft') return true;
+  const liveIndex = QUOTATION_ROUTE.indexOf(live.recipientType);
+  const nextIndex = QUOTATION_ROUTE.indexOf(recipientType);
+  return !(live.docStatus === 'APPROVED' && liveIndex >= 0 && nextIndex > liveIndex);
+}
+
+/** The newest live row (highest id) that blocks a new quotation to `recipientType`, or null. `live` is one
+ * row or every row the deal holds (the server checks all of them; the deal summary serves only the newest). */
+export function blockingDirectQuotation(live, recipientType, dealStatus = 'draft') {
+  return [live].flat().filter(Boolean)
+    .filter((row) => rowBlocksNewDirectQuotation(row, recipientType, dealStatus))
+    .reduce((newest, row) => (newest == null || (row.id ?? 0) > (newest.id ?? 0) ? row : newest), null);
+}
+
+/** N6 blocks unless every live quotation is APPROVED, addressed to a party strictly EARLIER on the route than
+ * `recipientType`, and the deal is still in 'draft' (no order confirmed yet) — the server's DirectQuotationLocks rule. */
+export function blocksNewDirectQuotation(live, recipientType, dealStatus = 'draft') {
+  return blockingDirectQuotation(live, recipientType, dealStatus) != null;
+}
+
 /** N6's reason, word for word the server's 409: the editor disables บันทึกร่าง with it BEFORE the rep
  * reaches that refusal (DESIGN.md §14: a disabled action says why). */
 function liveDirectQuotationBlockMessage(live) {
@@ -419,6 +452,8 @@ export const CONFIRM_ORDER_FROM_QUOTATION_COPY = Object.freeze({
   tail: (depositPercent) => (depositPercent != null && Number(depositPercent) === 0
     ? 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — ใบเสนอราคานี้ไม่เก็บมัดจำ สั่งสินค้าและส่งมอบได้เลย การดำเนินการนี้ย้อนกลับไม่ได้'
     : 'พร้อมรายการสินค้าตามใบเสนอราคานี้ — จากนั้นออกใบแจ้งรับมัดจำ สั่งสินค้า และส่งมอบได้ตามปกติ การดำเนินการนี้ย้อนกลับไม่ได้'),
+  // The deal's OTHER open direct quotations (DRAFT / PENDING_APPROVAL), which the confirm cancels (empty when none).
+  cancels: (numbers) => (numbers?.length ? `ใบเสนอราคาที่ยังเปิดอยู่ ${numbers.join(', ')} จะถูกยกเลิกอัตโนมัติ` : ''),
 });
 
 // An old-engine quotation that no longer stands (CustomerQuotationRepository#hasLiveQuotation's
@@ -1937,6 +1972,10 @@ export const QUOTATION_CHECK = Object.freeze({
   // One pricing route per deal: the picked deal has a live pricing request, which
   // DealQuotationService#create refuses (409).
   LIVE_PRICING_REQUEST: 'livePricingRequest',
+  // A NEW or CHANGED recipient off the deal's route, which DealQuotationService#create/#update refuse (409,
+  // DealRoute.refusalMessage). The message is that sentence, built from the served catalog
+  // (stageCatalog#recipientRouteRefusal) and passed in, so this module needs no route table.
+  RECIPIENT_OFF_ROUTE: 'recipientOffRoute',
   // ผู้ติดต่อ's Email is optional, so no "missing" check, only this one, for an address that is typed
   // but malformed, which DealQuotationService refuses on every save. Blocking (see
   // QUOTATION_BLOCKING_CHECKS).
@@ -1951,6 +1990,7 @@ export const QUOTATION_BLOCKING_CHECKS = Object.freeze(new Set([
   QUOTATION_CHECK.RECIPIENT,
   QUOTATION_CHECK.LIVE_DIRECT_QUOTATION,
   QUOTATION_CHECK.LIVE_PRICING_REQUEST,
+  QUOTATION_CHECK.RECIPIENT_OFF_ROUTE,
   QUOTATION_CHECK.CUSTOMER,
   QUOTATION_CHECK.PROJECT,
   QUOTATION_CHECK.ENTRY_CHANNEL,
@@ -2129,12 +2169,16 @@ export function buildQuotationChecklist({
   // `needsDeal`: the "เลือกดีลที่มีอยู่" branch with nothing picked yet. `recipientRequired`: a NEW
   // DEAL_DIRECT quotation (the server 400s one without a recipient); never set for an existing row or
   // a PRICING_REQUEST one. `liveDirectQuotation`: the picked deal's
-  // TicketSummaryDto.liveDirectQuotation on a NEW quotation (N6). All default to "never triggers", so
+  // TicketSummaryDto.liveDirectQuotation on a NEW quotation (N6), or an array of every live row. All default to "never triggers", so
   // existing callers keep their checklist.
   needsDeal = false,
   recipientRequired = false,
   recipientType = '',
+  // The route sentence for a NEW or CHANGED recipient off the deal's route (null/'' = none). The caller passes it
+  // only then: the server accepts a stored off-route recipient re-sent unchanged on a DRAFT.
+  offRouteRecipientMessage = null,
   liveDirectQuotation = null,
+  dealStatus = 'draft',
   // One pricing route per deal: the picked deal has a live pricing request (hasLivePricingRequest).
   livePricingRequest = false,
   // V192.3: ผู้ติดต่อ's Email as typed. Blank (the default) is fine — see #orderedByEmailError.
@@ -2153,10 +2197,10 @@ export function buildQuotationChecklist({
   };
 
   if (needsDeal) push(QUOTATION_CHECK.DEAL, 'ต้องเลือกดีลก่อนบันทึกร่าง', QUOTATION_FIELD_IDS.deal);
-  if (isLiveDirectQuotation(liveDirectQuotation)) {
-    push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(liveDirectQuotation));
-  }
+  const blockingLive = blockingDirectQuotation(liveDirectQuotation, recipientType, dealStatus);
+  if (blockingLive) push(QUOTATION_CHECK.LIVE_DIRECT_QUOTATION, liveDirectQuotationBlockMessage(blockingLive));
   if (livePricingRequest) push(QUOTATION_CHECK.LIVE_PRICING_REQUEST, LIVE_PRICING_REQUEST_BLOCK_MESSAGE);
+  if (offRouteRecipientMessage) push(QUOTATION_CHECK.RECIPIENT_OFF_ROUTE, offRouteRecipientMessage, QUOTATION_FIELD_IDS.recipient);
   if (recipientRequired && !quotationRecipientOption(recipientType)) {
     push(QUOTATION_CHECK.RECIPIENT, 'ต้องเลือกผู้รับใบเสนอราคา', QUOTATION_FIELD_IDS.recipient);
   }

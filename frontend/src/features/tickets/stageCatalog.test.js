@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { hasDealStageLabel } from '../../utils/format.js';
 import {
-  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, nextStageIn, phaseIdOf, routeForChannel, routePath,
+  EMPTY_STAGE_CATALOG, findStage, nextOnRoute, nextStageIn, phaseIdOf, recipientRouteRefusal, routeForChannel, routePath,
   routePosition, routePositionForChannel, stageIndexIn, stagesInPhase,
 } from './stageCatalog.js';
 import { assertStageLabelsComplete, AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
@@ -641,5 +641,34 @@ describe('routeForChannel / routePositionForChannel — lookups over the SERVED 
       expect(routePositionForChannel(EMPTY_STAGE_CATALOG, 'LEAD_APPROACH', 'BUYER_DIRECT').total)
         .toBe(0);
     });
+  });
+});
+
+describe('recipientRouteRefusal — the server\'s DealRoute.refusalMessage, read off the served catalog', () => {
+  const catalog = DEAL_STAGE_CATALOG;
+  const sentence = (phrase, no) => `ดีลนี้เป็น${phrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+
+  it('names the channel, the stage\'s display number and the remedy for an off-route party', () => {
+    expect(recipientRouteRefusal(catalog, 'OWNER_DIRECT', 'DESIGNER')).toBe(sentence('เจ้าของติดต่อโดยตรง', 4));
+    expect(recipientRouteRefusal(catalog, 'BUYER_DIRECT', 'DESIGNER')).toBe(sentence('ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', 4));
+    expect(recipientRouteRefusal(catalog, 'BUYER_DIRECT', 'OWNER')).toBe(sentence('ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', 5));
+  });
+
+  it('is null for an on-route party — the buyer on every route, and everyone on a designer-led deal', () => {
+    ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED'].forEach((channel) => {
+      expect(recipientRouteRefusal(catalog, channel, 'BUYER'), channel).toBeNull();
+    });
+    ['DESIGNER', 'OWNER', 'BUYER'].forEach((party) => expect(recipientRouteRefusal(catalog, 'DESIGNER_LED', party), party).toBeNull());
+    expect(recipientRouteRefusal(catalog, 'OWNER_DIRECT', 'OWNER')).toBeNull();
+  });
+
+  it('is null where there is no route to judge by: an unstated or unknown channel, no channel, no party, an unloaded catalog', () => {
+    ['UNSPECIFIED', 'SOMETHING_ELSE', null, undefined].forEach((channel) => {
+      expect(recipientRouteRefusal(catalog, channel, 'DESIGNER'), String(channel)).toBeNull();
+    });
+    expect(recipientRouteRefusal(catalog, 'BUYER_DIRECT', '')).toBeNull();
+    expect(recipientRouteRefusal(catalog, 'BUYER_DIRECT', 'UNSPECIFIED')).toBeNull();
+    expect(recipientRouteRefusal(EMPTY_STAGE_CATALOG, 'BUYER_DIRECT', 'DESIGNER')).toBeNull();
+    expect(recipientRouteRefusal(undefined, 'BUYER_DIRECT', 'DESIGNER')).toBeNull();
   });
 });

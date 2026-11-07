@@ -426,6 +426,15 @@ public class TicketRepository {
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
         if (hasItems) insertItems(ticketId, request.items());
+        // V204: the deal's customer is its first party (BUYER until a quotation says otherwise), and the headline.
+        // Every deal therefore has at least one sales.deal_party row, as the V204 backfill gave every older one.
+        if (request.customerId() != null) {
+            jdbc.update("""
+                INSERT INTO sales.deal_party (ticket_id, customer_id, contact_id, role, status, is_headline, added_by)
+                VALUES (:ticketId, :customerId, :contactId, 'BUYER', 'ACTIVE', TRUE, :actorId)
+                """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("customerId", request.customerId())
+                    .addValue("contactId", request.contactId()).addValue("actorId", actorId));
+        }
         addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
         return ticketId;
     }
@@ -2294,16 +2303,20 @@ public class TicketRepository {
 
     /**
      * The ONE definition of a "live" direct quotation, shared as SQL text by
-     * {@link #hasLiveDirectQuotation} (the lock) and {@link #findLiveDirectQuotation} (the
-     * refusal and {@link TicketSummaryDto#liveDirectQuotation}) so the two can never disagree about
-     * which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
+     * {@link #hasLiveDirectQuotation} (the lock), {@link #findLiveDirectQuotations} (the refusal)
+     * and {@link #liveDirectQuotationSelect} ({@link TicketSummaryDto#liveDirectQuotation}), so they can never
+     * disagree about which rows count. Appended after a {@code WHERE ticket_id = :ticketId} clause.
      */
     private static final String LIVE_DIRECT_QUOTATION_PREDICATE = """
                              AND origin = 'DEAL_DIRECT'
                              AND doc_status IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED')
         """;
 
-    /** The newest live direct quotation's row for {@code ticketIdRef} — see {@link #findLiveDirectQuotation}. */
+    /**
+     * The NEWEST live direct quotation's row for {@code ticketIdRef} (highest {@code quotation_id}): the row
+     * {@link TicketSummaryDto#liveDirectQuotation} serves for a whole page in one statement. A deal can hold
+     * several live rows (an APPROVED parent and its DRAFT revision, a reorder clone); the client acts on the newest.
+     */
     private static String liveDirectQuotationSelect(String ticketIdRef) {
         return """
             SELECT quotation_id, number, doc_status, recipient_type
@@ -2315,23 +2328,33 @@ public class TicketRepository {
         """;
     }
 
-    private static final String LIVE_DIRECT_QUOTATION_SELECT = liveDirectQuotationSelect(":ticketId");
-
-    /**
-     * Quotation ↔ deal linking — the NEWEST live direct quotation on the
-     * deal (highest {@code quotation_id}), or empty. Newest matters because a deal can legitimately
-     * hold two live rows — an APPROVED parent and its DRAFT revision, or an APPROVED source and its
-     * reorder clone — and the client acts on the one being worked on.
-     *
-     * <p>The list/detail field does not call this: {@link SummaryFactsSql#SELECT} reads the same row
-     * (via {@link #liveDirectQuotationSelect}) for a whole page in one statement. Each call here is an
-     * index lookup on {@code idx_quotation_deal_direct_ticket} (V165: {@code (ticket_id) WHERE origin = 'DEAL_DIRECT'}).
-     */
-    public Optional<LiveDirectQuotationDto> findLiveDirectQuotation(long ticketId) {
-        List<LiveDirectQuotationDto> rows = jdbc.query(LIVE_DIRECT_QUOTATION_SELECT, Map.of("ticketId", ticketId),
+    /** {@link #findLiveDirectQuotation} narrowed to ONE deal party (V204): the create-time refusal is per
+     * ผู้รับเหมา, so a second contractor may hold its own live document on the same deal. */
+    public Optional<LiveDirectQuotationDto> findLiveDirectQuotationForParty(long ticketId, long partyId) {
+        List<LiveDirectQuotationDto> rows = jdbc.query("""
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId AND party_id = :partyId
+        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+             LIMIT 1
+        """, Map.of("ticketId", ticketId, "partyId", partyId),
             (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
                 rs.getString("doc_status"), rs.getString("recipient_type")));
         return rows.stream().findFirst();
+    }
+
+    /** Every live direct quotation on the deal, newest first (same predicate as the lock). */
+    public List<LiveDirectQuotationDto> findLiveDirectQuotations(long ticketId) {
+        return jdbc.query("""
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+        """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
+                rs.getString("doc_status"), rs.getString("recipient_type")));
     }
 
     /**
@@ -2715,6 +2738,14 @@ public class TicketRepository {
                 .addValue("contactId", contactId)
                 .addValue("customerName", customerName)
                 .addValue("ticketId", ticketId));
+        // V204: a deal with exactly one party (every pre-party deal) moves that party with it; a deal with several
+        // parties keeps them, the customer change being a bill-to correction, not a bidder change.
+        jdbc.update("""
+            UPDATE sales.deal_party SET customer_id = :customerId, contact_id = :contactId, updated_at = now()
+             WHERE ticket_id = :ticketId
+               AND (SELECT COUNT(*) FROM sales.deal_party p WHERE p.ticket_id = :ticketId) = 1
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("customerId", customerId)
+                .addValue("contactId", contactId));
     }
 
     /**

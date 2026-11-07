@@ -146,5 +146,15 @@ public final class TicketEventKind {
     // order confirmation (OrderConfirmationService) — a different business event.
     public static final String DEAL_PROMOTED_FROM_QUOTATION = "DEAL_PROMOTED_FROM_QUOTATION";
 
+    // ── V204 deal party (docs/decisions/deal-party-model.md) ──
+    /** A customer joined the deal in a role (DESIGNER / OWNER / BUYER). */
+    public static final String DEAL_PARTY_ADDED = "DEAL_PARTY_ADDED";
+    /** "บันทึกผลประมูล": which contractors won, which lost or still wait. Written once on the primary deal. */
+    public static final String BID_OUTCOME_RECORDED = "BID_OUTCOME_RECORDED";
+    /** On a child deal forked for a second winner: cites the parent it was split from. */
+    public static final String DEAL_SPLIT_FROM_PARENT = "DEAL_SPLIT_FROM_PARENT";
+    /** On a container deal emptied by the V205 reconcile: cites the deal its quotation moved to. */
+    public static final String DEAL_MERGED_INTO = "DEAL_MERGED_INTO";
+
     private TicketEventKind() {}
 }

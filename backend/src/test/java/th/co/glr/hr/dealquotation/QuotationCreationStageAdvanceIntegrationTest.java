@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.DealLifecycle;
@@ -26,9 +27,8 @@ import th.co.glr.hr.ticket.TicketEventKind;
  * three silent no-ops (not ACTIVE, not strictly forward, off the deal's {@code DealRoute}), each
  * pinned below so the behaviour is a decision on record rather than an accident.
  *
- * <p><b>The inherited {@code deal(creator)} default is OWNER_DIRECT</b>, whose route excludes
- * {@code QUOTE_DESIGN_SIDE} — so every test here names its channel explicitly rather than taking
- * the default, and the off-route case uses it deliberately.
+ * <p>Every test here names its channel explicitly rather than taking the inherited
+ * {@code deal(creator)} default (DESIGNER_LED).
  */
 class QuotationCreationStageAdvanceIntegrationTest extends AbstractDealQuotationSlice2IntegrationTest {
 
@@ -128,21 +128,19 @@ class QuotationCreationStageAdvanceIntegrationTest extends AbstractDealQuotation
     // ── the three silent no-ops ──────────────────────────────────────────────────────────────────
 
     /**
-     * The edge case D-2 names explicitly. {@code OWNER_DIRECT}'s route skips
-     * {@code QUOTE_DESIGN_SIDE} (there is no designer to quote), and {@code autoAdvanceStage}
-     * returns silently on an off-route target rather than throwing — because throwing would fail
-     * the quotation creation that triggered it. So the document is written and the deal stays put.
-     *
-     * <p>Pinned deliberately rather than left to chance: it is the one shape in which a deal can
-     * hold a quotation and not be on its recipient's stage.
+     * Owner ruling 2026-11-07 REVERSES what this test used to pin ("the document is written and the deal stays
+     * put"): a direct quotation may not be addressed to a party OFF the deal's route, so the create is refused
+     * (409) before the stage hook runs — nothing is written, the stage does not move. The full route matrix is
+     * {@code DealQuotationCreateGuardsIntegrationTest}; {@code autoAdvanceStage}'s own off-route no-op remains for
+     * the unrefused callers (the pricing-request path).
      */
     @Test
-    void create_addressedToTheDesignerOnAnOwnerDirectDeal_movesNothing_andStillCreatesTheQuotation() {
+    void create_addressedToTheDesignerOnAnOwnerDirectDeal_isRefused_andMovesNothing() {
         long ticket = deal(salesActor, EntryChannel.OWNER_DIRECT);
 
-        DealQuotationDto created = quotationService.create(ticket, draft("DESIGNER"), salesActor);
+        refusal(() -> quotationService.create(ticket, draft("DESIGNER"), salesActor), HttpStatus.CONFLICT);
 
-        assertThat(created.recipientType()).isEqualTo("DESIGNER");
+        assertThat(quotationCount(ticket)).isZero();
         assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
         assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isZero();
     }

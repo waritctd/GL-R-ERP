@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
+import { entryChannelLabel } from '../../utils/format.js';
 import { assertStageLabelsComplete } from './stageMeta.js';
 
 /**
@@ -183,6 +184,18 @@ export function offRoutePartiesFor(catalog, entryChannel) {
   if (Object.keys(catalog?.routes ?? {}).length === 0) return null;
   const onRoute = new Set(routeForChannel(catalog, entryChannel).map((stage) => stage.code));
   return new Set(QUOTATION_RECIPIENT_OPTIONS.filter((option) => !onRoute.has(option.stage)).map((option) => option.code));
+}
+
+/**
+ * The sentence the server refuses a direct quotation with when it is addressed to a party off the deal's
+ * route (DealRoute.refusalMessage, verbatim: the channel phrase, the stage's display number, the remedy),
+ * or null when the party is on the route, the channel has none (UNSPECIFIED) or the catalog has not loaded.
+ * Shown beside a disabled recipient pill and passed to the checklist as `offRouteRecipientMessage`.
+ */
+export function recipientRouteRefusal(catalog, entryChannel, recipientCode) {
+  const option = QUOTATION_RECIPIENT_OPTIONS.find((o) => o.code === recipientCode);
+  if (!option || !offRoutePartiesFor(catalog, entryChannel)?.has(recipientCode)) return null;
+  return `ดีลนี้เป็น${entryChannelLabel(entryChannel).label} — ขั้นที่ ${findStage(catalog, option.stage)?.no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
 }
 
 /**

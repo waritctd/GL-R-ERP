@@ -133,8 +133,10 @@ public abstract class AbstractDealQuotationSlice2IntegrationTest extends Abstrac
             projectId, null, null, entryChannel, List.of(), LocalDate.now().plusDays(7)), creator).summary().id();
     }
 
+    /** DESIGNER_LED: the full route, so the default deal accepts a quotation to any of the three parties.
+     * A test of the route rule ({@code DealRoute}) names its channel explicitly. */
     protected long deal(UserPrincipal creator) {
-        return deal(creator, "OWNER_DIRECT");
+        return deal(creator, "DESIGNER_LED");
     }
 
     /** One TILE line and one PLAIN line — the same shape DealQuotationConfirmOrderIntegrationTest uses. */

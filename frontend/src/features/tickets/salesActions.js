@@ -25,7 +25,7 @@
 // bucket 1: a delivery-ready deal matching bucket 1's guard still gets CREATE_PCR. See bucket 5.
 
 import { bangkokTodayIso } from '../../utils/format.js';
-import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_RECIPIENT_OPTIONS } from '../quotations/quotationMeta.js';
+import { DEAD_PRICING_REQUEST_STATUSES, QUOTATION_ROUTE as PARTY_ROUTE } from '../quotations/quotationMeta.js';
 import { depositSettled } from './dealMoneyStatus.js';
 import { nextFulfilmentActionCode } from './importActions.js';
 import { isRemainingInvoiceReady } from './remainingInvoiceReadiness.js';
@@ -166,7 +166,6 @@ const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
 
 // The quote route in S-order (DESIGNER → OWNER → BUYER). The labels are a short phrase for after a
 // verb ("เสนอราคาผู้ซื้อ"), not the ผู้รับ chip labels (ผู้ซื้อ / ผู้รับเหมา).
-const PARTY_ROUTE = QUOTATION_RECIPIENT_OPTIONS.map((option) => option.code);
 export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ' };
 // A request's quotation "went out": sent at least once and not awaiting a revision. A REJECTED or
 // EXPIRED one counts — that party said no.
@@ -220,6 +219,19 @@ export function outcomeSecondaryAction(deal, pricingRequests, quotationByRequest
     : null;
 }
 
+/** The on-route parties after `party`, in route order. */
+const partiesAfter = (party, offRouteParties) =>
+  PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(party) + 1).filter((next) => !offRouteParties.has(next));
+
+/** The "เสนอราคา<next party>" route choice, shared by the pricing-request and the direct-quotation paths. */
+const quoteNextPartyAction = (anchorParty, parties, extra) => ({
+  key: SALES_ACTION.QUOTE_NEXT_PARTY,
+  label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
+  parties,
+  anchorParty,
+  ...extra,
+});
+
 /**
  * Once a designer/owner quotation is sent, the rep picks the next party. The anchor is the request
  * furthest along the route whose quotation went out (with no row for it, QUOTATION_ISSUED alone
@@ -234,8 +246,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
     .sort(byRoute)
     .at(-1);
   if (!anchor || !isDesignerOrOwner(anchor) || offRouteParties == null) return null;
-  const parties = PARTY_ROUTE.slice(PARTY_ROUTE.indexOf(anchor.recipientType) + 1)
-    .filter((party) => !offRouteParties.has(party));
+  const parties = partiesAfter(anchor.recipientType, offRouteParties);
   if (parties.length === 0) return null;
   const holding = ownPrs.filter((pr) => parties.includes(pr.recipientType) && !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
   if (holding.length > 0) {
@@ -244,13 +255,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
       ? { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id }
       : null;
   }
-  return {
-    key: SALES_ACTION.QUOTE_NEXT_PARTY,
-    label: `เสนอราคา${PARTY_LABEL[parties[0]]}`,
-    parties,
-    anchorParty: anchor.recipientType,
-    anchorDeclined: DECLINED_DOC_STATUSES.has(quotationOf(anchor)?.docStatus),
-  };
+  return quoteNextPartyAction(anchor.recipientType, parties, { anchorDeclined: DECLINED_DOC_STATUSES.has(quotationOf(anchor)?.docStatus) });
 }
 
 /**
@@ -272,7 +277,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   //    mixed-origin case the server refuses. Keyed only on TicketSummaryDto.liveDirectQuotation (the
   //    newest live DEAL_DIRECT row, server-picked), so this stays a list-row-only computation; a
   //    non-live status is ignored.
-  const directAction = liveDirectQuotationAction(deal.liveDirectQuotation);
+  const directAction = directQuoteNextPartyAction(deal, offRouteParties) ?? liveDirectQuotationAction(deal.liveDirectQuotation);
   // confirmOrderFromDirectQuotation 409s unless the deal is still 'draft'; a deal already past it
   // is never offered that confirm and falls through to the ordinary cascade. A list row always
   // carries `status`.
@@ -511,6 +516,17 @@ function liveDirectQuotationAction(live) {
   const action = { key, label: ACTION_LABEL[key], quotationId: live.id, quotationNumber: live.number };
   if (key === SALES_ACTION.SUBMIT_DIRECT_QUOTATION) action.to = `/quotations/${live.id}`;
   return action;
+}
+
+/** An APPROVED designer/owner direct quotation on a 'draft' deal with a later on-route party: the same route
+ * choice as routeChoiceAction, flagged `direct` (ยืนยันคำสั่งซื้อ stays a secondary action). Null otherwise. */
+function directQuoteNextPartyAction(deal, offRouteParties) {
+  const live = deal.liveDirectQuotation;
+  if (live?.docStatus !== 'APPROVED' || (deal.status ?? 'draft') !== 'draft' || offRouteParties == null
+    || (live.recipientType !== 'DESIGNER' && live.recipientType !== 'OWNER')) return null;
+  const parties = partiesAfter(live.recipientType, offRouteParties);
+  if (parties.length === 0) return null;
+  return quoteNextPartyAction(live.recipientType, parties, { anchorDeclined: false, direct: true, quotationId: live.id, quotationNumber: live.number });
 }
 
 /**

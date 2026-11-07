@@ -207,3 +207,20 @@ describe('DealStateHeader — การนำเข้า chip wording (owner ru
     expect(chipValue()).toBe('ยังไม่ออกใบขอซื้อ');
   });
 });
+
+// deal-party-model.md, prototype screen 2: while several contractors bid and none is awarded, the
+// deal is titled by its project and its bill-to reads "รอผลประมูล · N ราย".
+describe('DealStateHeader — awaiting a bid outcome', () => {
+  it('titles the deal by the project and adds the ลูกค้าผู้ชำระเงิน chip', () => {
+    renderHeader({ projectName: 'GRAND RIVER HOTEL' }, { awaitingBid: { projectName: 'GRAND RIVER HOTEL', count: 3 } });
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('GRAND RIVER HOTEL');
+    const dt = screen.getByText('ลูกค้าผู้ชำระเงิน');
+    expect(within(dt.parentElement).getByText('รอผลประมูล · 3 ราย')).toBeTruthy();
+  });
+
+  it('without it, the customer stays the title and there is no bill-to chip', () => {
+    renderHeader({ projectName: 'GRAND RIVER HOTEL' });
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('บริษัท ทดสอบ จำกัด');
+    expect(screen.queryByText('ลูกค้าผู้ชำระเงิน')).toBeNull();
+  });
+});

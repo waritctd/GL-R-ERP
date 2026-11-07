@@ -82,20 +82,41 @@ public final class DirectQuotationLocks {
 
     /**
      * N6 (S2-B3): 409 when {@code ticketId} already has a live direct quotation, naming the NEWEST
-     * one ({@link TicketRepository#findLiveDirectQuotation} — the same row
-     * {@link TicketSummaryDto#liveDirectQuotation} serves) in the error body's top-level
+     * blocking one (the newest live row that fails the exception below; with a single live row that is
+     * the row {@link TicketSummaryDto#liveDirectQuotation} serves) in the error body's top-level
      * {@code liveQuotationId} / {@code number} / {@code docStatus}, so the client can offer
      * "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข" instead of minting a second base number. A no-op otherwise.
-     * Same "live" definition as {@link #requireNoLiveDirectQuotation}; called ONLY by
-     * {@code DealQuotationService#create}.
+     *
+     * <p>Exception: a later party may be quoted once EVERY live direct quotation is APPROVED and addressed to a
+     * party strictly earlier on {@link QuotationRecipient#ROUTE} than {@code recipientType}, and no order has been
+     * confirmed from a quotation yet. Same "live" definition
+     * as {@link #requireNoLiveDirectQuotation}; called ONLY by {@code DealQuotationService#create}.
      */
-    public static void requireNoLiveDirectQuotationForCreate(TicketRepository tickets, long ticketId) {
-        tickets.findLiveDirectQuotation(ticketId).ifPresent(live -> {
+    /** {@link #requireNoLiveDirectQuotationForCreate} per deal party (V204): only THIS party's live
+     * document blocks a new one for it; a sibling bidder's does not. */
+    public static void requireNoLiveDirectQuotationForParty(TicketRepository tickets, long ticketId, long partyId) {
+        tickets.findLiveDirectQuotationForParty(ticketId, partyId).ifPresent(live -> {
             java.util.Map<String, Object> details = new java.util.LinkedHashMap<>();
             details.put("liveQuotationId", live.id());
             details.put("number", live.number());
             details.put("docStatus", live.docStatus());
             throw new ApiException(HttpStatus.CONFLICT, liveDirectQuotationMessage(live.number()), details);
         });
+    }
+
+    public static void requireNoLiveDirectQuotationForCreate(TicketRepository tickets, long ticketId, String recipientType) {
+        // Once the order is confirmed from a quotation the route is closed: a later-party draft could never be submitted.
+        boolean routeClosed = tickets.hasPromotionFromQuotationEvent(ticketId);
+        tickets.findLiveDirectQuotations(ticketId).stream()
+            .filter(live -> routeClosed || !(QuotationStatus.APPROVED.equals(live.docStatus())
+                && QuotationRecipient.isStrictlyEarlier(live.recipientType(), recipientType)))
+            .findFirst()
+            .ifPresent(live -> {
+                java.util.Map<String, Object> details = new java.util.LinkedHashMap<>();
+                details.put("liveQuotationId", live.id());
+                details.put("number", live.number());
+                details.put("docStatus", live.docStatus());
+                throw new ApiException(HttpStatus.CONFLICT, liveDirectQuotationMessage(live.number()), details);
+            });
     }
 }
