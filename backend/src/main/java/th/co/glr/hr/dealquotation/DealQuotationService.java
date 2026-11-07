@@ -223,7 +223,7 @@ public class DealQuotationService {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         requireEditAccess(actor, ticket);
         // Precedence (mirrored by mockApi.dealQuotations.create): authz 403 -> recipient 400 -> one-pricing-route 409 ->
-        // live-quotation 409, all before anything is resolved or written.
+        // off-route recipient 409 -> live-quotation 409, all before anything is resolved or written.
         // V204: a partyId names the ผู้รับเหมา this document is for. The party fixes the recipient (its role), the
         // customer snapshot (ITS customer, not the deal's) and the number family. Resolved before the lock so a bad id
         // is a 400, not a wait.
@@ -233,6 +233,8 @@ public class DealQuotationService {
         // One pricing route per deal: the reverse of DirectQuotationLocks#requireNoLiveDirectQuotation. Only for
         // #create; a revision or reorder is not a new route choice, and #createFromPricingRequest IS the pricing route.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLivePricingRequest(tickets, ticketId);
+        // The deal's route (a property of the deal, so before N6, which is about its documents): no party off it.
+        th.co.glr.hr.ticket.TicketService.requireQuotationRecipientOnRoute(ticket.entryChannel(), recipientType);
         // One live direct quotation per deal, unless every live one is APPROVED and addressed to an earlier party. The
         // 409 names the blocking one (liveQuotationId/number/docStatus, top-level in the body) so the client can offer
         // "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข". Under #lockTicket so concurrent creates cannot both pass.
@@ -847,6 +849,11 @@ public class DealQuotationService {
                 throw new ApiException(HttpStatus.CONFLICT, "ฉบับแก้ไขต้องส่งถึงผู้รับเดิม ("
                     + QuotationRecipient.thaiLabel(existing.recipientType())
                     + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
+            }
+            // A CHANGE to a party off the deal's route is refused; the stored recipient re-sent unchanged (a draft addressed
+            // before the channel was corrected) is not, so such a draft stays saveable.
+            if (!requestedRecipient.equals(existing.recipientType())) {
+                th.co.glr.hr.ticket.TicketService.requireQuotationRecipientOnRoute(ticket.entryChannel(), requestedRecipient);
             }
         }
         // ล้าง: clearContact stores a blank snapshot whatever contactId says, so updateHeader also writes a null

@@ -40,6 +40,7 @@ import {
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { ChangeCustomerModal } from './ChangeCustomerModal.jsx';
 import { DealCustomerCard, ExistingDealNotice, QuotationRecipientField } from './DealCustomerCard.jsx';
+import { offRoutePartiesFor, recipientRouteRefusal, useStageCatalog } from '../tickets/stageCatalog.js';
 import { useDealHasLivePricingRequest } from './DealPicker.jsx';
 import { OrderedByContactFields, ProjectNamePrintToggle, QuotationDealFields } from './QuotationDealFields.jsx';
 import { focusQuotationField, QuotationChecklist } from './QuotationChecklist.jsx';
@@ -373,6 +374,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // ผู้รับใบเสนอราคา. '' = not chosen. Seeded from the stored row on an existing quotation, and on the
   // ?ticket= path preselected from the deal's own stage until the rep touches it (see the effect below).
   const [recipientType, setRecipientType] = useState('');
+  const { catalog: stageCatalog, isLoading: stageCatalogLoading } = useStageCatalog();
   const recipientTouchedRef = useRef(false);
   // Once-per-ticket seed guards for the ?ticket= path (โครงการ and ผู้รับ — see their effects below).
   // Declared here, ABOVE the main seeding effect, because that effect clears them when the rep picks
@@ -461,8 +463,8 @@ export function QuotationEditorPage({ user, showToast }) {
     setDealForm((prev) => ({ ...prev, ...dealPatch }));
     setDirty(true);
   }
-  // The deals the inline flow's own `tickets.create` made on this visit, by the customer and project
-  // each was made for. Kept across a later dealQuotations.create failure so a retry reuses that
+  // The deals the inline flow's own `tickets.create` made on this visit, by the customer, project and
+  // channel each was made for. Kept across a later dealQuotations.create failure so a retry reuses that
   // ticket instead of minting a second deal (see handleInlineCreate).
   const [createdTicketIds, setCreatedTicketIds] = useState({});
   const [creatingDeal, setCreatingDeal] = useState(false);
@@ -689,14 +691,21 @@ export function QuotationEditorPage({ user, showToast }) {
   // shape as the โครงการ seed above, and never over a choice the rep already made. When the stage is
   // not a quote stage, the deal's own entry channel names the recipient (UNSPECIFIED names none, so
   // the rep is still asked).
+  // Never an off-route party (owner ruling 2026-11-07: the server 409s it): each hint that names one falls through
+  // to the next, and the channel's own party is on its route by construction. Waits for the served route while it
+  // loads; if it never loads there is no route to filter by, and the hints stand.
   useEffect(() => {
-    if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id) return;
+    if (id || !ticket?.id || recipientSeededForTicket.current === ticket.id || stageCatalogLoading) return;
     recipientSeededForTicket.current = ticket.id;
     if (recipientTouchedRef.current) return;
     const requested = searchParams.get('recipient');
-    setRecipientType((quotationRecipientOption(requested) && requested)
-      || recipientForDealStage(ticket.salesStage) || recipientForEntryChannel(ticket.entryChannel));
-  }, [id, ticket, searchParams]);
+    const offRoute = offRoutePartiesFor(stageCatalog, ticket.entryChannel);
+    setRecipientType([
+      quotationRecipientOption(requested) && requested,
+      recipientForDealStage(ticket.salesStage),
+      recipientForEntryChannel(ticket.entryChannel),
+    ].find((code) => code && !offRoute?.has(code)) || '');
+  }, [id, ticket, searchParams, stageCatalog, stageCatalogLoading]);
 
   function updateItem(clientId, patch) {
     setDirty(true);
@@ -1267,6 +1276,10 @@ export function QuotationEditorPage({ user, showToast }) {
     needsDeal,
     recipientRequired: !quotation,
     recipientType,
+    // Only a NEW or CHANGED recipient: the server accepts a stored off-route one re-sent unchanged on a DRAFT.
+    offRouteRecipientMessage: !quotation || recipientType !== quotation.recipientType
+      ? recipientRouteRefusal(stageCatalog, isInlineCreate ? dealForm.entryChannel : ticket?.entryChannel, recipientType)
+      : null,
     liveDirectQuotation: !quotation && !isInlineCreate ? checklistLiveRows : null,
     dealStatus: checklistDealStatus,
     // One pricing route per deal: a NEW quotation on a picked deal that holds a live pricing request
@@ -1278,7 +1291,7 @@ export function QuotationEditorPage({ user, showToast }) {
   }), [isInlineCreate, checklistCustomer, dealForm.project, dealForm.entryChannel, attachingToDeal, checklistProjectName, items, itemErrorsByRow,
     adjustments, adjustmentErrorsByRow, duplicateGroupIndex, docSettings, terms.noDeposit,
     terms.depositPercentCustom, terms.depositPercent, terms.fullPaymentTerm, terms.remainderMode, terms.creditDays,
-    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs]);
+    needsDeal, quotation, recipientType, checklistLiveRows, checklistDealStatus, dealHasLivePricingRequest, terms.orderedByEmail, missingLeadTimeSeqs, stageCatalog, ticket?.entryChannel]);
   const validationErrors = useMemo(() => checklist.filter((e) => e.blocking).map((e) => e.message), [checklist]);
   const checklistWarnings = useMemo(() => splitQuotationChecklist(checklist).warnings, [checklist]);
   const hasValidationErrors = validationErrors.length > 0;
@@ -1782,10 +1795,11 @@ export function QuotationEditorPage({ user, showToast }) {
     }
     setCreatingDeal(true);
     try {
-      // A deal is remembered under the customer and project it was made for, and reused for those
-      // two only: after a refusal the rep can choose another customer or project before saving
-      // again, and that quotation must not land on the earlier choice's deal.
-      const madeFor = `${dealForm.customer.id}/${dealForm.project.id}`;
+      // A deal is remembered under the customer, project and ช่องทางรับงาน it was made for, and reused for
+      // those only: after a refusal the rep can choose another customer, project or channel before saving
+      // again, and that quotation must not land on the earlier choice's deal (a different channel is a
+      // different route: the server refuses a recipient off it, and a deal's channel is not corrected here).
+      const madeFor = `${dealForm.customer.id}/${dealForm.project.id}/${dealForm.entryChannel}`;
       let ticketId = createdTicketIds[madeFor];
       if (!ticketId) {
         const ticketRes = await api.tickets.create({
@@ -2534,7 +2548,7 @@ export function QuotationEditorPage({ user, showToast }) {
                         value={recipientType}
                         onChange={changeRecipient}
                         idPrefix="quotation-recipient-edit"
-                        // The off-route note reads this draft's deal's channel (the deal summary is
+                        // The off-route pills read this draft's deal's channel (the deal summary is
                         // fetched for a DRAFT; see ticketQuery).
                         entryChannel={ticket?.entryChannel ?? null}
                       />

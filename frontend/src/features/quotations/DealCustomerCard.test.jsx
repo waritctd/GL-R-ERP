@@ -470,7 +470,7 @@ describe('DealCustomerCard — ที่อยู่ on the selected customer', 
 describe('DealCustomerCard — ดีล step (slice 2)', () => {
   const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
 
-  function ModeHarness({ initialMode = 'pick', initialValue, errors, onModeChange }) {
+  function ModeHarness({ initialMode = 'pick', initialValue, errors, onModeChange, onChange }) {
     const [mode, setMode] = React.useState(initialMode);
     const [value, setValue] = React.useState(initialValue
       ?? { customer: null, project: null, entryChannel: 'UNSPECIFIED', recipientType: '' });
@@ -481,7 +481,7 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
         onModeChange={(next) => { onModeChange?.(next); setMode(next); }}
         selectedDeal={null}
         value={value}
-        onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))}
+        onChange={(patch) => { onChange?.(patch); setValue((prev) => ({ ...prev, ...patch })); }}
         errors={errors}
         showToast={vi.fn()}
       />
@@ -564,27 +564,39 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
     expect(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' }).getAttribute('aria-invalid')).toBe('true');
   });
 
-  // Off-route recipient: ALLOW + inline note. All three pills stay selectable on every deal; when
-  // the chosen recipient's quote stage is not on the deal's route (read from the served catalog via
-  // routeForChannel), a quiet info line says so. No block, no modal. On the new-deal card the deal's
-  // channel is the one being chosen on that card.
-  describe('off-route recipient note (owner ruling #1)', () => {
-    const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+  // Owner ruling 2026-11-07 (reverses "allow + inline note"): the server 409s a direct quotation addressed to a party
+  // OFF the deal's route, so an off-route party's pill is DISABLED and says why, in DealRoute.refusalMessage's own
+  // sentence (DESIGN.md §14: a disabled action says why). The route is READ from the served catalog; the buyer
+  // (QUOTE_BUYER) is on every route. On the new-deal card the deal's channel is the one being chosen on that card.
+  describe('off-route recipient pills (owner ruling 2026-11-07)', () => {
+    const OWNER_DIRECT = 'เจ้าของติดต่อโดยตรง';
+    const BUYER_DIRECT = 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง';
+    const sentence = (channelPhrase, no) => `ดีลนี้เป็น${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+    const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
+    const pills = () => within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
 
     function createValue(entryChannel, recipientType) {
       return { customer: null, project: null, entryChannel, recipientType };
     }
 
     it.each([
-      ['OWNER_DIRECT', 'DESIGNER'],
-      ['BUYER_DIRECT', 'DESIGNER'],
-      ['BUYER_DIRECT', 'OWNER'],
-    ])('new deal on %s with recipient %s: the note shows, as a status line under the pills', async (entryChannel, recipientType) => {
-      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
-      const note = await screen.findByText(OFF_ROUTE_NOTE);
-      expect(note.closest('[role="status"]')).not.toBeNull();
-      const group = screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' });
-      expect(group.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      ['OWNER_DIRECT', [true, false, false], [sentence(OWNER_DIRECT, 4)]],
+      ['BUYER_DIRECT', [true, true, false], [sentence(BUYER_DIRECT, 4), sentence(BUYER_DIRECT, 5)]],
+    ])('new deal on %s: the off-route pills are disabled and each says why; the buyer never is', async (entryChannel, disabled, reasons) => {
+      renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, '') });
+      for (const reason of reasons) expect((await screen.findAllByText(reason)).length).toBeGreaterThan(0);
+      expect(pills().map(isDisabled)).toEqual(disabled);
+    });
+
+    it('a disabled pill cannot be picked: clicking it leaves the choice (and onChange) alone', async () => {
+      const onChange = vi.fn();
+      renderCard({ initialMode: 'create', initialValue: createValue('OWNER_DIRECT', 'OWNER'), onChange });
+      await screen.findAllByText(sentence(OWNER_DIRECT, 4));
+      onChange.mockClear();
+      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
+      expect(onChange).not.toHaveBeenCalledWith(expect.objectContaining({ recipientType: 'DESIGNER' }));
+      expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
     });
 
     it.each([
@@ -592,39 +604,48 @@ describe('DealCustomerCard — ดีล step (slice 2)', () => {
       ['OWNER_DIRECT', 'OWNER'], ['OWNER_DIRECT', 'BUYER'],
       ['BUYER_DIRECT', 'BUYER'],
       ['UNSPECIFIED', 'DESIGNER'],
-    ])('new deal on %s with recipient %s: on-route (or no stated route) — no note', async (entryChannel, recipientType) => {
+    ])('new deal on %s with recipient %s: on-route (or no stated route) — nothing disabled, no reason', async (entryChannel, recipientType) => {
       renderCard({ initialMode: 'create', initialValue: createValue(entryChannel, recipientType) });
       // Let the catalog query settle before asserting absence.
       await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
       await new Promise((resolve) => { setTimeout(resolve, 0); });
-      expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+      if (entryChannel !== 'UNSPECIFIED' && entryChannel !== 'DESIGNER_LED') {
+        // The disabled pills of a routed channel are the ones that must NOT include the chosen, on-route party.
+        expect(isDisabled(screen.getByRole('radio', { name: recipientType === 'OWNER' ? 'เจ้าของโครงการ' : 'ผู้ซื้อ / ผู้รับเหมา' }))).toBe(false);
+      } else {
+        pills().forEach((pill) => expect(isDisabled(pill)).toBe(false));
+        expect(screen.queryByText(/ไม่อยู่ในเส้นทางของดีลนี้/)).toBeNull();
+      }
     });
 
-    it('never blocks: on a buyer-direct deal every recipient pill stays enabled and pickable', async () => {
-      renderCard({ initialMode: 'create', initialValue: createValue('BUYER_DIRECT', '') });
-      const radios = within(screen.getByRole('radiogroup', { name: 'ผู้รับใบเสนอราคา' })).getAllByRole('radio');
-      radios.forEach((radio) => expect(radio.disabled).toBe(false));
-      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }));
-      expect(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }).getAttribute('aria-checked')).toBe('true');
-      expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
-      // Picking an on-route recipient clears it.
-      fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
-      await waitFor(() => expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull());
+    // The roving tab stop and the arrow keys step over a disabled pill: landing on one would be a dead key.
+    it('on an owner-direct deal the tab stop is เจ้าของโครงการ and the arrow keys wrap past the disabled ผู้ออกแบบ', async () => {
+      renderCard({ initialMode: 'create', initialValue: createValue('OWNER_DIRECT', '') });
+      await screen.findAllByText(sentence(OWNER_DIRECT, 4));
+      expect(pills().map((pill) => pill.getAttribute('tabindex'))).toEqual(['-1', '0', '-1']);
+
+      fireEvent.keyDown(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }), { key: 'ArrowLeft' });
+      expect(pills().map((pill) => pill.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true']);
+      fireEvent.keyDown(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }), { key: 'ArrowRight' });
+      expect(pills().map((pill) => pill.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false']);
+      fireEvent.keyDown(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }), { key: 'Home' });
+      expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true');
     });
 
-    it('changing the new deal\'s channel re-evaluates the note against the NEW route', async () => {
-      renderCard({ initialMode: 'create', initialValue: createValue('DESIGNER_LED', 'DESIGNER') });
+    it('changing the new deal\'s channel re-evaluates the pills against the NEW route', async () => {
+      renderCard({ initialMode: 'create', initialValue: createValue('DESIGNER_LED', 'OWNER') });
       await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
-      expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
-      expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+      pills().forEach((pill) => expect(isDisabled(pill)).toBe(false));
+      fireEvent.click(screen.getByRole('button', { name: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง' }));
+      expect((await screen.findAllByText(sentence(BUYER_DIRECT, 5))).length).toBeGreaterThan(0);
+      expect(pills().map(isDisabled)).toEqual([true, true, false]);
     });
   });
 });
 
-describe('DealCustomerCard — off-route note on a PICKED deal (owner ruling #1)', () => {
-  const OFF_ROUTE_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
+describe('DealCustomerCard — off-route pills on a PICKED deal (owner ruling 2026-11-07)', () => {
   const salesUser = { id: 6, name: 'คุณสมหมาย ขายดี', role: 'sales' };
+  const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -647,16 +668,21 @@ describe('DealCustomerCard — off-route note on a PICKED deal (owner ruling #1)
     ));
   }
 
-  it('reads the PICKED deal\'s own channel: an owner-direct deal + ผู้ออกแบบ shows the note', async () => {
-    renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'OWNER_DIRECT' }, 'DESIGNER');
-    expect(await screen.findByText(OFF_ROUTE_NOTE)).not.toBeNull();
+  it('reads the PICKED deal\'s own channel: an owner-direct deal disables ผู้ออกแบบ and says why', async () => {
+    renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'OWNER_DIRECT' }, 'OWNER');
+    expect((await screen.findAllByText('ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน')).length)
+      .toBeGreaterThan(0);
+    expect(isDisabled(screen.getByRole('radio', { name: 'ผู้ออกแบบ' }))).toBe(true);
+    expect(isDisabled(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }))).toBe(false);
+    expect(isDisabled(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }))).toBe(false);
   });
 
-  it('a designer-led deal + ผู้ออกแบบ: no note', async () => {
+  it('a designer-led deal: every pill enabled, no reason', async () => {
     renderPicked({ id: 18, code: 'DL-2026-0018', customerName: 'ก', salesStage: 'PRESENTATION', entryChannel: 'DESIGNER_LED' }, 'DESIGNER');
     await waitFor(() => expect(api.meta.dealStages).toHaveBeenCalled());
     await new Promise((resolve) => { setTimeout(resolve, 0); });
-    expect(screen.queryByText(OFF_ROUTE_NOTE)).toBeNull();
+    screen.getAllByRole('radio').forEach((pill) => expect(isDisabled(pill)).toBe(false));
+    expect(screen.queryByText(/ไม่อยู่ในเส้นทางของดีลนี้/)).toBeNull();
   });
 });
 

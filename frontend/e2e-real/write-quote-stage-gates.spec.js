@@ -350,21 +350,26 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await shot(page, '08-born-deal-stage5');
   });
 
-  test('9. off-route recipient is a silent no-op', async () => {
+  test('9. off-route recipient: the pill is disabled with the route sentence, and the API refuses it 409', async () => {
     const deal = await newDeal('C-offroute', 'OWNER_DIRECT');
     const page = salesPage;
+    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
     await page.goto(`/quotations/new?ticket=${deal}`);
-    await page.locator('#quotation-recipient-DESIGNER').click();
-    await expect(page.getByText('ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ')).toBeVisible();
-    await fillTileLine(page);
+    // The designer has no place on an owner-direct route: its pill is disabled and says why; the pre-select is
+    // the channel's own party (the owner), never the off-route one.
+    await expect(page.locator('#quotation-recipient-DESIGNER')).toBeDisabled();
+    await expect(page.getByText(sentence).first()).toBeVisible();
+    await expect(page.locator('#quotation-recipient-OWNER')).toHaveAttribute('aria-checked', 'true');
     await shot(page, '09-offroute-editor');
-    await page.getByRole('button', { name: 'บันทึกร่าง', exact: true }).last().click();
-    await page.waitForURL(/\/quotations\/\d+$/, { timeout: 30_000 });
-    await expect(page.locator('[role="alert"]')).toHaveCount(0);
-    const q = (await (await sessions.sales.get(`/api/deal-quotations/${page.url().match(/quotations\/(\d+)/)[1]}`)).json()).quotation;
-    expect(q.recipientType).toBe('DESIGNER');
-    const t = await ticketOf(deal);
-    expect(t.summary.salesStage).toBe('LEAD_APPROACH');
+    // The server refuses the same thing: 409 with that sentence, nothing written, the stage untouched.
+    const refused = await apiWrite(sessions.sales, 'post', `/api/tickets/${deal}/deal-quotations`, directQuotationBody('DESIGNER'));
+    const body = await refused.json();
+    expect(refused.status(), JSON.stringify(body)).toBe(409);
+    expect(body.message).toBe(sentence);
+    const list = await sessions.sales.get(`/api/tickets/${deal}/deal-quotations`);
+    expect(list.status(), 'GET /api/tickets/{id}/deal-quotations').toBe(200);
+    expect((await list.json()).items, 'the refusal wrote nothing').toHaveLength(0);
+    expect((await ticketOf(deal)).summary.salesStage).toBe('LEAD_APPROACH');
     await page.goto(`/tickets/${deal}`);
     await stageIs(page, 1);
     await shot(page, '09-offroute-deal-stage1');
