@@ -227,9 +227,9 @@ export function RecipientChip({ role, count = null }) {
     <span
       data-testid="quotation-recipient-chip"
       data-role={role}
-      className={cn('inline-flex min-h-5 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-2xs font-extrabold', chip.className)}
+      className={cn('inline-flex min-h-[18px] items-center gap-1 whitespace-nowrap rounded-full border px-1.5 text-2xs font-extrabold', chip.className)}
     >
-      <Icon name={chip.icon} size={11} />
+      <Icon name={chip.icon} size={10} />
       {chip.label}
       {count != null && count > 1 ? <span className="font-bold">{`×${count}`}</span> : null}
     </span>
@@ -241,7 +241,7 @@ function GroupSummary({ row }) {
   const docs = row.documentCount ?? 1;
   const counts = row.roleCounts ?? {};
   return (
-    <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted" data-testid="quotation-group-summary">
+    <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-2xs text-text-muted mobile:text-xs" data-testid="quotation-group-summary">
       <span>{`ใบเสนอราคา ${docs} รายการ${row.versionCount > docs ? ` (${row.versionCount} เวอร์ชัน)` : ''}`}</span>
       {KNOWN_ROLES.filter((r) => counts[r]).map((r) => <RecipientChip key={r} role={r} count={counts[r]} />)}
       {(row.bidderCount ?? 0) > 1 ? (
@@ -259,10 +259,12 @@ function GroupSummary({ row }) {
 // the third line says what sits beneath it, so on a phone the cards below read as this deal's quotations.
 function GroupRowContent({ row }) {
   return (
-    <span className="flex min-w-0 flex-col gap-0.5" data-testid="quotation-group-row">
-      <span className="flex min-w-0 items-center justify-between gap-3">
-        <span className="inline-flex min-w-0 items-center gap-1.5 text-2xs font-extrabold uppercase tracking-wide text-info" data-testid="quotation-group-deal">
-          <Icon name="briefcase" size={14} />
+    // Desktop: ONE line (deal · project · what it holds · เปิดดีล), so the header costs a row, not three.
+    // Phone: stacked, deal label and เปิดดีล on top, the project as the card's title.
+    <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 mobile:flex-col mobile:flex-nowrap mobile:items-stretch" data-testid="quotation-group-row">
+      <span className="contents mobile:flex mobile:min-w-0 mobile:items-center mobile:justify-between mobile:gap-3">
+        <span className="inline-flex min-w-0 shrink-0 items-center gap-1.5 text-2xs font-extrabold uppercase tracking-wide text-info" data-testid="quotation-group-deal">
+          <Icon name="briefcase" size={13} />
           <span className="truncate">{`ดีล ${row.ticketCode ?? `#${row.ticketId}`}`}</span>
           {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
         </span>
@@ -270,13 +272,13 @@ function GroupRowContent({ row }) {
           <Link
             to={`/tickets/${row.ticketId}`}
             aria-label={`เปิดดีล ${row.ticketCode ?? row.ticketId}`}
-            className="inline-flex min-h-8 shrink-0 items-center text-xs font-bold text-info underline mobile:min-h-[44px]"
+            className="order-last ml-auto inline-flex min-h-6 shrink-0 items-center text-xs font-bold text-info underline mobile:order-none mobile:ml-0 mobile:min-h-[44px]"
           >
             เปิดดีล →
           </Link>
         ) : null}
       </span>
-      <strong className="min-w-0 text-md font-extrabold leading-snug text-text [overflow-wrap:anywhere]">
+      <strong className="min-w-0 text-sm font-extrabold leading-snug text-text [overflow-wrap:anywhere] mobile:text-md">
         {row.projectName ?? 'ไม่ระบุโครงการ'}
       </strong>
       <GroupSummary row={row} />
@@ -359,9 +361,11 @@ const COLUMNS = [
     // what made it lose 29px at 721px. `flex flex-col` still stacks the two lines: a Tailwind
     // utility beats the escape hatch's `display: block` on layer order (styles.css is
     // `layer(legacy)`), so only the wrapping changes.
+    // A grouped row puts the customer and its chips on ONE line (wrapping only when the column is too narrow),
+    // with compact badges, so a quotation costs one table line. Desktop only: the phone renders QuotationCard.
     render: (row) => (row.isGroup ? null : (
-      <span className="flex flex-col gap-0.5">
-        <span className="flex items-center gap-2 font-bold">
+      <span className={cn('flex gap-0.5', row.inGroup ? 'flex-row flex-wrap items-center gap-x-2 [&_.status-badge]:min-h-5 [&_.status-badge]:px-2 [&_.status-badge]:py-0 [&_.status-badge]:text-2xs' : 'flex-col')}>
+        <span className="flex items-center gap-2 text-sm font-bold">
           {row.inGroup && row.groupContractors > 1 && row.groupIndex && !row.isOlderVersion ? <GroupIndexCircle n={row.groupIndex} /> : null}
           {row.customerName ?? '-'}
         </span>
@@ -379,14 +383,14 @@ const COLUMNS = [
     // no child element, so styles.css's wrap escape hatch has nothing to match and a two-word Thai
     // name is truncated rather than broken across two lines. `ภิญญาดา วงศ์ประเสริฐ` needs 147.8px
     // on one line and this column is floored at 64px, so wrapping is what keeps it whole.
-    render: (row) => (row.isGroup ? null : <span>{row.salesRepName ?? '-'}</span>),
+    render: (row) => (row.isGroup ? null : <span className="text-xs">{row.salesRepName ?? '-'}</span>),
   },
   {
     key: 'grandTotal',
     header: 'ยอดรวม',
     align: 'right',
     sortable: true,
-    render: (row) => (row.isGroup ? null : <span className="tabular-nums font-bold">{formatMoney(row.grandTotal)}</span>),
+    render: (row) => (row.isGroup ? null : <span className="tabular-nums text-sm font-bold">{formatMoney(row.grandTotal)}</span>),
   },
   {
     key: 'status',
@@ -396,14 +400,14 @@ const COLUMNS = [
     render: (row) => {
       if (row.isGroup) return null;
       const status = dealQuotationStatusLabel(row.docStatus);
-      return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
+      return <span className="[&_.status-badge]:min-h-5 [&_.status-badge]:px-2 [&_.status-badge]:py-0 [&_.status-badge]:text-2xs"><StatusBadge tone={status.tone}>{status.label}</StatusBadge></span>;
     },
   },
   {
     key: 'quotationDate',
     header: 'วันที่',
     sortable: true,
-    render: (row) => (row.isGroup ? null : formatThaiDate(row.quotationDate)),
+    render: (row) => (row.isGroup ? null : <span className="text-xs">{formatThaiDate(row.quotationDate)}</span>),
   },
 ];
 
@@ -425,12 +429,13 @@ const GROUPED_COLUMNS = COLUMNS.map((column) => ({
 // cards read as children of the deal header above them. An older version sits one step further in, dimmed.
 export function quotationRowClassName(row) {
   if (row.isGroup) {
-    return 'bg-info-bg-alt [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden border-t-2 border-t-info-border mobile:border-t mobile:border-info-border mobile:rounded-b-none mobile:py-2.5';
+    return 'py-1.5 bg-info-bg-alt [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden border-t-2 border-t-info-border mobile:border-t mobile:border-info-border mobile:rounded-b-none mobile:py-2.5';
   }
   const dim = row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : row.isOlderVersion ? 'bg-surface-muted text-text-muted' : '';
   if (!row.inGroup) return dim;
   return [
     dim,
+    'py-1.5 mobile:py-4',
     'shadow-[inset_4px_0_0_var(--color-info)]',
     // A page boundary can split a group: the first card on a page drops the pull-up, the last closes its corners.
     'mobile:-mt-[10px] mobile:first:mt-0 mobile:border-info-border mobile:border-t-0 mobile:shadow-none mobile:last:rounded-b-md',
