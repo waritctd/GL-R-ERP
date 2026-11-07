@@ -8,6 +8,8 @@
 -- WHICH GROUPS (strict on purpose; anything else is left for a person to decide):
 --   * same deal owner (sales.ticket.created_by) and same project name (customers.project.name_key, V204);
 --   * at least two different customers in the group;
+--   * the same keyed_by (V202) on every ticket, and the same deposit_policy and tender_requirement: the survivor
+--     keeps its own, so a group that disagrees would silently change the others' owner/keyer or policy;
 --   * EVERY ticket in the group, among those not already cancelled, is a pure container:
 --       quotation_only = TRUE, status 'draft', lifecycle 'ACTIVE', at least one live quotation, and NOTHING else
 --       hanging off it: no ticket_item, pricing_request, deposit_notice, import_request, payment_receipt,
@@ -41,7 +43,7 @@
 
 CREATE TEMP TABLE v205_member ON COMMIT DROP AS
 WITH t AS (
-    SELECT t.ticket_id, t.created_by, t.customer_id, p.name_key,
+    SELECT t.ticket_id, t.created_by, t.customer_id, p.name_key, t.keyed_by, t.deposit_policy, t.tender_requirement,
            (t.quotation_only AND t.status = 'draft' AND t.lifecycle = 'ACTIVE'
             AND EXISTS (SELECT 1 FROM sales.quotation q WHERE q.ticket_id = t.ticket_id
                           AND q.doc_status NOT IN ('SUPERSEDED', 'CANCELLED'))
@@ -67,6 +69,9 @@ grp AS (
      GROUP BY created_by, name_key
     HAVING COUNT(*) >= 2
        AND COUNT(DISTINCT customer_id) >= 2
+       AND COUNT(DISTINCT COALESCE(keyed_by, created_by)) = 1
+       AND COUNT(DISTINCT deposit_policy) = 1
+       AND COUNT(DISTINCT tender_requirement) = 1
        AND bool_and(container)
 )
 SELECT t.ticket_id, g.survivor_id

@@ -56,5 +56,5 @@ export function isAwaitingBidOutcome(parties) {
 
 /** `<code>-A`, `-B`, … for the n-th (0-based) child deal a bid outcome forks. */
 export function childDealCode(code, index) {
-  return `${code}-${String.fromCharCode(65 + index)}`;
+  return `${code}-${index < 26 ? String.fromCharCode(65 + index) : index + 1}`;
 }
