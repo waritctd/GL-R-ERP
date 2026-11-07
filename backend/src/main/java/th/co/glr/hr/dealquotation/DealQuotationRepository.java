@@ -1635,8 +1635,10 @@ public class DealQuotationRepository {
                SET doc_status = 'SUPERSEDED', updated_at = now()
              WHERE ticket_id = :ticketId AND quotation_id <> :approvedId
                -- V204: one live offer per PARTY, not per deal. Sibling bidders each keep their own approved
-               -- document; a row with no party (pre-V204, no customer) still sweeps like before.
-               AND (party_id IS NOT DISTINCT FROM (SELECT party_id FROM sales.quotation WHERE quotation_id = :approvedId))
+               -- document; a row with no party (pre-V204, no customer, or the pricing-request route which is deal-level) still sweeps like before.
+               AND (party_id IS NULL
+                    OR (SELECT party_id FROM sales.quotation WHERE quotation_id = :approvedId) IS NULL
+                    OR party_id = (SELECT party_id FROM sales.quotation WHERE quotation_id = :approvedId))
                AND ((origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED')
                     OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ISSUED', 'REVISION_REQUESTED')))
             RETURNING quotation_id, number
