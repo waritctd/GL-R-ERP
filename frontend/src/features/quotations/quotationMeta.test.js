@@ -2157,3 +2157,26 @@ describe('depositTermsSummary', () => {
     expect(meta.depositTermsSummary({ depositPercent: null })).toBe('มัดจำ 30% · ส่วนที่เหลือก่อนหรือเมื่อส่งมอบสินค้า');
   });
 });
+
+describe('deal parties — the per-party live-quotation block (V204)', () => {
+  it('picks the named party, else the deal customer\'s party preferring the recipient role', () => {
+    const { quotationTargetParty } = meta;
+    const parties = [
+      { id: 1, customerId: 5, role: 'DESIGNER' },
+      { id: 2, customerId: 5, role: 'BUYER' },
+      { id: 3, customerId: 7, role: 'BUYER' },
+    ];
+    expect(quotationTargetParty(parties, { partyId: 3 })?.id).toBe(3);
+    expect(quotationTargetParty(parties, { customerId: 5, recipientType: 'BUYER' })?.id).toBe(2);
+    expect(quotationTargetParty(parties, { customerId: 5, recipientType: 'OWNER' })?.id).toBe(1);
+    expect(quotationTargetParty(undefined, { customerId: 5 })).toBeNull();
+  });
+
+  it('a party\'s live quotation is its latest one in DRAFT / PENDING_APPROVAL / APPROVED', () => {
+    const { liveQuotationOfParty } = meta;
+    const party = (docStatus) => ({ latestQuotationId: 9, latestQuotationNumber: 'QT-1', latestQuotationStatus: docStatus });
+    expect(liveQuotationOfParty(party('APPROVED'))).toEqual({ id: 9, number: 'QT-1', docStatus: 'APPROVED' });
+    expect(liveQuotationOfParty(party('CANCELLED'))).toBeNull();
+    expect(liveQuotationOfParty({ latestQuotationId: null })).toBeNull();
+  });
+});

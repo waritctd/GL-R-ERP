@@ -411,6 +411,88 @@ public class DealQuotationRepository {
     /** A quotation's printed {@code number} and its {@code revisionNo}, as {@link #nextNumberOnDeal} returns them. */
     public record QuotationNumber(String number, int revisionNo) {}
 
+    // ── V204 deal party (docs/decisions/deal-party-model.md) ─────────────────────────────────────
+
+    /** The few party facts the quotation engine needs: whose document this is and whether it may still be quoted. */
+    public record PartyRef(long partyId, long ticketId, long customerId, Long contactId, String role, String status) {}
+
+    public Optional<PartyRef> findParty(long partyId) {
+        List<PartyRef> rows = jdbc.query("""
+            SELECT party_id, ticket_id, customer_id, contact_id, role, status
+              FROM sales.deal_party WHERE party_id = :id
+            """, Map.of("id", partyId),
+            (rs, n) -> new PartyRef(rs.getLong("party_id"), rs.getLong("ticket_id"), rs.getLong("customer_id"),
+                nullableLong(rs, "contact_id"), rs.getString("role"), rs.getString("status")));
+        return rows.stream().findFirst();
+    }
+
+    /** The deal's ONE party when it has exactly one (the pre-V204 shape every backfilled deal has), else empty —
+     * the party a path that was not told one (a PRICING_REQUEST-origin quotation) attaches its document to. */
+    public Optional<Long> findSolePartyId(long ticketId) {
+        List<Long> ids = jdbc.query("""
+            SELECT party_id FROM sales.deal_party WHERE ticket_id = :ticketId
+            """, Map.of("ticketId", ticketId), (rs, n) -> rs.getLong("party_id"));
+        return ids.size() == 1 ? Optional.of(ids.get(0)) : Optional.empty();
+    }
+
+    /**
+     * The party a document that names none belongs to: the deal's OWN customer's party (preferring the document's
+     * recipient role), else the deal's sole party, else none. Covers every pre-V204 caller and the deal owner quoting
+     * the deal's customer on a deal that has since gained sibling bidders.
+     */
+    public Optional<Long> findDefaultPartyId(long ticketId, Long ticketCustomerId, String role) {
+        if (ticketCustomerId != null) {
+            List<Long> own = jdbc.query("""
+                SELECT party_id FROM sales.deal_party
+                 WHERE ticket_id = :ticketId AND customer_id = :customerId
+                 ORDER BY (role = :role) DESC, party_id
+                 LIMIT 1
+                """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("customerId", ticketCustomerId)
+                    .addValue("role", role == null ? "" : role),
+                (rs, n) -> rs.getLong("party_id"));
+            if (!own.isEmpty()) {
+                return Optional.of(own.get(0));
+            }
+        }
+        return findSolePartyId(ticketId);
+    }
+
+    /** The party whose quotation became the confirmed order has won (V204); the bid outcome also sets it. */
+    public int markPartyAwarded(long partyId) {
+        return jdbc.update("""
+            UPDATE sales.deal_party SET status = 'AWARDED', not_awarded_reason = NULL, updated_at = now()
+             WHERE party_id = :id AND status <> 'AWARDED'
+            """, Map.of("id", partyId));
+    }
+
+    /** ACTIVE -> QUOTED once the party's first document exists; every other status is left alone. */
+    public int markPartyQuoted(long partyId) {
+        return jdbc.update("""
+            UPDATE sales.deal_party SET status = 'QUOTED', updated_at = now()
+             WHERE party_id = :id AND status = 'ACTIVE'
+            """, Map.of("id", partyId));
+    }
+
+    /**
+     * {@link #nextNumberOnDeal} scoped to ONE party: each ผู้รับเหมา bidding on a deal keeps its own number
+     * family, so a second contractor's first document is a fresh {@code QT-<year>-<seq>-1}, never a "-2" of the
+     * first contractor's. The revision counter is still per (deal, base), which is exact because bases differ.
+     * Callers must hold {@link #lockTicket}.
+     */
+    public QuotationNumber nextNumberOnDealForParty(long ticketId, long partyId) {
+        List<String> newest = jdbc.query("""
+            SELECT number, quotation_revision_no FROM sales.quotation
+             WHERE ticket_id = :ticketId AND party_id = :partyId AND origin IN ('DEAL_DIRECT', 'PRICING_REQUEST')
+             ORDER BY quotation_id DESC
+             LIMIT 1
+            """,
+            new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("partyId", partyId),
+            (rs, rowNum) -> baseNumber(rs.getString("number"), rs.getInt("quotation_revision_no")));
+        String base = newest.isEmpty() ? nextQuotationCode() : newest.get(0);
+        int revisionNo = nextRevisionNo(ticketId, base);
+        return new QuotationNumber(revisionNumber(base, revisionNo), revisionNo);
+    }
+
     /**
      * The number and revision for the next quotation written on this deal — the one place the
      * "continue the deal's family, else mint" decision is made, so {@code DealQuotationService#create}
@@ -696,7 +778,10 @@ public class DealQuotationRepository {
         // V192.3 — how to reach the person orderedByName names; see DealQuotationDtos#orderedByPhone.
         // They travel beside orderedByName on every path it travels, so they sit beside it here:
         // already trimmed and checked by DealQuotationService, null where there is none to carry.
-        String orderedByPhone, String orderedByEmail) {
+        String orderedByPhone, String orderedByEmail,
+        // V204 — the deal party this document is addressed to (sales.quotation.party_id). Null only on a
+        // path that could not resolve one (a ticket with no party at all).
+        Long partyId) {
 
         // There is no convenience constructor that defaults the recipient: every create path
         // states its own, so nothing here can write 'UNSPECIFIED'.
@@ -726,7 +811,7 @@ public class DealQuotationRepository {
                  omit_contact_honorific, full_payment_term,
                  parent_quotation_id, derived_from_quotation_id, updated_at,
                  pricing_request_id, pricing_decision_id,
-                 ordered_by_name, ordered_by_phone, ordered_by_email)
+                 ordered_by_name, ordered_by_phone, ordered_by_email, party_id)
             VALUES
                 (:ticketId, :number, :salesRepId, now(), :totalAmount, :currency, :version,
                  'DRAFT', :recipientType, :recipientLabel, :revisionNo, :origin, :createdById, :salesRepId,
@@ -738,7 +823,7 @@ public class DealQuotationRepository {
                  :omitContactHonorific, :fullPaymentTerm,
                  :parentQuotationId, :derivedFromQuotationId, now(),
                  :pricingRequestId, :pricingDecisionId,
-                 :orderedByName, :orderedByPhone, :orderedByEmail)
+                 :orderedByName, :orderedByPhone, :orderedByEmail, :partyId)
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", p.ticketId())
@@ -790,7 +875,8 @@ public class DealQuotationRepository {
                 // See DealQuotationDtos#orderedByName.
                 .addValue("orderedByName", p.orderedByName())
                 .addValue("orderedByPhone", p.orderedByPhone())
-                .addValue("orderedByEmail", p.orderedByEmail()),
+                .addValue("orderedByEmail", p.orderedByEmail())
+                .addValue("partyId", p.partyId()),
             keyHolder, new String[]{"quotation_id"});
         long quotationId = keyHolder.getKey().longValue();
         insertItems(quotationId, p.items());
@@ -1442,18 +1528,32 @@ public class DealQuotationRepository {
      * was cancelled (with whether it was waiting on approval) so the caller can log and notify. PRICING_REQUEST-origin
      * rows are never touched. */
     public List<CancelledQuotation> cancelOtherOpenDirectQuotations(long ticketId, long keepId) {
+        return cancelOtherOpenDirectQuotations(ticketId, keepId, java.util.Set.of());
+    }
+
+    /**
+     * {@link #cancelOtherOpenDirectQuotations(long, long)} that LEAVES the documents of {@code keepPartyIds} alone:
+     * a bid outcome recorded with "ยังรอผล" for some contractors confirms the winner's order without stranding
+     * the still-open bidders' drafts (V204). An empty set is the original behaviour.
+     */
+    public List<CancelledQuotation> cancelOtherOpenDirectQuotations(long ticketId, long keepId, java.util.Set<Long> keepPartyIds) {
+        String keepClause = keepPartyIds.isEmpty() ? "" : " AND (party_id IS NULL OR party_id NOT IN (:keepPartyIds))";
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("ticketId", ticketId).addValue("keepId", keepId);
+        if (!keepPartyIds.isEmpty()) params.addValue("keepPartyIds", keepPartyIds);
         return jdbc.query("""
             WITH prior AS (
                 SELECT quotation_id, doc_status FROM sales.quotation
                  WHERE ticket_id = :ticketId AND quotation_id <> :keepId AND origin = 'DEAL_DIRECT'
-                   AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')
+                   AND doc_status IN ('DRAFT', 'PENDING_APPROVAL')""" + keepClause + """
+
                  FOR UPDATE) -- lock first, so a concurrent DRAFT -> PENDING_APPROVAL is read as PENDING (B7 notice)
             UPDATE sales.quotation q SET doc_status = 'CANCELLED', updated_at = now()
               FROM prior p
              WHERE q.quotation_id = p.quotation_id
                AND q.doc_status IN ('DRAFT', 'PENDING_APPROVAL') -- row-lock re-check against a concurrent approve
             RETURNING q.quotation_id, q.number, p.doc_status
-            """, Map.of("ticketId", ticketId, "keepId", keepId),
+            """, params,
             (rs, n) -> new CancelledQuotation(rs.getLong("quotation_id"), rs.getString("number"),
                 "PENDING_APPROVAL".equals(rs.getString("doc_status"))));
     }
@@ -1526,12 +1626,19 @@ public class DealQuotationRepository {
      *
      * <p>Existing data is NOT rewritten: this only runs going forward, from the next approval — a
      * ticket already holding two or more live rows stays as it is until then.
+     *
+     * <p>V204: scoped to the approved row's PARTY, so each ผู้รับเหมา bidding on the deal keeps one live offer.
      */
     public List<SupersededSibling> supersedeOtherLiveOnTicket(long ticketId, long approvedId) {
         return jdbc.query("""
             UPDATE sales.quotation
                SET doc_status = 'SUPERSEDED', updated_at = now()
              WHERE ticket_id = :ticketId AND quotation_id <> :approvedId
+               -- V204: one live offer per PARTY, not per deal. Sibling bidders each keep their own approved
+               -- document; a row with no party (pre-V204, no customer, or the pricing-request route which is deal-level) still sweeps like before.
+               AND (party_id IS NULL
+                    OR (SELECT party_id FROM sales.quotation WHERE quotation_id = :approvedId) IS NULL
+                    OR party_id = (SELECT party_id FROM sales.quotation WHERE quotation_id = :approvedId))
                AND ((origin = 'DEAL_DIRECT' AND doc_status = 'APPROVED')
                     OR (origin = 'PRICING_REQUEST' AND doc_status IN ('ISSUED', 'REVISION_REQUESTED')))
             RETURNING quotation_id, number
@@ -2022,9 +2129,14 @@ public class DealQuotationRepository {
                    q.hide_project_name,
                    -- Quotation <-> deal linking, slice 1: the deal's code and LIVE stage, so list
                    -- and detail can link "ดีล {code}" without a second round trip.
-                   tk.code AS ticket_code, tk.sales_stage AS deal_stage
+                   tk.code AS ticket_code, tk.sales_stage AS deal_stage,
+                   -- V204 deal party: the addressed party's LIVE status/headline and the deal's bidder count,
+                   -- so the register can group sibling bids under their project without a second round trip.
+                   q.party_id, dp.status AS party_status, dp.is_headline AS party_headline,
+                   (SELECT COUNT(*) FROM sales.deal_party b WHERE b.ticket_id = q.ticket_id AND b.role = 'BUYER') AS deal_buyer_count
               FROM sales.quotation q
               LEFT JOIN sales.ticket tk ON tk.ticket_id = q.ticket_id
+              LEFT JOIN sales.deal_party dp ON dp.party_id = q.party_id
               LEFT JOIN hr.employee cb  ON cb.employee_id = q.created_by
               LEFT JOIN hr.employee rep ON rep.employee_id = q.sales_rep_id
               LEFT JOIN hr.employee ap  ON ap.employee_id = q.approved_by
@@ -2174,7 +2286,12 @@ public class DealQuotationRepository {
             rs.getString("recipient_label"),
             rs.getString("ticket_code"),
             rs.getString("deal_stage"),
-            rs.getString("origin") == null
+            rs.getString("origin") == null,
+            // V204 deal party (see baseSelect): party_status/party_headline are null/false when party_id is null.
+            nullableLong(rs, "party_id"),
+            rs.getString("party_status"),
+            rs.getBoolean("party_headline"),
+            rs.getInt("deal_buyer_count")
         );
     }
 
@@ -2211,10 +2328,13 @@ public class DealQuotationRepository {
                    q.issued_at, q.updated_at, q.total_amount, q.currency,
                    q.customer_name, q.customer_address, q.customer_tax_id, q.customer_phone, q.project_name,
                    q.customer_notes, q.validity_date, q.recipient_type, q.recipient_label,
-                   tk.code AS ticket_code, tk.sales_stage AS deal_stage
+                   tk.code AS ticket_code, tk.sales_stage AS deal_stage,
+                   q.party_id, dp.status AS party_status, dp.is_headline AS party_headline,
+                   (SELECT COUNT(*) FROM sales.deal_party b WHERE b.ticket_id = q.ticket_id AND b.role = 'BUYER') AS deal_buyer_count
               FROM sales.quotation q
               LEFT JOIN hr.employee e ON e.employee_id = q.issued_by
               LEFT JOIN sales.ticket tk ON tk.ticket_id = q.ticket_id
+              LEFT JOIN sales.deal_party dp ON dp.party_id = q.party_id
              WHERE q.quotation_id IN (:ids) AND q.origin IS NULL
             """, Map.of("ids", ids), (rs, rowNum) -> {
                 BigDecimal subtotal = rs.getBigDecimal("total_amount") != null
@@ -2252,7 +2372,9 @@ public class DealQuotationRepository {
                     false, null, null,
                     // Recipient chip: a v1 row carries recipient_type/label too (V52).
                     rs.getString("recipient_type"), rs.getString("recipient_label"),
-                    rs.getString("ticket_code"), rs.getString("deal_stage"), true);
+                    rs.getString("ticket_code"), rs.getString("deal_stage"), true,
+                    nullableLong(rs, "party_id"), rs.getString("party_status"), rs.getBoolean("party_headline"),
+                    rs.getInt("deal_buyer_count"));
             });
     }
 

@@ -51,6 +51,11 @@ import {
 import { DealStagePanel } from './DealStagePanel.jsx';
 import { DealStateHeader } from './DealStateHeader.jsx';
 import { DealTrackingPanel } from './DealTrackingPanel.jsx';
+import { DealPartiesPanel } from './DealPartiesPanel.jsx';
+import { BidOutcomeModal } from './BidOutcomeModal.jsx';
+import {
+  PARTY_ROLE_LABEL, buyerParties, isAwaitingBidOutcome, isBiddingParty,
+} from './dealPartyMeta.js';
 import { visibleSections } from './salesViewScope.js';
 import { nextOnRoute, offRoutePartiesFor, stageIndexIn, useStageCatalog } from './stageCatalog.js';
 import { PARTY_LABEL } from './salesActions.js';
@@ -482,6 +487,16 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: canViewDealTracking && !!ticketId && !!ticket,
   });
   const activities = canViewDealTracking ? (activitiesQuery.data ?? []) : [];
+
+  // Deal parties (deal-party-model.md): the contractors bidding this deal, its designer and owner.
+  // Same audience as the whole-deal read (GET /tickets/{id}): sales, sales_manager, ceo.
+  const partiesQuery = useQuery({
+    queryKey: queryKeys.ticketParties(ticketId),
+    queryFn: () => api.tickets.parties(ticketId).then((r) => r.parties ?? []),
+    enabled: canViewDealTracking && !!ticketId && !!ticket,
+  });
+  const parties = canViewDealTracking ? (partiesQuery.data ?? []) : [];
+  const [bidOutcomeOpen, setBidOutcomeOpen] = useState(false);
 
   // The main button creates the deposit notice / remaining invoice, so the sales rep's page reads
   // both. Same keys and shapes as DealPaymentSection's reads, so the cache is shared (one fetch).
@@ -1178,6 +1193,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   let advanceInHeader = false;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
+  // "บันทึกผลประมูล" (deal-party-model.md): offered to the deal's editors (owner/keyer sales,
+  // sales_manager, ceo — DealPartyService re-checks) on an ACTIVE deal with at least one contractor
+  // still bidding. It outranks the quote-stage actions below, never the money/close steps.
+  const canEditParties = (role === 'sales' && isOwner) || role === 'sales_manager' || role === 'ceo';
+  const bidOutcomeAvailable = canEditParties && isActiveLifecycle && parties.some(isBiddingParty);
+  const awaitingBid = isAwaitingBidOutcome(parties);
+  const bidOutcomeBanner = bidOutcomeAvailable && awaitingBid
+    ? `รอผลประมูล · ผู้รับเหมา ${buyerParties(parties).filter(isBiddingParty).length} ราย เสนอราคาแล้ว · กด "บันทึกผลประมูล" เมื่อทราบผล เลือกผู้ชนะได้มากกว่า 1 ราย`
+    : null;
+  if (bidOutcomeAvailable && !can.confirmFinalPayment && !can.confirmClose && !can.verifyClose) {
+    stickyPrimaryLabel = 'บันทึกผลประมูล';
+    stickyPrimaryAction = (
+      <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="record_bid_outcome"
+        onClick={() => setBidOutcomeOpen(true)}>
+        <Icon name="check" size={14} />
+        บันทึกผลประมูล
+      </Button>
+    );
+  }
   if (!stickyPrimaryAction && workStateAction) {
     const actionKey = workStateAction.key ?? workStateAction.code;
     const jumpId = IN_PAGE_JUMP_TARGET[actionKey];
@@ -1388,7 +1422,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // workState can hand back its own finished line (`workState.bannerText`: the rep's direct
   // quotation waiting on ผจก.ขาย/CEO), which reads before the blocker line. The เสนอราคา<party>
   // primary also carries one, shown beside its button.
-  const bannerText = primaryAction
+  const bannerText = stickyPrimaryLabel === 'บันทึกผลประมูล'
+    ? bidOutcomeBanner
+    : primaryAction
     ? nextAction
     : stickyPrimaryLabel
       ? (workState.bannerText ?? null)
@@ -1624,6 +1660,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             onRefresh={refreshTicket}
             condensed={ticketChromeCondensed}
             onMenuOpenChange={onHeaderMenuOpenChange}
+            awaitingBid={awaitingBid ? { projectName: summary.projectName, count: buyerParties(parties).length } : null}
           />
           <div className="border-t border-border bg-surface px-4 sm:px-5">
             {/* onSurface: this strip is on a white card, unlike the two page-background call
@@ -1711,6 +1748,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           are plain aliases of `tabItems`/`activeTab`. */}
       <div className="min-w-0">
       <TabPanel id="deal" idPrefix="ticket-detail" active={visibleActiveTab === 'deal'}>
+          {/* ผู้รับเหมาที่เสนอราคา: one row per bidding contractor (deal-party-model.md). */}
+          {canViewDealTracking ? (
+            <div className="mb-4">
+              <DealPartiesPanel
+                ticketId={ticketId}
+                parties={parties}
+                loading={partiesQuery.isLoading}
+                canEdit={canEditParties && isActiveLifecycle}
+                showToast={showToast}
+              />
+            </div>
+          ) : null}
           {/* วันสำคัญ / ผู้เกี่ยวข้อง, with the assignedImport role-scoped readout. */}
           <div className="grid gap-4 sm:grid-cols-2">
             <section className="rounded-md border border-border bg-surface p-4">
@@ -1726,6 +1775,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               <ContextSection title="ผู้เกี่ยวข้อง" helper="ทีมที่เกี่ยวข้อง" icon="users">
                 <dl className="m-0">
                   <FieldRow label="เจ้าของดีล" value={summary.createdByName} />
+                  {/* DESIGNER / OWNER parties when the deal has them; the old free-text names
+                      otherwise (deal-party-model.md: parties replace them). */}
+                  {['DESIGNER', 'OWNER'].map((partyRole) => {
+                    const rows = parties.filter((p) => p.role === partyRole);
+                    const fallback = partyRole === 'DESIGNER' ? summary.designerName : summary.ownerName;
+                    if (rows.length === 0 && !fallback) return null;
+                    return (
+                      <FieldRow
+                        key={partyRole}
+                        label={<StatusBadge tone={partyRole === 'DESIGNER' ? 'info' : 'neutral'}>{PARTY_ROLE_LABEL[partyRole]}</StatusBadge>}
+                        value={rows.length ? rows.map((p) => p.customerName).join(', ') : fallback}
+                      />
+                    );
+                  })}
                   <FieldRow label="ผู้รับเรื่องคำขอราคา" value={assignedImport} />
                   <FieldRow label="บัญชี" value={summary.closeConfirmedByName || 'ยังไม่ระบุ'} />
                 </dl>
@@ -2636,6 +2699,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
           quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
           doors to the same irreversible act say the same thing. */}
+      {bidOutcomeOpen ? (
+        <BidOutcomeModal
+          ticketId={ticketId}
+          summary={summary}
+          projectName={summary.projectName}
+          parties={parties}
+          quotations={dealQuotationRows}
+          onClose={() => setBidOutcomeOpen(false)}
+          showToast={showToast}
+        />
+      ) : null}
+
       <ConfirmOrderDialog
         open={confirm?.kind === 'confirmOrderDirect'}
         number={confirm?.number}

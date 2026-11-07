@@ -92,6 +92,18 @@ public final class DirectQuotationLocks {
      * confirmed from a quotation yet. Same "live" definition
      * as {@link #requireNoLiveDirectQuotation}; called ONLY by {@code DealQuotationService#create}.
      */
+    /** {@link #requireNoLiveDirectQuotationForCreate} per deal party (V204): only THIS party's live
+     * document blocks a new one for it; a sibling bidder's does not. */
+    public static void requireNoLiveDirectQuotationForParty(TicketRepository tickets, long ticketId, long partyId) {
+        tickets.findLiveDirectQuotationForParty(ticketId, partyId).ifPresent(live -> {
+            java.util.Map<String, Object> details = new java.util.LinkedHashMap<>();
+            details.put("liveQuotationId", live.id());
+            details.put("number", live.number());
+            details.put("docStatus", live.docStatus());
+            throw new ApiException(HttpStatus.CONFLICT, liveDirectQuotationMessage(live.number()), details);
+        });
+    }
+
     public static void requireNoLiveDirectQuotationForCreate(TicketRepository tickets, long ticketId, String recipientType) {
         // Once the order is confirmed from a quotation the route is closed: a later-party draft could never be submitted.
         boolean routeClosed = tickets.hasPromotionFromQuotationEvent(ticketId);

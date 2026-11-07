@@ -11,6 +11,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { partyStatusLabel } from '../tickets/dealPartyMeta.js';
 import {
   canApproveDealQuotation, canCreateDealQuotationStandalone, DEAL_QUOTATION_AMOUNT_OPTIONS,
   DEAL_QUOTATION_EMAIL_OPTIONS, DEAL_QUOTATION_STATUS_TABS, dealQuotationListSeesAll, dealQuotationRepOptions,
@@ -81,22 +82,112 @@ const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(
 // canApproveDealQuotation (quotationMeta.js) is the single source of truth, shared with the
 // editor's own อนุมัติ/ไม่อนุมัติ button gate.
 
+// ── "จัดกลุ่มตามโครงการ" (deal-party-model.md, prototype screen 1) ─────────────────────────────
+// A deal with more than one BUYER party (DealQuotationDto.dealBuyerCount) is one project quoted to
+// several contractors: its rows are listed together under a thin group row, inside DataTable's own
+// row mechanism (a synthetic row whose first cell spans the grid, the rest hidden), so search,
+// pagination and the mobile cards all keep working. Grouping turns column sorting off: a sort would
+// scatter a group's rows away from their header.
+const GROUP_PREF_KEY = 'glr.quotations.groupByProject';
+
+function readGroupPref() {
+  try {
+    return globalThis.localStorage?.getItem(GROUP_PREF_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+function writeGroupPref(on) {
+  try {
+    globalThis.localStorage?.setItem(GROUP_PREF_KEY, on ? 'on' : 'off');
+  } catch {
+    // A browser that refuses storage just forgets the choice.
+  }
+}
+
+/** The rows in server order, each multi-bidder deal's rows pulled together under a group row placed
+ * where its newest row was. Member rows are copied with `inGroup: true`. */
+export function groupQuotationRows(rows) {
+  const byTicket = new Map();
+  for (const row of rows) {
+    if (Number(row.dealBuyerCount ?? 0) > 1 && row.ticketId != null) {
+      if (!byTicket.has(row.ticketId)) byTicket.set(row.ticketId, []);
+      byTicket.get(row.ticketId).push(row);
+    }
+  }
+  const out = [];
+  const emitted = new Set();
+  for (const row of rows) {
+    const members = byTicket.get(row.ticketId);
+    if (!members) { out.push(row); continue; }
+    if (emitted.has(row.ticketId)) continue;
+    emitted.add(row.ticketId);
+    const headline = members.find((m) => m.partyHeadline) ?? null;
+    out.push({
+      isGroup: true,
+      id: `group-${row.ticketId}`,
+      ticketId: row.ticketId,
+      ticketCode: row.ticketCode,
+      projectName: members.find((m) => m.projectName)?.projectName ?? null,
+      buyerCount: Number(row.dealBuyerCount),
+      decided: members.some((m) => m.partyStatus === 'AWARDED' || m.partyStatus === 'AWARDED_SPLIT'),
+      headlineAmount: headline?.grandTotal ?? null,
+      // What a search over the group header matches: any of its rows' own text.
+      searchText: members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''}`).join(' '),
+    });
+    members.forEach((m) => out.push({ ...m, inGroup: true }));
+  }
+  return out;
+}
+
+function GroupRowContent({ row }) {
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs" data-testid="quotation-group-row">
+      <strong className="text-sm font-extrabold text-text">{row.projectName ?? row.ticketCode ?? '-'}</strong>
+      <StatusBadge tone="info">{`${row.buyerCount} ผู้รับเหมา`}</StatusBadge>
+      {row.decided ? <StatusBadge tone="neutral">ตัดสินแล้ว</StatusBadge> : null}
+      <span className="text-text-muted">
+        {row.decided
+          ? 'บันทึกผลประมูลแล้ว'
+          : `รอผลประมูล${row.headlineAmount != null ? ` · ยอดหลัก ${formatMoney(row.headlineAmount)}` : ''}`}
+      </span>
+      {row.ticketId != null ? (
+        <Link to={`/tickets/${row.ticketId}`} className="ml-auto inline-flex min-h-8 items-center font-bold text-info underline mobile:min-h-[44px]">
+          {`ดีล ${row.ticketCode ?? `#${row.ticketId}`} →`}
+        </Link>
+      ) : null}
+    </span>
+  );
+}
+
+/** The party outcome line a grouped row shows in place of its project name. */
+function PartyChipLine({ row }) {
+  const chip = partyStatusLabel(row.partyStatus);
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      {row.partyStatus ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
+      {row.partyHeadline ? <span className="text-2xs font-bold text-warning-dark">★ ยอดหลัก</span> : null}
+    </span>
+  );
+}
+
 const COLUMNS = [
   {
     key: 'number',
     header: 'เลขที่',
     sortable: true,
-    searchAccessor: (row) => row.number,
-    render: (row) => (
+    searchAccessor: (row) => (row.isGroup ? row.searchText : row.number),
+    render: (row) => (row.isGroup ? <GroupRowContent row={row} /> : (
       <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
         <code>{row.number}</code>
       </Link>
-    ),
+    )),
   },
   {
     key: 'customer',
     header: 'ลูกค้า / โครงการ',
-    searchAccessor: (row) => `${row.customerName ?? ''} ${row.projectName ?? ''}`,
+    searchAccessor: (row) => (row.isGroup ? row.searchText : `${row.customerName ?? ''} ${row.projectName ?? ''}`),
     // <span>, NOT <div>, and that is load-bearing rather than a style preference. styles.css
     // clips on the CELL — `.data-row > td` is `white-space: nowrap; text-overflow: ellipsis` — and
     // its wrap escape hatch only reaches `> strong`, `> small` and `> span`. A <div> child
@@ -104,36 +195,39 @@ const COLUMNS = [
     // what made it lose 29px at 721px. `flex flex-col` still stacks the two lines: a Tailwind
     // utility beats the escape hatch's `display: block` on layer order (styles.css is
     // `layer(legacy)`), so only the wrapping changes.
-    render: (row) => (
-      <span className="flex flex-col">
+    render: (row) => (row.isGroup ? null : (
+      <span className="flex flex-col gap-0.5">
         <span className="font-bold">{row.customerName ?? '-'}</span>
-        {row.projectName ? <span className="text-2xs text-text-muted">{row.projectName}</span> : null}
+        {row.inGroup
+          ? <PartyChipLine row={row} />
+          : row.projectName ? <span className="text-2xs text-text-muted">{row.projectName}</span> : null}
       </span>
-    ),
+    )),
   },
   {
     key: 'salesRepName',
     header: 'พนักงานขาย',
-    searchAccessor: (row) => row.salesRepName,
+    searchAccessor: (row) => (row.isGroup ? null : row.salesRepName),
     // Wrapped in a <span> for the same reason as ลูกค้า above: a bare string leaves the cell with
     // no child element, so styles.css's wrap escape hatch has nothing to match and a two-word Thai
     // name is truncated rather than broken across two lines. `ภิญญาดา วงศ์ประเสริฐ` needs 147.8px
     // on one line and this column is floored at 64px, so wrapping is what keeps it whole.
-    render: (row) => <span>{row.salesRepName ?? '-'}</span>,
+    render: (row) => (row.isGroup ? null : <span>{row.salesRepName ?? '-'}</span>),
   },
   {
     key: 'grandTotal',
     header: 'ยอดรวม',
     align: 'right',
     sortable: true,
-    render: (row) => <span className="tabular-nums font-bold">{formatMoney(row.grandTotal)}</span>,
+    render: (row) => (row.isGroup ? null : <span className="tabular-nums font-bold">{formatMoney(row.grandTotal)}</span>),
   },
   {
     key: 'status',
     header: 'สถานะ',
     sortable: true,
-    searchAccessor: (row) => row.docStatus,
+    searchAccessor: (row) => (row.isGroup ? null : row.docStatus),
     render: (row) => {
+      if (row.isGroup) return null;
       const status = dealQuotationStatusLabel(row.docStatus);
       return <StatusBadge tone={status.tone}>{status.label}</StatusBadge>;
     },
@@ -142,11 +236,22 @@ const COLUMNS = [
     key: 'quotationDate',
     header: 'วันที่',
     sortable: true,
-    render: (row) => formatThaiDate(row.quotationDate),
+    render: (row) => (row.isGroup ? null : formatThaiDate(row.quotationDate)),
   },
 ];
 
+// Grouped: no column sorts (see GROUP_PREF_KEY's comment).
+const GROUPED_COLUMNS = COLUMNS.map((column) => ({ ...column, sortable: false }));
+
+// The group row: its first cell spans the whole grid, the other five are hidden. A NOT_AWARDED bid
+// is dimmed.
+function quotationRowClassName(row) {
+  if (row.isGroup) return 'bg-surface-subtle [&>td:first-child]:col-span-full [&>td:not(:first-child)]:hidden';
+  return row.partyStatus === 'NOT_AWARDED' ? 'opacity-60' : '';
+}
+
 function QuotationCard({ row }) {
+  if (row.isGroup) return <GroupRowContent row={row} />;
   const status = dealQuotationStatusLabel(row.docStatus);
   return (
     <>
@@ -159,7 +264,9 @@ function QuotationCard({ row }) {
       <strong className="min-w-0 truncate text-md leading-snug font-extrabold text-text">
         {row.customerName ?? '-'}
       </strong>
-      {row.projectName ? <span className="min-w-0 truncate text-xs text-text-muted">{row.projectName}</span> : null}
+      {row.inGroup
+        ? <PartyChipLine row={row} />
+        : row.projectName ? <span className="min-w-0 truncate text-xs text-text-muted">{row.projectName}</span> : null}
       <span className="min-w-0 truncate text-xs text-text-muted">
         {row.salesRepName ?? '-'} · {formatThaiDate(row.quotationDate)}
       </span>
@@ -224,7 +331,18 @@ export function QuotationListPage({ user }) {
   // The filters sit in a plain row ABOVE DataTable's own search input (see the JSX below, shared by
   // every breakpoint), so column headers stay plain text at every width and `columns` does not
   // diverge by role.
-  const columns = COLUMNS;
+  const [groupByProject, setGroupByProject] = useState(readGroupPref);
+  function toggleGrouping() {
+    setGroupByProject((on) => {
+      writeGroupPref(!on);
+      return !on;
+    });
+  }
+  const columns = groupByProject ? GROUPED_COLUMNS : COLUMNS;
+  const tableRows = useMemo(
+    () => (groupByProject ? groupQuotationRows(filteredRows) : filteredRows),
+    [groupByProject, filteredRows],
+  );
 
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
   // are advisory chrome: a failed or in-flight counts call renders the tabs with NO number rather
@@ -278,7 +396,8 @@ export function QuotationListPage({ user }) {
       {/* `role="tablist"` rather than a bare row of buttons: these five ARE tabs over one list,
           and arrow-key semantics plus aria-selected is what a screen reader needs to say so. The
           panel they control is the table below. */}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3" role="tablist" aria-label="สถานะใบเสนอราคา">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
+      <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="สถานะใบเสนอราคา">
         <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>
         {DEAL_QUOTATION_STATUS_TABS.map((tab) => {
           const active = activeTab.key === tab.key;
@@ -304,6 +423,23 @@ export function QuotationListPage({ user }) {
             </button>
           );
         })}
+      </div>
+      {/* A view switch, not a tab: one pressed/unpressed button beside the tablist. Remembered per
+          browser (localStorage, guarded). */}
+      <button
+        type="button"
+        aria-pressed={groupByProject}
+        data-testid="quotation-group-toggle"
+        className={`ml-auto inline-flex min-h-8 mobile:min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold ${
+          groupByProject ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface hover:bg-surface-hover'
+        }`}
+        onClick={toggleGrouping}
+      >
+        จัดกลุ่มตามโครงการ
+        <span className={`rounded-full px-1.5 text-2xs ${groupByProject ? 'bg-primary/15' : 'bg-surface-subtle text-text-muted'}`}>
+          {groupByProject ? 'เปิด' : 'ปิด'}
+        </span>
+      </button>
       </div>
       <div id="quotation-list-panel" role="tabpanel">
         {/* Filter row: พนักงานขาย/ยอดรวม for see-all roles (sales_manager/ceo), อีเมลลูกค้า for everyone -- moved OUT of the
@@ -368,10 +504,12 @@ export function QuotationListPage({ user }) {
 
         <DataTable
           columns={columns}
-          rows={filteredRows}
-          unfilteredTotal={rows.length}
+          rows={tableRows}
+          // Group rows count as rows in the footer, so the "(กรองจาก M)" denominator counts them too.
+          unfilteredTotal={groupByProject ? groupQuotationRows(rows).length : rows.length}
           getRowKey={(row) => row.id}
           gridClassName={LIST_TABLE_GRID}
+          rowClassName={quotationRowClassName}
           mobileCard={(row) => <QuotationCard row={row} />}
           searchable
           searchPlaceholder="ค้นหาลูกค้า / โครงการ"

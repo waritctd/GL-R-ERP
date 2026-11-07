@@ -168,6 +168,15 @@ export const API_ROUTES = {
     activities: (id) => `/api/tickets/${id}/activities`,
     tracking: (id) => `/api/tickets/${id}/tracking`,
     customer: (id) => `/api/tickets/${id}/customer`,
+    // Deal parties (docs/decisions/deal-party-model.md): one row per customer taking part in the
+    // deal (DESIGNER / OWNER / BUYER); each bidding contractor is one BUYER party with its own
+    // quotation chain. The bid outcome is recorded once per deal, ticking one or more winners.
+    parties: (id) => `/api/tickets/${id}/parties`,
+    party: (id, partyId) => `/api/tickets/${id}/parties/${partyId}`,
+    bidOutcome: (id) => `/api/tickets/${id}/bid-outcome`,
+    // The actor's own ACTIVE pre-outcome deals whose project name matches (case/whitespace-
+    // insensitive), for the quotation editor's "โครงการนี้มีดีลของคุณอยู่แล้ว" prompt.
+    openForProject: (projectName) => `/api/tickets/open-for-project?projectName=${encodeURIComponent(projectName ?? '')}`,
   },
   depositNotices: {
     get: (id) => `/api/deposit-notices/${id}`,

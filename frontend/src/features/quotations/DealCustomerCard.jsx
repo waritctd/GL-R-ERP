@@ -8,7 +8,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { cn } from '../../utils/cn.js';
-import { entryChannelLabel } from '../../utils/format.js';
+import { dealStageLabel, entryChannelLabel } from '../../utils/format.js';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { CustomerDetailsFields } from './CustomerDetailsFields.jsx';
 import { DealPicker } from './DealPicker.jsx';
 import { QUOTATION_RECIPIENT_OPTIONS, isRecipientOffRoute } from './quotationMeta.js';
@@ -112,6 +113,79 @@ export function QuotationRecipientField({ value, onChange, error, idPrefix = 'qu
   );
 }
 
+/**
+ * "โครงการนี้มีดีลของคุณอยู่แล้ว" (deal-party-model.md, prototype screen 4). The rep picked a project
+ * that already has one of their own open, pre-outcome deals (GET /tickets/open-for-project): one
+ * project is one deal, so the default is to add this customer to it as another contractor. Linking
+ * is never automatic: "สร้างดีลใหม่แยกต่างหาก" keeps today's path for a genuinely separate job.
+ */
+export function ExistingDealNotice({
+  deal, customerName, repName, choice, onChoice, moreCount = 0,
+}) {
+  const stage = dealStageLabel(deal.salesStage);
+  const buyers = (deal.parties ?? []).filter((p) => p.role === 'BUYER');
+  const alreadyBidding = buyers.some((p) => p.customerName === customerName);
+  const resultCount = (deal.buyerCount ?? buyers.length) + (alreadyBidding ? 0 : 1);
+  const choices = [
+    {
+      value: 'existing',
+      title: `เพิ่ม ${customerName} เป็นผู้รับเหมาในดีลเดิม (แนะนำ)`,
+      hint: 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย',
+    },
+    {
+      value: 'new',
+      title: 'สร้างดีลใหม่แยกต่างหาก',
+      hint: 'ใช้เมื่อเป็นคนละงาน คนละขอบเขต แม้ชื่อโครงการเหมือนกัน',
+    },
+  ];
+  return (
+    <div role="group" aria-labelledby="existing-deal-title" data-testid="existing-deal-notice" className="mt-4 grid gap-3 rounded-md border border-info-border bg-info-bg p-3.5 text-sm">
+      <div id="existing-deal-title" className="flex items-center gap-2 font-extrabold text-info-dark">
+        <Icon name="info" size={16} className="shrink-0" />
+        โครงการนี้มีดีลของคุณอยู่แล้ว
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md bg-surface px-3 py-2">
+        <code className="text-xs text-text-muted">{deal.code}</code>
+        <strong className="text-text">{deal.projectName}</strong>
+        {repName ? <span className="text-text-secondary">{repName}</span> : null}
+        <StatusBadge tone="info">{`${deal.buyerCount ?? buyers.length} ผู้รับเหมา`}</StatusBadge>
+        {buyers.length ? <span className="text-xs text-text-muted">{buyers.map((p) => p.customerName).join(' · ')}</span> : null}
+        <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
+      </div>
+      <div role="radiogroup" aria-label="ใช้ดีลเดิมหรือสร้างดีลใหม่" className="grid gap-2">
+        {choices.map((option) => (
+          <label
+            key={option.value}
+            aria-label={option.title}
+            className={cn(
+              'flex min-h-11 cursor-pointer items-start gap-2.5 rounded-md border bg-surface px-3 py-2.5',
+              choice === option.value ? 'border-primary' : 'border-border',
+            )}
+          >
+            <input
+              type="radio"
+              name="existing-deal-choice"
+              className="mt-1 h-4 w-4 shrink-0"
+              checked={choice === option.value}
+              onChange={() => onChoice(option.value)}
+            />
+            <span className="flex flex-col gap-0.5">
+              <strong className="text-text">{option.title}</strong>
+              <span className="text-xs text-text-muted">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="m-0 text-xs font-bold text-info-dark" data-testid="existing-deal-result">
+        {choice === 'existing'
+          ? `จะสร้างใบเสนอราคาใหม่ภายใต้ ${deal.code} · ผู้รับเหมา ${resultCount} ราย`
+          : 'จะสร้างดีลใหม่และใบเสนอราคาใหม่ · ดีลนี้จะนับแยกใน pipeline'}
+        {moreCount > 0 ? ` (โครงการนี้มีดีลของคุณอีก ${moreCount} ดีล)` : ''}
+      </p>
+    </div>
+  );
+}
+
 const OFF_ROUTE_RECIPIENT_NOTE = 'ผู้รับนี้ไม่อยู่ในเส้นทางของดีล — ขั้นของดีลจะไม่ขยับ';
 
 // ช่องทางรับงาน: the three real channels th.co.glr.hr.ticket.EntryChannel
@@ -152,6 +226,11 @@ function emptyNewCustomer() {
 export function DealCustomerCard({
   value, onChange, errors, showToast, suggestedProjectName = '', belowProject = null, pickOnly = false,
   user = null, mode = 'create', onModeChange = null, selectedDeal = null,
+  // deal-party-model.md: the "โครงการนี้มีดีลของคุณอยู่แล้ว" node (ExistingDealNotice), rendered under
+  // the customer and project; `attachingToDeal` hides ช่องทางรับงาน, which belongs to a NEW deal only.
+  existingDealNotice = null, attachingToDeal = false,
+  // Per-party live quotation for DealPicker's notice (undefined = the deal-wide summary field).
+  selectedDealLive,
 }) {
   const { customer, project, entryChannel } = value;
   const creating = mode === 'create';
@@ -392,7 +471,7 @@ export function DealCustomerCard({
       ) : null}
 
       {!creating ? (
-        <DealPicker user={user} selected={selectedDeal} recipientType={value.recipientType} error={errors?.deal} showToast={showToast} />
+        <DealPicker user={user} selected={selectedDeal} recipientType={value.recipientType} liveOverride={selectedDealLive} error={errors?.deal} showToast={showToast} />
       ) : null}
 
       {creating ? (
@@ -578,6 +657,8 @@ export function DealCustomerCard({
         </div>
       ) : null}
 
+      {existingDealNotice}
+
       {showNewCustomer && !customer ? (
         <Modal title="เพิ่มลูกค้าใหม่" onClose={closeNewCustomer}>
           <div className="grid grid-cols-2 gap-2 mobile:grid-cols-1">
@@ -657,7 +738,7 @@ export function DealCustomerCard({
       {/* ช่องทางรับงาน — a NEW deal's own field (a real channel is required, UNSPECIFIED is no
           longer offered, and a missing one shows its error here). Only on the สร้างดีลใหม่ branch: a
           picked deal already has its channel. */}
-      {creating && !pickOnly ? (
+      {creating && !pickOnly && !attachingToDeal ? (
         <div className="mt-4">
           <span className="mb-1 block text-xs">ช่องทางรับงาน</span>
           <div id="deal-entry-channel" role="group" aria-label="ช่องทางรับงาน" aria-describedby={errors?.entryChannel ? 'deal-entry-channel-error' : undefined} tabIndex={-1} className="flex flex-wrap gap-2">

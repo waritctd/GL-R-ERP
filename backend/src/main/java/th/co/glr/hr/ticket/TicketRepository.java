@@ -426,6 +426,15 @@ public class TicketRepository {
             keyHolder, new String[]{"ticket_id"});
         long ticketId = keyHolder.getKey().longValue();
         if (hasItems) insertItems(ticketId, request.items());
+        // V204: the deal's customer is its first party (BUYER until a quotation says otherwise), and the headline.
+        // Every deal therefore has at least one sales.deal_party row, as the V204 backfill gave every older one.
+        if (request.customerId() != null) {
+            jdbc.update("""
+                INSERT INTO sales.deal_party (ticket_id, customer_id, contact_id, role, status, is_headline, added_by)
+                VALUES (:ticketId, :customerId, :contactId, 'BUYER', 'ACTIVE', TRUE, :actorId)
+                """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("customerId", request.customerId())
+                    .addValue("contactId", request.contactId()).addValue("actorId", actorId));
+        }
         addEvent(ticketId, actorId, actorName, TicketEventKind.CREATED, null, TicketStatus.DRAFT, null);
         return ticketId;
     }
@@ -2319,6 +2328,22 @@ public class TicketRepository {
         """;
     }
 
+    /** {@link #findLiveDirectQuotation} narrowed to ONE deal party (V204): the create-time refusal is per
+     * ผู้รับเหมา, so a second contractor may hold its own live document on the same deal. */
+    public Optional<LiveDirectQuotationDto> findLiveDirectQuotationForParty(long ticketId, long partyId) {
+        List<LiveDirectQuotationDto> rows = jdbc.query("""
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId AND party_id = :partyId
+        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+             LIMIT 1
+        """, Map.of("ticketId", ticketId, "partyId", partyId),
+            (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
+                rs.getString("doc_status"), rs.getString("recipient_type")));
+        return rows.stream().findFirst();
+    }
+
     /** Every live direct quotation on the deal, newest first (same predicate as the lock). */
     public List<LiveDirectQuotationDto> findLiveDirectQuotations(long ticketId) {
         return jdbc.query("""
@@ -2713,6 +2738,14 @@ public class TicketRepository {
                 .addValue("contactId", contactId)
                 .addValue("customerName", customerName)
                 .addValue("ticketId", ticketId));
+        // V204: a deal with exactly one party (every pre-party deal) moves that party with it; a deal with several
+        // parties keeps them, the customer change being a bill-to correction, not a bidder change.
+        jdbc.update("""
+            UPDATE sales.deal_party SET customer_id = :customerId, contact_id = :contactId, updated_at = now()
+             WHERE ticket_id = :ticketId
+               AND (SELECT COUNT(*) FROM sales.deal_party p WHERE p.ticket_id = :ticketId) = 1
+            """, new MapSqlParameterSource().addValue("ticketId", ticketId).addValue("customerId", customerId)
+                .addValue("contactId", contactId));
     }
 
     /**

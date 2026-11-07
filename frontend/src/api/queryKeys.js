@@ -129,6 +129,12 @@ export const queryKeys = {
   // string vs numeric-field reason as ticketDetail above.
   importDeal: (ticketId) => ['importDeal', Number(ticketId)],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
+  // Deal parties (deal-party-model.md). Number()-coerced like ticketDetail above: TicketDetailPage
+  // reaches the id via useParams() (a string) while the quotation editor passes a number.
+  ticketParties: (ticketId) => ['tickets', 'parties', ticketId == null ? ticketId : Number(ticketId)],
+  // GET /api/tickets/open-for-project?projectName= — keyed on the normalised name the server
+  // matches on (case/whitespace-insensitive), so "S26 Hotel" and "s26  hotel" share one entry.
+  openDealsForProject: (name) => ['tickets', 'open-for-project', String(name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()],
   ticketActivities: (id) => ['tickets', 'activities', id == null ? id : Number(id)],
   depositNotices: (ticketId) => ['depositNotices', ticketId],
   depositNoteTemplates: () => ['depositNotices', 'templates'],
