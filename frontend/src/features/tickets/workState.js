@@ -109,8 +109,8 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
 
 /** "ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ"; one party left reads
  * "…ส่งแล้ว ถัดไปเสนอราคา<next>"; a quotation the party said no to reads "…ไม่ผ่าน" instead. */
-function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties }) {
-  const sent = `ใบเสนอราคา${PARTY_LABEL[anchorParty]}${anchorDeclined ? 'ไม่ผ่าน' : 'ส่งแล้ว'}`;
+function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties, direct }) {
+  const sent = `ใบเสนอราคา${PARTY_LABEL[anchorParty]}${anchorDeclined ? 'ไม่ผ่าน' : direct ? 'อนุมัติแล้ว' : 'ส่งแล้ว'}`;
   const [next, ...later] = parties.map((party) => PARTY_LABEL[party]);
   return later.length > 0
     ? `${sent} เลือกเสนอราคา${next} หรือข้ามไป${later.join(', ')}`
@@ -129,8 +129,12 @@ function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties }) {
 export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items } = {}) {
   if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
   const outcome = outcomeSecondaryAction(deal, pricingRequests, quotationByRequest);
-  const revise = reviseTarget && REVISE_STAGES.has(deal.salesStage)
-    && resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items }).action?.key !== SALES_ACTION.REVISE_QUOTATION
+  const primary = resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items }).action;
+  const revise = reviseTarget && REVISE_STAGES.has(deal.salesStage) && primary?.key !== SALES_ACTION.REVISE_QUOTATION
     ? reviseAction(reviseTarget) : null;
-  return [outcome, revise].filter(Boolean);
+  // The direct route choice replaces ยืนยันคำสั่งซื้อ as the primary; it stays one menu away.
+  const confirmDirect = primary?.key === SALES_ACTION.QUOTE_NEXT_PARTY && primary.direct
+    ? { key: SALES_ACTION.CONFIRM_ORDER_DIRECT, label: 'ยืนยันคำสั่งซื้อ', quotationId: primary.quotationId, quotationNumber: primary.quotationNumber }
+    : null;
+  return [outcome, revise, confirmDirect].filter(Boolean);
 }

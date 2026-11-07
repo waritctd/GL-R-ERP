@@ -52,7 +52,7 @@ import {
   hasSpecialPricing,
   // The recipient table (code -> Thai label) and the live DEAL_DIRECT status set, shared with the
   // editor so the mock validates and labels recipients exactly as the pills do.
-  isLiveDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
+  isLiveDirectQuotation, blocksNewDirectQuotation, quotationRecipientOption, hasLivePricingRequest, LIVE_PRICING_REQUEST_BLOCK_MESSAGE, revisionRecipientRefusal,
   // V192.3: the SAME email shape check the editor runs before it saves — see
   // resolveDealQuotationOrderedByContact below.
   orderedByEmailError,
@@ -16469,12 +16469,17 @@ export const api = {
       // predicate): a deal already holding a LIVE DEAL_DIRECT quotation gets a 409 whose body names
       // it, so the client can offer "แก้ไขฉบับนั้น" / "สร้างฉบับแก้ไข" instead of minting a second
       // base number.
-      const live = mockLiveDirectQuotation(ticket.id);
-      if (live) {
+      // Relaxed: every live row must be APPROVED and addressed to an earlier party, while the deal is still in
+      // 'draft'; the 409 names the newest live row that blocks.
+      const blocking = mockDealQuotations
+        .filter((q) => q.ticketId === ticket.id && isDealDirectOrigin(q) && isLiveDirectQuotation(q)
+          && blocksNewDirectQuotation(q, recipientType, ticket.status ?? 'draft'))
+        .sort((a, b) => b.id - a.id)[0];
+      if (blocking) {
         fail(
-          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${blocking.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
           409,
-          { liveQuotationId: live.id, number: live.number, docStatus: live.docStatus },
+          { liveQuotationId: blocking.id, number: blocking.number, docStatus: blocking.docStatus },
         );
       }
       const contactSnapshot = resolveDealQuotationContact(ticket, payload);

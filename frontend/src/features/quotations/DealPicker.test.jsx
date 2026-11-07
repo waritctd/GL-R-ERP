@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within, cleanup } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealPicker } from './DealPicker.jsx';
 import { api } from '../../api/index.js';
@@ -47,14 +47,14 @@ function QuotationProbe() {
   return <p>quotation page {id}</p>;
 }
 
-function renderPicker({ user = salesUser, selected = null, initialPath = '/quotations/new', showToast = vi.fn() } = {}) {
+function renderPicker({ user = salesUser, selected = null, recipientType = '', initialPath = '/quotations/new', showToast = vi.fn() } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialPath]}>
         <LocationProbe />
         <Routes>
-          <Route path="/quotations/new" element={<DealPicker user={user} selected={selected} showToast={showToast} />} />
+          <Route path="/quotations/new" element={<DealPicker user={user} selected={selected} recipientType={recipientType} showToast={showToast} />} />
           <Route path="/quotations/:id" element={<QuotationProbe />} />
         </Routes>
       </MemoryRouter>
@@ -219,6 +219,17 @@ describe('DealPicker — the picked deal already has a live direct quotation (N6
     await waitFor(() => expect(api.dealQuotations.createRevision).toHaveBeenCalledWith(77, {}));
     expect(await screen.findByText('quotation page 78')).not.toBeNull();
     expect(showToast).toHaveBeenCalledWith('success', 'สร้างฉบับแก้ไขแล้ว');
+  });
+
+  // N6 relaxation: an APPROVED earlier-party quotation does not block a later recipient — but only while the
+  // deal is still in draft.
+  it('APPROVED DESIGNER + recipient OWNER: no notice while the deal is in draft, the notice once the order is confirmed', () => {
+    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
+    renderPicker({ selected: { ...DEALS[1], status: 'draft', liveDirectQuotation: live }, recipientType: 'OWNER', initialPath: '/quotations/new?ticket=12' });
+    expect(screen.queryByTestId('deal-picker-live-quotation')).toBeNull();
+    cleanup();
+    renderPicker({ selected: { ...DEALS[1], status: 'quotation_issued', liveDirectQuotation: live }, recipientType: 'OWNER', initialPath: '/quotations/new?ticket=12' });
+    expect(screen.getByTestId('deal-picker-live-quotation')).not.toBeNull();
   });
 
   it('no notice at all for a deal without a live direct quotation', () => {

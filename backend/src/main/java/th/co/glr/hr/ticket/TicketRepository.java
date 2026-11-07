@@ -2334,6 +2334,19 @@ public class TicketRepository {
         return rows.stream().findFirst();
     }
 
+    /** Every live direct quotation on the deal, newest first (same predicate as {@link #findLiveDirectQuotation}). */
+    public List<LiveDirectQuotationDto> findLiveDirectQuotations(long ticketId) {
+        return jdbc.query("""
+            SELECT quotation_id, number, doc_status, recipient_type
+              FROM sales.quotation
+             WHERE ticket_id = :ticketId
+        """ + LIVE_DIRECT_QUOTATION_PREDICATE + """
+             ORDER BY quotation_id DESC
+        """, Map.of("ticketId", ticketId),
+            (rs, rowNum) -> new LiveDirectQuotationDto(rs.getLong("quotation_id"), rs.getString("number"),
+                rs.getString("doc_status"), rs.getString("recipient_type")));
+    }
+
     /**
      * Quotation ↔ deal linking — one pricing route per deal: does
      * this deal have a LIVE pricing request, i.e. any {@code sales.pricing_request} whose status is

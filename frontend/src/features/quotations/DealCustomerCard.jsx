@@ -392,7 +392,7 @@ export function DealCustomerCard({
       ) : null}
 
       {!creating ? (
-        <DealPicker user={user} selected={selectedDeal} error={errors?.deal} showToast={showToast} />
+        <DealPicker user={user} selected={selectedDeal} recipientType={value.recipientType} error={errors?.deal} showToast={showToast} />
       ) : null}
 
       {creating ? (

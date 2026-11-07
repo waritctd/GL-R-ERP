@@ -1659,6 +1659,34 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
 
+  it('slice 2: N6 relaxed — an APPROVED live quotation addressed to a strictly EARLIER party does not block a later recipient; everything else still does', () => {
+    const live = (docStatus, recipientType) => ({ id: 77, number: 'QT-2026-0077-1', docStatus, recipientType });
+    const checks = (liveDirectQuotation, recipientType) =>
+      meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType, liveDirectQuotation }).map((e) => e.check);
+    // allowed
+    expect(checks(live('APPROVED', 'DESIGNER'), 'OWNER')).toEqual([]);
+    expect(checks(live('APPROVED', 'DESIGNER'), 'BUYER')).toEqual([]);
+    expect(checks(live('APPROVED', 'OWNER'), 'BUYER')).toEqual([]);
+    // blocked: same / earlier recipient, not APPROVED, BUYER/unknown live recipient, no recipient chosen yet
+    expect(checks(live('APPROVED', 'DESIGNER'), 'DESIGNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'OWNER'), 'DESIGNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'OWNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'BUYER'), 'BUYER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'UNSPECIFIED'), 'BUYER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('PENDING_APPROVAL', 'DESIGNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('DRAFT', 'DESIGNER'), 'OWNER')).toEqual(['liveDirectQuotation']);
+    expect(checks(live('APPROVED', 'DESIGNER'), '')).toEqual(expect.arrayContaining(['liveDirectQuotation']));
+  });
+
+  it('slice 2: N6 relaxed only while the deal is still in draft — once the order is confirmed the block returns', () => {
+    const live = { id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER' };
+    const checks = (dealStatus) => meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'OWNER', liveDirectQuotation: live, dealStatus })
+      .map((e) => e.check);
+    expect(checks('draft')).toEqual([]);
+    expect(checks(undefined)).toEqual([]);
+    expect(checks('approved')).toEqual(['liveDirectQuotation']);
+  });
+
   it('slice 2: the recipient table maps to S4/S5/S8 and back, and never offers UNSPECIFIED', () => {
     expect(meta.QUOTATION_RECIPIENT_OPTIONS.map((o) => [o.code, o.stage])).toEqual([
       ['DESIGNER', 'QUOTE_DESIGN_SIDE'], ['OWNER', 'QUOTE_OWNER'], ['BUYER', 'QUOTE_BUYER'],
