@@ -142,6 +142,8 @@ public class LandedCostCalculator {
         // One batched catalog round trip per field, for every source's price id, rather than
         // per-item lookups inside resolveItemPhysicals. See CatalogRepository#findPricingKeys.
         Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys = prefetchCatalogKeys(sources);
+        // CEO-entered freight (THB, total per line) for lines the freight table has no band for.
+        Map<Long, BigDecimal> manualFreights = pricingRequests.findManualFreights(summary.id());
 
         // Resolve EVERY item's physicals up front, in one accumulating pass across ALL
         // shipments/factories in this request — not per shipment, and not aborting on the first
@@ -151,7 +153,7 @@ public class LandedCostCalculator {
         Set<String> problems = new LinkedHashSet<>();
         for (ResolvedSource source : sources) {
             try {
-                allPhysicals.add(resolveItemPhysicals(source, formulaConfig, catalogKeys));
+                allPhysicals.add(resolveItemPhysicals(source, formulaConfig, catalogKeys, manualFreights));
             } catch (ApiException e) {
                 // Every throw reachable on this path is a 422 today (see
                 // resolveItemPhysicals and its callees), so this rethrow is currently inert — but
@@ -259,17 +261,37 @@ public class LandedCostCalculator {
         // line's own cost and the costing is recalculated.
         List<ItemPhysicals> items = new ArrayList<>();
         List<ItemPhysicals> uncostable = new ArrayList<>();
+        // ไทย-สต็อก lines are costed domestically and kept OUT of everything below: not in the freight
+        // grouping, and not in the clearance denominator or amount (no customs on a domestic purchase, so
+        // they neither fill container space nor dilute the fee). The other lines' numbers are therefore
+        // exactly what they would be without these lines.
+        List<PricingCostingWriteItem> domesticWrites = new ArrayList<>();
         for (ItemPhysicals item : allItems) {
-            (uncostableReason(item) == null ? items : uncostable).add(item);
+            if (uncostableReason(item) != null) {
+                uncostable.add(item);
+            } else if (item.domestic()) {
+                domesticWrites.add(domesticWriteItem(item, formulaConfig, calculatedAt));
+            } else {
+                items.add(item);
+            }
         }
+        // Freight table gaps are decided per GROUP (the unit the container rule actually looks up), so a group
+        // whose lines each pass alone but have no band together is set aside too, instead of 422ing the request.
+        FreightPlan plan = planFreight(items, formulaConfig, shipmentLabel);
+        List<PricingCostingWriteItem> gapWrites = new ArrayList<>();
+        for (ItemPhysicals gap : plan.gap()) {
+            gapWrites.add(uncostableWriteItem(gap, formulaConfig, freightGapReason(gap), "NO_FREIGHT_BAND"));
+        }
+        items = items.stream().filter(i -> !plan.gap().contains(i)).toList();
         if (items.isEmpty()) {
             // Every line in this shipment is uncostable — there is no freight band and no
             // clearance denominator to compute at all. Emit the placeholders and stop, rather
             // than dividing by a zero shipment quantity.
-            List<PricingCostingWriteItem> onlyUncostable = new ArrayList<>();
+            List<PricingCostingWriteItem> onlyUncostable = new ArrayList<>(domesticWrites);
             for (ItemPhysicals item : uncostable) {
                 onlyUncostable.add(uncostableWriteItem(item, formulaConfig));
             }
+            onlyUncostable.addAll(gapWrites);
             return onlyUncostable;
         }
 
@@ -281,7 +303,11 @@ public class LandedCostCalculator {
         for (ItemPhysicals item : items) {
             PricingFormulaEngine.ContainerLine line =
                 new PricingFormulaEngine.ContainerLine(item.thicknessMm(), item.qtySqm());
-            linesByGroup.computeIfAbsent(item.originCountryCode(), k -> new ArrayList<>()).add(line);
+            // A line carrying the CEO's own freight is not looked up in the table (it has no band); it still
+            // counts in the clearance lines below, because it is imported like every other line.
+            if (!plan.manual().contains(item)) {
+                linesByGroup.computeIfAbsent(item.originCountryCode(), k -> new ArrayList<>()).add(line);
+            }
             qtySqmByGroup.merge(item.originCountryCode(), item.qtySqm(), BigDecimal::add);
             shipmentLines.add(line);
         }
@@ -307,7 +333,11 @@ public class LandedCostCalculator {
         for (ItemPhysicals item : items) {
             String key = item.originCountryCode();
             BigDecimal freightGroupQtySqm = qtySqmByGroup.get(key);
-            PricingFormulaEngine.ContainerCharge freight = freightByGroup.get(key);
+            boolean manualF = plan.manual().contains(item);
+            // CEO freight = the TOTAL for this line (not split by container space like a looked-up charge).
+            PricingFormulaEngine.ContainerCharge freight = manualF
+                ? new PricingFormulaEngine.ContainerCharge(money4(item.manualFreightThb()), 0, ZERO, ZERO)
+                : freightByGroup.get(key);
             BigDecimal freightAmountForGroup = freight.amountThb();
             // F/S allocation is inherently a TOTAL-for-the-item quantity (a share of a flat,
             // shipment-level amount, proportional to the item's own share of the group's CONTAINER
@@ -317,8 +347,8 @@ public class LandedCostCalculator {
             // per-sqm rate).
             BigDecimal itemUnits = item.qtySqm().divide(
                 PricingFormulaEngine.containerCapacitySqm(item.thicknessMm()), 12, RoundingMode.HALF_UP);
-            BigDecimal groupUnits = unitsByGroup.get(key);
-            BigDecimal freightShareTotal = allocate(freightAmountForGroup, itemUnits, groupUnits);
+            BigDecimal groupUnits = manualF ? ZERO : unitsByGroup.get(key);
+            BigDecimal freightShareTotal = manualF ? freightAmountForGroup : allocate(freightAmountForGroup, itemUnits, groupUnits);
             BigDecimal clearanceShareTotal = allocate(clearance.amountThb(), itemUnits, shipmentUnits);
 
             PricingDutyRateDto dutyRate = formulaEngine.selectDutyRate(
@@ -353,6 +383,9 @@ public class LandedCostCalculator {
                 freightGroupQtySqm, clearance.amountThb(), clearanceShareTotal, shipmentQtySqm,
                 dutyRate.dutyPct(), formulaConfig, calculatedAt, freight, clearance,
                 itemUnits, groupUnits, shipmentUnits);
+            if (manualF) {
+                snapshot = snapshot.replace("{\"formula\":\"V109\"", "{\"formula\":\"V109\",\"freightSource\":\"CEO_MANUAL\"");
+            }
 
             ResolvedSource source = item.source();
             writeItems.add(new PricingCostingWriteItem(
@@ -394,13 +427,106 @@ public class LandedCostCalculator {
                 clearancePerPiece,
                 item.productType(),
                 snapshot,
-                null            // uncostable_reason — this line costed cleanly
+                null,           // uncostable_reason — this line costed cleanly
+                null            // uncostable_code
             ));
         }
+        writeItems.addAll(domesticWrites);
         for (ItemPhysicals item : uncostable) {
             writeItems.add(uncostableWriteItem(item, formulaConfig));
         }
+        writeItems.addAll(gapWrites);
         return writeItems;
+    }
+
+    /** Which lines are looked up in the freight table, which use the CEO's own freight, which are set aside. */
+    private record FreightPlan(java.util.Set<ItemPhysicals> manual, java.util.Set<ItemPhysicals> gap) {}
+
+    private FreightPlan planFreight(List<ItemPhysicals> items, PricingFormulaConfigDto formulaConfig, String shipmentLabel) {
+        java.util.Set<ItemPhysicals> manual = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        java.util.Set<ItemPhysicals> gap = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Map<String, List<ItemPhysicals>> byOrigin = new LinkedHashMap<>();
+        for (ItemPhysicals item : items) {
+            byOrigin.computeIfAbsent(item.originCountryCode(), k -> new ArrayList<>()).add(item);
+        }
+        for (Map.Entry<String, List<ItemPhysicals>> entry : byOrigin.entrySet()) {
+            List<ItemPhysicals> group = entry.getValue();
+            if (freightFound(formulaConfig, entry.getKey(), group, shipmentLabel)) {
+                continue; // the table answers for the whole group: any manual value is ignored
+            }
+            List<ItemPhysicals> rest = new ArrayList<>();
+            for (ItemPhysicals item : group) {
+                if (item.manualFreightThb() != null) {
+                    manual.add(item);
+                } else {
+                    rest.add(item);
+                }
+            }
+            if (rest.isEmpty() || freightFound(formulaConfig, entry.getKey(), rest, shipmentLabel)) {
+                continue;
+            }
+            // Isolate the lines that have no band even alone, then retry the others together.
+            List<ItemPhysicals> alone = rest.stream().filter(ItemPhysicals::freightGap).toList();
+            List<ItemPhysicals> others = rest.stream().filter(i -> !i.freightGap()).toList();
+            if (others.isEmpty() || !freightFound(formulaConfig, entry.getKey(), others, shipmentLabel)) {
+                gap.addAll(rest);
+            } else {
+                gap.addAll(alone);
+            }
+        }
+        return new FreightPlan(manual, gap);
+    }
+
+    /** True when the freight table has a band for these lines together; false only for "no band" (other 422s propagate). */
+    private boolean freightFound(PricingFormulaConfigDto formulaConfig, String origin, List<ItemPhysicals> group, String shipmentLabel) {
+        List<PricingFormulaEngine.ContainerLine> lines = group.stream()
+            .map(i -> new PricingFormulaEngine.ContainerLine(i.thicknessMm(), i.qtySqm())).toList();
+        try {
+            formulaEngine.containerFreight(formulaConfig.freightRates(), origin, lines, shipmentLabel + " ต้นทาง " + origin);
+            return true;
+        } catch (ApiException e) {
+            if (e.getMessage() != null && e.getMessage().startsWith("ไม่พบอัตราค่าขนส่ง")) {
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    /** A ไทย-สต็อก line: landed = goods x cost buffer; insurance/freight/duty/clearance are 0 (not null, so it is costable). */
+    private PricingCostingWriteItem domesticWriteItem(ItemPhysicals item, PricingFormulaConfigDto formulaConfig,
+                                                      Instant calculatedAt) {
+        ResolvedSource source = item.source();
+        BigDecimal goodsPerPiece = money4(item.goodsCostPerPiece());
+        // Same pipeline as a costed line with insurance, freight, duty and clearance all zero.
+        BigDecimal cifTotal = money4(item.goodsCostThb());
+        BigDecimal totalLandedCostThb = formulaEngine.totalLandedCost(cifTotal, ZERO, formulaConfig.costBuffer(), ZERO);
+        BigDecimal perPiece = money4(formulaEngine.unitCostPerSqm(totalLandedCostThb, item.qtySqm()).multiply(item.sqmPerPiece()));
+        String snapshot = "{\"formula\":\"DOMESTIC\""
+            + ",\"note\":\"ไทย-สต็อก: ซื้อในประเทศ สูตรเดิมโดย ค่าขนส่ง/ประกัน/อากร/ค่าพิธีการ = 0 (ยังคูณบัฟเฟอร์ต้นทุน)\""
+            + ",\"calculatedAt\":\"" + calculatedAt + "\""
+            + ",\"formulaConfigId\":\"" + formulaConfig.formulaConfigId() + "\""
+            + ",\"formulaConfigVersion\":\"" + formulaConfig.version() + "\""
+            + ",\"goodsCostTotalThb\":\"" + item.goodsCostThb() + "\""
+            + ",\"requestedUnitBasis\":\"" + source.requestItem().requestedUnitBasis() + "\"}";
+        return new PricingCostingWriteItem(
+            source.requestItem().id(), source.quote().id(), source.quoteItem().id(), source.quote().revisionNo(),
+            source.quote().factoryId(), source.quote().factoryName(), source.quote().supplierQuoteRef(),
+            source.quoteItem().rawUnitPrice(), source.quoteItem().currency(), source.quoteItem().quotedUnit(),
+            source.quoteItem().unitBasis(), source.requestItem().requestedQty(), source.requestItem().requestedUnit(),
+            source.requestItem().requestedUnitBasis(), item.qtyPieces(), source.quoteItem().linearMPerUnit(),
+            item.sqmPerPiece(), source.quoteItem().piecesPerBox(), item.fx().rate(), item.fx().source(),
+            item.fx().effectiveDate(), item.fx().fetchedAt(), formulaConfig.formulaConfigId(), formulaConfig.version(),
+            goodsPerPiece,
+            ZERO,               // freight
+            ZERO,               // insurance
+            ZERO,               // import duty
+            ZERO,               // inland transport -- no input exists yet
+            ZERO,               // other
+            goodsPerPiece,      // cif = goods
+            perPiece,           // landed cost per piece
+            money4(perPiece.multiply(item.qtyPieces())),
+            ZERO,               // clearance
+            item.productType(), snapshot, null, null);
     }
 
     /**
@@ -414,6 +540,11 @@ public class LandedCostCalculator {
      * empty placeholder.
      */
     private PricingCostingWriteItem uncostableWriteItem(ItemPhysicals item, PricingFormulaConfigDto formulaConfig) {
+        return uncostableWriteItem(item, formulaConfig, uncostableReason(item), uncostableCode(item));
+    }
+
+    private PricingCostingWriteItem uncostableWriteItem(ItemPhysicals item, PricingFormulaConfigDto formulaConfig,
+                                                        String reason, String code) {
         ResolvedSource source = item.source();
         // goods_cost_thb / insurance_cost_thb are NOT NULL (V156 left them so): a line whose goods
         // cost could not be computed (missing sqm on a PER_SQM basis) records 0 here and the
@@ -458,12 +589,14 @@ public class LandedCostCalculator {
             null,               // clearance_fee_thb — allocated across costable lines only
             item.productType(),
             null,               // calculation_snapshot — no calculation happened
-            uncostableReason(item)
+            reason,
+            code
         );
     }
 
     private ItemPhysicals resolveItemPhysicals(ResolvedSource source, PricingFormulaConfigDto formulaConfig,
-                                               Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
+                                               Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys,
+                                               Map<Long, BigDecimal> manualFreights) {
         BigDecimal sqmPerPiece = resolveSqmPerPiece(source.quoteItem(), source.requestItem());
         BigDecimal piecesPerBox = source.quoteItem().piecesPerBox();
         BigDecimal linearMPerUnit = source.quoteItem().linearMPerUnit();
@@ -498,22 +631,28 @@ public class LandedCostCalculator {
         }
         BigDecimal thicknessMm = resolveThicknessMm(source.requestItem(), catalogKeys);
         String originCountryCode = resolveOriginCountryCode(source.requestItem(), catalogKeys);
-        // An origin that came from the item's own Sales value (no catalogue country) may have no freight
-        // band for this thickness/qty. Probe it per line so that line alone is set aside as uncostable
-        // (soft, like a missing origin) instead of the freight lookup 422ing the whole request.
-        boolean originFromItem = originCountryCode != null && !hasCatalogCountry(source.requestItem(), catalogKeys);
-        String fallbackOriginProblem = null;
-        if (originFromItem && thicknessMm != null && qtySqm != null) {
+        boolean domestic = originCountryCode == null && !hasCatalogCountry(source.requestItem(), catalogKeys)
+            && source.requestItem().originCountry() != null
+            && DOMESTIC_ORIGIN.equals(source.requestItem().originCountry().trim());
+        // Probe the freight table per line: no matching band (e.g. 12-16 mm > 800 sqm) sets just this line
+        // aside as uncostable - or lets the CEO's own freight stand in - instead of 422ing the whole request.
+        boolean freightGap = false;
+        if (!domestic && originCountryCode != null && thicknessMm != null && qtySqm != null) {
             try {
                 formulaEngine.containerFreight(formulaConfig.freightRates(), originCountryCode,
                     List.of(new PricingFormulaEngine.ContainerLine(thicknessMm, qtySqm)), itemLabel(source.requestItem()));
             } catch (ApiException e) {
-                fallbackOriginProblem = originCountryCode;
+                if (e.getMessage() == null || !e.getMessage().startsWith("ไม่พบอัตราค่าขนส่ง")) {
+                    throw e;
+                }
+                freightGap = true;
             }
         }
+        // The CEO's freight is only USED where the table has no band for the line's group (planFreight).
+        BigDecimal manualFreight = manualFreights.get(source.requestItem().id());
         String productType = resolveProductType(source.requestItem());
         return new ItemPhysicals(source, sqmPerPiece, qtyPieces, qtySqm, goodsCostPerPiece, goodsCostThb,
-            insuranceThb, thicknessMm, originCountryCode, productType, fx, fallbackOriginProblem);
+            insuranceThb, thicknessMm, originCountryCode, productType, fx, freightGap, manualFreight, domestic);
     }
 
     /**
@@ -594,6 +733,13 @@ public class LandedCostCalculator {
      * Mirrors the frontend's ORIGIN_COUNTRY_OPTIONS (not shared: no drift guard). ไทย-สต็อก and
      * อื่นๆ are deliberately absent: neither has a freight band, so they stay "no origin" (uncostable).
      */
+    /**
+     * "ไทย-สต็อก" (goods already in Thailand), owner ruling: the SAME V109 formula with i = F = T = S = 0,
+     * i.e. TC = goods x costBuffer (the x1.07 stays). No freight lookup (prod has no TH band). There is no
+     * inland-transport input yet, so that column stays 0. Catalogue country wins.
+     */
+    public static final String DOMESTIC_ORIGIN = "ไทย-สต็อก";
+
     public static final Map<String, String> ISO_BY_SALES_ORIGIN = Map.of("อิตาลี", "IT", "สเปน", "ES", "จีน", "CN");
 
     /**
@@ -605,15 +751,37 @@ public class LandedCostCalculator {
      * quote's {@code sqm_per_unit} or the request's own {@code requested_qty_sqm}, NOT the Price
      * Catalog), so it carries its own clause.
      */
+    /** Machine-readable twin of {@link #uncostableReason}: comma-separated MISSING_SQM / MISSING_THICKNESS / MISSING_ORIGIN. */
+    private String uncostableCode(ItemPhysicals item) {
+        List<String> codes = new ArrayList<>();
+        if (item.sqmPerPiece() == null) {
+            codes.add("MISSING_SQM");
+        }
+        if (!item.domestic() && item.thicknessMm() == null) {
+            codes.add("MISSING_THICKNESS");
+        }
+        if (!item.domestic() && item.originCountryCode() == null) {
+            codes.add("MISSING_ORIGIN");
+        }
+        return codes.isEmpty() ? null : String.join(",", codes);
+    }
+
+    /** The origin as Sales typed it (อิตาลี); the ISO code only when the line has no typed origin. */
+    private String originLabel(ItemPhysicals item) {
+        String typed = item.source().requestItem().originCountry();
+        return typed != null && !typed.isBlank() ? typed.trim() : item.originCountryCode();
+    }
+
+    private String freightGapReason(ItemPhysicals item) {
+        return itemLabel(item.source().requestItem()) + " ไม่มีอัตราค่าขนส่งในตาราง (ต้นทาง=" + originLabel(item)
+            + " ความหนา=" + item.thicknessMm() + " มม.) — คำนวณต้นทุนอัตโนมัติไม่ได้ กรุณากรอกค่าขนส่งเอง หรือระบุต้นทุนเอง";
+    }
+
     private String uncostableReason(ItemPhysicals item) {
         boolean noSqm = item.sqmPerPiece() == null;
-        boolean noThickness = item.thicknessMm() == null;
-        boolean noCountry = item.originCountryCode() == null;
+        boolean noThickness = !item.domestic() && item.thicknessMm() == null;
+        boolean noCountry = !item.domestic() && item.originCountryCode() == null;
         String label = itemLabel(item.source().requestItem());
-        if (!noSqm && !noThickness && !noCountry && item.fallbackOriginProblem() != null) {
-            return label + " ใช้ประเทศต้นทาง " + item.fallbackOriginProblem() + " ที่ฝ่ายขายกรอก แต่ไม่มีอัตราค่าขนส่งที่ครอบคลุมความหนา/จำนวนนี้ "
-                + "— คำนวณค่าขนส่งอัตโนมัติไม่ได้ กรุณาระบุต้นทุนเอง หรือเชื่อมรายการนี้กับสินค้าใน Price Catalog ที่มีข้อมูลครบ";
-        }
         if (!noSqm && !noThickness && !noCountry) {
             return null;
         }
@@ -955,5 +1123,6 @@ public class LandedCostCalculator {
     private record ItemPhysicals(ResolvedSource source, BigDecimal sqmPerPiece, BigDecimal qtyPieces,
                                  BigDecimal qtySqm, BigDecimal goodsCostPerPiece, BigDecimal goodsCostThb,
                                  BigDecimal insuranceThb, BigDecimal thicknessMm, String originCountryCode,
-                                 String productType, FxSnapshot fx, String fallbackOriginProblem) {}
+                                 String productType, FxSnapshot fx, boolean freightGap, BigDecimal manualFreightThb,
+                                 boolean domestic) {}
 }

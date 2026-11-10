@@ -507,6 +507,7 @@ export const API_ROUTES = {
     factoryQuoteFactory: (id, quoteId) => `/api/pricing-requests/${id}/factory-quotes/${quoteId}/factory`,
     itemOriginCountry: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/origin-country`,
     itemName: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/name`,
+    itemFreight: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/freight`,
     factoryEmailDrafts: (id) => `/api/pricing-requests/${id}/factory-email-drafts`,
     factoryQuotes: (id) => `/api/pricing-requests/${id}/factory-quotes`,
     factoryQuote: (id) => `/api/factory-quotes/${id}`,

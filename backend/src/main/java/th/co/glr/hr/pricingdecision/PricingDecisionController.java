@@ -17,6 +17,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.FreightRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.OriginCountryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RenameItemRequest;
@@ -123,6 +124,17 @@ public class PricingDecisionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return decisions.setItemOriginCountry(id, itemId, request, user);
+    }
+
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/freight")
+    CeoFixResult setItemFreight(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @RequestBody FreightRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return decisions.setItemFreight(id, itemId, request, user);
     }
 
     @PutMapping("/pricing-requests/{id}/items/{itemId}/name")

@@ -36,6 +36,7 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository.ItemUpdate;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.FreightRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.OriginCountryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RenameItemRequest;
@@ -399,14 +400,14 @@ public class PricingDecisionService {
      */
     private PricingDecisionDto requireFixContext(long pricingRequestId, UserPrincipal actor, boolean allowNoDecision) {
         requireRole(actor, CEO_ROLES);
-        PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
+        requirePricingRequest(pricingRequestId); // 404 before taking the lock
         decisions.lockPricingRequest(pricingRequestId);
+        PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId); // read once, under the lock
         Optional<PricingDecisionDto> draft = decisions.findOpenDraft(pricingRequestId);
         if (draft.isPresent()) {
             return requireOpenDecisionForMutation(draft.get().id());
         }
-        PricingRequestSummaryDto fresh = requirePricingRequest(pricingRequestId);
-        if (allowNoDecision && PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(fresh.status())) {
+        if (allowNoDecision && PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
             requireActiveDeal(summary.ticketId());
             return null;
         }
@@ -436,9 +437,17 @@ public class PricingDecisionService {
         return new CeoFixResult(recomputeCostingInPlace(decision, calc), null);
     }
 
-    private PricingRequestItemDto requireRequestItem(long pricingRequestId, long itemId) {
-        return pricingRequests.findItems(pricingRequestId).stream().filter(i -> i.id() == itemId).findFirst()
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการสินค้านี้ในคำขอราคานี้"));
+    /** A request line with its 1-based position in sort order (what the screens and itemLabel call "รายการที่ N"). */
+    private record Line(PricingRequestItemDto item, int position) {}
+
+    private Line requireLine(long pricingRequestId, long itemId) {
+        List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).id() == itemId) {
+                return new Line(items.get(i), i + 1);
+            }
+        }
+        throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการสินค้านี้ในคำขอราคานี้");
     }
 
     /**
@@ -486,20 +495,50 @@ public class PricingDecisionService {
     @Transactional
     public CeoFixResult setItemOriginCountry(long pricingRequestId, long itemId, OriginCountryRequest request, UserPrincipal actor) {
         PricingDecisionDto decision = requireFixContext(pricingRequestId, actor, true);
-        PricingRequestItemDto item = requireRequestItem(pricingRequestId, itemId);
+        Line line = requireLine(pricingRequestId, itemId);
+        PricingRequestItemDto item = line.item();
         String country = request.originCountry() == null ? "" : request.originCountry().trim();
-        if (!LandedCostCalculator.ISO_BY_SALES_ORIGIN.containsKey(country)) {
+        if (!LandedCostCalculator.ISO_BY_SALES_ORIGIN.containsKey(country) && !LandedCostCalculator.DOMESTIC_ORIGIN.equals(country)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน");
+                "ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน, ไทย-สต็อก");
         }
         if (item.stockSource() != null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีต้นทุนนำเข้า จึงตั้งประเทศต้นทางไม่ได้");
         }
+        if (pricingRequests.catalogProvidesOriginCountry(itemId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ใช้ประเทศต้นทางจาก Price Catalog จึงตั้งประเทศต้นทางเองไม่ได้");
+        }
         pricingRequests.updateItemOriginCountry(pricingRequestId, itemId, country);
         CeoFixResult result = recomputeKeepingFix(decision);
         addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET,
-            "CEO ตั้งประเทศต้นทางรายการที่ " + itemId + ": "
+            "CEO ตั้งประเทศต้นทางรายการที่ " + line.position() + ": "
                 + (blankToNullTrim(item.originCountry()) != null ? item.originCountry() : "ไม่ระบุ") + " → " + country);
+        return result;
+    }
+
+    /**
+     * CEO fix: the freight (THB, TOTAL for the line) for a line the freight table has no band for, so the
+     * CEO need not override the whole landed cost. Costing then runs the same formula with this F; where a
+     * band exists the table wins and this value is ignored. null clears it. Positive only.
+     */
+    @Transactional
+    public CeoFixResult setItemFreight(long pricingRequestId, long itemId, FreightRequest request, UserPrincipal actor) {
+        PricingDecisionDto decision = requireFixContext(pricingRequestId, actor, true);
+        Line line = requireLine(pricingRequestId, itemId);
+        PricingRequestItemDto item = line.item();
+        BigDecimal freight = request.freightThb();
+        if (freight != null && (freight.signum() <= 0 || freight.compareTo(MAX_COST_18_4) > 0)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ค่าขนส่งต้องมากกว่า 0 และไม่เกิน " + MAX_COST_18_4 + " บาท");
+        }
+        if (item.stockSource() != null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีค่าขนส่งนำเข้า");
+        }
+        BigDecimal rounded = freight == null ? null : money4(freight);
+        pricingRequests.updateItemManualFreight(pricingRequestId, itemId, rounded);
+        CeoFixResult result = recomputeKeepingFix(decision);
+        addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_FREIGHT_SET,
+            rounded == null ? "CEO ล้างค่าขนส่งที่กรอกเองของรายการที่ " + line.position()
+                : "CEO กรอกค่าขนส่งรายการที่ " + line.position() + ": " + rounded.stripTrailingZeros().toPlainString() + " บาท (ไม่มีอัตราในตาราง)");
         return result;
     }
 
@@ -507,7 +546,8 @@ public class PricingDecisionService {
     @Transactional
     public CeoFixResult renameItem(long pricingRequestId, long itemId, RenameItemRequest request, UserPrincipal actor) {
         PricingDecisionDto decision = requireOpenDraftForRequest(pricingRequestId, actor);
-        PricingRequestItemDto item = requireRequestItem(pricingRequestId, itemId);
+        Line line = requireLine(pricingRequestId, itemId);
+        PricingRequestItemDto item = line.item();
         String brand = blankToNullTrim(request.brand());
         String model = blankToNullTrim(request.model());
         if (brand == null && model == null) {
@@ -519,7 +559,7 @@ public class PricingDecisionService {
         }
         pricingRequests.renameItem(pricingRequestId, itemId, brand, model);
         addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_RENAMED,
-            "CEO แก้ชื่อรายการที่ " + itemId + ": \"" + joinName(item.brand(), item.model()) + "\" → \""
+            "CEO แก้ชื่อรายการที่ " + line.position() + " : \"" + joinName(item.brand(), item.model()) + "\" → \""
                 + joinName(brand, model) + "\"");
         return new CeoFixResult(requireDecision(decision.id()), null);
     }

@@ -672,12 +672,9 @@ public class PricingRequestRepository {
         }
     }
 
-    /** Master factory row whose name equals {@code name} ignoring case/padding; empty if none. */
-    public Optional<String> findFactoryNameByNameIgnoreCase(String name) {
-        List<String> rows = jdbc.queryForList(
-            "SELECT name FROM price_catalog.factories WHERE lower(btrim(name)) = lower(btrim(:name)) ORDER BY factory_id LIMIT 1",
-            Map.of("name", name), String.class);
-        return rows.stream().findFirst();
+    /** Every master factory name, in factory_id order (read once per save and matched in memory). */
+    public List<String> findMasterFactoryNames() {
+        return jdbc.queryForList("SELECT name FROM price_catalog.factories ORDER BY factory_id", Map.of(), String.class);
     }
 
     public Optional<FactoryQuoteDto> findFactoryQuote(long factoryQuoteId) {
@@ -687,6 +684,16 @@ public class PricingRequestRepository {
     /** CEO fix: a CURRENT, non-cancelled quote of this request already named {@code factoryName}. */
     public boolean hasCurrentFactoryQuote(long pricingRequestId, String factoryName) {
         return factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName).isPresent();
+    }
+
+    /** CEO fix: another CURRENT, non-cancelled quote of this request already carries {@code factoryId}
+     * (V62's unique index would otherwise raise a raw 500). */
+    public boolean hasCurrentFactoryQuoteWithFactoryId(long pricingRequestId, long factoryId, long exceptQuoteId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.factory_quote
+                            WHERE pricing_request_id = :pr AND factory_id = :f AND factory_quote_id <> :q
+                              AND is_current = TRUE AND status <> 'CANCELLED')
+            """, Map.of("pr", pricingRequestId, "f", factoryId, "q", exceptQuoteId), Boolean.class));
     }
 
     /**
@@ -719,16 +726,6 @@ public class PricingRequestRepository {
             """, p);
     }
 
-    /** CEO fix: another CURRENT, non-cancelled quote of this request already carries {@code factoryId}
-     * (V62's unique index would otherwise raise a raw 500). */
-    public boolean hasCurrentFactoryQuoteWithFactoryId(long pricingRequestId, long factoryId, long exceptQuoteId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("""
-            SELECT EXISTS (SELECT 1 FROM sales.factory_quote
-                            WHERE pricing_request_id = :pr AND factory_id = :f AND factory_quote_id <> :q
-                              AND is_current = TRUE AND status <> 'CANCELLED')
-            """, Map.of("pr", pricingRequestId, "f", factoryId, "q", exceptQuoteId), Boolean.class));
-    }
-
     /** CEO fix: sets the sales-vocabulary origin country on one line (clears the "อื่นๆ" free text). */
     public int updateItemOriginCountry(long pricingRequestId, long itemId, String originCountry) {
         return jdbc.update("""
@@ -737,15 +734,41 @@ public class PricingRequestRepository {
             """, Map.of("o", originCountry, "id", itemId, "prId", pricingRequestId));
     }
 
+    /** True when the line's catalogue link (snapshot id, else live product id) resolves to a factory with a country. */
+    public boolean catalogProvidesOriginCountry(long pricingRequestItemId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.pricing_request_item pri
+                             JOIN price_catalog.product_prices pp ON pp.price_id = COALESCE(pri.catalog_price_id, pri.product_id)
+                             JOIN price_catalog.factories f ON f.factory_id = pp.factory_id
+                            WHERE pri.pricing_request_item_id = :id AND f.country IS NOT NULL)
+            """, Map.of("id", pricingRequestItemId), Boolean.class));
+    }
+
+    /** CEO fix: sets (or clears, null) the manual freight THB on one line. */
+    public int updateItemManualFreight(long pricingRequestId, long itemId, java.math.BigDecimal freightThb) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item SET manual_freight_thb = :f
+             WHERE pricing_request_item_id = :id AND pricing_request_id = :prId
+            """, new MapSqlParameterSource().addValue("f", freightThb).addValue("id", itemId).addValue("prId", pricingRequestId));
+    }
+
+    public Map<Long, java.math.BigDecimal> findManualFreights(long pricingRequestId) {
+        Map<Long, java.math.BigDecimal> out = new java.util.HashMap<>();
+        jdbc.query("SELECT pricing_request_item_id, manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_id = :id AND manual_freight_thb IS NOT NULL",
+            Map.of("id", pricingRequestId), rs -> { out.put(rs.getLong(1), rs.getBigDecimal(2)); });
+        return out;
+    }
+
     /** CEO fix: renames one line; the catalogue snapshot names (which the UI prefers) follow when present. */
     public int renameItem(long pricingRequestId, long itemId, String brand, String model) {
         // Source ticket line first (compared against the OLD pair): rewritten only while it still equals it.
+        // NULL-safe: ticket_item.brand is NOT NULL (blank for a cleared brand), the item's is NULL.
         jdbc.update("""
-            UPDATE sales.ticket_item ti SET brand = COALESCE(:brand, ''), model = :model -- ticket_item.brand is NOT NULL: a cleared brand is blank there
+            UPDATE sales.ticket_item ti SET brand = COALESCE(:brand, ''), model = :model
               FROM sales.pricing_request_item pri
              WHERE pri.pricing_request_item_id = :id AND pri.pricing_request_id = :prId
                AND ti.item_id = pri.source_ticket_item_id
-               AND ti.brand IS NOT DISTINCT FROM pri.brand AND ti.model IS NOT DISTINCT FROM pri.model
+               AND COALESCE(ti.brand, '') = COALESCE(pri.brand, '') AND COALESCE(ti.model, '') = COALESCE(pri.model, '')
             """, new MapSqlParameterSource().addValue("brand", brand).addValue("model", model)
                 .addValue("id", itemId).addValue("prId", pricingRequestId));
         return jdbc.update("""

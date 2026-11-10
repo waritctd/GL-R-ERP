@@ -15955,12 +15955,27 @@ export const api = {
       const item = pr.items.find((i) => i.id === Number(itemId));
       if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
       const country = String(payload?.originCountry ?? '').trim();
-      if (!['อิตาลี', 'สเปน', 'จีน'].includes(country)) fail('ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน', 400);
+      if (!['อิตาลี', 'สเปน', 'จีน', 'ไทย-สต็อก'].includes(country)) fail('ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน, ไทย-สต็อก', 400);
       if (item.stockSource) fail('รายการจากสต็อกไม่มีต้นทุนนำเข้า จึงตั้งประเทศต้นทางไม่ได้', 400);
+      if (item.productId != null || item.catalogPriceId != null) fail('รายการนี้ใช้ประเทศต้นทางจาก Price Catalog จึงตั้งประเทศต้นทางเองไม่ได้', 409);
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET', pr.status, pr.status,
         `CEO ตั้งประเทศต้นทางรายการที่ ${item.id}: ${item.originCountry || 'ไม่ระบุ'} → ${country}`);
       item.originCountry = country;
       item.originCountryOther = null;
+      return delay({ decision, costingError: null });
+    },
+
+    async setItemFreight(id, itemId, payload) {
+      const user = hasRole('ceo');
+      const { pr, decision } = mockOpenDraftFor(id, true);
+      const item = pr.items.find((i) => i.id === Number(itemId));
+      if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
+      const freight = payload?.freightThb == null ? null : Number(payload.freightThb);
+      if (freight != null && !(freight > 0)) fail('ค่าขนส่งต้องมากกว่า 0', 400);
+      if (item.stockSource) fail('รายการจากสต็อกไม่มีค่าขนส่งนำเข้า', 400);
+      item.manualFreightThb = freight;
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_FREIGHT_SET', pr.status, pr.status,
+        freight == null ? 'CEO ล้างค่าขนส่งที่กรอกเอง' : `CEO กรอกค่าขนส่ง ${freight} บาท`);
       return delay({ decision, costingError: null });
     },
 
@@ -15972,7 +15987,7 @@ export const api = {
       const brand = String(payload?.brand ?? '').trim() || null;
       const model = String(payload?.model ?? '').trim() || null;
       if (!brand && !model) fail('ต้องระบุยี่ห้อหรือรุ่นอย่างน้อยหนึ่งอย่าง', 400);
-      if ((brand?.length ?? 0) > 255 || (model?.length ?? 0) > 255) fail('ยี่ห้อและรุ่นต้องยาวไม่เกิน 255 ตัวอักษร', 400);
+      if ((brand?.length ?? 0) > 255 || (model?.length ?? 0) > 80) fail('ยี่ห้อต้องยาวไม่เกิน 255 ตัวอักษร และรุ่นไม่เกิน 80 ตัวอักษร', 400);
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_RENAMED', pr.status, pr.status,
         `CEO แก้ชื่อรายการที่ ${item.id}: "${[item.brand, item.model].filter(Boolean).join(' ')}" → "${[brand, model].filter(Boolean).join(' ')}"`);
       item.brand = brand;

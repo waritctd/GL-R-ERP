@@ -232,9 +232,8 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        if (typed != null) {
-            when(requestRepo.findFactoryNameByNameIgnoreCase(typed)).thenReturn(master);
-        }
+        // The master names are read ONCE per save, not once per line.
+        when(requestRepo.findMasterFactoryNames()).thenReturn(master.map(List::of).orElse(List.of("Unrelated Factory")));
         when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
 
@@ -266,7 +265,24 @@ class PricingRequestServiceTest {
     @Test
     void createDraft_blankFactoryIsSavedAsNull() {
         assertThat(savedFactoryFor("   ", java.util.Optional.empty())).isNull();
-        verify(requestRepo, never()).findFactoryNameByNameIgnoreCase(any());
+        verify(requestRepo, never()).findMasterFactoryNames();
+    }
+
+    @Test
+    void createDraft_readsTheMasterFactoryNamesOnceForManyLines() {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        when(requestRepo.findMasterFactoryNames()).thenReturn(List.of("Padana"));
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, createRequest(PricingRequestRecipient.BUYER, 1L, null, List.of(
+            sampleItemRequest(null, QuantityType.REFERENCE, "padana"),
+            sampleItemRequest(null, QuantityType.REFERENCE, "Padana "),
+            sampleItemRequest(null, QuantityType.REFERENCE, "Other"))), salesActor);
+
+        verify(requestRepo, org.mockito.Mockito.times(1)).findMasterFactoryNames();
     }
 
     // ── item identity (Part 1: an unidentified product must be rejected) ───────

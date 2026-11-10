@@ -310,9 +310,10 @@ export function CostCalculation({ row, priceMode }) {
           {b.insFactor != null ? `C × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}` : 'C × อัตราค่าประกันภัย'}
           {b.insFactor != null ? <Sub>{`= ${n2(b.goods)} × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}`}</Sub> : null}
         </CalcStep>
-        <CalcStep label="ค่าเรือ" symbol="F" amount={n2(b.freight.share)}>
-          {perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}
-          {freightContainers ? (
+        <CalcStep label={b.freight.manual ? 'ค่าเรือ (CEO กรอก)' : 'ค่าเรือ'} symbol="F" amount={n2(b.freight.share)}>
+          {b.freight.manual ? n2(b.freight.share) : <>{perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}</>}
+          {b.freight.manual ? <Sub>กรอกโดย CEO เพราะไม่มีอัตราค่าขนส่งในตาราง</Sub> : null}
+          {!b.freight.manual && freightContainers ? (
             <Sub>{byUnits
               ? `${freightContainers} · ความจุ ${nf(b.containerSqm)} ตร.ม./ตู้ · เศษเกิน ${nf(b.freight.roundUpAboveSqm)} ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้`
               : `${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
@@ -386,6 +387,7 @@ function Details({ row, model }) {
             <b className="block">คำนวณต้นทุนอัตโนมัติไม่ได้</b>
             <span>{row.costingItem.uncostableReason}</span>
             {row.originFix}
+            {row.freightFix}
           </div>
         ) : null}
         {row.stale ? (

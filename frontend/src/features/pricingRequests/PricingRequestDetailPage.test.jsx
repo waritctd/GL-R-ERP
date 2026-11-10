@@ -58,6 +58,7 @@ vi.mock('../../api/index.js', () => ({
       repointFactoryQuote: vi.fn(),
       setItemOriginCountry: vi.fn(),
       renameItem: vi.fn(),
+      setItemFreight: vi.fn(),
       approvePricingDecision: vi.fn(),
       returnPricingDecisionToImport: vi.fn(),
       // Step 4: Customer Quotation Generation and Issuance.
@@ -8249,7 +8250,7 @@ describe('CEO fixes during price review', () => {
 
   const uncostableOrigin = (requestItemOverrides = {}) => ({
     requestItems: [{ ...buildRequest().items[0], originCountry: 'อิตาลี', ...requestItemOverrides }],
-    costings: [buildCosting({ id: 601, items: [buildCostingItemWithOverride({ id: 1, uncostableReason: 'ไม่มีประเทศต้นทาง (origin country) จาก Price Catalog' })] })],
+    costings: [buildCosting({ id: 601, items: [buildCostingItemWithOverride({ id: 1, uncostableReason: 'ไม่มีประเทศต้นทาง (origin country) จาก Price Catalog', uncostableCode: 'MISSING_ORIGIN' })] })],
     items: [nfItem({ pricingCostingItemId: 1, frozenLandedCostPerRequestedUnitThb: null, netUnitPrice: null })],
   });
 
@@ -8261,10 +8262,10 @@ describe('CEO fixes during price review', () => {
     const select = within(box).getByLabelText('ประเทศต้นทาง');
     expect(select.value).toBe('อิตาลี');
     expect(box.textContent).toContain('ปรับต้นทุนเอง');
-    fireEvent.change(select, { target: { value: 'สเปน' } });
+    fireEvent.change(select, { target: { value: 'ไทย-สต็อก' } });
     fireEvent.click(within(box).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
 
-    await waitFor(() => expect(api.pricingRequests.setItemOriginCountry).toHaveBeenCalledWith(501, 1, { originCountry: 'สเปน' }));
+    await waitFor(() => expect(api.pricingRequests.setItemOriginCountry).toHaveBeenCalledWith(501, 1, { originCountry: 'ไทย-สต็อก' }));
   });
 
   it('B: no country select when the line has a catalogue link', async () => {
@@ -8321,6 +8322,32 @@ describe('CEO fixes during price review', () => {
     expect((await screen.findByTestId('pcr-ceo-costing-error')).textContent).toContain('Second typo');
     expect(showToast).toHaveBeenCalledWith('success', 'บันทึกแล้ว แต่ยังคำนวณต้นทุนไม่ได้');
     expect(showToast).not.toHaveBeenCalledWith('success', 'เปลี่ยนโรงงานแล้ว');
+  });
+
+  const noBandOrigin = () => ({
+    requestItems: [{ ...buildRequest().items[0], originCountry: 'อิตาลี' }],
+    costings: [buildCosting({ id: 601, items: [buildCostingItemWithOverride({
+      id: 1, uncostableReason: 'รายการที่ 1 ไม่มีอัตราค่าขนส่งในตาราง (ต้นทาง=อิตาลี ความหนา=18 มม.)', uncostableCode: 'NO_FREIGHT_BAND',
+    })] })],
+    items: [nfItem({ pricingCostingItemId: 1, frozenLandedCostPerRequestedUnitThb: null, netUnitPrice: null })],
+  });
+
+  it('B: the no-freight-band reason shows the freight input (not the origin select) and saves the THB amount', async () => {
+    await renderCeoNewForm(noBandOrigin());
+
+    const box = await ceoTable().findByTestId('pcr-ceo-freight-fix-8001');
+    expect(ceoTable().queryByTestId('pcr-ceo-origin-fix-8001')).toBeNull();
+    expect(box.textContent).toContain('ไม่มีอัตราค่าขนส่งในตาราง — กรอกค่าขนส่งเอง ระบบคำนวณส่วนที่เหลือตามสูตร');
+    fireEvent.change(within(box).getByLabelText('ค่าขนส่ง (บาท)'), { target: { value: '12000' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
+
+    await waitFor(() => expect(api.pricingRequests.setItemFreight).toHaveBeenCalledWith(501, 1, { freightThb: 12000 }));
+  });
+
+  it('B: a missing-origin line shows the origin select and no freight input', async () => {
+    await renderCeoNewForm(uncostableOrigin());
+    await ceoTable().findByTestId('pcr-ceo-origin-fix-8001');
+    expect(ceoTable().queryByTestId('pcr-ceo-freight-fix-8001')).toBeNull();
   });
 });
 

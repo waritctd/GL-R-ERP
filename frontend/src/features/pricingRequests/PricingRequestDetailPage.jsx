@@ -494,7 +494,7 @@ function CeoFactoryQuoteFix({ quote, factories, takenNames, value, onChangeValue
   );
 }
 
-const ORIGIN_FIX_OPTIONS = ORIGIN_COUNTRY_OPTIONS.filter((o) => ['อิตาลี', 'สเปน', 'จีน'].includes(o.code));
+const ORIGIN_FIX_OPTIONS = ORIGIN_COUNTRY_OPTIONS.filter((o) => ['อิตาลี', 'สเปน', 'จีน', 'ไทย-สต็อก'].includes(o.code));
 
 /** Inside a line's "คำนวณต้นทุนอัตโนมัติไม่ได้" box when it has no catalogue link to read an origin from. */
 function CeoOriginCountryFix({ itemId, defaultValue, onSave, saving }) {
@@ -511,6 +511,28 @@ function CeoOriginCountryFix({ itemId, defaultValue, onSave, saving }) {
         <Button type="button" variant="primary" size="sm" disabled={!value || saving} onClick={() => onSave(value)}>บันทึกและคำนวณต้นทุนใหม่</Button>
       </div>
       <p className="m-0 text-xs text-text-muted">หรือกด “ปรับต้นทุนเอง” ด้านบนเพื่อกรอกต้นทุนต่อแผ่นเองแทน</p>
+    </div>
+  );
+}
+
+function uncostableCodes(costingItem) {
+  return (costingItem?.uncostableCode ?? '').split(',');
+}
+
+/** For a line the freight table has no band for: the CEO types the freight (THB, total for the line). */
+function CeoFreightFix({ itemId, onSave, saving }) {
+  const [value, setValue] = useState('');
+  const amount = Number(value);
+  const id = `pcr-ceo-freight-input-${itemId}`;
+  return (
+    <div data-testid={`pcr-ceo-freight-fix-${itemId}`} className="mt-2 grid gap-2 text-text">
+      <label htmlFor={id} className="font-bold">ค่าขนส่ง (บาท)</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <input id={id} type="number" min="0" step="any" inputMode="decimal" value={value} disabled={saving}
+          onChange={(e) => setValue(e.target.value)} />
+        <Button type="button" variant="primary" size="sm" disabled={!(amount > 0) || saving} onClick={() => onSave(amount)}>บันทึกและคำนวณต้นทุนใหม่</Button>
+      </div>
+      <p className="m-0 text-xs text-text-muted">ไม่มีอัตราค่าขนส่งในตาราง — กรอกค่าขนส่งเอง ระบบคำนวณส่วนที่เหลือตามสูตร</p>
     </div>
   );
 }
@@ -1489,6 +1511,14 @@ export function PricingRequestDetailPage({ user, showToast }) {
       onError: (error) => setCeoCostingError(error.message || 'บันทึกประเทศต้นทางไม่สำเร็จ'),
     },
   );
+  const setItemFreight = useActionMutation(
+    ({ itemId, freightThb }) => api.pricingRequests.setItemFreight(pricingRequestId, itemId, { freightThb }),
+    (data) => (data?.costingError ? SAVED_NOT_COSTED : 'บันทึกค่าขนส่งแล้ว'),
+    {
+      onSuccess: (data) => setCeoCostingError(data?.costingError ?? null),
+      onError: (error) => setCeoCostingError(error.message || 'บันทึกค่าขนส่งไม่สำเร็จ'),
+    },
+  );
   const renameItem = useActionMutation(
     ({ itemId, brand, model }) => api.pricingRequests.renameItem(pricingRequestId, itemId, { brand, model }),
     'แก้ชื่อรายการแล้ว',
@@ -2127,7 +2157,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // read one from), and rename the line. Both only while the decision is editable.
     const noCatalogLink = requestItem != null && requestItem.productId == null && requestItem.catalogPriceId == null;
     const originFix = editable && requestItem && !isStockLine && noCatalogLink
-      && costingItem?.uncostableReason?.includes('ประเทศต้นทาง') ? (
+      && uncostableCodes(costingItem).includes('MISSING_ORIGIN') ? (
         <CeoOriginCountryFix
           itemId={item.id}
           defaultValue={requestItem.originCountry}
@@ -2135,6 +2165,13 @@ export function PricingRequestDetailPage({ user, showToast }) {
           onSave={(originCountry) => setItemOriginCountry.mutate({ itemId: requestItem.id, originCountry })}
         />
       ) : null;
+    const freightFix = editable && requestItem && !isStockLine && uncostableCodes(costingItem).includes('NO_FREIGHT_BAND') ? (
+      <CeoFreightFix
+        itemId={item.id}
+        saving={setItemFreight.isPending}
+        onSave={(freightThb) => setItemFreight.mutate({ itemId: requestItem.id, freightThb })}
+      />
+    ) : null;
     const renameNode = editable && requestItem ? (
       <CeoRenameItem
         requestItem={requestItem}
@@ -2143,7 +2180,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       />
     ) : null;
     return {
-      item, costingItem, position, name, productNode, originFix, renameNode, editable,
+      item, costingItem, position, name, productNode, originFix, freightFix, renameNode, editable,
       size: requestItem?.size,
       factoryLabel: isStockLine ? 'สต็อก' : (factoryName ?? item.factoryName),
       isStock: isStockLine,

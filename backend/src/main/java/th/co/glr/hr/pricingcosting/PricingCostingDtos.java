@@ -101,6 +101,8 @@ public final class PricingCostingDtos {
         /** V156: non-null when the freight table could not be looked up for this line (no
          *  thickness_mm or no origin country on the catalogue row), in which case every
          *  shipment-derived cost above is null and the CEO must supply one before approval. */
-        String uncostableReason
+        String uncostableReason,
+        /** Comma-separated codes behind {@code uncostableReason}: MISSING_SQM, MISSING_THICKNESS, MISSING_ORIGIN, NO_FREIGHT_BAND. */
+        String uncostableCode
     ) {}
 }

@@ -189,4 +189,7 @@ public final class PricingDecisionRequests {
 
     /** CEO fix: rename a line (ยี่ห้อ + รุ่น); at least one must be non-blank. */
     public record RenameItemRequest(String brand, String model) {}
+
+    /** CEO fix: the freight (THB, TOTAL for the line) for a line the freight table has no band for; null clears it. */
+    public record FreightRequest(BigDecimal freightThb) {}
 }
