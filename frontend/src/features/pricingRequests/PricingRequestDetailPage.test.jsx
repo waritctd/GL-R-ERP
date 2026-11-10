@@ -1,5 +1,5 @@
 import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -566,6 +566,8 @@ function renderDetailPage({
   );
   return { ...utils, queryClient, showToast };
 }
+
+const todayIso = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 
 async function waitForLoaded(request = buildRequest()) {
   return screen.findByRole('heading', { level: 1, name: request.summary.requestCode });
@@ -2853,6 +2855,17 @@ describe('PricingRequestDetailPage import price in baht', () => {
   };
   afterEach(() => { delete api.fxRates; });
 
+  it('re-fetches FX rates when the window regains focus, so the baht figure never uses a cached rate', async () => {
+    await renderWithFx(importUser, [quoteWith()]);
+    expect((await screen.findByTestId('pcr-quote-thb-91-1')).textContent).toContain('฿4,600.00');
+    const calls = api.fxRates.list.mock.calls.length;
+    api.fxRates.list.mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 41 }] });
+    act(() => { focusManager.setFocused(false); focusManager.setFocused(true); });
+    await waitFor(() => expect(api.fxRates.list.mock.calls.length).toBeGreaterThan(calls));
+    await waitFor(() => expect(screen.getByTestId('pcr-quote-thb-91-1').textContent).toContain('฿4,715.00'));
+    focusManager.setFocused(undefined);
+  });
+
   // The read-only item card (and its "ราคาจากฝ่ายนำเข้า" line) is gone for import; the baht
   // conversion sits under the price input in the factory table. The CEO still reads it on the item
   // card (second test).
@@ -4392,6 +4405,23 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(91,
       expect.objectContaining({ defaultCurrency: 'USD', items: [expect.objectContaining({ currency: 'USD', rawUnitPrice: 10 })] })));
+  });
+
+  it('offers only THB and currencies that have a rate on file, plus the line\'s own currency', async () => {
+    api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'USD', rateToThb: 35, effectiveDate: todayIso() }] }) };
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    const select = await screen.findByRole('combobox', { name: /^สกุลเงิน/ });
+    await waitFor(() => expect([...select.options].map((o) => o.value)).toEqual(['THB', 'USD', 'EUR']));
+  });
+
+  it('warns when the rate is older than 7 days (costing would refuse it) and names the rate date', async () => {
+    api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40, effectiveDate: '2020-01-02' }] }) };
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    const fx = await screen.findByTestId('pcr-factory-fx-91');
+    await waitFor(() => expect(fx.textContent).toContain('อัตราเก่าเกิน 7 วัน'));
+    expect(fx.textContent).toContain(formatThaiDate('2020-01-02'));
   });
 
   it('reopening a saved response preserves Import currency instead of resetting it to Sales currency', async () => {

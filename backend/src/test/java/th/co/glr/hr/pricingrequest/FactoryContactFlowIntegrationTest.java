@@ -444,6 +444,22 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         assertThat(pricingRequestService.get(prId, salesActor).items().get(0).requestedCurrency()).isEqualTo("EUR");
     }
 
+    /** B3b: the currency is free for import, but it must be a 3-letter code; it is stored trimmed and upper-cased. */
+    @Test
+    void importCurrencyIsNormalisedAndANonCodeIs400WithNothingStored() {
+        long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_PIECE));
+        FactoryQuoteDto quote = requestedQuote(prId, "Factory A");
+
+        assertThatThrownBy(() -> factoryQuoteService.receive(quote.id(), receiveAll(quote, "BAHT", "PER_PIECE"), importActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(factoryQuoteService.get(quote.id(), importActor).items()).allSatisfy(i -> assertThat(i.rawUnitPrice()).isNull());
+
+        FactoryQuoteDto received = factoryQuoteService.receive(quote.id(), receiveAll(quote, " usd ", "PER_PIECE"), importActor);
+        FactoryQuoteDto after = factoryQuoteService.get(received.id(), importActor);
+        assertThat(after.defaultCurrency()).isEqualTo("USD");
+        assertThat(after.items()).allSatisfy(i -> assertThat(i.currency()).isEqualTo("USD"));
+    }
+
     /** B4 — owner ruling 2026-10-01: factories sell on different terms, so import may quote a
      *  per-ตร.ม. line per แผ่น and vice versa. Only that pair is switchable; Import may also change currency. */
     @Test

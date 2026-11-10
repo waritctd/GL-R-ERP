@@ -3,7 +3,7 @@ import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
-import { quotedPriceInThb } from './quotedPriceThb.js';
+import { fxRateFor, isFxRateStale, MAX_FX_RATE_AGE_DAYS, quotedPriceInThb } from './quotedPriceThb.js';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -163,7 +163,12 @@ function apiStatus(error) {
   return typeof error?.status === 'number' ? error.status : null;
 }
 
-/** Seeds Import's answer from the saved factory quote, falling back to Sales' requested terms. */
+/**
+ * Seeds Import's answer. A line Import already priced keeps Import's own currency and unit; an
+ * unpriced line starts from Sales' requested terms. The last fallback matters: `catalogCurrency`
+ * (EUR for the European factories) must win over a hardcoded 'THB', which once stored a price
+ * typed as 46 as ฿46 instead of €46 (a 38.5x error in the landed cost).
+ */
 function defaultResponseItems(quote, requestItemById = new Map()) {
   return (quote?.items ?? []).map((item) => {
     const requestItem = requestItemById.get(item.pricingRequestItemId) ?? {};
@@ -851,7 +856,10 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // The CEO needs the same list for the baht conversion of a line's catalogue price (GET
     // /api/fx-rates is ceo/import/sales/sales_manager on the server).
     enabled: Number.isFinite(pricingRequestId) && canSeeRaw(user),
-    staleTime: 5 * 60 * 1000,
+    // Always the server's latest rate: re-read on every page open and window focus, never a cache.
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
   });
 
   // Step 3: CEO Selling Price Decision. Raw (cost/margin-bearing) history is import/ceo only
@@ -2627,14 +2635,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const current = group.current;
       const quoteStatus = factoryQuoteStatusLabel(current.status);
       const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
+      const seededItems = defaultResponseItems(current, requestItemById);
+      // A priced quote keeps its saved default; a fresh one takes its first line's seeded currency.
+      const seededDefaultCurrency = (current.items?.some((item) => item.rawUnitPrice != null)
+        ? current.defaultCurrency : seededItems[0]?.currency) || current.defaultCurrency || 'THB';
       const seedDraft = () => ({
         supplierQuoteRef: current.supplierQuoteRef ?? '',
-        defaultCurrency: current.items?.some((item) => item.rawUnitPrice != null) ? current.defaultCurrency || 'THB' : defaultResponseItems(current, requestItemById)[0]?.currency || current.defaultCurrency || 'THB',
+        defaultCurrency: seededDefaultCurrency,
         paymentTerms: current.paymentTerms ?? '',
         leadTimeText: current.leadTimeText ?? '',
         revisionReason: '',
         negotiationNote: current.negotiationNote ?? '',
-        items: defaultResponseItems(current, requestItemById),
+        items: seededItems,
       });
       const draft = unsavedDraft ?? seedDraft();
       const dirty = Boolean(unsavedDraft);
@@ -2708,8 +2720,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
         const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
         const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
         const equivalentPrice = equivalentUnitPrice(line, requested);
-        const thb = requested ? quotedPriceInThb(line, requested, fxRatesQuery.data) : null;
-        const rate = lineCurrency === 'THB' ? 1 : (fxRatesQuery.data ?? []).find((fx) => fx.currency === lineCurrency)?.rateToThb;
+        const thb = requested ? quotedPriceInThb({ ...line, currency: lineCurrency }, requested, fxRatesQuery.data) : null;
+        const rate = fxRateFor(lineCurrency, fxRatesQuery.data)?.rateToThb;
         const rawPrice = cleanNumber(line.rawUnitPrice);
         const thbPreview = rawPrice != null && Number(rate) > 0
           ? `≈ ${formatMoney(rawPrice * Number(rate))}/${unitName(line.unitBasis)}${thb ? ` · รวม ${formatMoney(thb.total)}` : ''}`
@@ -2778,7 +2790,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
         };
       });
 
-      const fxRate = sharedCurrency && sharedCurrency !== 'THB' ? (fxRatesQuery.data ?? []).find((fx) => fx.currency === sharedCurrency)?.rateToThb : null;
+      const sharedFx = sharedCurrency && sharedCurrency !== 'THB' ? fxRateFor(sharedCurrency, fxRatesQuery.data) : null;
+      const fxRate = sharedFx?.rateToThb ?? null;
       const emptyPrices = draft.items.filter((line) => cleanNumber(line.rawUnitPrice) == null).length;
       let helper = null;
       if (!contacted) helper = NOT_CONTACTED_HELPER;
@@ -2812,7 +2825,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           currency: sharedCurrency,
           symbol: sharedCurrency ? (CURRENCY_SYMBOLS[sharedCurrency] ?? sharedCurrency) : null,
           editable: editable && contacted,
-          options: [...new Set(['THB', 'EUR', 'USD', 'CNY', ...(fxRatesQuery.data ?? []).map((fx) => fx.currency), ...lineCurrencies])],
+          // Only currencies costing can convert (THB + a rate on file); the current one stays so the select shows it.
+          options: [...new Set(['THB', ...(fxRatesQuery.data ?? []).map((fx) => fx.currency), ...lineCurrencies])],
           onCurrency: (currency) => setResponseDrafts((cur) => {
             const latest = cur[current.id] ?? seedDraft();
             return { ...cur, [current.id]: { ...latest, defaultCurrency: currency, items: latest.items.map((line) => ({ ...line, currency })) } };
@@ -2820,6 +2834,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           requestedCurrencies: [...new Set(groupRequestItems.map((item) => item?.requestedCurrency).filter(Boolean))].join(', '),
           fxNote: sharedCurrency === 'THB' ? '1 THB = 1 บาท'
             : fxRate > 0 ? `1 ${sharedCurrency} = ${Number(fxRate).toLocaleString('th-TH', { maximumFractionDigits: 6 })} บาท`
+              + (sharedFx?.effectiveDate ? ` (ธปท. ${formatThaiDate(sharedFx.effectiveDate)})` : '')
+              + (isFxRateStale(sharedFx) ? ` · อัตราเก่าเกิน ${MAX_FX_RATE_AGE_DAYS} วัน — CEO คิดต้นทุนไม่ได้จนกว่าจะอัปเดต` : '')
               : sharedCurrency ? `ยังไม่มีอัตราแลกเปลี่ยน ${sharedCurrency}` : null,
           lockReason: editable && !contacted,
         },

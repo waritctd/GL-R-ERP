@@ -121,12 +121,12 @@ function PriceCell({ row, quoteId }) {
     <div data-testid={quoteId != null ? `pcr-quote-price-cell-${quoteId}-${row.itemId}` : undefined}>
       {p.mode === 'input' ? (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="grid w-full gap-1.5">
-            <label className="flex w-full items-stretch overflow-hidden rounded-md border border-border-input bg-surface focus-within:ring-2 focus-within:ring-primary md:w-44">
-              <span data-testid={`pcr-quote-symbol-${quoteId}-${row.itemId}`} aria-hidden="true" className="grid min-w-10 place-items-center border-r border-border-input bg-surface-subtle px-2 font-extrabold text-text-secondary">{p.symbol}</span>
+          <span className="grid w-full gap-1 md:w-32">
+            <label className="flex w-full items-stretch overflow-hidden rounded-md border border-border-input bg-surface focus-within:ring-2 focus-within:ring-primary">
+              <span data-testid={`pcr-quote-symbol-${quoteId}-${row.itemId}`} aria-hidden="true" className="grid min-w-6 place-items-center border-r border-border-input bg-surface-subtle px-1 text-xs font-bold text-text-secondary">{p.symbol}</span>
               <input
                 id={p.id}
-                className="w-full min-w-0 border-0 bg-transparent px-2.5 py-1.5 text-right tabular-nums outline-none mobile:min-h-11 mobile:text-base"
+                className="w-full min-w-0 border-0 bg-transparent px-1.5 py-0.5 text-right text-sm tabular-nums outline-none md:h-8 mobile:min-h-11 mobile:text-base"
                 type="text"
                 inputMode="decimal"
                 placeholder={p.placeholder}
@@ -139,14 +139,14 @@ function PriceCell({ row, quoteId }) {
             {p.fixedUnit ? (
               <span data-testid={`pcr-quote-unit-${quoteId}-${row.itemId}`} className="text-sm font-bold text-text-secondary">{p.fixedUnit}</span>
             ) : (
-            <span role="group" aria-label={p.unitSwitch.ariaLabel} className="inline-flex w-full overflow-hidden rounded-md border border-border-muted md:w-auto">
+            <span role="group" aria-label={p.unitSwitch.ariaLabel} className="inline-flex w-full overflow-hidden rounded-md border border-border-muted">
               {p.unitSwitch.options.map((o) => (
                 <button
                   key={o.code}
                   type="button"
                   aria-pressed={p.unitSwitch.value === o.code}
                   onClick={() => p.unitSwitch.onChange(o.code)}
-                  className={cn('min-h-8 flex-1 border-0 border-l border-border px-3 text-sm font-bold first:border-l-0 mobile:min-h-11', p.unitSwitch.value === o.code ? 'bg-primary-bg text-primary' : 'bg-surface text-text-secondary')}
+                  className={cn('min-h-6 flex-1 border-0 border-l border-border px-1.5 text-xs font-semibold first:border-l-0 mobile:min-h-11', p.unitSwitch.value === o.code ? 'bg-primary-bg text-primary' : 'bg-surface text-text-secondary')}
                 >
                   {o.label}
                 </button>

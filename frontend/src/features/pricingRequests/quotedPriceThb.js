@@ -11,6 +11,20 @@
  */
 const positive = (value) => (Number(value) > 0 ? Number(value) : null);
 
+/** The FX row for a currency, THB being 1 by definition (no row needed). */
+export function fxRateFor(currency, fxRates) {
+  return currency === 'THB' ? { currency: 'THB', rateToThb: 1 } : (fxRates ?? []).find((fx) => fx.currency === currency) ?? null;
+}
+
+/** Mirrors FxResolver.MAX_RATE_AGE_DAYS: costing refuses a non-THB rate older than this. */
+export const MAX_FX_RATE_AGE_DAYS = 7;
+
+export function isFxRateStale(fx, today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date())) {
+  if (!fx || fx.currency === 'THB') return false;
+  if (!fx.effectiveDate) return true;
+  return (Date.parse(today) - Date.parse(fx.effectiveDate)) / 86_400_000 > MAX_FX_RATE_AGE_DAYS;
+}
+
 export function quotedPriceInThb(quoteItem, requestItem, fxRates) {
   const basis = quoteItem?.unitBasis;
   if (basis !== 'PER_SQM' && basis !== 'PER_PIECE') return null;
@@ -18,7 +32,7 @@ export function quotedPriceInThb(quoteItem, requestItem, fxRates) {
   const price = positive(quoteItem.rawUnitPrice);
   const sqmPerPiece = positive(quoteItem.sqmPerUnit) ?? positive(requestItem?.sqmPerPiece);
   const item = requestItem ?? {};
-  const rate = quoteItem.currency === 'THB' ? 1 : (fxRates ?? []).find((fx) => fx.currency === quoteItem.currency)?.rateToThb;
+  const rate = fxRateFor(quoteItem.currency, fxRates)?.rateToThb;
   if (price == null || sqmPerPiece == null || positive(rate) == null) return null;
 
   const pricePerUnitThb = price * Number(rate);
