@@ -440,7 +440,7 @@ public class FactoryQuoteService {
         FactoryQuoteDto saved;
         long respondedQuoteId;
         if (Set.of(FactoryQuoteStatus.DRAFT, FactoryQuoteStatus.REQUESTED).contains(current.status())) {
-            int rows = quotes.updateFirstResponse(quoteId, request.supplierQuoteRef(), request.defaultCurrency(),
+            int rows = quotes.updateFirstResponse(quoteId, request.supplierQuoteRef(), optionalCurrencyCode(request.defaultCurrency()),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote());
             if (rows == 0) {
                 // Someone else already moved this quote out of DRAFT/REQUESTED. If that was a
@@ -487,7 +487,7 @@ public class FactoryQuoteService {
                 notifyAutoWithdrawnLeadTimeChange(summary, current.factoryName(),
                     "ฝ่ายนำเข้า (" + actor.name() + ") แก้ไขใบราคาโรงงาน");
             }
-            long newId = quotes.createRevision(current, request.supplierQuoteRef(), request.defaultCurrency(),
+            long newId = quotes.createRevision(current, request.supplierQuoteRef(), optionalCurrencyCode(request.defaultCurrency()),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
             quotes.replaceResponseItems(newId, normalizedItems);
             // CEO-owns-costing (plan 2.3): there is no submitted costing row sitting around any
@@ -738,13 +738,9 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้เป็นของโรงงานอื่น");
             }
             String unitBasis = UnitBasis.canonicalize(responseItem.unitBasis(), "Factory quote unit");
-            // CR-1 (R1): currency and price unit are fixed by Sales on the line and locked for import.
-            // NULL on the line = legacy request, anything accepted. Checked here, before any write.
-            if (requestItem.requestedCurrency() != null
-                && !requestItem.requestedCurrency().equalsIgnoreCase(responseItem.currency() == null ? "" : responseItem.currency().trim())) {
-                throw new ApiException(HttpStatus.CONFLICT, "สกุลเงินต้องเป็น " + requestItem.requestedCurrency()
-                    + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
-            }
+            // Import records the supplier's actual currency (Sales' requested currency stays on the
+            // request for reference); it must still be a 3-letter code so FxResolver can price it.
+            String currency = currencyCode(responseItem.currency());
             // Factories sell on different terms, so import may quote a
             // per-ตร.ม. line per แผ่น (and the reverse). Only that pair switches; any other basis
             // stays locked to what Sales asked for. Costing normalises the requested quantity onto
@@ -785,7 +781,7 @@ public class FactoryQuoteService {
                 quotedUnit,
                 unitBasis,
                 responseItem.rawUnitPrice(),
-                responseItem.currency(),
+                currency,
                 responseItem.minimumOrderQuantity(),
                 responseItem.sqmPerUnit(),
                 responseItem.piecesPerBox(),
@@ -796,6 +792,19 @@ public class FactoryQuoteService {
             ));
         }
         return normalized;
+    }
+
+    /** The quote-level default may be omitted (kept as before); when given it must be a valid code. */
+    private static String optionalCurrencyCode(String raw) {
+        return raw == null || raw.isBlank() ? raw : currencyCode(raw);
+    }
+
+    private static String currencyCode(String raw) {
+        String code = raw == null ? "" : raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!code.matches("[A-Z]{3}")) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "สกุลเงินต้องเป็นรหัส 3 ตัวอักษร เช่น THB, EUR, USD");
+        }
+        return code;
     }
 
     private PricingRequestSummaryDto requirePricingRequest(long pricingRequestId) {
