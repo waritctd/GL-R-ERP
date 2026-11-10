@@ -182,11 +182,11 @@ describe('mockApi.pricingRequests.receiveFactoryQuote — price entry locked unt
     expect(factoryQuote.status).toBe('RESPONSE_RECEIVED');
   });
 
-  it('409s a different currency than the line requested', async () => {
+  it('accepts Import supplier currency differing from Sales request', async () => {
     const { quote } = await pcrWithDraftQuote();
     await api.pricingRequests.markFactoryQuoteContacted(quote.id, { contactedOn: todayBangkok() });
-    await expect(api.pricingRequests.receiveFactoryQuote(quote.id, receivePayload(quote, { currency: 'USD' })))
-      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('สกุลเงิน') });
+    const { factoryQuote } = await api.pricingRequests.receiveFactoryQuote(quote.id, receivePayload(quote, { currency: 'USD' }));
+    expect(factoryQuote.items[0].currency).toBe('USD');
   });
 
   it('accepts ตร.ม. <-> แผ่น for a per-ตร.ม. line (factories sell on different terms), but 409s any other unit', async () => {

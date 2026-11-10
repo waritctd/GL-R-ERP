@@ -738,13 +738,8 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "รายการตอบกลับนี้เป็นของโรงงานอื่น");
             }
             String unitBasis = UnitBasis.canonicalize(responseItem.unitBasis(), "Factory quote unit");
-            // CR-1 (R1): currency and price unit are fixed by Sales on the line and locked for import.
-            // NULL on the line = legacy request, anything accepted. Checked here, before any write.
-            if (requestItem.requestedCurrency() != null
-                && !requestItem.requestedCurrency().equalsIgnoreCase(responseItem.currency() == null ? "" : responseItem.currency().trim())) {
-                throw new ApiException(HttpStatus.CONFLICT, "สกุลเงินต้องเป็น " + requestItem.requestedCurrency()
-                    + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
-            }
+            // Import records the supplier's actual currency; Sales' requested currency remains
+            // on the original request for reference. Existing role/state gates still apply.
             // Factories sell on different terms, so import may quote a
             // per-ตร.ม. line per แผ่น (and the reverse). Only that pair switches; any other basis
             // stays locked to what Sales asked for. Costing normalises the requested quantity onto

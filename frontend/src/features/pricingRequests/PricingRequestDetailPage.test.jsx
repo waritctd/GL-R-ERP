@@ -2885,11 +2885,11 @@ describe('PricingRequestDetailPage import price in baht', () => {
     expect(screen.queryByTestId('pcr-quote-thb-91-1')).toBeNull();
   });
 
-  it('import: no baht for a per-box price; ceo item card keeps its per-box text; Sales has no FX access', async () => {
+  it('import: baht per box without guessing a total; ceo item card keeps its per-box text; Sales has no FX access', async () => {
     await renderWithFx(importUser, [quoteWith({ unitBasis: 'PER_BOX' })]);
     expect(await screen.findByTestId('pcr-quote-price-cell-91-1')).not.toBeNull(); // positive control: the redesigned price cell
     expect((await screen.findByLabelText(/^ราคาที่เสนอ/)).value).toBe('115');
-    expect(screen.queryByTestId('pcr-quote-thb-91-1')).toBeNull();
+    expect(screen.getByTestId('pcr-quote-thb-91-1').textContent).toBe('≈ ฿4,600.00/กล่อง');
     cleanup();
     await renderWithFx(ceoUser, [quoteWith({ unitBasis: 'PER_BOX' })]);
     expect((await screen.findByTestId('pcr-import-price-1')).textContent).toContain('115 EUR/กล่อง');
@@ -4354,28 +4354,52 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     expect(screen.queryByRole('button', { name: 'ส่งแล้ว' })).toBeNull();
   });
 
-  it('shows the read-only currency line "สกุลเงิน 🔒 EUR € · ตามคำขอราคา" and no currency / unit select for lines that carry terms (R1)', async () => {
+  it('lets Import select factory currency while retaining Sales requested currency', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
     const line = screen.getByTestId('pcr-factory-currency-91').textContent;
     expect(line).toContain('สกุลเงิน');
-    expect(line).toContain('EUR €');
-    expect(line).toContain('ตามคำขอราคา');
+    expect(line).toContain('ฝ่ายขายขอ: EUR');
+    expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ }).value).toBe('EUR');
     expect(screen.queryByTestId('pcr-factory-terms-91')).toBeNull(); // the "ต่อ ตร.ม." strip is gone: the unit is per line now
-    expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
+    expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ })).not.toBeNull();
     expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
   });
 
-  it('a legacy line with no requested terms ALSO gets the read-only currency line — no currency or unit select', async () => {
+  it('lets Import select currency on legacy lines too', async () => {
     renderDetailPage({ user: importUser, request: buildRequest(), factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
 
-    expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
+    expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ })).not.toBeNull();
     expect(screen.queryByRole('combobox', { name: /^หน่วยราคา/ })).toBeNull();
-    expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('THB ฿');
+    expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ }).value).toBe('THB');
+  });
+
+  it('updates baht live when Import changes currency and sends that currency on confirmation', async () => {
+    api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }, { currency: 'USD', rateToThb: 35 }] }) };
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    const currency = await screen.findByRole('combobox', { name: /^สกุลเงิน/ });
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
+    await waitFor(() => expect(screen.getByTestId('pcr-quote-thb-91-1').textContent).toContain('฿400.00/ตร.ม.'));
+    fireEvent.change(currency, { target: { value: 'USD' } });
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).value).toBe('10');
+    expect(screen.getByTestId('pcr-quote-thb-91-1').textContent).toContain('฿350.00/ตร.ม.');
+    expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('ฝ่ายขายขอ: EUR');
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(91,
+      expect.objectContaining({ defaultCurrency: 'USD', items: [expect.objectContaining({ currency: 'USD', rawUnitPrice: 10 })] })));
+  });
+
+  it('reopening a saved response preserves Import currency instead of resetting it to Sales currency', async () => {
+    const quote = contactedQuote();
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [{ ...quote, status: 'RESPONSE_RECEIVED', defaultCurrency: 'USD', items: quote.items.map((item) => ({ ...item, rawUnitPrice: 10, currency: 'USD' })) }] });
+    await waitForLoaded();
+    expect((await screen.findByRole('combobox', { name: /^สกุลเงิน/ })).value).toBe('USD');
+    expect(screen.getByLabelText(/^ราคาที่เสนอ/).value).toBe('10');
   });
 
   it('a not-yet-contacted factory disables every price input and says why', async () => {
@@ -7640,23 +7664,23 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       expect(card(91).getByLabelText(/^ราคาที่เสนอ/).disabled).toBe(false);
     });
 
-    it('terms row holds the read-only currency line and, for EUR, the FX note "อัตรา 40.00 บาท (ธปท.)" when a rate exists', async () => {
+    it('terms row shows editable currency and the exact conversion direction', async () => {
       api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }] }) };
       renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
       await waitForLoaded();
       const row = within(await screen.findByTestId('pcr-factory-terms-row-91'));
-      expect(row.getByTestId('pcr-factory-currency-91').textContent).toContain('ตามคำขอราคา');
-      expect((await row.findByTestId('pcr-factory-fx-91')).textContent).toMatch(/อัตรา 40\.00 บาท \(ธปท\.\)/);
+      expect(row.getByTestId('pcr-factory-currency-91').textContent).toContain('ฝ่ายขายขอ:');
+      expect((await row.findByTestId('pcr-factory-fx-91')).textContent).toContain('1 EUR = 40 บาท');
     });
 
-    it('terms row: a THB / legacy factory has no FX note and no currency / unit select', async () => {
+    it('terms row: THB works without a foreign exchange rate', async () => {
       api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }] }) };
       renderDetailPage({ user: importUser, request: buildRequest(), factoryQuotes: [buildFactoryQuote({ status: 'REQUESTED' })] });
       await waitForLoaded();
       const row = within(await screen.findByTestId('pcr-factory-terms-row-91'));
-      expect(row.queryByRole('combobox')).toBeNull();
+      expect(row.getByRole('combobox').value).toBe('THB');
       expect(row.getByTestId('pcr-factory-currency-91')).not.toBeNull();
-      expect(row.queryByTestId('pcr-factory-fx-91')).toBeNull();
+      expect(row.getByTestId('pcr-factory-fx-91').textContent).toBe('1 THB = 1 บาท');
     });
   });
 
@@ -7892,10 +7916,9 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       await screen.findByTestId('pcr-factory-card-91');
     };
 
-    it('a legacy line has no currency select and shows the read-only code', async () => {
+    it('a legacy line has a currency selector', async () => {
       await render(legacyEur());
-      expect(screen.queryByRole('combobox', { name: /^สกุลเงิน/ })).toBeNull();
-      expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('EUR €');
+      expect(screen.getByRole('combobox', { name: /^สกุลเงิน/ }).value).toBe('EUR');
     });
 
     it('a legacy line\'s unit switch offers exactly / แผ่น and / ตร.ม., with the current one pressed', async () => {
@@ -7918,7 +7941,7 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       ));
     });
 
-    it('currency parity: when defaultCurrency differs from a line\'s currency, confirm sends exactly the seeded values', async () => {
+    it('uses the line currency as the default for a fresh single-currency quote', async () => {
       const base = buildFactoryQuote();
       const quote = buildFactoryQuote({ status: 'REQUESTED', defaultCurrency: 'USD', items: [{ ...base.items[0], currency: 'EUR' }] });
       await render(quote);
@@ -7926,7 +7949,7 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
       await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalled());
       const payload = api.pricingRequests.receiveFactoryQuote.mock.calls[0][1];
-      expect(payload.defaultCurrency).toBe('USD');
+      expect(payload.defaultCurrency).toBe('EUR');
       expect(payload.items[0].currency).toBe('EUR');
     });
 
@@ -7961,7 +7984,7 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
     it('mixed currencies: the locked pill says so instead of showing only a lock icon', async () => {
       const request = crRequest({ items: [crItem({ id: 1 }), crItem({ id: 2, model: 'A2', requestedCurrency: 'USD' })] });
       await render(contactedQuote({ items: [line(91, 1), line(91, 2, { currency: 'USD' })] }), request);
-      expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('หลายสกุลเงิน — ดูในแต่ละรายการ');
+      expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('หลายสกุลเงิน — เลือกเพื่อใช้ทั้งโรงงาน');
     });
 
     it('header terms: only printedByDisplayId / salesRepDisplayId set → no terms row (it never shows them)', async () => {
@@ -7983,8 +8006,8 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       const quote = contactedQuote({ items: [line(91, 1), line(91, 2, { currency: 'USD' })] });
       await render(quote, request);
       const header = screen.getByTestId('pcr-factory-currency-91').textContent;
-      expect(header).toContain('ตามคำขอราคา');
-      expect(header).not.toMatch(/EUR|USD/);
+      expect(header).toContain('ฝ่ายขายขอ:');
+      expect(header).toContain('ฝ่ายขายขอ: EUR, USD');
       expect(screen.getByTestId('pcr-quote-symbol-91-1').textContent).toBe('€');
       expect(screen.getByTestId('pcr-quote-symbol-91-2').textContent).toBe('$');
       expect(screen.getByTestId('pcr-quote-currency-91-2').textContent).toContain('USD');

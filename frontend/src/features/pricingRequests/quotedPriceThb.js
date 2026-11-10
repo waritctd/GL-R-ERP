@@ -18,7 +18,7 @@ export function quotedPriceInThb(quoteItem, requestItem, fxRates) {
   const price = positive(quoteItem.rawUnitPrice);
   const sqmPerPiece = positive(quoteItem.sqmPerUnit) ?? positive(requestItem?.sqmPerPiece);
   const item = requestItem ?? {};
-  const rate = (fxRates ?? []).find((fx) => fx.currency === quoteItem.currency)?.rateToThb;
+  const rate = quoteItem.currency === 'THB' ? 1 : (fxRates ?? []).find((fx) => fx.currency === quoteItem.currency)?.rateToThb;
   if (price == null || sqmPerPiece == null || positive(rate) == null) return null;
 
   const pricePerUnitThb = price * Number(rate);

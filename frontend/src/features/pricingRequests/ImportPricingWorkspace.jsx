@@ -122,7 +122,7 @@ function PriceCell({ row, quoteId }) {
       {p.mode === 'input' ? (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="grid w-full gap-1.5">
-            <label className="flex w-full items-stretch overflow-hidden rounded-md border border-border-input bg-surface md:w-44">
+            <label className="flex w-full items-stretch overflow-hidden rounded-md border border-border-input bg-surface focus-within:ring-2 focus-within:ring-primary md:w-44">
               <span data-testid={`pcr-quote-symbol-${quoteId}-${row.itemId}`} aria-hidden="true" className="grid min-w-10 place-items-center border-r border-border-input bg-surface-subtle px-2 font-extrabold text-text-secondary">{p.symbol}</span>
               <input
                 id={p.id}
@@ -184,7 +184,7 @@ function PriceCell({ row, quoteId }) {
         <span className="text-sm text-text-secondary">{p.text}</span>
       ) : <span className="text-text-muted">–</span>}
       {row.thb ? (
-        <div className="mt-1 text-xs text-text-muted" data-testid={`pcr-quote-thb-${quoteId}-${row.itemId}`}>{row.thb}</div>
+        <div className="mt-2 text-sm font-bold text-text-secondary mobile:text-base" data-testid={`pcr-quote-thb-${quoteId}-${row.itemId}`}>{row.thb}</div>
       ) : row.priceEmpty ? <div className="mt-1 text-xs text-text-muted">ยังไม่กรอก</div> : null}
     </div>
   );
@@ -233,15 +233,22 @@ function CardTerms({ card }) {
   const t = card.terms;
   return (
     <div data-testid={card.quoteId != null ? `pcr-factory-terms-row-${card.quoteId}` : undefined} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border-subtle px-5 py-2.5 text-xs text-text-secondary mobile:px-4">
-      <span className="inline-flex flex-wrap items-center gap-x-2" data-testid={`pcr-factory-currency-${card.quoteId}`}>
-        <b className="text-text">สกุลเงิน</b>
-        <span className="inline-flex items-center gap-1 rounded-pill bg-surface-subtle px-2 py-0.5 font-bold text-text" title="ใช้สกุลเงินตามคำขอราคา เปลี่ยนไม่ได้">
-          <Icon name="lock" size={12} className="shrink-0 text-text-muted" />
-          {t.currency ? `${t.currency} ${t.symbol}` : 'หลายสกุลเงิน — ดูในแต่ละรายการ'}
-        </span>
-        <span className="text-text-muted">ตามคำขอราคา</span>
-        {t.fxNote ? <span className="text-text-muted" data-testid={`pcr-factory-fx-${card.quoteId}`}>{`· ${t.fxNote}`}</span> : null}
-      </span>
+      <div className="grid w-full gap-2 sm:w-auto" data-testid={`pcr-factory-currency-${card.quoteId}`}>
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor={`pcr-currency-${card.quoteId}`} className="font-bold text-text mobile:text-base">สกุลเงินที่โรงงานเสนอ</label>
+          {t.editable ? (
+            <select id={`pcr-currency-${card.quoteId}`} className="min-h-11 w-auto cursor-pointer px-2 py-1 text-base sm:min-h-9 sm:text-sm" value={t.currency ?? ''} onChange={(e) => t.onCurrency(e.target.value)} aria-describedby={`pcr-currency-hint-${card.quoteId}`}>
+              {!t.currency ? <option value="" disabled>หลายสกุลเงิน — เลือกเพื่อใช้ทั้งโรงงาน</option> : null}
+              {t.options.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+            </select>
+          ) : <b className="text-text">{t.currency ? `${t.currency} ${t.symbol}` : 'หลายสกุลเงิน — ดูในแต่ละรายการ'}</b>}
+          {t.fxNote ? <span className="text-sm text-text-secondary" data-testid={`pcr-factory-fx-${card.quoteId}`}>{t.fxNote}</span> : null}
+          {t.requestedCurrencies ? <span className="text-sm text-text-muted">ฝ่ายขายขอ: {t.requestedCurrencies}</span> : null}
+        </div>
+        <p id={`pcr-currency-hint-${card.quoteId}`} className="m-0 text-sm text-text-muted mobile:text-base">
+          {t.editable ? 'ใช้กับทุกรายการในโรงงานนี้ · เปลี่ยนสกุลเงินแล้วตรวจสอบราคาก่อนยืนยัน · ' : ''}ยอดบาทเป็นค่าประมาณตามอัตราในระบบ ยังไม่รวมค่าขนส่งและภาษี
+        </p>
+      </div>
       {t.lockReason ? (
         <span className="inline-flex items-center gap-1 font-bold text-warning-dark" data-testid={`pcr-await-contact-${card.quoteId}`}>
           <Icon name="lock" size={13} />

@@ -163,16 +163,7 @@ function apiStatus(error) {
   return typeof error?.status === 'number' ? error.status : null;
 }
 
-/**
- * Seeds the "record the factory's answer" draft. Import types the PRICE and nothing else:
- * quantity, unit and currency come from what Sales requested, so they are carried in this state
- * (the backend still requires them) but never rendered as inputs.
- *
- * `requestItem` is the sales-side PricingRequestItem this quote line was generated from, looked up
- * by pricingRequestItemId. The currency fallback matters: `catalogCurrency` is the currency of the
- * catalog row Sales picked (EUR for the European factories) and must win over a hardcoded 'THB',
- * which stored a price typed as 46 as ฿46 instead of €46 (a 38.5x error in the landed cost).
- */
+/** Seeds Import's answer from the saved factory quote, falling back to Sales' requested terms. */
 function defaultResponseItems(quote, requestItemById = new Map()) {
   return (quote?.items ?? []).map((item) => {
     const requestItem = requestItemById.get(item.pricingRequestItemId) ?? {};
@@ -187,11 +178,8 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     // is NOT NULL and CHECK-constrained to the four canonical codes, and every quote comes from the
     // API. A `'PER_PIECE'` default would only hide a bad value as a silently wrong basis; an
     // absent one should fail loudly at the backend.
-    // Currency and price unit are fixed by Sales on the line and locked for import: the line's own
-    // requested terms win over the draft, so what is sent back always matches
-    // (FactoryQuoteService#receive 409s anything else). A legacy line has neither and keeps the
-    // seeding below.
-    const unitBasis = requestItem.requestedPriceUnitBasis ?? item.unitBasis;
+    // Preserve Import's saved terms when reopening a response or revision.
+    const unitBasis = item.rawUnitPrice != null ? item.unitBasis : requestItem.requestedPriceUnitBasis ?? item.unitBasis;
     const quotedUnit = requestItem.requestedPriceUnitBasis
       ? unitBasisLabel(unitBasis)
       : item.quotedUnit ?? requestItem.requestedUnit ?? unitBasisLabel(unitBasis);
@@ -203,7 +191,7 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     quotedUnit,
     unitBasis,
     rawUnitPrice: item.rawUnitPrice ?? '',
-    currency: requestItem.requestedCurrency ?? item.currency ?? quote.defaultCurrency ?? requestItem.catalogCurrency ?? 'THB',
+    currency: (item.rawUnitPrice != null ? item.currency : requestItem.requestedCurrency) || item.currency || requestItem.requestedCurrency || quote.defaultCurrency || requestItem.catalogCurrency || 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
     // Falls back to the request item's own ตร.ม./แผ่น (required on every item since V185) so import
     // is not asked for a figure the system already holds; a value saved on the quote still wins.
@@ -2641,10 +2629,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const unsavedDraft = inResponseWindow ? responseDrafts[current.id] : undefined;
       const seedDraft = () => ({
         supplierQuoteRef: current.supplierQuoteRef ?? '',
-        defaultCurrency: (() => {
-          const locked = [...new Set((current.items ?? []).map((i) => requestItemById.get(i.pricingRequestItemId)?.requestedCurrency).filter(Boolean))];
-          return locked.length === 1 ? locked[0] : (current.defaultCurrency ?? 'THB');
-        })(),
+        defaultCurrency: current.items?.some((item) => item.rawUnitPrice != null) ? current.defaultCurrency || 'THB' : defaultResponseItems(current, requestItemById)[0]?.currency || current.defaultCurrency || 'THB',
         paymentTerms: current.paymentTerms ?? '',
         leadTimeText: current.leadTimeText ?? '',
         revisionReason: '',
@@ -2723,7 +2708,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
         const serverItem = current.items?.find((i) => i.pricingRequestItemId === line.pricingRequestItemId);
         const approvedPrice = current.status === 'READY_FOR_COSTING' ? serverItem?.rawUnitPrice ?? null : null;
         const equivalentPrice = equivalentUnitPrice(line, requested);
-        const thb = requested ? quotedPriceInThb(importQuoteItemByRequestItem.get(requested.id), requested, fxRatesQuery.data) : null;
+        const thb = requested ? quotedPriceInThb(line, requested, fxRatesQuery.data) : null;
+        const rate = lineCurrency === 'THB' ? 1 : (fxRatesQuery.data ?? []).find((fx) => fx.currency === lineCurrency)?.rateToThb;
+        const rawPrice = cleanNumber(line.rawUnitPrice);
+        const thbPreview = rawPrice != null && Number(rate) > 0
+          ? `≈ ${formatMoney(rawPrice * Number(rate))}/${unitName(line.unitBasis)}${thb ? ` · รวม ${formatMoney(thb.total)}` : ''}`
+          : rawPrice != null ? (fxRatesQuery.isPending ? 'กำลังโหลดอัตราแลกเปลี่ยน…' : `ยังแปลงเป็นบาทไม่ได้ — ไม่มีอัตรา ${lineCurrency}`) : null;
         const pendingLine = pendingLineById.get(line.pricingRequestItemId);
         let price;
         if (editable && contacted) {
@@ -2776,7 +2766,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           qtyDetail: qtyDetailOf(requested),
           spec: specFor(requested),
           price,
-          thb: thb ? `≈ ${formatMoney(thb.perSqm)}/ตร.ม. · รวม ${formatMoney(thb.total)}` : null,
+          thb: thbPreview,
           currency: lineCurrency,
           currencyNote: sharedCurrency ? null : lineCurrency,
           priceEmpty: price.mode === 'input' && !thb && cleanNumber(line.rawUnitPrice) == null,
@@ -2819,11 +2809,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
         contact: canMarkContacted ? { testId: `pcr-open-contact-${current.id}`, onClick: () => setContactQuoteId(current.id) } : null,
         contactNote: contacted && current.contactedNote ? current.contactedNote : null,
         terms: {
-          // Currency is Sales's and read-only. One shared code is named in the header; mixed codes stay
-          // generic here and each row shows its own.
           currency: sharedCurrency,
           symbol: sharedCurrency ? (CURRENCY_SYMBOLS[sharedCurrency] ?? sharedCurrency) : null,
-          fxNote: fxRate != null ? `อัตรา ${Number(fxRate).toFixed(2)} บาท (ธปท.)` : null,
+          editable: editable && contacted,
+          options: [...new Set(['THB', 'EUR', 'USD', 'CNY', ...(fxRatesQuery.data ?? []).map((fx) => fx.currency), ...lineCurrencies])],
+          onCurrency: (currency) => setResponseDrafts((cur) => {
+            const latest = cur[current.id] ?? seedDraft();
+            return { ...cur, [current.id]: { ...latest, defaultCurrency: currency, items: latest.items.map((line) => ({ ...line, currency })) } };
+          }),
+          requestedCurrencies: [...new Set(groupRequestItems.map((item) => item?.requestedCurrency).filter(Boolean))].join(', '),
+          fxNote: sharedCurrency === 'THB' ? '1 THB = 1 บาท'
+            : fxRate > 0 ? `1 ${sharedCurrency} = ${Number(fxRate).toLocaleString('th-TH', { maximumFractionDigits: 6 })} บาท`
+              : sharedCurrency ? `ยังไม่มีอัตราแลกเปลี่ยน ${sharedCurrency}` : null,
           lockReason: editable && !contacted,
         },
         rows,

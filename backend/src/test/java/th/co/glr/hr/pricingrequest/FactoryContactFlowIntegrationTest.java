@@ -21,7 +21,7 @@ import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
  * real services/repositories.
  *
  * <p>A: the "ติดต่อโรงงานแล้ว" (factory contacted) step replaces "send" and gates price entry.
- * B: currency and price unit are fixed by Sales on the request line and locked for import.
+ * B: Sales terms seed the quote; Import may change currency and switch sqm/piece pricing.
  *
  * <p>Authz cases are written wrong-way-round: they assert who CANNOT reach the step, and which
  * states refuse it, rather than that the happy caller can.
@@ -429,23 +429,23 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
 
     /** B3 */
     @Test
-    void receiveWithACurrencyOtherThanTheRequestedOneIs409_andStoresNothing() {
+    void importMayChangeCurrencyWithoutChangingSalesRequest() {
         long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_PIECE));
         FactoryQuoteDto quote = requestedQuote(prId, "Factory A");
 
-        assertThatThrownBy(() -> factoryQuoteService.receive(quote.id(), receiveAll(quote, "USD", "PER_PIECE"), importActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        FactoryQuoteDto after = factoryQuoteService.get(quote.id(), importActor);
-        assertThat(after.status()).isEqualTo(FactoryQuoteStatus.REQUESTED);
-        assertThat(after.items()).allSatisfy(i -> assertThat(i.rawUnitPrice()).isNull());
-
-        // control: the SAME state accepts the requested currency, so the 409 above was about currency
-        assertThat(factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_PIECE"), importActor).status())
-            .isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
+        FactoryQuoteDto received = factoryQuoteService.receive(quote.id(), receiveAll(quote, "USD", "PER_PIECE"), importActor);
+        assertThat(received.status()).isEqualTo(FactoryQuoteStatus.RESPONSE_RECEIVED);
+        FactoryQuoteDto after = factoryQuoteService.get(received.id(), importActor);
+        assertThat(after.defaultCurrency()).isEqualTo("USD");
+        assertThat(after.items()).allSatisfy(i -> {
+            assertThat(i.currency()).isEqualTo("USD");
+            assertThat(i.rawUnitPrice()).isNotNull();
+        });
+        assertThat(pricingRequestService.get(prId, salesActor).items().get(0).requestedCurrency()).isEqualTo("EUR");
     }
 
     /** B4 — owner ruling 2026-10-01: factories sell on different terms, so import may quote a
-     *  per-ตร.ม. line per แผ่น and vice versa. Only that pair is switchable; currency stays locked. */
+     *  per-ตร.ม. line per แผ่น and vice versa. Only that pair is switchable; Import may also change currency. */
     @Test
     void importMayQuoteAPerSqmLineByThePieceAndAPerPieceLineBySqm() {
         long prId = requestInImportReview(
