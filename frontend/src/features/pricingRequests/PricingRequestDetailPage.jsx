@@ -526,13 +526,13 @@ function CeoFreightFix({ itemId, onSave, saving }) {
   const id = `pcr-ceo-freight-input-${itemId}`;
   return (
     <div data-testid={`pcr-ceo-freight-fix-${itemId}`} className="mt-2 grid gap-2 text-text">
-      <label htmlFor={id} className="font-bold">ค่าขนส่ง (บาท)</label>
+      <label htmlFor={id} className="font-bold">ค่าขนส่งของรายการนี้ (บาท)</label>
       <div className="flex flex-wrap items-center gap-2">
         <input id={id} type="number" min="0" step="any" inputMode="decimal" value={value} disabled={saving}
           onChange={(e) => setValue(e.target.value)} />
         <Button type="button" variant="primary" size="sm" disabled={!(amount > 0) || saving} onClick={() => onSave(amount)}>บันทึกและคำนวณต้นทุนใหม่</Button>
       </div>
-      <p className="m-0 text-xs text-text-muted">ไม่มีอัตราค่าขนส่งในตาราง — กรอกค่าขนส่งเอง ระบบคำนวณส่วนที่เหลือตามสูตร</p>
+      <p className="m-0 text-xs text-text-muted">ไม่มีอัตราค่าขนส่งในตารางสำหรับรายการนี้ — กรอกค่าขนส่งรวมของรายการนี้เท่านั้น (ไม่รวมรายการอื่นในตู้เดียวกัน) ระบบคำนวณส่วนที่เหลือตามสูตร</p>
     </div>
   );
 }

@@ -8337,8 +8337,8 @@ describe('CEO fixes during price review', () => {
 
     const box = await ceoTable().findByTestId('pcr-ceo-freight-fix-8001');
     expect(ceoTable().queryByTestId('pcr-ceo-origin-fix-8001')).toBeNull();
-    expect(box.textContent).toContain('ไม่มีอัตราค่าขนส่งในตาราง — กรอกค่าขนส่งเอง ระบบคำนวณส่วนที่เหลือตามสูตร');
-    fireEvent.change(within(box).getByLabelText('ค่าขนส่ง (บาท)'), { target: { value: '12000' } });
+    expect(box.textContent).toContain('ไม่มีอัตราค่าขนส่งในตารางสำหรับรายการนี้ — กรอกค่าขนส่งรวมของรายการนี้เท่านั้น (ไม่รวมรายการอื่นในตู้เดียวกัน) ระบบคำนวณส่วนที่เหลือตามสูตร');
+    fireEvent.change(within(box).getByLabelText('ค่าขนส่งของรายการนี้ (บาท)'), { target: { value: '12000' } });
     fireEvent.click(within(box).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
 
     await waitFor(() => expect(api.pricingRequests.setItemFreight).toHaveBeenCalledWith(501, 1, { freightThb: 12000 }));
