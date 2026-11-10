@@ -15281,16 +15281,10 @@ export const api = {
       if (quote.status === 'DRAFT') fail('ต้องกด ติดต่อโรงงานแล้ว ก่อนกรอกราคา', 409);
       const pr = findPricingRequestRaw(quote.pricingRequestId);
       mockRequireNotCeoReviewing(pr);
-      // Currency and price unit are fixed by Sales on the line and locked for import. A line with
-      // no requested terms accepts anything — mirrors
-      // FactoryQuoteService#validateAndNormalizeResponseItems.
+      // Import may change the supplier currency; retain the price-unit constraints.
       for (const responseItem of payload.items ?? []) {
         const requestItem = pr.items.find((i) => i.id === responseItem.pricingRequestItemId);
         if (!requestItem) continue;
-        if (requestItem.requestedCurrency
-          && requestItem.requestedCurrency.toUpperCase() !== String(responseItem.currency ?? '').trim().toUpperCase()) {
-          fail(`สกุลเงินต้องเป็น ${requestItem.requestedCurrency} ตามที่ฝ่ายขายระบุ (รายการ ${pricingRequestItemDisplayName(requestItem)})`, 409);
-        }
         // Mirrors FactoryQuoteService#isSqmPieceSwitch: only ตร.ม. <-> แผ่น may differ from the request.
         const quotedBasis = String(responseItem.unitBasis ?? '').trim().toUpperCase();
         const sqmPieceSwitch = ['PER_SQM', 'PER_PIECE'].includes(requestItem.requestedPriceUnitBasis)

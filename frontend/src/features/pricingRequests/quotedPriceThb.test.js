@@ -37,7 +37,7 @@ describe('quotedPriceInThb', () => {
   });
 
   it('treats THB as rate 1', () => {
-    expect(quotedPriceInThb(quote({ currency: 'THB', rawUnitPrice: 1000 }), request(), FX).perSqm).toBeCloseTo(1000);
+    expect(quotedPriceInThb(quote({ currency: 'THB', rawUnitPrice: 1000 }), request(), []).perSqm).toBeCloseTo(1000);
   });
 
   it.each([
