@@ -1365,9 +1365,13 @@ public class PricingRequestService {
         if (stockLine) {
             originCountryOther = null;
         }
+        // The deal form's one brand+factory field can hold free text ("Padana marmoker"); only a
+        // master factory name may be stored, else costing 422s. Unknown -> blank, Import picks it.
+        String factory = hasText(item.factory())
+            ? requests.findFactoryNameByNameIgnoreCase(item.factory()).orElse(null) : null;
         return new PricingRequestItemRequest(
             item.sourceTicketItemId(), item.productId(), item.variantId(), item.brand(), item.model(),
-            item.productDescription(), item.color(), item.texture(), item.size(), item.factory(),
+            item.productDescription(), item.color(), item.texture(), item.size(), factory,
             requestedQty, requestedQtySqm, PIECE_UNIT_LABEL, UnitBasis.PER_PIECE, item.quantityType(),
             item.targetDeliveryDate(), item.deliveryLocation(), item.specialRequirement(),
             item.productCode(), item.thicknessMm(), item.sqmPerPiece(), quantityMode, item.areaSqm(),

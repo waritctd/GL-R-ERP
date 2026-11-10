@@ -55,6 +55,9 @@ vi.mock('../../api/index.js', () => ({
       updatePricingDecision: vi.fn(),
       recalculatePricingDecisionCost: vi.fn(),
       overridePricingDecisionItemCost: vi.fn(),
+      repointFactoryQuote: vi.fn(),
+      setItemOriginCountry: vi.fn(),
+      renameItem: vi.fn(),
       approvePricingDecision: vi.fn(),
       returnPricingDecisionToImport: vi.fn(),
       // Step 4: Customer Quotation Generation and Issuance.
@@ -8196,3 +8199,128 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
     );
   });
 });
+
+// CEO price-review fixes (PCR-2026-0005): re-point a typo'd factory quote, set the origin country on
+// a line with no catalogue link, rename a line. Server guards (CEO only, open DRAFT only) are pinned
+// in LandedCostCalculatorFormulaIntegrationTest; here only what the UI offers and sends.
+describe('CEO fixes during price review', () => {
+  const badQuote = (overrides = {}) => buildFactoryQuote({
+    id: 91, quoteCode: 'FQ-2026-0001', factoryName: 'Padana marmoker', ...overrides,
+  });
+
+  it('A: a current quote whose factory is not a master factory gets an inline fix; saving re-points it by factoryId', async () => {
+    await renderCeoNewForm({ factoryQuotes: [badQuote()] });
+
+    const form = await screen.findByTestId('pcr-ceo-fix-factory-91');
+    expect(form.textContent).toContain('FQ-2026-0001');
+    expect(form.textContent).toContain('Padana marmoker');
+    expect(form.textContent).toContain('1 รายการ');
+    expect(form.textContent).toContain('ราคาของฝ่ายนำเข้าไม่เปลี่ยน');
+    fireEvent.focus(within(form).getByLabelText('โรงงานที่ถูกต้อง'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    fireEvent.click(within(form).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
+
+    await waitFor(() => expect(api.pricingRequests.repointFactoryQuote).toHaveBeenCalledWith(501, 91, { factoryId: 602 }));
+  });
+
+  it('A: no fix form when the quote already names a master factory, or when the decision is no longer editable', async () => {
+    const { unmount } = await renderCeoNewForm({ factoryQuotes: [buildFactoryQuote()] });
+    await waitFor(() => expect(api.priceImport.factories).toHaveBeenCalled());
+    expect(screen.queryByTestId('pcr-ceo-fix-factory-91')).toBeNull();
+    unmount();
+
+    await renderCeoNewForm({
+      factoryQuotes: [badQuote()],
+      decisions: [buildDecision({ status: 'APPROVED', priceMode: 'NET', items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] })],
+    });
+    await waitFor(() => expect(api.priceImport.factories).toHaveBeenCalled());
+    expect(screen.queryByTestId('pcr-ceo-fix-factory-91')).toBeNull();
+  });
+
+  it('A: a factory that already has a quote in this request is listed but disabled', async () => {
+    await renderCeoNewForm({ factoryQuotes: [badQuote(), buildFactoryQuote({ id: 92, quoteCode: 'FQ-2026-0002', factoryName: 'SCG Ceramics' })] });
+
+    const form = await screen.findByTestId('pcr-ceo-fix-factory-91');
+    fireEvent.focus(within(form).getByLabelText('โรงงานที่ถูกต้อง'));
+    const taken = await screen.findByRole('option', { name: /SCG Ceramics.*มีใบเสนอราคาโรงงานในคำขอนี้แล้ว/ });
+    expect(taken.disabled).toBe(true);
+    expect(screen.getByRole('option', { name: 'Cotto Industry' }).disabled).toBe(false);
+  });
+
+  const uncostableOrigin = (requestItemOverrides = {}) => ({
+    requestItems: [{ ...buildRequest().items[0], originCountry: 'อิตาลี', ...requestItemOverrides }],
+    costings: [buildCosting({ id: 601, items: [buildCostingItemWithOverride({ id: 1, uncostableReason: 'ไม่มีประเทศต้นทาง (origin country) จาก Price Catalog' })] })],
+    items: [nfItem({ pricingCostingItemId: 1, frozenLandedCostPerRequestedUnitThb: null, netUnitPrice: null })],
+  });
+
+  it('B: an uncostable line with no catalogue link offers a country select defaulting to the sales value, and saves the pick', async () => {
+    // An uncostable row starts open (row.defaultOpen), so the details are already showing.
+    await renderCeoNewForm(uncostableOrigin());
+
+    const box = await ceoTable().findByTestId('pcr-ceo-origin-fix-8001');
+    const select = within(box).getByLabelText('ประเทศต้นทาง');
+    expect(select.value).toBe('อิตาลี');
+    expect(box.textContent).toContain('ปรับต้นทุนเอง');
+    fireEvent.change(select, { target: { value: 'สเปน' } });
+    fireEvent.click(within(box).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
+
+    await waitFor(() => expect(api.pricingRequests.setItemOriginCountry).toHaveBeenCalledWith(501, 1, { originCountry: 'สเปน' }));
+  });
+
+  it('B: no country select when the line has a catalogue link', async () => {
+    await renderCeoNewForm(uncostableOrigin({ productId: 77, catalogPriceId: 77 }));
+    await ceoTable().findByTestId('pcr-ceo-details-8001');
+    expect(ceoTable().queryByTestId('pcr-ceo-origin-fix-8001')).toBeNull();
+  });
+
+  it('C: แก้ชื่อ opens a form prefilled with ยี่ห้อ/รุ่น and saves the trimmed pair', async () => {
+    await renderCeoNewForm();
+    openRowDetails();
+
+    fireEvent.click(await ceoTable().findByRole('button', { name: 'แก้ชื่อ' }));
+    const brand = ceoTable().getByLabelText('ยี่ห้อ');
+    const model = ceoTable().getByLabelText('รุ่น');
+    expect([brand.value, model.value]).toEqual(['SCG', 'A1']);
+    fireEvent.change(brand, { target: { value: ' Padana ' } });
+    fireEvent.change(model, { target: { value: 'Marmo' } });
+    fireEvent.click(ceoTable().getByRole('button', { name: 'บันทึกชื่อ' }));
+
+    await waitFor(() => expect(api.pricingRequests.renameItem).toHaveBeenCalledWith(501, 1, { brand: 'Padana', model: 'Marmo' }));
+  });
+
+  it('C: no แก้ชื่อ once the decision is no longer editable', async () => {
+    await renderCeoNewForm({ decisions: [buildDecision({ status: 'APPROVED', priceMode: 'NET', items: [nfItem({ listUnitPrice: 100, netUnitPrice: 100 })] })] });
+    openRowDetails();
+    await ceoTable().findByTestId('pcr-ceo-details-8001');
+    expect(ceoTable().queryByRole('button', { name: 'แก้ชื่อ' })).toBeNull();
+  });
+
+  it('A: the real incident path - READY_FOR_CEO_REVIEW with no decision yet still offers the factory fix', async () => {
+    const request = buildRequest({ summary: { status: 'READY_FOR_CEO_REVIEW' } });
+    api.pricingRequests.listPricingDecisions.mockResolvedValue({ items: [] });
+    renderDetailPage({ user: ceoUser, request, factoryQuotes: [badQuote()] });
+    await waitForLoaded(request);
+
+    const form = await screen.findByTestId('pcr-ceo-fix-factory-91');
+    fireEvent.focus(within(form).getByLabelText('โรงงานที่ถูกต้อง'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    fireEvent.click(within(form).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
+
+    await waitFor(() => expect(api.pricingRequests.repointFactoryQuote).toHaveBeenCalledWith(501, 91, { factoryId: 602 }));
+  });
+
+  it('A: a saved fix whose recalculation still fails shows the remaining error inline', async () => {
+    api.pricingRequests.repointFactoryQuote.mockResolvedValue({ decision: null, costingError: 'ไม่พบ factory config สำหรับโรงงาน: Second typo' });
+    const { showToast } = await renderCeoNewForm({ factoryQuotes: [badQuote()] });
+
+    const form = await screen.findByTestId('pcr-ceo-fix-factory-91');
+    fireEvent.focus(within(form).getByLabelText('โรงงานที่ถูกต้อง'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Cotto Industry' }));
+    fireEvent.click(within(form).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
+
+    expect((await screen.findByTestId('pcr-ceo-costing-error')).textContent).toContain('Second typo');
+    expect(showToast).toHaveBeenCalledWith('success', 'บันทึกแล้ว แต่ยังคำนวณต้นทุนไม่ได้');
+    expect(showToast).not.toHaveBeenCalledWith('success', 'เปลี่ยนโรงงานแล้ว');
+  });
+});
+

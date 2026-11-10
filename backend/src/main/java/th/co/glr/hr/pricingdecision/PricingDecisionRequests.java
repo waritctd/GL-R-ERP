@@ -180,4 +180,13 @@ public final class PricingDecisionRequests {
      * formula-derived and auditable from the product_type alone, recorded on the row itself
      * ({@code pricing_costing_item.product_type}), not just in the event trail. */
     public record ProductTypeOverrideRequest(String productType) {}
+
+    /** CEO fix: re-point a factory quote to a master {@code price_catalog.factories} row. */
+    public record RepointFactoryRequest(Long factoryId) {}
+
+    /** CEO fix: set a line's ประเทศต้นทาง (the sales form's vocabulary: อิตาลี/สเปน/จีน/ไทย-สต็อก). */
+    public record OriginCountryRequest(String originCountry) {}
+
+    /** CEO fix: rename a line (ยี่ห้อ + รุ่น); at least one must be non-blank. */
+    public record RenameItemRequest(String brand, String model) {}
 }

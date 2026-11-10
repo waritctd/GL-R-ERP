@@ -358,7 +358,10 @@ function Details({ row, model }) {
   return (
     <div data-testid={`pcr-ceo-details-${id}`} className="grid gap-4 p-3 md:grid-cols-3">
       <section aria-label="สินค้า" className="grid content-start gap-1 text-sm">
-        <h4 className="m-0 text-sm">สินค้า</h4>
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="m-0 text-sm">สินค้า</h4>
+          {row.renameNode}
+        </div>
         {row.productNode}
       </section>
       <section aria-label="ต้นทุน" className="grid content-start gap-1 text-sm">
@@ -382,6 +385,7 @@ function Details({ row, model }) {
           <div className="rounded-md border border-danger-border bg-danger-bg p-2 text-danger">
             <b className="block">คำนวณต้นทุนอัตโนมัติไม่ได้</b>
             <span>{row.costingItem.uncostableReason}</span>
+            {row.originFix}
           </div>
         ) : null}
         {row.stale ? (

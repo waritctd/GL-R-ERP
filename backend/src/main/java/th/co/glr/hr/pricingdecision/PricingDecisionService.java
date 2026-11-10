@@ -25,6 +25,7 @@ import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingDto;
 import th.co.glr.hr.pricingcosting.PricingCostingDtos.PricingCostingItemDto;
 import th.co.glr.hr.pricingcosting.PricingCostingRepository;
 import th.co.glr.hr.pricingcosting.PricingFormulaEngine;
+import th.co.glr.hr.pricingdecision.PricingDecisionDtos.CeoFixResult;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
@@ -35,11 +36,16 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRepository.ItemUpdate;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.OriginCountryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RenameItemRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RepointFactoryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionItemRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
+import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestItemDto;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
@@ -374,6 +380,157 @@ public class PricingDecisionService {
         addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
             "CEO คำนวณต้นทุนใหม่");
         return recomputed;
+    }
+
+    /**
+     * The guard every CEO price-review fix shares with {@link #recalculateCost}: CEO only, and only
+     * while this request's decision is an open DRAFT on a CEO_REVIEWING request with an active deal
+     * ({@link #requireOpenDecisionForMutation}). No open decision is the same 409 as a wrong status.
+     */
+    private PricingDecisionDto requireOpenDraftForRequest(long pricingRequestId, UserPrincipal actor) {
+        return requireFixContext(pricingRequestId, actor, false);
+    }
+
+    /**
+     * Shared guard of the three fixes. Locks the request like the other mutating paths. With an open
+     * DRAFT decision it is exactly {@link #requireOpenDecisionForMutation}. When {@code allowNoDecision}
+     * (re-point / origin country) and the request is READY_FOR_CEO_REVIEW with no decision yet - the state a
+     * failed {@link #startReview} leaves behind - it returns null: save only, nothing to recompute.
+     */
+    private PricingDecisionDto requireFixContext(long pricingRequestId, UserPrincipal actor, boolean allowNoDecision) {
+        requireRole(actor, CEO_ROLES);
+        PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
+        decisions.lockPricingRequest(pricingRequestId);
+        Optional<PricingDecisionDto> draft = decisions.findOpenDraft(pricingRequestId);
+        if (draft.isPresent()) {
+            return requireOpenDecisionForMutation(draft.get().id());
+        }
+        PricingRequestSummaryDto fresh = requirePricingRequest(pricingRequestId);
+        if (allowNoDecision && PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(fresh.status())) {
+            requireActiveDeal(summary.ticketId());
+            return null;
+        }
+        throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO");
+    }
+
+    /**
+     * Recalculates after a saved fix WITHOUT letting the calculator's 422 undo the save: the fix stands and
+     * the remaining problem (e.g. a second broken quote) comes back as {@code costingError}. The calculator
+     * runs before any costing write, so catching its 422 leaves nothing half-written.
+     */
+    private CeoFixResult recomputeKeepingFix(PricingDecisionDto decision) {
+        if (decision == null) {
+            return new CeoFixResult(null, null);
+        }
+        // Only the calculator's own 422 is absorbed: it runs before any costing write. Everything after the
+        // first write (replace items, freeze costs) propagates and rolls the transaction back.
+        LandedCostCalculator.CalculationResult calc;
+        try {
+            calc = landedCost.calculate(requirePricingRequest(decision.pricingRequestId()));
+        } catch (ApiException e) {
+            if (!HttpStatus.UNPROCESSABLE_CONTENT.equals(e.getStatus())) {
+                throw e;
+            }
+            return new CeoFixResult(requireDecision(decision.id()), e.getMessage());
+        }
+        return new CeoFixResult(recomputeCostingInPlace(decision, calc), null);
+    }
+
+    private PricingRequestItemDto requireRequestItem(long pricingRequestId, long itemId) {
+        return pricingRequests.findItems(pricingRequestId).stream().filter(i -> i.id() == itemId).findFirst()
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการสินค้านี้ในคำขอราคานี้"));
+    }
+
+    /**
+     * CEO fix (PCR-2026-0005): a sales-typed factory name matched no master factory, so costing
+     * 422s. Re-points the quote and its lines to a real {@code price_catalog.factories} row, then
+     * recalculates through the same path as {@link #recalculateCost} (overrides preserved).
+     */
+    @Transactional
+    public CeoFixResult repointFactoryQuote(long pricingRequestId, long factoryQuoteId, RepointFactoryRequest request, UserPrincipal actor) {
+        PricingDecisionDto decision = requireFixContext(pricingRequestId, actor, true);
+        FactoryQuoteDto quote = pricingRequests.findFactoryQuote(factoryQuoteId)
+            .filter(q -> q.pricingRequestId() == pricingRequestId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบเสนอราคาโรงงานนี้ในคำขอราคานี้"));
+        if (request.factoryId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุโรงงาน");
+        }
+        String newName = pricingRequests.findFactoryNameById(request.factoryId())
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบโรงงานนี้ในระบบ"));
+        if (!quote.current() || FactoryQuoteStatus.CANCELLED.equals(quote.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาโรงงานนี้ไม่ใช่ฉบับปัจจุบัน");
+        }
+        String oldName = quote.factoryName();
+        if (newName.equals(oldName)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาโรงงานนี้ใช้โรงงาน \"" + newName + "\" อยู่แล้ว");
+        }
+        if (pricingRequests.hasCurrentFactoryQuote(pricingRequestId, newName)) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีใบเสนอราคาโรงงาน \"" + newName + "\" ในคำขอราคานี้แล้ว");
+        }
+        if (pricingRequests.hasCurrentFactoryQuoteWithFactoryId(pricingRequestId, request.factoryId(), factoryQuoteId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีใบเสนอราคาโรงงานอื่นในคำขอราคานี้ที่ใช้โรงงาน \"" + newName + "\" อยู่แล้ว");
+        }
+        int lines = pricingRequests.repointFactoryQuote(factoryQuoteId, request.factoryId(), oldName, newName);
+        CeoFixResult result = recomputeKeepingFix(decision);
+        addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_FACTORY_QUOTE_REPOINTED,
+            "CEO เปลี่ยนโรงงานของใบเสนอราคาโรงงาน " + quote.quoteCode() + ": \"" + oldName + "\" → \"" + newName
+                + "\" (" + lines + " รายการ)");
+        return result;
+    }
+
+    /**
+     * CEO fix: sets a line's ประเทศต้นทาง (the sales form's vocabulary) when it has no catalogue
+     * link to read one from — {@link LandedCostCalculator} then falls back to this value — and
+     * recalculates. Stock lines have no cost, so they are refused.
+     */
+    @Transactional
+    public CeoFixResult setItemOriginCountry(long pricingRequestId, long itemId, OriginCountryRequest request, UserPrincipal actor) {
+        PricingDecisionDto decision = requireFixContext(pricingRequestId, actor, true);
+        PricingRequestItemDto item = requireRequestItem(pricingRequestId, itemId);
+        String country = request.originCountry() == null ? "" : request.originCountry().trim();
+        if (!LandedCostCalculator.ISO_BY_SALES_ORIGIN.containsKey(country)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน");
+        }
+        if (item.stockSource() != null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีต้นทุนนำเข้า จึงตั้งประเทศต้นทางไม่ได้");
+        }
+        pricingRequests.updateItemOriginCountry(pricingRequestId, itemId, country);
+        CeoFixResult result = recomputeKeepingFix(decision);
+        addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET,
+            "CEO ตั้งประเทศต้นทางรายการที่ " + itemId + ": "
+                + (blankToNullTrim(item.originCountry()) != null ? item.originCountry() : "ไม่ระบุ") + " → " + country);
+        return result;
+    }
+
+    /** CEO fix: renames a line (ยี่ห้อ + รุ่น, the pair the UI shows and the quotation copies). No cost change. */
+    @Transactional
+    public CeoFixResult renameItem(long pricingRequestId, long itemId, RenameItemRequest request, UserPrincipal actor) {
+        PricingDecisionDto decision = requireOpenDraftForRequest(pricingRequestId, actor);
+        PricingRequestItemDto item = requireRequestItem(pricingRequestId, itemId);
+        String brand = blankToNullTrim(request.brand());
+        String model = blankToNullTrim(request.model());
+        if (brand == null && model == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุยี่ห้อหรือรุ่นอย่างน้อยหนึ่งอย่าง");
+        }
+        // Widths of the deal line (ticket_item brand 255, model 80), which the rename also writes.
+        if ((brand != null && brand.length() > 255) || (model != null && model.length() > 80)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ยี่ห้อต้องยาวไม่เกิน 255 ตัวอักษร และรุ่นไม่เกิน 80 ตัวอักษร");
+        }
+        pricingRequests.renameItem(pricingRequestId, itemId, brand, model);
+        addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_RENAMED,
+            "CEO แก้ชื่อรายการที่ " + itemId + ": \"" + joinName(item.brand(), item.model()) + "\" → \""
+                + joinName(brand, model) + "\"");
+        return new CeoFixResult(requireDecision(decision.id()), null);
+    }
+
+    private static String blankToNullTrim(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static String joinName(String brand, String model) {
+        return java.util.stream.Stream.of(brand, model).filter(v -> v != null && !v.isBlank())
+            .map(String::trim).collect(java.util.stream.Collectors.joining(" "));
     }
 
     /**
@@ -1111,8 +1268,11 @@ public class PricingDecisionService {
      * still-overridden) effective cost.
      */
     private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision) {
-        PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
-        LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
+        return recomputeCostingInPlace(decision,
+            landedCost.calculate(requirePricingRequest(decision.pricingRequestId())));
+    }
+
+    private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision, LandedCostCalculator.CalculationResult calc) {
         costings.replaceItemsPreservingOverrides(decision.pricingCostingId(), calc.items());
         PricingCostingDto refreshed = requireCosting(decision.pricingCostingId());
         Map<Long, PricingCostingItemDto> costingItemsByRequestItem = refreshed.items().stream()

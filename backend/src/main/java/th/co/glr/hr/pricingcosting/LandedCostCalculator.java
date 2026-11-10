@@ -498,9 +498,22 @@ public class LandedCostCalculator {
         }
         BigDecimal thicknessMm = resolveThicknessMm(source.requestItem(), catalogKeys);
         String originCountryCode = resolveOriginCountryCode(source.requestItem(), catalogKeys);
+        // An origin that came from the item's own Sales value (no catalogue country) may have no freight
+        // band for this thickness/qty. Probe it per line so that line alone is set aside as uncostable
+        // (soft, like a missing origin) instead of the freight lookup 422ing the whole request.
+        boolean originFromItem = originCountryCode != null && !hasCatalogCountry(source.requestItem(), catalogKeys);
+        String fallbackOriginProblem = null;
+        if (originFromItem && thicknessMm != null && qtySqm != null) {
+            try {
+                formulaEngine.containerFreight(formulaConfig.freightRates(), originCountryCode,
+                    List.of(new PricingFormulaEngine.ContainerLine(thicknessMm, qtySqm)), itemLabel(source.requestItem()));
+            } catch (ApiException e) {
+                fallbackOriginProblem = originCountryCode;
+            }
+        }
         String productType = resolveProductType(source.requestItem());
         return new ItemPhysicals(source, sqmPerPiece, qtyPieces, qtySqm, goodsCostPerPiece, goodsCostThb,
-            insuranceThb, thicknessMm, originCountryCode, productType, fx);
+            insuranceThb, thicknessMm, originCountryCode, productType, fx, fallbackOriginProblem);
     }
 
     /**
@@ -543,14 +556,14 @@ public class LandedCostCalculator {
     }
 
     /**
-     * Origin country comes ONLY from the catalog link — {@code price_catalog.factories.country}
+     * Origin country comes from the catalog link — {@code price_catalog.factories.country}
      * via {@code price_catalog.product_prices.factory_id} — resolved through the SAME {@code
      * catalog_price_id}/{@code product_id} link {@link #resolveThicknessMm} uses (see class
      * Javadoc's V151 section for why: this is the canonical ISO 3166-1 alpha-2 source {@code
      * sales.pricing_freight_rate.origin_country_code} is normalised against; {@code
      * sales.factory_config.country}, a different table's free-text field, is never read for
-     * pricing). An item with no resolvable catalog link fails costing LOUDLY here, naming the
-     * item, for the same reason a missing thickness does.
+     * pricing). An item with no catalog link falls back to its own Sales-entered origin country (see
+     * {@link #ISO_BY_SALES_ORIGIN}); with neither it is uncostable, naming the item.
      *
      * <p>Reads the SAME prefetched {@code catalogKeys} map {@link
      * #resolveThicknessMm} does. Resolution uses the base {@code product_prices}/
@@ -561,12 +574,27 @@ public class LandedCostCalculator {
     private String resolveOriginCountryCode(PricingRequestItemDto requestItem,
                                             Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
         Long priceId = catalogPriceId(requestItem);
-        if (priceId == null) {
-            return null;
-        }
-        CatalogRepository.CatalogPricingKey key = catalogKeys.get(priceId);
-        return key == null ? null : key.originCountryCode();
+        CatalogRepository.CatalogPricingKey key = priceId == null ? null : catalogKeys.get(priceId);
+        String fromCatalog = key == null ? null : key.originCountryCode();
+        // Catalog wins; fall back to the Sales-entered ประเทศต้นทาง on the item when the line has no
+        // catalogue link (a free-text line), mirroring resolveThicknessMm. "อื่นๆ"/unknown -> no code.
+        return fromCatalog != null ? fromCatalog
+            : requestItem.originCountry() == null ? null : ISO_BY_SALES_ORIGIN.get(requestItem.originCountry().trim());
     }
+
+    private boolean hasCatalogCountry(PricingRequestItemDto requestItem,
+                                      Map<Long, CatalogRepository.CatalogPricingKey> catalogKeys) {
+        Long priceId = catalogPriceId(requestItem);
+        CatalogRepository.CatalogPricingKey key = priceId == null ? null : catalogKeys.get(priceId);
+        return key != null && key.originCountryCode() != null;
+    }
+
+    /**
+     * The sales form's ประเทศต้นทาง values that name a freight-lookup country, as ISO 3166-1 alpha-2.
+     * Mirrors the frontend's ORIGIN_COUNTRY_OPTIONS (not shared: no drift guard). ไทย-สต็อก and
+     * อื่นๆ are deliberately absent: neither has a freight band, so they stay "no origin" (uncostable).
+     */
+    public static final Map<String, String> ISO_BY_SALES_ORIGIN = Map.of("อิตาลี", "IT", "สเปน", "ES", "จีน", "CN");
 
     /**
      * Why this item cannot be costed, in the CEO's own language, or null when it can. All three
@@ -581,10 +609,14 @@ public class LandedCostCalculator {
         boolean noSqm = item.sqmPerPiece() == null;
         boolean noThickness = item.thicknessMm() == null;
         boolean noCountry = item.originCountryCode() == null;
+        String label = itemLabel(item.source().requestItem());
+        if (!noSqm && !noThickness && !noCountry && item.fallbackOriginProblem() != null) {
+            return label + " ใช้ประเทศต้นทาง " + item.fallbackOriginProblem() + " ที่ฝ่ายขายกรอก แต่ไม่มีอัตราค่าขนส่งที่ครอบคลุมความหนา/จำนวนนี้ "
+                + "— คำนวณค่าขนส่งอัตโนมัติไม่ได้ กรุณาระบุต้นทุนเอง หรือเชื่อมรายการนี้กับสินค้าใน Price Catalog ที่มีข้อมูลครบ";
+        }
         if (!noSqm && !noThickness && !noCountry) {
             return null;
         }
-        String label = itemLabel(item.source().requestItem());
         if (noSqm) {
             StringBuilder missing = new StringBuilder("ตร.ม./แผ่น (sqm per piece)");
             if (noThickness) {
@@ -923,5 +955,5 @@ public class LandedCostCalculator {
     private record ItemPhysicals(ResolvedSource source, BigDecimal sqmPerPiece, BigDecimal qtyPieces,
                                  BigDecimal qtySqm, BigDecimal goodsCostPerPiece, BigDecimal goodsCostThb,
                                  BigDecimal insuranceThb, BigDecimal thicknessMm, String originCountryCode,
-                                 String productType, FxSnapshot fx) {}
+                                 String productType, FxSnapshot fx, String fallbackOriginProblem) {}
 }

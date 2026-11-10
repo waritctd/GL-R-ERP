@@ -226,6 +226,49 @@ class PricingRequestServiceTest {
         verify(notifRepo, never()).notifyEmployee(anyLong(), anyLong(), any(), any());
     }
 
+    // ── factory normalization: free text must never reach factory_name_snapshot ──
+
+    private String savedFactoryFor(String typed, java.util.Optional<String> master) {
+        stubTicket(10L, 1L, DealLifecycle.ACTIVE);
+        when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
+        when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
+        if (typed != null) {
+            when(requestRepo.findFactoryNameByNameIgnoreCase(typed)).thenReturn(master);
+        }
+        when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
+        stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
+
+        service.createDraft(10L, createRequest(PricingRequestRecipient.BUYER, 1L, null,
+            List.of(sampleItemRequest(null, QuantityType.REFERENCE, typed))), salesActor);
+
+        org.mockito.ArgumentCaptor<CreatePricingRequestRequest> saved =
+            org.mockito.ArgumentCaptor.forClass(CreatePricingRequestRequest.class);
+        verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), saved.capture(), eq(1L));
+        return saved.getValue().items().get(0).factory();
+    }
+
+    @Test
+    void createDraft_unknownTypedFactoryIsSavedAsNull() {
+        // "Padana marmoker" = brand+series typed into the factory field; not a master row
+        assertThat(savedFactoryFor("Padana marmoker", java.util.Optional.empty())).isNull();
+    }
+
+    @Test
+    void createDraft_knownFactoryDifferentCaseOrPaddedIsSavedCanonical() {
+        assertThat(savedFactoryFor("  padana ", java.util.Optional.of("Padana"))).isEqualTo("Padana");
+    }
+
+    @Test
+    void createDraft_exactKnownFactoryIsKept() {
+        assertThat(savedFactoryFor("Padana", java.util.Optional.of("Padana"))).isEqualTo("Padana");
+    }
+
+    @Test
+    void createDraft_blankFactoryIsSavedAsNull() {
+        assertThat(savedFactoryFor("   ", java.util.Optional.empty())).isNull();
+        verify(requestRepo, never()).findFactoryNameByNameIgnoreCase(any());
+    }
+
     // ── item identity (Part 1: an unidentified product must be rejected) ───────
 
     @Test
@@ -1610,8 +1653,13 @@ class PricingRequestServiceTest {
     // that far (validateItems' isProductIdentified check throws first), so the baseline is inert
     // for them either way.
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
+        return sampleItemRequest(sourceTicketItemId, quantityType, null);
+    }
+
+    private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType,
+                                                               String factory) {
         return new PricingRequestItemRequest(sourceTicketItemId, null, null, "Brand", "Model", null,
-            "สี", "ผิว", "60x60", null,
+            "สี", "ผิว", "60x60", factory,
             null, null, null, null, quantityType, null, null, null,
             null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
             null, 1, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,

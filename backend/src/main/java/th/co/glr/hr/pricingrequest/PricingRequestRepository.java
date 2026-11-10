@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
@@ -669,6 +670,92 @@ public class PricingRequestRepository {
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
+    }
+
+    /** Master factory row whose name equals {@code name} ignoring case/padding; empty if none. */
+    public Optional<String> findFactoryNameByNameIgnoreCase(String name) {
+        List<String> rows = jdbc.queryForList(
+            "SELECT name FROM price_catalog.factories WHERE lower(btrim(name)) = lower(btrim(:name)) ORDER BY factory_id LIMIT 1",
+            Map.of("name", name), String.class);
+        return rows.stream().findFirst();
+    }
+
+    public Optional<FactoryQuoteDto> findFactoryQuote(long factoryQuoteId) {
+        return factoryQuotes.find(factoryQuoteId);
+    }
+
+    /** CEO fix: a CURRENT, non-cancelled quote of this request already named {@code factoryName}. */
+    public boolean hasCurrentFactoryQuote(long pricingRequestId, String factoryName) {
+        return factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName).isPresent();
+    }
+
+    /**
+     * CEO fix: re-points one factory quote (and every request line on it) from {@code oldName} to
+     * the master factory {@code factoryId}/{@code newName}. Returns the number of lines moved. The
+     * ticket line (what a later revision copies from) is only rewritten where it still carries the
+     * old typo, so a value Sales has since changed is never clobbered. Import's prices are untouched.
+     */
+    public int repointFactoryQuote(long factoryQuoteId, long factoryId, String oldName, String newName) {
+        MapSqlParameterSource p = new MapSqlParameterSource()
+            .addValue("quoteId", factoryQuoteId).addValue("factoryId", factoryId)
+            .addValue("old", oldName).addValue("new", newName);
+        jdbc.update("""
+            UPDATE sales.factory_quote
+               SET factory_id = :factoryId, factory_name_snapshot = :new, updated_at = now()
+             WHERE factory_quote_id = :quoteId
+            """, p);
+        jdbc.update("""
+            UPDATE sales.ticket_item ti SET factory = :new
+              FROM sales.pricing_request_item pri
+              JOIN sales.factory_quote_item fqi ON fqi.pricing_request_item_id = pri.pricing_request_item_id
+             WHERE fqi.factory_quote_id = :quoteId AND ti.item_id = pri.source_ticket_item_id AND ti.factory = :old
+            """, p);
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item pri
+               SET factory = :new, resolved_factory_id = :factoryId,
+                   resolved_factory_name = CASE WHEN pri.resolved_factory_name IS NULL THEN NULL ELSE :new END
+              FROM sales.factory_quote_item fqi
+             WHERE fqi.factory_quote_id = :quoteId AND fqi.pricing_request_item_id = pri.pricing_request_item_id
+            """, p);
+    }
+
+    /** CEO fix: another CURRENT, non-cancelled quote of this request already carries {@code factoryId}
+     * (V62's unique index would otherwise raise a raw 500). */
+    public boolean hasCurrentFactoryQuoteWithFactoryId(long pricingRequestId, long factoryId, long exceptQuoteId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.factory_quote
+                            WHERE pricing_request_id = :pr AND factory_id = :f AND factory_quote_id <> :q
+                              AND is_current = TRUE AND status <> 'CANCELLED')
+            """, Map.of("pr", pricingRequestId, "f", factoryId, "q", exceptQuoteId), Boolean.class));
+    }
+
+    /** CEO fix: sets the sales-vocabulary origin country on one line (clears the "อื่นๆ" free text). */
+    public int updateItemOriginCountry(long pricingRequestId, long itemId, String originCountry) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item SET origin_country = :o, origin_country_other = NULL
+             WHERE pricing_request_item_id = :id AND pricing_request_id = :prId
+            """, Map.of("o", originCountry, "id", itemId, "prId", pricingRequestId));
+    }
+
+    /** CEO fix: renames one line; the catalogue snapshot names (which the UI prefers) follow when present. */
+    public int renameItem(long pricingRequestId, long itemId, String brand, String model) {
+        // Source ticket line first (compared against the OLD pair): rewritten only while it still equals it.
+        jdbc.update("""
+            UPDATE sales.ticket_item ti SET brand = COALESCE(:brand, ''), model = :model -- ticket_item.brand is NOT NULL: a cleared brand is blank there
+              FROM sales.pricing_request_item pri
+             WHERE pri.pricing_request_item_id = :id AND pri.pricing_request_id = :prId
+               AND ti.item_id = pri.source_ticket_item_id
+               AND ti.brand IS NOT DISTINCT FROM pri.brand AND ti.model IS NOT DISTINCT FROM pri.model
+            """, new MapSqlParameterSource().addValue("brand", brand).addValue("model", model)
+                .addValue("id", itemId).addValue("prId", pricingRequestId));
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET brand = :brand, model = :model,
+                   catalog_brand = CASE WHEN catalog_brand IS NULL THEN NULL ELSE :brand END,
+                   catalog_model = CASE WHEN catalog_model IS NULL THEN NULL ELSE :model END
+             WHERE pricing_request_item_id = :id AND pricing_request_id = :prId
+            """, new MapSqlParameterSource().addValue("brand", brand).addValue("model", model)
+                .addValue("id", itemId).addValue("prId", pricingRequestId));
     }
 
     /**

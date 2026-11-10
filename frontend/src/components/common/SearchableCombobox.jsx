@@ -15,7 +15,7 @@ export function SearchableCombobox({ id, label, value, options, onChange, disabl
   const filtered = options.filter((item) => `${item.nameTh} ${item.nameEn ?? ''} ${item.code}`.toLocaleLowerCase('th').includes(query.trim().toLocaleLowerCase('th')));
   useEffect(() => { setQuery(''); setActive(-1); setOpen(false); }, [value, disabled]);
   useEffect(() => { list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active]);
-  function select(item) { onChange(item?.code ?? ''); setQuery(''); setOpen(false); setActive(-1); }
+  function select(item) { if (item?.disabled) return; onChange(item?.code ?? ''); setQuery(''); setOpen(false); setActive(-1); }
   return (
     <div onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setOpen(false); setQuery(''); } }}>
       <div className="relative">
@@ -44,8 +44,10 @@ export function SearchableCombobox({ id, label, value, options, onChange, disabl
         {!loading && !filtered.length ? <li role="presentation" className="p-3 text-sm text-text-muted">ไม่พบข้อมูล</li> : null}
         {!loading && filtered.map((item, index) => <li key={item.code} role="presentation">
           <button type="button" role="option" id={`${id}-option-${index}`} tabIndex={-1} aria-selected={index === active}
-            className={`min-h-11 w-full cursor-pointer border-0 px-3 py-2 text-left text-sm text-text hover:bg-surface-hover ${index === active ? 'bg-surface-hover' : 'bg-surface'}`}
-            onMouseDown={(e) => e.preventDefault()} onClick={() => select(item)} onMouseEnter={() => setActive(index)}>{item.nameTh}</button>
+            className={`min-h-11 w-full cursor-pointer border-0 disabled:cursor-not-allowed disabled:text-text-muted px-3 py-2 text-left text-sm text-text hover:bg-surface-hover ${index === active ? 'bg-surface-hover' : 'bg-surface'}`}
+            disabled={item.disabled} onMouseDown={(e) => e.preventDefault()} onClick={() => select(item)} onMouseEnter={() => setActive(index)}>
+            {item.nameTh}{item.hint ? <small className="ml-2 text-text-muted">{item.hint}</small> : null}
+          </button>
         </li>)}
       </ul> : null}
     </div>

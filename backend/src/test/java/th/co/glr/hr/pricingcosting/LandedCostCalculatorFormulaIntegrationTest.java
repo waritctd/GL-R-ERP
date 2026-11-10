@@ -47,7 +47,11 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.OriginCountryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RenameItemRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RepointFactoryRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
@@ -867,6 +871,343 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
     private PricingCostingItemDto costingItemFor(PricingDecisionDto decision) {
         return costingRepository.find(decision.pricingCostingId()).orElseThrow().items().get(0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // CEO price-review fixes (PCR-2026-0005): re-point a factory quote, set the origin country,
+    // rename a line. All three: CEO only, only while the decision is an open DRAFT (the same guard
+    // as recalculateCost), each writes an event and (A, B) recalculates cost.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private PricingDecisionDto startedDecision() {
+        long pricingRequestId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        return decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+    }
+
+    private long onlyQuoteId(long pricingRequestId) {
+        return jdbc.queryForObject("SELECT factory_quote_id FROM sales.factory_quote WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Long.class);
+    }
+
+    private long masterFactoryId(String name) {
+        insertCatalogProduct(name, "IT", "FIX-" + UUID.randomUUID(), new BigDecimal("100.00"), "THB", "per_piece");
+        return jdbc.queryForObject("SELECT factory_id FROM price_catalog.factories WHERE name = :n",
+            Map.of("n", name), Long.class);
+    }
+
+    private List<String> eventMessages(long pricingRequestId, String kind) {
+        return jdbc.queryForList("SELECT message FROM sales.pricing_request_event WHERE pricing_request_id = :id AND event_kind = :k",
+            Map.of("id", pricingRequestId, "k", kind), String.class);
+    }
+
+    /** The incident: sales typed a free-text factory, so the quote snapshot matches no master row. */
+    private String breakFactoryName(long pricingRequestId) {
+        String typo = "Padana marmoker " + UUID.randomUUID();
+        jdbc.update("UPDATE sales.factory_quote SET factory_name_snapshot = :n, factory_id = NULL WHERE pricing_request_id = :id",
+            Map.of("n", typo, "id", pricingRequestId));
+        jdbc.update("UPDATE sales.pricing_request_item SET factory = :n, resolved_factory_id = NULL, resolved_factory_name = NULL WHERE pricing_request_id = :id",
+            Map.of("n", typo, "id", pricingRequestId));
+        return typo;
+    }
+
+    @Test
+    void repointFactoryQuote_rewritesQuoteLinesAndTicketItem_thenCostsAgain() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        String typo = breakFactoryName(prId);
+        long ticketItemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t",
+            Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET factory = :n WHERE item_id = :id", Map.of("n", typo, "id", ticketItemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET source_ticket_item_id = :t WHERE pricing_request_id = :id",
+            Map.of("t", ticketItemId, "id", prId));
+        assertThatThrownBy(() -> decisionService.recalculateCost(decision.id(), ceoActor))
+            .hasMessageContaining("ไม่พบ factory config");
+        String master = "Padana " + UUID.randomUUID();
+        long masterId = masterFactoryId(master);
+
+        PricingDecisionDto after = decisionService.repointFactoryQuote(prId, onlyQuoteId(prId),
+            new RepointFactoryRequest(masterId), ceoActor).decision();
+
+        assertThat(jdbc.queryForMap("SELECT factory_name_snapshot, factory_id FROM sales.factory_quote WHERE pricing_request_id = :id",
+            Map.of("id", prId))).containsEntry("factory_name_snapshot", master).containsEntry("factory_id", masterId);
+        assertThat(jdbc.queryForMap("SELECT factory, resolved_factory_id FROM sales.pricing_request_item WHERE pricing_request_id = :id",
+            Map.of("id", prId))).containsEntry("factory", master).containsEntry("resolved_factory_id", masterId);
+        assertThat(jdbc.queryForObject("SELECT factory FROM sales.ticket_item WHERE item_id = :id",
+            Map.of("id", ticketItemId), String.class)).isEqualTo(master);
+        assertThat(eventMessages(prId, "PRICING_REQUEST_FACTORY_QUOTE_REPOINTED")).singleElement()
+            .satisfies(m -> assertThat(m).contains(typo).contains(master));
+        assertThat(after.items().get(0).frozenLandedCostPerRequestedUnitThb())
+            .as("cost was recalculated through the recalculateCost path").isNotNull();
+    }
+
+    @Test
+    void repointFactoryQuote_leavesTicketItemAloneWhenItsFactoryIsSomethingElse() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        breakFactoryName(prId);
+        long ticketItemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t",
+            Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET factory = 'Unrelated' WHERE item_id = :id", Map.of("id", ticketItemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET source_ticket_item_id = :t WHERE pricing_request_id = :id",
+            Map.of("t", ticketItemId, "id", prId));
+
+        decisionService.repointFactoryQuote(prId, onlyQuoteId(prId),
+            new RepointFactoryRequest(masterFactoryId("Padana " + UUID.randomUUID())), ceoActor);
+
+        assertThat(jdbc.queryForObject("SELECT factory FROM sales.ticket_item WHERE item_id = :id",
+            Map.of("id", ticketItemId), String.class)).isEqualTo("Unrelated");
+    }
+
+    @Test
+    void repointFactoryQuote_rejectsUnknownFactorySameNameDuplicateAndForeignQuote() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long quoteId = onlyQuoteId(prId);
+        String current = jdbc.queryForObject("SELECT factory_name_snapshot FROM sales.factory_quote WHERE factory_quote_id = :id",
+            Map.of("id", quoteId), String.class);
+        long currentFactoryId = jdbc.queryForObject("SELECT factory_id FROM price_catalog.factories WHERE name = :n",
+            Map.of("n", current), Long.class);
+        String other = "Other " + UUID.randomUUID();
+        long otherId = masterFactoryId(other);
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, status) VALUES (:c, :id, :n, 'DRAFT')",
+            Map.of("c", "FQ-D" + UUID.randomUUID().toString().substring(0, 8), "id", prId, "n", other));
+        long otherPr = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(),
+            new CreatePricingRequestRequest(PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+                null, "THB", "other", UUID.randomUUID().toString(), List.of()), salesRepId);
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, status) VALUES (:c, :id, 'X', 'DRAFT')",
+            Map.of("c", "FQ-O" + UUID.randomUUID().toString().substring(0, 8), "id", otherPr));
+        long foreignQuote = onlyQuoteId(otherPr);
+
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(Long.MAX_VALUE), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(currentFactoryId), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(otherId), ceoActor));
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.repointFactoryQuote(prId, foreignQuote, new RepointFactoryRequest(otherId), ceoActor));
+    }
+
+    private void assertStatus(HttpStatus status, org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+        assertThatThrownBy(call).isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(status));
+    }
+
+    @Test
+    void ceoFixes_nonCeoGets403_andOnlyWhileTheDecisionIsAnOpenDraft() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        long quoteId = onlyQuoteId(prId);
+        long target = masterFactoryId("Padana " + UUID.randomUUID());
+        for (UserPrincipal who : List.of(salesActor, importActor)) {
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(target), who));
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("อิตาลี"), who));
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), who));
+        }
+        // Returned to import: no open DRAFT decision any more.
+        decisionService.returnToImport(decision.id(), new ReturnPricingDecisionRequest("test"), ceoActor);
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(target), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("อิตาลี"), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), ceoActor));
+    }
+
+    /** Free-text line: no catalog link, so only the item's own origin_country/thickness can feed freight. */
+    private PricingDecisionDto startedDecisionWithoutCatalogLink(String originCountry) {
+        return startedDecisionWithoutCatalogLink(originCountry, 10);
+    }
+
+    private PricingDecisionDto startedDecisionWithoutCatalogLink(String originCountry, int thicknessMm) {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET product_id = NULL, catalog_price_id = NULL, thickness_mm = :t, origin_country = :o WHERE pricing_request_id = :id",
+            Map.of("o", originCountry == null ? "" : originCountry, "id", prId, "t", thicknessMm));
+        if (originCountry == null) {
+            jdbc.update("UPDATE sales.pricing_request_item SET origin_country = NULL WHERE pricing_request_id = :id", Map.of("id", prId));
+        }
+        return decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+    }
+
+    @Test
+    void originCountry_fallsBackToTheItemsOwnSalesValue_whenNoCatalogLink() {
+        // Same band as the hand-computed test: Italy [8,12)mm, qty 100 -> 500.0000/pc freight.
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink("อิตาลี");
+        PricingCostingItemDto item = costingItemFor(decision);
+        assertThat(item.uncostableReason()).isNull();
+        assertThat(item.freightCostThb()).isEqualByComparingTo("500.0000");
+    }
+
+    @Test
+    void originCountry_otherSentinelAndCatalogPrecedence() {
+        assertThat(costingItemFor(startedDecisionWithoutCatalogLink("อื่นๆ")).uncostableReason()).contains("ประเทศต้นทาง");
+        // Catalog (Italy, 500) wins over the item's own จีน (300).
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET origin_country = 'จีน' WHERE pricing_request_id = :id", Map.of("id", prId));
+        PricingDecisionDto decision = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(costingItemFor(decision).freightCostThb()).isEqualByComparingTo("500.0000");
+    }
+
+    @Test
+    void setItemOriginCountry_savesAndRecalculates_refusesStockAndBadValues() {
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink(null);
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        assertThat(costingItemFor(decision).uncostableReason()).contains("ประเทศต้นทาง");
+
+        PricingDecisionDto after = decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("สเปน"), ceoActor).decision();
+
+        assertThat(jdbc.queryForObject("SELECT origin_country FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), String.class)).isEqualTo("สเปน");
+        assertThat(costingItemFor(after).uncostableReason()).isNull();
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET")).singleElement()
+            .satisfies(m -> assertThat(m).contains("สเปน"));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("อื่นๆ"), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest(" "), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("Atlantis"), ceoActor));
+        jdbc.update("UPDATE sales.pricing_request_item SET stock_source = 'IN_THAILAND' WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("จีน"), ceoActor));
+    }
+
+    @Test
+    void renameItem_trimsAndSaves_requiresAName_respectsLength_andItemMustBelong() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        jdbc.update("UPDATE sales.pricing_request_item SET catalog_brand = 'OldB', catalog_model = 'OldM' WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("  Padana  ", " Marmo "), ceoActor);
+
+        assertThat(jdbc.queryForMap("SELECT brand, model, catalog_brand, catalog_model FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId))).containsEntry("brand", "Padana").containsEntry("model", "Marmo")
+            .containsEntry("catalog_brand", "Padana").containsEntry("catalog_model", "Marmo");
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_RENAMED")).singleElement()
+            .satisfies(m -> assertThat(m).contains("Test Model").contains("Padana Marmo"));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest(" ", null), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("x".repeat(256), "m"), ceoActor));
+        // ticket_item.model is VARCHAR(80): a longer model would 500 the whole rename, so it is a 400 here.
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("b", "m".repeat(81)), ceoActor));
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("b", "m".repeat(80)), ceoActor);
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.renameItem(prId, Long.MAX_VALUE, new RenameItemRequest("a", "b"), ceoActor));
+    }
+
+    /** The REAL incident path: the typed factory is saved, import marks the quote ready, and the CEO's
+     * startReview 422s, so no decision ever exists. The fix must still be reachable, then startReview works. */
+    @Test
+    void repointFactoryQuote_realIncidentPath_startReview422_fixWithNoDecision_thenStartReviewSucceeds() {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        breakFactoryName(prId);
+        StartPricingDecisionRequest start = new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString());
+        assertThatThrownBy(() -> decisionService.startReview(prId, start, ceoActor)).hasMessageContaining("ไม่พบ factory config");
+        long target = masterFactoryId("Padana " + UUID.randomUUID());
+
+        var fixed = decisionService.repointFactoryQuote(prId, onlyQuoteId(prId), new RepointFactoryRequest(target), ceoActor);
+
+        assertThat(fixed.decision()).as("no decision exists yet, so nothing is recalculated").isNull();
+        assertThat(fixed.costingError()).isNull();
+        assertThat(decisionService.startReview(prId, start, ceoActor).items().get(0).frozenLandedCostPerRequestedUnitThb()).isNotNull();
+    }
+
+    @Test
+    void setItemOriginCountry_withNoDecisionYet_savesWithoutRecompute_thenStartReviewCostsTheLine() {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET product_id = NULL, catalog_price_id = NULL, thickness_mm = 10, origin_country = NULL WHERE pricing_request_id = :id", Map.of("id", prId));
+        long itemId = jdbc.queryForObject("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id", Map.of("id", prId), Long.class);
+
+        var fixed = decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("จีน"), ceoActor);
+
+        assertThat(fixed.decision()).isNull();
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), ceoActor));
+        assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("จีน"), salesActor));
+        PricingDecisionDto decision = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(costingItemFor(decision).uncostableReason()).isNull();
+    }
+
+    /** Two typo'd quotes: fixing the first must stand even though the recalculation still 422s on the second. */
+    @Test
+    void repointFactoryQuote_fixSurvivesARecalculationFailureOnAnotherBrokenQuote() {
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("60"), new BigDecimal("40"));
+        PricingDecisionDto decision = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        long quote1 = onlyQuoteId(prId);
+        long item2 = jdbc.queryForObject("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id ORDER BY pricing_request_item_id DESC LIMIT 1", Map.of("id", prId), Long.class);
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, status, default_currency) SELECT :c, pricing_request_id, 'Second typo', status, default_currency FROM sales.factory_quote WHERE factory_quote_id = :q",
+            Map.of("c", "FQ-S" + UUID.randomUUID().toString().substring(0, 8), "q", quote1));
+        long quote2 = jdbc.queryForObject("SELECT max(factory_quote_id) FROM sales.factory_quote WHERE pricing_request_id = :id", Map.of("id", prId), Long.class);
+        jdbc.update("UPDATE sales.factory_quote_item SET factory_quote_id = :q2 WHERE pricing_request_item_id = :i", Map.of("q2", quote2, "i", item2));
+        jdbc.update("UPDATE sales.pricing_request_item SET factory = 'Second typo', resolved_factory_id = NULL, resolved_factory_name = NULL WHERE pricing_request_item_id = :i", Map.of("i", item2));
+        jdbc.update("UPDATE sales.factory_quote SET factory_name_snapshot = 'First typo', factory_id = NULL WHERE factory_quote_id = :q", Map.of("q", quote1));
+        jdbc.update("UPDATE sales.pricing_request_item SET factory = 'First typo', resolved_factory_id = NULL, resolved_factory_name = NULL WHERE pricing_request_id = :id AND pricing_request_item_id <> :i", Map.of("id", prId, "i", item2));
+        String masterA = "Padana A " + UUID.randomUUID();
+        String masterB = "Padana B " + UUID.randomUUID();
+
+        var first = decisionService.repointFactoryQuote(prId, quote1, new RepointFactoryRequest(masterFactoryId(masterA)), ceoActor);
+
+        assertThat(jdbc.queryForObject("SELECT factory_name_snapshot FROM sales.factory_quote WHERE factory_quote_id = :q", Map.of("q", quote1), String.class))
+            .as("the first fix is persisted despite the recalculation failing").isEqualTo(masterA);
+        assertThat(first.costingError()).contains("ไม่พบ factory config").contains("Second typo");
+        assertThat(eventMessages(prId, "PRICING_REQUEST_FACTORY_QUOTE_REPOINTED")).hasSize(1);
+
+        var second = decisionService.repointFactoryQuote(prId, quote2, new RepointFactoryRequest(masterFactoryId(masterB)), ceoActor);
+
+        assertThat(second.costingError()).isNull();
+        assertThat(second.decision().items()).allSatisfy(i -> assertThat(i.frozenLandedCostPerRequestedUnitThb()).isNotNull());
+        assertThat(decision.id()).isEqualTo(second.decision().id());
+    }
+
+    @Test
+    void repointFactoryQuote_keepsLineResolvedNameConsistent_andRejectsADuplicateFactoryId() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        jdbc.update("UPDATE sales.pricing_request_item SET resolved_factory_name = 'Stale Catalog Name' WHERE pricing_request_id = :id", Map.of("id", prId));
+        String master = "Padana " + UUID.randomUUID();
+        long masterId = masterFactoryId(master);
+
+        decisionService.repointFactoryQuote(prId, onlyQuoteId(prId), new RepointFactoryRequest(masterId), ceoActor);
+
+        assertThat(jdbc.queryForObject("SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_id = :id",
+            Map.of("id", prId), String.class)).isEqualTo(master);
+        // Another current quote already carries factory_id = target (under a different snapshot name):
+        // the V62 unique index would raise a raw 500, so it must be a 409 first.
+        long quote = onlyQuoteId(prId);
+        long otherId = masterFactoryId("Alias " + UUID.randomUUID());
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, factory_id, status) VALUES (:c, :id, :n, :f, 'DRAFT')",
+            Map.of("c", "FQ-I" + UUID.randomUUID().toString().substring(0, 8), "id", prId, "n", "Differently named " + UUID.randomUUID(), "f", otherId));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quote, new RepointFactoryRequest(otherId), ceoActor));
+    }
+
+    @Test
+    void originCountryFallback_withNoFreightBand_setsOnlyThatLineAside_insteadOfFailingTheWholeCosting() {
+        // 100 mm is outside every seeded freight band, so Italy has no rate for it.
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink("อิตาลี", 100);
+        PricingCostingItemDto item = costingItemFor(decision);
+        assertThat(item.uncostableReason()).contains("ประเทศต้นทาง").contains("ค่าขนส่ง");
+    }
+
+    @Test
+    void renameItem_alsoUpdatesTheTicketItemOnlyWhileItStillHasTheOldName() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        long ticketItemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET brand = 'Test', model = 'Model' WHERE item_id = :id", Map.of("id", ticketItemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET source_ticket_item_id = :t WHERE pricing_request_item_id = :i", Map.of("t", ticketItemId, "i", itemId));
+
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("Padana", "Marmo"), ceoActor);
+
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "Padana").containsEntry("model", "Marmo");
+        jdbc.update("UPDATE sales.ticket_item SET brand = 'Sales changed it' WHERE item_id = :id", Map.of("id", ticketItemId));
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("Padana2", "Marmo2"), ceoActor);
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "Sales changed it").containsEntry("model", "Marmo");
+        // Clearing the brand clears it on the deal line too (ticket_item.brand is NOT NULL, so blank there).
+        jdbc.update("UPDATE sales.ticket_item SET brand = 'Padana2', model = 'Marmo2' WHERE item_id = :id", Map.of("id", ticketItemId));
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("", "Only model"), ceoActor);
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "").containsEntry("model", "Only model");
     }
 
     private long readyForReview(BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis,

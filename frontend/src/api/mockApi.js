@@ -1160,6 +1160,17 @@ function nextPricingRequestCode() {
   return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
 }
 
+// The guard the CEO price-review fixes share with recalculateCost: the request's open DRAFT decision on a
+// CEO_REVIEWING request (anything else is the same 409).
+function mockOpenDraftFor(pricingRequestId, allowNoDecision = false) {
+  const pr = findPricingRequestRaw(pricingRequestId);
+  const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'DRAFT');
+  if (decision && pr.status === 'CEO_REVIEWING') return { pr, decision };
+  // Re-point / origin country are also open before any decision exists (a failed startReview leaves it here).
+  if (allowNoDecision && !decision && pr.status === 'READY_FOR_CEO_REVIEW') return { pr, decision: null };
+  fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
+}
+
 function findPricingRequestRaw(id) {
   const pr = mockPricingRequests.find((p) => p.id === Number(id));
   if (!pr) fail('ไม่พบคำขอราคานี้', 404);
@@ -15910,6 +15921,65 @@ export const api = {
       }
       decision.updatedAt = new Date().toISOString();
       return delay({ decision });
+    },
+
+    // CEO price-review fixes — mirror PricingDecisionService#repointFactoryQuote / #setItemOriginCountry /
+    // #renameItem (role + open-DRAFT guard shared with recalculateCost; real guards are pinned in
+    // LandedCostCalculatorFormulaIntegrationTest). Cost is not re-derived here (the mock has no engine).
+    async repointFactoryQuote(id, quoteId, payload) {
+      const user = hasRole('ceo');
+      const { pr, decision } = mockOpenDraftFor(id, true);
+      const quote = mockFactoryQuotes.find((q) => q.id === Number(quoteId) && q.pricingRequestId === pr.id);
+      if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้ในคำขอราคานี้', 404);
+      const master = mockPriceImportFactories.find((f) => f.factoryId === Number(payload?.factoryId));
+      if (!master) fail('ไม่พบโรงงานนี้ในระบบ', 404);
+      if (master.name === quote.factoryName) fail(`ใบเสนอราคาโรงงานนี้ใช้โรงงาน "${master.name}" อยู่แล้ว`, 409);
+      if (mockFactoryQuotes.some((q) => q.pricingRequestId === pr.id && q.current && q.status !== 'CANCELLED' && q.factoryName === master.name)) {
+        fail(`มีใบเสนอราคาโรงงาน "${master.name}" ในคำขอราคานี้แล้ว`, 409);
+      }
+      const oldName = quote.factoryName;
+      quote.factoryName = master.name;
+      quote.factoryId = master.factoryId;
+      for (const qi of quote.items ?? []) {
+        const item = pr.items.find((i) => i.id === qi.pricingRequestItemId);
+        if (item) { item.factory = master.name; item.resolvedFactoryId = master.factoryId; }
+      }
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_FACTORY_QUOTE_REPOINTED', pr.status, pr.status,
+        `CEO เปลี่ยนโรงงานของใบเสนอราคาโรงงาน ${quote.quoteCode}: "${oldName}" → "${master.name}"`);
+      return delay({ decision, costingError: null });
+    },
+
+    async setItemOriginCountry(id, itemId, payload) {
+      const user = hasRole('ceo');
+      const { pr, decision } = mockOpenDraftFor(id, true);
+      const item = pr.items.find((i) => i.id === Number(itemId));
+      if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
+      const country = String(payload?.originCountry ?? '').trim();
+      if (!['อิตาลี', 'สเปน', 'จีน'].includes(country)) fail('ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน', 400);
+      if (item.stockSource) fail('รายการจากสต็อกไม่มีต้นทุนนำเข้า จึงตั้งประเทศต้นทางไม่ได้', 400);
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET', pr.status, pr.status,
+        `CEO ตั้งประเทศต้นทางรายการที่ ${item.id}: ${item.originCountry || 'ไม่ระบุ'} → ${country}`);
+      item.originCountry = country;
+      item.originCountryOther = null;
+      return delay({ decision, costingError: null });
+    },
+
+    async renameItem(id, itemId, payload) {
+      const user = hasRole('ceo');
+      const { pr, decision } = mockOpenDraftFor(id);
+      const item = pr.items.find((i) => i.id === Number(itemId));
+      if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
+      const brand = String(payload?.brand ?? '').trim() || null;
+      const model = String(payload?.model ?? '').trim() || null;
+      if (!brand && !model) fail('ต้องระบุยี่ห้อหรือรุ่นอย่างน้อยหนึ่งอย่าง', 400);
+      if ((brand?.length ?? 0) > 255 || (model?.length ?? 0) > 255) fail('ยี่ห้อและรุ่นต้องยาวไม่เกิน 255 ตัวอักษร', 400);
+      pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_RENAMED', pr.status, pr.status,
+        `CEO แก้ชื่อรายการที่ ${item.id}: "${[item.brand, item.model].filter(Boolean).join(' ')}" → "${[brand, model].filter(Boolean).join(' ')}"`);
+      item.brand = brand;
+      item.model = model;
+      if (item.catalogBrand != null) item.catalogBrand = brand;
+      if (item.catalogModel != null) item.catalogModel = model;
+      return delay({ decision, costingError: null });
     },
 
     // Mirrors PricingDecisionService.overrideItemCost, including its check ORDER: role -> reason
