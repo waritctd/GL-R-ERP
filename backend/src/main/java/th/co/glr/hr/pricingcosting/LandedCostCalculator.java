@@ -177,9 +177,10 @@ public class LandedCostCalculator {
 
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
         Set<Long> freightGapItemIds = new java.util.HashSet<>();
+        Set<Long> tableFreightItemIds = new java.util.HashSet<>();
         Instant calculatedAt = Instant.now();
         for (List<ItemPhysicals> shipment : byShipment.values()) {
-            writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt, freightGapItemIds));
+            writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt, freightGapItemIds, tableFreightItemIds));
         }
 
         // V156: an uncostable line contributes NOTHING to the costing total — it has no computed
@@ -192,7 +193,7 @@ public class LandedCostCalculator {
                 total = total.add(item.totalLandedCostThb());
             }
         }
-        return new CalculationResult(writeItems, money4(total), freightGapItemIds);
+        return new CalculationResult(writeItems, money4(total), freightGapItemIds, tableFreightItemIds);
     }
 
     /**
@@ -238,7 +239,7 @@ public class LandedCostCalculator {
      */
     private List<PricingCostingWriteItem> costShipment(List<ItemPhysicals> allItems,
                                                         PricingFormulaConfigDto formulaConfig, Instant calculatedAt,
-                                                        Set<Long> freightGapItemIds) {
+                                                        Set<Long> freightGapItemIds, Set<Long> tableFreightItemIds) {
         FactoryQuoteDto quote = allItems.get(0).source().quote();
         String factoryName = quote.factoryName();
         // Existence check only: the freight lookup's origin country comes from the catalog link
@@ -288,6 +289,9 @@ public class LandedCostCalculator {
             gapWrites.add(uncostableWriteItem(gap, formulaConfig, freightGapReason(gap), "NO_FREIGHT_BAND"));
         }
         items = items.stream().filter(i -> !plan.gap().contains(i)).toList();
+        // Costed with the TABLE's freight: not set aside, not standing on a CEO value.
+        items.stream().filter(i -> !plan.manual().contains(i))
+            .forEach(i -> tableFreightItemIds.add(i.source().requestItem().id()));
         if (items.isEmpty()) {
             // Every line in this shipment is uncostable — there is no freight band and no
             // clearance denominator to compute at all. Emit the placeholders and stop, rather
@@ -445,6 +449,15 @@ public class LandedCostCalculator {
     private record FreightPlan(java.util.Set<ItemPhysicals> manual, java.util.Set<ItemPhysicals> gap) {}
 
     private FreightPlan planFreight(List<ItemPhysicals> items, PricingFormulaConfigDto formulaConfig, String shipmentLabel) {
+        // Each (origin, set of lines) is looked up at most once per plan, keyed by the lines' request item ids.
+        Map<List<Object>, Boolean> memo = new java.util.HashMap<>();
+        java.util.function.BiPredicate<String, List<ItemPhysicals>> found = (origin, lines) -> {
+            List<Object> key = new ArrayList<>();
+            key.add(origin);
+            // Request item ids are unique per line (identity hash codes can collide).
+            lines.stream().map(i -> i.source().requestItem().id()).sorted().forEach(key::add);
+            return memo.computeIfAbsent(key, k -> freightFound(formulaConfig, origin, lines, shipmentLabel));
+        };
         java.util.Set<ItemPhysicals> manual = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         java.util.Set<ItemPhysicals> gap = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         Map<String, List<ItemPhysicals>> byOrigin = new LinkedHashMap<>();
@@ -453,7 +466,7 @@ public class LandedCostCalculator {
         }
         for (Map.Entry<String, List<ItemPhysicals>> entry : byOrigin.entrySet()) {
             List<ItemPhysicals> group = entry.getValue();
-            if (freightFound(formulaConfig, entry.getKey(), group, shipmentLabel)) {
+            if (found.test(entry.getKey(), group)) {
                 continue; // the table answers for the whole group: any manual value is ignored
             }
             List<ItemPhysicals> rest = new ArrayList<>();
@@ -462,24 +475,23 @@ public class LandedCostCalculator {
                 // even alone, or the rest of the group would be priceable without it. A priceable line that merely
                 // sits next to a real gap line keeps its table freight (its value is ignored, then cleared).
                 boolean legit = item.manualFreightThb() != null
-                    && (!freightFound(formulaConfig, entry.getKey(), List.of(item), shipmentLabel)
-                        || freightFound(formulaConfig, entry.getKey(),
-                            group.stream().filter(g -> g != item).toList(), shipmentLabel));
+                    && (!found.test(entry.getKey(), List.of(item))
+                        || found.test(entry.getKey(), group.stream().filter(g -> g != item).toList()));
                 if (legit) {
                     manual.add(item);
                 } else {
                     rest.add(item);
                 }
             }
-            if (rest.isEmpty() || freightFound(formulaConfig, entry.getKey(), rest, shipmentLabel)) {
+            if (rest.isEmpty() || found.test(entry.getKey(), rest)) {
                 continue;
             }
             // Isolate the lines that have no band even alone, then retry the others together.
             // (the per-line check runs only now, after a group lookup has already failed)
             List<ItemPhysicals> alone = rest.stream()
-                .filter(i -> !freightFound(formulaConfig, entry.getKey(), List.of(i), shipmentLabel)).toList();
+                .filter(i -> !found.test(entry.getKey(), List.of(i))).toList();
             List<ItemPhysicals> others = rest.stream().filter(i -> !alone.contains(i)).toList();
-            if (others.isEmpty() || !freightFound(formulaConfig, entry.getKey(), others, shipmentLabel)) {
+            if (others.isEmpty() || !found.test(entry.getKey(), others)) {
                 gap.addAll(rest);
             } else {
                 gap.addAll(alone);
@@ -1106,10 +1118,12 @@ public class LandedCostCalculator {
 
     public record ResolvedSource(PricingRequestItemDto requestItem, FactoryQuoteDto quote, FactoryQuoteItemDto quoteItem) {}
     public record FxSnapshot(BigDecimal rate, String source, LocalDate effectiveDate, Instant fetchedAt) {}
-    /** {@code freightGapItemIds}: request items whose freight group has NO band in the table (CEO freight may apply). */
-    public record CalculationResult(List<PricingCostingWriteItem> items, BigDecimal total, Set<Long> freightGapItemIds) {
+    /** {@code freightGapItemIds}: request items whose freight group has NO band in the table (CEO freight may apply).
+     * {@code tableFreightItemIds}: request items actually costed with the table's freight (a CEO value on them is stale). */
+    public record CalculationResult(List<PricingCostingWriteItem> items, BigDecimal total, Set<Long> freightGapItemIds,
+                                    Set<Long> tableFreightItemIds) {
         public CalculationResult(List<PricingCostingWriteItem> items, BigDecimal total) {
-            this(items, total, Set.of());
+            this(items, total, Set.of(), Set.of());
         }
     }
 
