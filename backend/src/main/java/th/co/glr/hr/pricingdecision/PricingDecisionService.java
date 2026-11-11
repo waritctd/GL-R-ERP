@@ -417,23 +417,7 @@ public class PricingDecisionService {
     }
 
     /**
-     * True when the freight table has no band for this line's group right now (so a CEO freight may apply). If
-     * the calculator itself cannot run yet (another 422, e.g. a still-broken quote) the answer is unknown and
-     * the save is allowed; a value that turns out unnecessary is cleared on the next recalculation.
-     */
-    private boolean freightGapFor(long pricingRequestId, long itemId) {
-        try {
-            return landedCost.calculate(requirePricingRequest(pricingRequestId)).freightGapItemIds().contains(itemId);
-        } catch (ApiException e) {
-            if (!HttpStatus.UNPROCESSABLE_CONTENT.equals(e.getStatus())) {
-                throw e;
-            }
-            return true;
-        }
-    }
-
-    /**
-     * A CEO freight is dormant once the table has a band for its line's group: clear it (same transaction, with an
+     * A CEO freight is dormant once its line is costed with the table's freight: clear it (same transaction, with an
      * event) so it can never apply silently later. Called right after every successful calculation.
      */
     private void clearStaleManualFreights(long pricingRequestId, LandedCostCalculator.CalculationResult calc, UserPrincipal actor) {
@@ -444,7 +428,7 @@ public class PricingDecisionService {
         List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
         for (int i = 0; i < items.size(); i++) {
             long id = items.get(i).id();
-            if (manual.containsKey(id) && !calc.freightGapItemIds().contains(id)) {
+            if (manual.containsKey(id) && calc.tableFreightItemIds().contains(id)) {
                 pricingRequests.updateItemManualFreight(pricingRequestId, id, null);
                 addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_FREIGHT_SET,
                     "ล้างค่าขนส่งที่กรอกเองของรายการที่ " + (i + 1) + " เพราะตารางมีอัตราแล้ว");
@@ -572,15 +556,47 @@ public class PricingDecisionService {
         if (item.stockSource() != null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีค่าขนส่งนำเข้า");
         }
-        if (freight != null && !freightGapFor(pricingRequestId, itemId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "ตารางค่าขนส่งมีอัตราสำหรับรายการนี้แล้ว จึงกรอกค่าขนส่งเองไม่ได้");
-        }
         BigDecimal rounded = freight == null ? null : money4(freight);
-        pricingRequests.updateItemManualFreight(pricingRequestId, itemId, rounded);
+        if (rounded != null) {
+            return saveFreightIfTrueGap(pricingRequestId, itemId, line, rounded, decision, actor);
+        }
+        pricingRequests.updateItemManualFreight(pricingRequestId, itemId, null);
         CeoFixResult result = recomputeKeepingFix(decision, actor);
         addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_FREIGHT_SET,
-            rounded == null ? "CEO ล้างค่าขนส่งที่กรอกเองของรายการที่ " + line.position()
-                : "CEO กรอกค่าขนส่งรายการที่ " + line.position() + ": " + rounded.stripTrailingZeros().toPlainString() + " บาท (ไม่มีอัตราในตาราง)");
+            "CEO ล้างค่าขนส่งที่กรอกเองของรายการที่ " + line.position());
+        return result;
+    }
+
+    /**
+     * Saves a CEO freight, runs the calculator ONCE, and keeps the value only if that calculation shows the line really
+     * is a freight gap. Otherwise the previous value is put back (explicitly, so it holds with or without the
+     * surrounding transaction) and the save is refused with 409: either the table prices the line, or costing cannot
+     * run at all yet (another problem must be fixed first).
+     */
+    private CeoFixResult saveFreightIfTrueGap(long pricingRequestId, long itemId, Line line, BigDecimal rounded,
+                                               PricingDecisionDto decision, UserPrincipal actor) {
+        BigDecimal previous = pricingRequests.findManualFreights(pricingRequestId).get(itemId);
+        pricingRequests.updateItemManualFreight(pricingRequestId, itemId, rounded);
+        LandedCostCalculator.CalculationResult calc;
+        try {
+            calc = landedCost.calculate(requirePricingRequest(pricingRequestId));
+        } catch (ApiException e) {
+            pricingRequests.updateItemManualFreight(pricingRequestId, itemId, previous);
+            if (!HttpStatus.UNPROCESSABLE_CONTENT.equals(e.getStatus())) {
+                throw e;
+            }
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ยังคำนวณต้นทุนไม่ได้ (" + e.getMessage() + ") — แก้ปัญหาอื่นก่อนแล้วค่อยกรอกค่าขนส่ง");
+        }
+        if (!calc.freightGapItemIds().contains(itemId)) {
+            pricingRequests.updateItemManualFreight(pricingRequestId, itemId, previous);
+            throw new ApiException(HttpStatus.CONFLICT, "ตารางค่าขนส่งมีอัตราสำหรับรายการนี้แล้ว จึงกรอกค่าขนส่งเองไม่ได้");
+        }
+        clearStaleManualFreights(pricingRequestId, calc, actor);
+        CeoFixResult result = new CeoFixResult(decision == null ? null : recomputeCostingInPlace(decision, calc), null);
+        addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_FREIGHT_SET,
+            "CEO กรอกค่าขนส่งรายการที่ " + line.position() + ": " + rounded.stripTrailingZeros().toPlainString()
+                + " บาท (ไม่มีอัตราในตาราง)");
         return result;
     }
 

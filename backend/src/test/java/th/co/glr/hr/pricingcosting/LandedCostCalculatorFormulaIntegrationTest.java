@@ -93,6 +93,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     private PricingCostingRepository costingRepository;
     private PricingDecisionRepository decisionRepository;
     private PricingDecisionService decisionService;
+    private LandedCostCalculator landedCostSpy;
     private PricingFormulaConfigRepository formulaConfigRepository;
 
     private long salesRepId;
@@ -126,10 +127,11 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
             new FactoryConfigRepository(jdbc), notifications, fileStorage,
             landedCostCalculator);
+        landedCostSpy = org.mockito.Mockito.spy(landedCostCalculator); // counts calculate() calls
         costingRepository = new PricingCostingRepository(jdbc);
         decisionRepository = new PricingDecisionRepository(jdbc);
         decisionService = new PricingDecisionService(decisionRepository, pricingRequests, costingRepository,
-            tickets, fxRates, notifications, landedCostCalculator, formulaEngine);
+            tickets, fxRates, notifications, landedCostSpy, formulaEngine);
         TicketService ticketService = new TicketService(tickets, notifications,
             objectMapper, customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
@@ -1456,6 +1458,56 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).anySatisfy(m -> assertThat(m).contains("เพราะตารางมีอัตราแล้ว"));
         // The real gap line A still accepts one.
         assertThatCode(() -> decisionService.setItemFreight(prId, itemA, new FreightRequest(new BigDecimal("12000")), ceoActor)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void manualFreight_isKeptWhileTheLineIsSetAsideForAnotherReason_andUsedAgainWhenItCostsAgain() {
+        long prId = gapLineReadyForReview();
+        PricingDecisionDto decision = start(prId);
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("12000")), ceoActor);
+
+        // The line now cannot be costed for a different reason (no sqm per piece).
+        jdbc.update("UPDATE sales.factory_quote_item SET sqm_per_unit = NULL WHERE pricing_request_item_id = :i", Map.of("i", itemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET requested_qty_sqm = NULL WHERE pricing_request_item_id = :i", Map.of("i", itemId));
+        PricingDecisionDto broken = decisionService.recalculateCost(decision.id(), ceoActor);
+
+        assertThat(costingItemFor(broken).uncostableCode()).contains("MISSING_SQM");
+        assertThat(jdbc.queryForObject("SELECT manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_item_id = :i",
+            Map.of("i", itemId), BigDecimal.class)).as("kept, not mistaken for a stale value").isEqualByComparingTo("12000");
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).noneSatisfy(m -> assertThat(m).contains("เพราะตารางมีอัตราแล้ว"));
+
+        jdbc.update("UPDATE sales.factory_quote_item SET sqm_per_unit = 1 WHERE pricing_request_item_id = :i", Map.of("i", itemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET requested_qty_sqm = 100 WHERE pricing_request_item_id = :i", Map.of("i", itemId));
+        assertThat(costingItemFor(decisionService.recalculateCost(decision.id(), ceoActor)).landedCostPerUnitThb())
+            .as("costed again with the CEO's freight").isEqualByComparingTo("386.7902");
+    }
+
+    @Test
+    void setItemFreight_runsTheCalculatorOnce() {
+        long prId = gapLineReadyForReview();
+        PricingDecisionDto decision = start(prId);
+        org.mockito.Mockito.clearInvocations(landedCostSpy);
+
+        decisionService.setItemFreight(prId, decision.items().get(0).pricingRequestItemId(), new FreightRequest(new BigDecimal("12000")), ceoActor);
+
+        org.mockito.Mockito.verify(landedCostSpy, org.mockito.Mockito.times(1)).calculate(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void setItemFreight_isRefusedWhileCostingCannotRunForAnotherReason() {
+        long prId = gapLineReadyForReview();
+        PricingDecisionDto decision = start(prId);
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        breakFactoryName(prId); // a different problem: the calculator now 422s
+
+        assertThatThrownBy(() -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("12000")), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ยังคำนวณต้นทุนไม่ได้");
+            });
+        assertThat(jdbc.queryForObject("SELECT manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_item_id = :i",
+            Map.of("i", itemId), BigDecimal.class)).as("nothing saved").isNull();
     }
 
     private long readyForReview(BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis,
