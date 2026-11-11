@@ -233,7 +233,7 @@ function SubstepChips({ currentCode, fromStock = null }) {
  * predicates below are the same status+role checks that used to live in TicketDetailPage.
  */
 export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
-  user, ticketId, summary, items = [], availableActions = [], showToast,
+  user, ticketId, summary, items = [], availableActions = [], procurementSource, showToast,
 }, ref) {
   const queryClient = useQueryClient();
   const role = user?.role;
@@ -377,6 +377,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // Returns false (and says why) while a factory-less line has no factory, so the picker can't be
   // bypassed.
   const depositReady = depositReadyForIr(summary);
+  // An old deal whose lines' source the rep has not yet chosen (the จัดซื้อสินค้า button): no IR before it.
+  const sourcePending = Boolean(procurementSource?.legacy && !procurementSource.decidedAt);
   const DEPOSIT_HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
   // ออกใบขอซื้อ (IR) numbers and issues one IR per factory and cannot be undone, so it asks first.
   // The country / lead-time popup retries continue this confirmed create and call the mutation
@@ -768,7 +770,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock ? (
-                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady}
+                <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady || sourcePending}
                   onClick={requestCreateIrDrafts} data-testid="deal-fulfilment-create-ir-drafts">
                   {/* Once the deal has rows, "ออกใบขอซื้อ (IR)" would read as creating a fresh set
                       for every factory; createDrafts SKIPS factories already covered, so the label
@@ -779,6 +781,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             </div>
             {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock && !depositReady ? (
               <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-deposit-hint">{DEPOSIT_HINT}</p>
+            ) : null}
+            {canFullWriteStoredIr && !allFactoriesCovered && !allLinesFromStock && depositReady && sourcePending ? (
+              <p className="m-0 text-xs font-bold text-text-secondary" data-testid="ir-source-hint">ต้องกด “จัดซื้อสินค้า” เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)</p>
             ) : null}
             {allFactoriesCovered ? (
               <p className="m-0 text-xs font-bold text-text-secondary" data-testid="deal-fulfilment-all-covered">

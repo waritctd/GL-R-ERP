@@ -59,7 +59,7 @@ const DIRECT_APPROVAL_ACTION_KEY = 'approve_direct_quotation';
  * The same two apply to a PRICING_REQUEST-origin quotation awaiting approval, read from
  * `quotationByRequest` (see nextSalesAction).
  */
-export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items } = {}) {
+export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items, procurementSource } = {}) {
   const role = user?.role;
   if (!deal || deal.lifecycle !== 'ACTIVE') return { action: null };
 
@@ -85,7 +85,7 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
     }
   }
 
-  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items })
+  const action = role === 'sales' ? nextSalesAction(deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items, procurementSource })
     : role === 'import' ? nextImportAction(deal, pricingRequests)
       : role === 'account' ? nextAccountAction(deal)
         : null;
@@ -101,6 +101,11 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
 
   // The เสนอราคา<party> primary comes with a line naming the sent quotation.
   if (action?.key === SALES_ACTION.QUOTE_NEXT_PARTY) return { action, bannerText: quoteNextPartyBanner(action) };
+
+  // Old deals pick each line's source themselves; new ones follow their quotation.
+  if (action?.key === SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE) {
+    return { action, bannerText: procurementSource?.legacy ? 'เลือกว่าสินค้าสั่งนำเข้าหรือมาจากสต็อก' : 'ตรวจที่มาสินค้าตามใบเสนอราคา' };
+  }
 
   if (action) return { action };
 
@@ -129,12 +134,12 @@ export function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties, dir
  * - ยืนยันคำสั่งซื้อ for the APPROVED direct quotation when the primary is the route choice for it, or for
  *   `approvedDirect` beside a newer live one. `primary`: the caller's resolved action (else computed here).
  */
-export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items, approvedDirect = null, primary: knownPrimary } = {}) {
+export function secondaryWorkActions(user, deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items, procurementSource, approvedDirect = null, primary: knownPrimary } = {}) {
   if (user?.role !== 'sales' || !deal || deal.lifecycle !== 'ACTIVE') return [];
   const outcome = outcomeSecondaryAction(deal, pricingRequests, quotationByRequest);
   // The caller's already-resolved primary action (null included) saves running the cascade twice.
   const primary = knownPrimary !== undefined ? knownPrimary
-    : resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items }).action;
+    : resolveWorkState(user, deal, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items, procurementSource }).action;
   const revise = reviseTarget && REVISE_STAGES.has(deal.salesStage) && primary?.key !== SALES_ACTION.REVISE_QUOTATION
     ? reviseAction(reviseTarget) : null;
   // The direct route choice replaces ยืนยันคำสั่งซื้อ as the primary; it stays one menu away. So does an APPROVED

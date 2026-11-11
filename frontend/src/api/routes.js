@@ -151,6 +151,7 @@ export const API_ROUTES = {
     billing: (id) => `/api/tickets/${id}/billing`,
     deliveries: (id) => `/api/tickets/${id}/deliveries`,
     reserveStock: (id) => `/api/tickets/${id}/reserve-stock`,
+    procurementSource: (id) => `/api/tickets/${id}/procurement-source`,
     // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
     // reserveStock above.
     itemWeightMultipliers: (id) => `/api/tickets/${id}/item-weight-multipliers`,

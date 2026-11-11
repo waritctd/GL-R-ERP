@@ -2459,6 +2459,15 @@ function requireDepositPolicyOwner(ticket) {
   return user;
 }
 
+// TicketService.isFromStock / decisionStageOpen.
+function itemFromStock(item) {
+  return Number(item.qty ?? 0) > 0 && Number(item.qtyFromStock ?? 0) >= Number(item.qty ?? 0);
+}
+function procurementDecisionOpen(ticket) {
+  return (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.fulfillmentStatus == null
+    && dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED');
+}
+
 function hasRole(...roles) {
   const user = requireSession();
   if (!roles.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -4536,6 +4545,11 @@ export function setPricingRequestStatusForTests(prId, status) {
   const pr = mockPricingRequests.find((row) => row.id === Number(prId));
   if (!pr) throw new Error(`no pricing request ${prId}`);
   pr.status = status;
+}
+
+/** TEST-ONLY seam — not part of `api`. Patches raw ticket fields (e.g. lifecycle, legacyStockSource). */
+export function patchTicketForTests(ticketId, patch) {
+  Object.assign(findTicketRaw(Number(ticketId)), patch);
 }
 
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
@@ -8130,7 +8144,8 @@ function buildTicketActions(user, ticket) {
     if (isOwnerOrKeyer(ticket, user.id) && !['closed', 'cancelled'].includes(ticket.status)) add('CANCEL', 'operational', 'ยกเลิก');
     if (owner && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(ticket.status)) add('EDIT_ITEMS', 'operational', 'แก้ไขรายการ');
     // TicketService.actions: reserveStock's own gate, offered only before the deal is on the import axis.
-    if ((owner || user.role === 'ceo') && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.fulfillmentStatus == null
+    // CEO-only (production): the owning rep now goes through the "จัดซื้อสินค้า" dialog instead.
+    if (user.role === 'ceo' && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.fulfillmentStatus == null
       && dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED')) {
       add('RESERVE_STOCK', 'operational', 'ระบุสินค้าจากสต็อก');
     }
@@ -8752,13 +8767,60 @@ export const api = {
 
     async reserveStock(id, payload) {
       const ticket = findTicketRaw(Number(id));
-      // Stock coverage is the owning sales rep's (or CEO's), not import's -- mirrors
-      // TicketService#canDeclareStockCoverage. Keeping `hasRole('import', 'ceo')` would make the
-      // mock MORE permissive than production, the one direction CLAUDE.md calls dangerous. Same
-      // predicate as recordDelivery's requireOwningRepOrCeo.
-      const user = requireOwningRepOrCeo(ticket);
+      // CEO-ONLY, matching production: the owning rep (and import) decide stock vs import through
+      // decideProcurementSource below. A looser mock gate would be the dangerous drift direction.
+      const user = requireSession();
+      if (user.role !== 'ceo') fail('ระบุสินค้าจากสต็อกผ่านปุ่ม "จัดซื้อสินค้า" เท่านั้น', 403);
       requireActive(ticket);
       reserveStockForTicket(ticket, user, payload ?? {});
+      return delay({ ticket: buildTicketDetail(ticket) });
+    },
+
+    // Mirrors TicketService.getProcurementSource / decideProcurementSource (Java is the source of
+    // truth). `legacy` comes from the per-ticket fixture flag `ticket.legacyStockSource === true`
+    // (production derives it from the deal's quotation); `ticket.procurementDecidedAt` is the latch.
+    async getProcurementSource(id) {
+      const { user, ticket } = requireTicketViewer(id);
+      const legacy = ticket.legacyStockSource === true;
+      const decidedAt = ticket.procurementDecidedAt ?? null;
+      const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
+      return delay({
+        legacy,
+        editable: legacy && !decidedAt && procurementDecisionOpen(ticket) && (user.role === 'ceo' || owns),
+        decidedAt,
+        quotationNumber: ticket.quotation?.number ?? null,
+        lines: (ticket.items ?? []).map((item) => ({ itemId: item.id, fromStock: itemFromStock(item) })),
+      });
+    },
+
+    async decideProcurementSource(id, payload) {
+      const ticket = findTicketRaw(Number(id));
+      const user = requireOwningRepOrCeo(ticket);
+      requireActive(ticket);
+      if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
+        fail('เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)', 409);
+      }
+      if (ticket.fulfillmentStatus != null) fail('เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้', 409);
+      const lines = payload?.lines ?? [];
+      const ids = lines.map((l) => Number(l.itemId));
+      const items = ticket.items ?? [];
+      if (new Set(ids).size !== ids.length || ids.length !== items.length || !items.every((it) => ids.includes(it.id))) {
+        fail('ต้องระบุที่มาสินค้าให้ครบทุกรายการ', 400);
+      }
+      if (ticket.procurementDecidedAt) fail('เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้', 409);
+      const wanted = new Map(lines.map((l) => [Number(l.itemId), Boolean(l.fromStock)]));
+      if (ticket.legacyStockSource !== true) {
+        if (items.some((it) => wanted.get(it.id) !== itemFromStock(it))) {
+          fail('ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้', 409);
+        }
+      } else {
+        for (const it of items) it.qtyFromStock = wanted.get(it.id) ? Number(it.qty ?? 0) : 0;
+        routeAllStockDealToDelivery(ticket, user);
+      }
+      ticket.procurementDecidedAt = new Date().toISOString();
+      const stock = [...wanted.values()].filter(Boolean).length;
+      pushEvent(ticket, user, 'PROCUREMENT_SOURCE_DECIDED', ticket.status, ticket.status,
+        `เลือกที่มาสินค้า: นำเข้า ${wanted.size - stock} รายการ · จากสต็อก ${stock} รายการ`);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -12573,6 +12635,10 @@ export const api = {
       requireActive(ticket);
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น', 409);
+      }
+      // ImportRequestService.procurementSourceAwaitingRep: an old deal must press จัดซื้อสินค้า first.
+      if (ticket.legacyStockSource === true && !ticket.procurementDecidedAt && procurementDecisionOpen(ticket)) {
+        fail('กด "จัดซื้อสินค้า" เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)', 409);
       }
       // Payment gate FIRST (same predicate as issue() below), before any prompt-producing check.
       if (!(['DEPOSIT_NOTICE_ISSUED', 'DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus)

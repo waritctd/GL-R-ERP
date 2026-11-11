@@ -82,6 +82,7 @@ function renderPanel(user, rows = [draftRow()], {
   summary: dealSummary = summary, availableActions = [], showToast = vi.fn(), items = [], ref = undefined,
   hasUncoveredFactories = undefined, // undefined = an older backend that does not send the flag
   uncoveredFactoryNames = undefined, // undefined = an older backend that sends no names
+  procurementSource = undefined,
 } = {}) {
   if (rows instanceof Error) api.storedImportRequests.listForTicket.mockRejectedValue(rows);
   else {
@@ -97,7 +98,7 @@ function renderPanel(user, rows = [draftRow()], {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} showToast={showToast} />
+      <DealFulfilmentPanel ref={ref} user={user} ticketId={1} summary={dealSummary} items={items} availableActions={availableActions} procurementSource={procurementSource} showToast={showToast} />
     </QueryClientProvider>,
   );
 }
@@ -704,6 +705,29 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   // The create button mirrors TicketService#requireImportRequestIssuable(summary, true)
   // (DEPOSIT_NOTICE_ISSUED / DEPOSIT_PAID / AWAITING_FINAL_PAYMENT / FULLY_PAID, or a not-required
   // deposit policy that has reached CUSTOMER_CONFIRMED) instead of offering a click that can only 409.
+  describe('stage-10 source gate on the create button', () => {
+    const paid = { ...summary, paymentStatus: 'DEPOSIT_PAID' };
+    it('an old deal whose source is not decided: disabled with a hint pointing at จัดซื้อสินค้า', async () => {
+      renderPanel(OWNER, [], { summary: paid, procurementSource: { legacy: true, decidedAt: null } });
+      expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(true);
+      expect(screen.getByTestId('ir-source-hint').textContent).toContain('จัดซื้อสินค้า');
+    });
+    it('before the deposit is settled only the deposit hint shows, not the source hint', async () => {
+      renderPanel(OWNER, [], { summary: { ...summary, paymentStatus: 'CUSTOMER_CONFIRMED' }, procurementSource: { legacy: true, decidedAt: null } });
+      await screen.findByTestId('ir-deposit-hint');
+      expect(screen.queryByTestId('ir-source-hint')).toBeNull();
+    });
+    it.each([
+      ['decided', { legacy: true, decidedAt: '2026-11-10T00:00:00Z' }],
+      ['a new (non-legacy) deal', { legacy: false, decidedAt: null }],
+      ['not read (undefined)', undefined],
+    ])('%s: enabled, no source hint', async (_name, procurementSource) => {
+      renderPanel(OWNER, [], { summary: paid, procurementSource });
+      expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(false);
+      expect(screen.queryByTestId('ir-source-hint')).toBeNull();
+    });
+  });
+
   describe('deposit-ready gate on the create button', () => {
     const HINT = 'ออกใบขอซื้อ (IR) ได้หลังรับชำระมัดจำแล้ว';
     const dealAt = (paymentStatus, depositPolicy = 'REQUIRED') => ({ ...summary, paymentStatus, depositPolicy });

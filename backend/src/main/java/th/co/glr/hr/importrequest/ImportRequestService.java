@@ -281,6 +281,10 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น");
         }
+        if (ticketService.procurementSourceAwaitingRep(ticketId)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "กด \"จัดซื้อสินค้า\" เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)");
+        }
 
         // The payment gate applies at create now (widened gate, same as issue()) and refuses FIRST, so a
         // deal with no paid deposit is never walked through the country / lead-time prompts.

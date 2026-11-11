@@ -157,4 +157,6 @@ public final class TicketEventKind {
     public static final String DEAL_MERGED_INTO = "DEAL_MERGED_INTO";
 
     private TicketEventKind() {}
+    // Stage-10 procurement-source decision (V208): the rep's import/stock split for an order confirmed before the quotation carried it.
+    public static final String PROCUREMENT_SOURCE_DECIDED = "PROCUREMENT_SOURCE_DECIDED";
 }

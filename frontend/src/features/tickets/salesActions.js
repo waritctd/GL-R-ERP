@@ -51,6 +51,7 @@ export const SALES_ACTION = {
   CREATE_DEPOSIT_NOTICE: 'create_deposit_notice',
   CREATE_REMAINING_INVOICE: 'create_remaining_invoice',
   // ขั้น 11, deposit paid: the owning rep creates the import request (IR).
+  CHOOSE_PROCUREMENT_SOURCE: 'choose_procurement_source',
   CREATE_IMPORT_REQUEST: 'create_import_request',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
   RECORD_DELIVERY: 'record_delivery',
@@ -71,6 +72,7 @@ const ACTION_LABEL = {
   [SALES_ACTION.CONFIRM_ORDER]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 'สร้างใบแจ้งยอดเงินรับมัดจำ',
   [SALES_ACTION.CREATE_REMAINING_INVOICE]: 'สร้างใบแจ้งหนี้',
+  [SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE]: 'จัดซื้อสินค้า',
   [SALES_ACTION.CREATE_IMPORT_REQUEST]: 'ออกใบขอซื้อ (IR)',
   // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
   // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
@@ -104,6 +106,7 @@ const ACTION_RANK = {
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 1,
   [SALES_ACTION.CREATE_DEPOSIT_NOTICE]: 1,
   [SALES_ACTION.CREATE_REMAINING_INVOICE]: 1,
+  [SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE]: 1,
   [SALES_ACTION.CREATE_IMPORT_REQUEST]: 1,
   [SALES_ACTION.ISSUE_QUOTATION]: 2,
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 2,
@@ -272,7 +275,7 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
  * while the route is unknown. `quotationByRequest`: a Map, pricingRequestId -> the newest
  * PRICING_REQUEST-origin quotation `{ id, number, docStatus }`; only the deal page has it.
  */
-export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items } = {}) {
+export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = null, offRouteParties = null, quotationByRequest = null, depositNotice = null, remainingInvoice, importRequests, items, procurementSource } = {}) {
   if (!deal || deal.lifecycle !== 'ACTIVE') return null;
 
   // 0. A LIVE direct quotation. Checked BEFORE bucket 1 on purpose: a deal whose price is written
@@ -291,7 +294,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   // rather than left to fall through to CREATE_PCR. A confirmed flow-A deal keeps its direct
   // quotation APPROVED + live, so the deposit notice must outrank this revise.
   const depositAction = depositNoticeAction(deal, depositNotice);
-  if (confirmRefused && reviseTarget) return depositAction ?? importRequestAction(deal, importRequests, items) ?? reviseAction(reviseTarget);
+  if (confirmRefused && reviseTarget) return depositAction ?? importRequestAction(deal, importRequests, items, procurementSource) ?? reviseAction(reviseTarget);
 
   // ขั้น 1 → 2 → 3 are moved by hand and the price request starts at ขั้น 3, so on ขั้น 1–2 the one
   // action is moving the stage; nothing below takes it over.
@@ -373,7 +376,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   if (depositAction) return depositAction;
 
   // ขั้น 11, deposit paid and nothing ordered yet -> create the IR.
-  const importAction = importRequestAction(deal, importRequests, items);
+  const importAction = importRequestAction(deal, importRequests, items, procurementSource);
   if (importAction) return importAction;
 
   // A live request's quotation awaiting ผจก.ขาย/CEO: the rep waits.
@@ -473,13 +476,16 @@ function depositNoticeAction(deal, depositNotice) {
 }
 
 /** `importRequests` undefined = unknown (still the create label). A DRAFT row -> the issue label. */
-function importRequestAction(deal, importRequests, items) {
+function importRequestAction(deal, importRequests, items, procurementSource) {
   // Deposit settled (a no-deposit deal stays at CUSTOMER_CONFIRMED and may issue there), but not the paid-further
   // states: by then the IR is long past (same behaviour as before). `items` is the page's own line list (the deal
   // summary has none); a non-empty list fully covered from stock orders nothing from a factory.
   const depositReady = depositSettled(deal) && !PAID_FURTHER.has(deal.paymentStatus);
   const allFromStock = (items?.length ?? 0) > 0 && items.every((i) => Number(i.qtyFromStock ?? 0) >= Number(i.qty ?? 0));
   if (!depositReady || allFromStock || deal.fulfillmentStatus != null) return null;
+  if (!procurementSource?.decidedAt) {
+    return { key: SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE, label: ACTION_LABEL[SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE] };
+  }
   return {
     key: SALES_ACTION.CREATE_IMPORT_REQUEST,
     label: importRequests?.some((r) => r.status === 'DRAFT') ? 'ออกเลขใบขอซื้อ (IR)' : ACTION_LABEL[SALES_ACTION.CREATE_IMPORT_REQUEST],

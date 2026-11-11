@@ -395,6 +395,10 @@ export const api = {
     setBilling: (id, payload) => apiRequest(API_ROUTES.tickets.billing(id), { method: 'POST', body: payload }),
     listDeliveries: (id) => apiRequest(API_ROUTES.tickets.deliveries(id)),
     reserveStock: (id, payload) => apiRequest(API_ROUTES.tickets.reserveStock(id), { method: 'POST', body: payload }),
+    // "จัดซื้อสินค้า" dialog: where each deal line comes from (stock vs import). GET -> { legacy,
+    // editable, decidedAt, quotationNumber, lines }; POST { lines:[{itemId, fromStock}] } -> { ticket }.
+    getProcurementSource: (id) => apiRequest(API_ROUTES.tickets.procurementSource(id)),
+    decideProcurementSource: (id, payload) => apiRequest(API_ROUTES.tickets.procurementSource(id), { method: 'POST', body: payload }),
     // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
     // reserveStock above.
     updateItemWeightMultipliers: (id, payload) =>

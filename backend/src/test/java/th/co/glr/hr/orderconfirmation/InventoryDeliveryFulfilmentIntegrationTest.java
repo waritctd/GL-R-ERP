@@ -316,7 +316,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         TicketDto afterReserve = ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("15"), "จองครบจากสต็อก"))),
-            salesActor);
+            ceoActor);
         assertThat(afterReserve.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(afterReserve.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
@@ -364,7 +364,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("4"), null))),
-            salesActor);
+            ceoActor);
 
         ticketService.completeDelivery(deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
 
@@ -406,7 +406,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("10"), null))),
-            salesActor);
+            ceoActor);
         // 6 of the 10 are already delivered before any revision exists.
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
@@ -496,7 +496,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemAId, new BigDecimal("10"), null))),
-            salesActor);
+            ceoActor);
         TicketDto delivered = ticketService.completeDelivery(
             deal.ticketId, new CompleteDeliveryRequest("ส่งครบ", null), salesActor);
         // Reaches FULLY_DELIVERED / DealStage.DELIVERED — the exact outcome B's phantom open
@@ -535,7 +535,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemBId, new BigDecimal("2"), null))),
-            salesActor);
+            ceoActor);
         ticketService.recordPartialDelivery(deal.ticketId,
             new RecordDeliveryRequest("STOCK", null,
                 List.of(new RecordDeliveryRequest.Line(deal.ticketItemBId, new BigDecimal("2"))), null),
@@ -620,7 +620,7 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal(qty), null))),
-            salesActor);
+            ceoActor);
         return deal;
     }
 

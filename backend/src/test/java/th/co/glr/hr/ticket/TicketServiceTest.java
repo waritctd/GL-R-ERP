@@ -1181,10 +1181,9 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        // Stock coverage is the owning rep's (or CEO's), not import's.
-        // This is a routing test, so it declares as salesActor (id 1L, this deal's owner).
+        // Per-line stock coverage is CEO-only (reps use decideProcurementSource).
         service.reserveStock(10L, new StockReservationRequest(List.of(
-            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), salesActor);
+            new StockReservationRequest.Line(1L, new BigDecimal("100.00"), "พร้อมจากสต็อก"))), ceoActor);
 
         verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
             lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
@@ -1193,7 +1192,7 @@ class TicketServiceTest {
         // deal jumps past PROCUREMENT straight to DELIVERY_SCHEDULING (S18).
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
         verify(ticketRepo, never()).updateSalesStage(10L, DealStage.PROCUREMENT);
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
+        verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
             eq(TicketEventKind.STOCK_RESERVED), anyString(), anyString(), anyString());
     }
 
@@ -1203,10 +1202,8 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        // Import cannot declare, so this actor-agnostic
-        // quantity-validation case declares as the owning rep (salesActor, id 1L).
         assertBadRequest(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
-            new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), salesActor));
+            new StockReservationRequest.Line(1L, new BigDecimal("101.00"), null))), ceoActor));
     }
 
     // ── who may declare stock coverage ────────────────────────────────────────
@@ -1217,14 +1214,28 @@ class TicketServiceTest {
     // StockDeclarationAuthzIntegrationTest's job, against real Postgres.
 
     @Test
-    void reserveStock_dealOwner_mayDeclare() {
+    void reserveStock_dealOwner_isForbiddenAndWritesNothing() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
-        // createdById 1L == salesActor's id: this is the owning rep's own deal.
+        // createdById 1L == salesActor's id: this is the owning rep's own deal, yet the rep no longer
+        // declares per line (POST /procurement-source replaced it).
+        stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
+            "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
+
+        assertForbidden(() -> service.reserveStock(10L, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(1L, new BigDecimal("40.00"), null))), salesActor));
+
+        verify(ticketRepo, never()).reserveStock(anyLong(), any());
+        verify(ticketRepo, never()).updateFulfillmentStatus(anyLong(), any());
+    }
+
+    @Test
+    void reserveStock_ceo_mayDeclare() {
+        TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
         service.reserveStock(10L, new StockReservationRequest(List.of(
-            new StockReservationRequest.Line(1L, new BigDecimal("40.00"), null))), salesActor);
+            new StockReservationRequest.Line(1L, new BigDecimal("40.00"), null))), ceoActor);
 
         verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
             lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("40.00")) == 0));
@@ -1278,10 +1289,8 @@ class TicketServiceTest {
         // Every stage before ORDER_RECEIVED, for the roles that would otherwise be allowed.
         for (String stage : DealStage.ORDER.subList(0, DealStage.indexOf(DealStage.ORDER_RECEIVED))) {
             stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
-            // The two roles that CAN declare (owning rep + CEO) hit the stage floor with a 409.
-            // import is not a declarer at all — its refusal is a
-            // 403 before this floor, pinned in StockDeclarationAuthzIntegrationTest, not here.
-            assertConflict(() -> service.reserveStock(10L, request, salesActor));
+            // Only the CEO reaches the stage floor's 409; the rep's refusal is a 403 before it.
+            assertForbidden(() -> service.reserveStock(10L, request, salesActor));
             assertConflict(() -> service.reserveStock(10L, request, ceoActor));
         }
 
@@ -1300,18 +1309,18 @@ class TicketServiceTest {
         for (String stage : List.of(DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
                                     DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING)) {
             stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
-            service.reserveStock(10L, request, salesActor);
+            service.reserveStock(10L, request, ceoActor);
         }
 
         verify(ticketRepo, org.mockito.Mockito.times(4)).reserveStock(eq(10L), any());
     }
 
     /**
-     * {@code RESERVE_STOCK} is advertised to the owning rep and the CEO from ORDER_RECEIVED while the deal has no
-     * fulfilment status, and to nobody earlier or as import.
+     * {@code RESERVE_STOCK} is advertised to the CEO only, from ORDER_RECEIVED while the deal has no
+     * fulfilment status; never to the owning rep or import.
      */
     @Test
-    void actions_advertisesReserveStock_toOwnerAndCeoFromOrderReceivedOnly() {
+    void actions_advertisesReserveStock_toCeoOnlyFromOrderReceived() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(41L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, DealStage.NEGOTIATION, null);
         assertThat(actionCodes(41L, salesActor)).doesNotContain("RESERVE_STOCK");
@@ -1321,7 +1330,7 @@ class TicketServiceTest {
         for (String stage : List.of(DealStage.ORDER_RECEIVED, DealStage.DEPOSIT_RECEIVED,
                                     DealStage.PROCUREMENT, DealStage.DELIVERY_SCHEDULING)) {
             stubDeal(id, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item), null, null, stage, null);
-            assertThat(actionCodes(id, salesActor)).as(stage).contains("RESERVE_STOCK");
+            assertThat(actionCodes(id, salesActor)).as(stage).doesNotContain("RESERVE_STOCK");
             assertThat(actionCodes(id, ceoActor)).as(stage).contains("RESERVE_STOCK");
             assertThat(actionCodes(id, importActor)).as(stage).doesNotContain("RESERVE_STOCK");
             id++;
@@ -2360,14 +2369,14 @@ class TicketServiceTest {
         assertThat(withoutItems).doesNotContain("SUBMIT");
     }
 
-    /** {@code RESERVE_STOCK} goes to the deal owner and the CEO only, never to import, account or the sales manager. */
+    /** {@code RESERVE_STOCK} goes to the CEO only, never to the deal owner, import, account or the sales manager. */
     @Test
-    void actions_offersReserveStock_toOwnerAndCeoOnly() {
+    void actions_offersReserveStock_toCeoOnly() {
         TicketItemDto item = deliveryItem(1L, "100.00", "0.00", "0.00");
         stubDeal(40L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(item),
             "DEPOSIT_PAID", null, DealStage.ORDER_RECEIVED, null);
 
-        assertThat(actionCodes(40L, salesActor)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(40L, salesActor)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(40L, ceoActor)).contains("RESERVE_STOCK");
         assertThat(actionCodes(40L, importActor)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(40L, accountActor)).doesNotContain("RESERVE_STOCK");
@@ -2387,7 +2396,7 @@ class TicketServiceTest {
      * Rule 4 — {@link TicketService#waiveDeposit} 409s past that point (see
      * {@code depositPolicy_cannotChangeAfterNoticeIssued_evenForTheOwner} in
      * {@code DepositPolicyAuthzIntegrationTest}), so advertising it here would offer a button that
-     * dies on click, the same discipline {@link #actions_offersReserveStock_toOwnerAndCeoOnly}
+     * dies on click, the same discipline {@link #actions_offersReserveStock_toCeoOnly}
      * documents for RESERVE_STOCK. See canSetDepositPolicy's own Javadoc for why the
      * advertisement and the write gate are deliberately NOT the same predicate.
      * {@code otherSales} is left out — a non-owning sales rep cannot even call {@code actions()} on

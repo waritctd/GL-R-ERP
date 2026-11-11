@@ -316,7 +316,7 @@ class DeliveryAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), "ทดสอบ"))),
-            owner);
+            ceoUser);
         return ticketId;
     }
 

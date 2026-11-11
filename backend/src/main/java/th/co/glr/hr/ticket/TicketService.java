@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -1474,6 +1475,9 @@ public class TicketService {
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
         requireRole(actor, STOCK_DECLARATION_ROLES);
+        if (!CEO_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
+        }
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         if (!canDeclareStockCoverage(s, actor)) {
@@ -1510,6 +1514,99 @@ public class TicketService {
         boolean leavesTheImportAxis = routeAllStockDealToDelivery(s, ticket.items(), mergedStock, actor);
         notifySalesManagerOfRepDeclaration(s, actor, mergedStock, ticket.items(), leavesTheImportAxis);
         return requireTicket(ticketId);
+    }
+
+    /** Current import/stock split of a deal's lines, for the stage-10 dialog. View access as {@link #requireViewAccess}. */
+    public ProcurementSourceDto getProcurementSource(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireViewAccess(ticketId, actor);
+        TicketSummaryDto s = ticket.summary();
+        boolean legacy = tickets.isLegacyStockSourceDeal(ticketId);
+        Instant decidedAt = tickets.findProcurementSourceDecidedAt(ticketId).orElse(null);
+        boolean editable = legacy && decidedAt == null && decisionStageOpen(s)
+            && STOCK_DECLARATION_ROLES.contains(actor.role()) && canDeclareStockCoverage(s, actor);
+        String number = tickets.findOrderConfirmedQuotationId(ticketId)
+            .flatMap(id -> tickets.quotationNumber(id)).orElse(null);
+        List<ProcurementSourceDto.Line> lines = ticket.items().stream()
+            .map(i -> new ProcurementSourceDto.Line(i.id(), isFromStock(i))).toList();
+        return new ProcurementSourceDto(legacy, editable, decidedAt, number, lines);
+    }
+
+    /**
+     * The rep's (or CEO's) one-time import/stock split. A legacy deal writes the declared coverage; a newer
+     * deal's split comes from its quotation, so this only records that it was seen (and refuses a change).
+     */
+    @Transactional
+    public TicketDto decideProcurementSource(long ticketId, ProcurementSourceRequest req, UserPrincipal actor) {
+        requireRole(actor, STOCK_DECLARATION_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        if (!canDeclareStockCoverage(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        requireActive(s);
+        if (!stockCoverageStageReached(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)");
+        }
+        if (s.fulfillmentStatus() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+        }
+        Map<Long, Boolean> wanted = new LinkedHashMap<>();
+        for (ProcurementSourceRequest.Line line : req.lines()) {
+            if (wanted.put(line.itemId(), line.fromStock()) != null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุที่มาสินค้าให้ครบทุกรายการ");
+            }
+        }
+        Set<Long> itemIds = ticket.items().stream().map(TicketItemDto::id).collect(Collectors.toSet());
+        if (!wanted.keySet().equals(itemIds)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุที่มาสินค้าให้ครบทุกรายการ");
+        }
+        // Cheap pre-check so a second decision never writes; the latch below stays as the race guard.
+        if (tickets.findProcurementSourceDecidedAt(ticketId).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+        }
+        if (!tickets.isLegacyStockSourceDeal(ticketId)) {
+            boolean changes = ticket.items().stream().anyMatch(i -> wanted.get(i.id()) != isFromStock(i));
+            if (changes) {
+                throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+            }
+        } else {
+            List<StockReservationRequest.Line> lines = ticket.items().stream()
+                .map(i -> new StockReservationRequest.Line(i.id(),
+                    wanted.get(i.id()) ? nullToZero(i.qty()) : BigDecimal.ZERO, null))
+                .toList();
+            tickets.reserveStock(ticketId, lines);
+            Map<Long, BigDecimal> merged = new LinkedHashMap<>();
+            lines.forEach(l -> merged.put(l.itemId(), l.qtyFromStock()));
+            boolean leavesTheImportAxis = routeAllStockDealToDelivery(s, ticket.items(), merged, actor);
+            if (SALES_ROLES.contains(actor.role()) && wanted.containsValue(true)) {
+                notifySalesManagerOfRepDeclaration(s, actor, merged, ticket.items(), leavesTheImportAxis);
+            }
+        }
+        if (!tickets.markProcurementSourceDecided(ticketId, actor.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+        }
+        long stock = wanted.values().stream().filter(Boolean::booleanValue).count();
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PROCUREMENT_SOURCE_DECIDED,
+            s.status(), s.status(), "เลือกที่มาสินค้า: นำเข้า " + (wanted.size() - stock) + " รายการ · จากสต็อก "
+                + stock + " รายการ");
+        return requireTicket(ticketId);
+    }
+
+    /** True while a legacy deal still waits for the rep's import/stock decision. */
+    public boolean procurementSourceAwaitingRep(long ticketId) {
+        return tickets.isLegacyStockSourceDeal(ticketId) && tickets.findProcurementSourceDecidedAt(ticketId).isEmpty()
+            && tickets.findById(ticketId).map(t -> decisionStageOpen(t.summary())).orElse(false);
+    }
+
+    /** ACTIVE, at/after ORDER_RECEIVED, and not yet on the import/stock axis: the window where a decision can still be made. */
+    private static boolean decisionStageOpen(TicketSummaryDto s) {
+        return DealLifecycle.ACTIVE.equals(s.lifecycle()) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null;
+    }
+
+    private static boolean isFromStock(TicketItemDto i) {
+        BigDecimal qty = nullToZero(i.qty());
+        return qty.signum() > 0 && nullToZero(i.qtyFromStock()).compareTo(qty) >= 0;
     }
 
     /**
@@ -3384,7 +3481,7 @@ public class TicketService {
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
         // reserveStock's own gate, advertised only before the deal is on the import axis (or already FROM_STOCK).
         // Lifecycle is already ACTIVE here: buildActions only calls this method for an ACTIVE deal.
-        if (canDeclareStockCoverage(s, actor) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null) {
+        if (CEO_ROLES.contains(actor.role()) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null) {
             actions.add(new TicketActionDto("RESERVE_STOCK", "operational", "ระบุสินค้าจากสต็อก"));
         }
     }
