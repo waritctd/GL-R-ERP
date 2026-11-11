@@ -80,7 +80,7 @@ import {
   searchCatalog,
 } from './ticketItemFields.jsx';
 import { manualMoveLabel } from './stageMeta.js';
-import { resolveWorkState, secondaryWorkActions } from './workState.js';
+import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Ticket-detail IA rebuild Phase 1 (see
@@ -1193,6 +1193,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   let advanceInHeader = false;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
+  // The เสนอราคา<party> line, minus a skip this viewer cannot take (set below).
+  let quoteBannerText = workState.bannerText;
   // "บันทึกผลประมูล" (deal-party-model.md): offered to the deal's editors (owner/keyer sales,
   // sales_manager, ceo — DealPartyService re-checks) on an ACTIVE deal with at least one contractor
   // still bidding. It outranks the quote-stage actions below, never the money/close steps.
@@ -1259,14 +1261,28 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       const openFor = (party) => (workStateAction.direct
         ? navigate(`/quotations/new?ticket=${ticketId}&recipient=${party}`)
         : runOnTab('items', () => pricingRequestPanelRef.current?.openCreate({ recipientType: party })));
-      stickyPrimaryAction = parties.length > 1 ? (
+      // An owner may buy directly: beside the contractor, "ไม่มีผู้รับเหมา" records the owner's answer (the
+      // request page, or the confirm dialog for a direct quotation) so ยืนยันคำสั่งซื้อ follows.
+      const skipBuyerItem = !workStateAction.skipBuyer ? null
+        : workStateAction.direct
+          ? isOwner && confirmDirectSecondary && {
+            key: 'none', label: 'ไม่มีผู้รับเหมา — ยืนยันคำสั่งซื้อ', testId: 'quote-party-none',
+            disabled: confirmOrderDirectMutation.isPending,
+            onSelect: () => setConfirm({ kind: 'confirmOrderDirect', quotationId: confirmDirectSecondary.quotationId, number: confirmDirectSecondary.quotationNumber }),
+          }
+          : outcomeSecondary && {
+            key: 'none', label: 'ไม่มีผู้รับเหมา — บันทึกผลใบเสนอราคา', testId: 'quote-party-none',
+            onSelect: () => navigate(`/pricing-requests/${outcomeSecondary.pricingRequestId}`),
+          };
+      if (workStateAction.skipBuyer && !skipBuyerItem) quoteBannerText = quoteNextPartyBanner({ ...workStateAction, skipBuyer: false });
+      stickyPrimaryAction = parties.length > 1 || skipBuyerItem ? (
         <OverflowMenu
-          items={parties.map((party, index) => ({
+          items={[...parties.map((party, index) => ({
             key: party,
             label: `${index > 0 ? 'ข้ามไป' : ''}เสนอราคา${PARTY_LABEL[party]}`,
             testId: `quote-party-${party}`,
             onSelect: () => openFor(party),
-          }))}
+          })), skipBuyerItem].filter(Boolean)}
           label="เสนอราคา"
           triggerLabel={<>เสนอราคา<Icon name="chevronDown" size={14} /></>}
           triggerIcon={null}
@@ -1427,8 +1443,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     : primaryAction
     ? nextAction
     : stickyPrimaryLabel
-      ? (workState.bannerText ?? null)
-      : (workState.bannerText || blocker);
+      ? (quoteBannerText ?? null)
+      : (quoteBannerText || blocker);
 
   // Overflow-menu / danger-zone availability mirrors DealStagePanel's canEditStage/canLost/canHold/
   // canDormant gates (same hasAction/stageDecisions reads on the same server payload) so the header

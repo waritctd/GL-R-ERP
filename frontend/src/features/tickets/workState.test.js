@@ -437,22 +437,46 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
   const quotation = (id, docStatus, number = 'QT-2026-0101-1') => ({ id, number, docStatus });
 
   it.each(['ISSUED', 'SUPERSEDED'])(
-    'a designer quotation that went out (%s): เสนอราคา, beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ"',
+    'a designer quotation that went out (%s): เสนอราคา, beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ/ผู้รับเหมา"',
     (docStatus) => {
       const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), [request(5, 'DESIGNER', 'QUOTATION_ISSUED')], {
         offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[5, quotation(9105, docStatus)]]),
       });
       expect(result.action).toMatchObject({ key: 'quote_next_party', parties: ['OWNER', 'BUYER'] });
-      expect(result.bannerText).toBe('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+      expect(result.bannerText).toBe('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ/ผู้รับเหมา');
     },
   );
 
-  it('one party left (the owner off the route): "ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ"', () => {
+  it('one party left (the owner off the route): "ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ/ผู้รับเหมา"', () => {
     const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), [request(5, 'DESIGNER', 'QUOTATION_ISSUED')], {
       offRouteParties: new Set(['OWNER']), quotationByRequest: new Map([[5, quotation(9105, 'ISSUED')]]),
     });
     expect(result.action).toMatchObject({ key: 'quote_next_party', parties: ['BUYER'] });
-    expect(result.bannerText).toBe('ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ');
+    expect(result.bannerText).toBe('ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ/ผู้รับเหมา');
+  });
+
+  it('a sent OWNER quotation: the owner may buy directly, so the line adds "หรือไม่มีผู้รับเหมา"', () => {
+    const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), [request(6, 'OWNER', 'QUOTATION_ISSUED')], {
+      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[6, quotation(9106, 'ISSUED')]]),
+    });
+    expect(result.action).toMatchObject({ key: 'quote_next_party', anchorParty: 'OWNER', parties: ['BUYER'] });
+    expect(result.bannerText).toBe('ใบเสนอราคาเจ้าของโครงการส่งแล้ว เลือกเสนอราคาผู้ซื้อ/ผู้รับเหมา หรือไม่มีผู้รับเหมา');
+  });
+
+  it('a sent OWNER request with no quotation row yet still offers "หรือไม่มีผู้รับเหมา" (its outcome is open)', () => {
+    const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), [request(6, 'OWNER', 'QUOTATION_ISSUED')], {
+      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map(),
+    });
+    expect(result.action).toMatchObject({ key: 'quote_next_party', anchorParty: 'OWNER', skipBuyer: true });
+    expect(result.bannerText).toBe('ใบเสนอราคาเจ้าของโครงการส่งแล้ว เลือกเสนอราคาผู้ซื้อ/ผู้รับเหมา หรือไม่มีผู้รับเหมา');
+  });
+
+  it('a SUPERSEDED owner quotation has no open outcome to record: no skip, plain "ถัดไป" line', () => {
+    const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), [request(6, 'OWNER', 'QUOTATION_ISSUED')], {
+      offRouteParties: ROUTE_KNOWN, quotationByRequest: new Map([[6, quotation(9106, 'SUPERSEDED')]]),
+    });
+    expect(result.action).toMatchObject({ key: 'quote_next_party', skipBuyer: false });
+    expect(result.bannerText).toBe('ใบเสนอราคาเจ้าของโครงการส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ/ผู้รับเหมา');
   });
 
   it.each([
@@ -460,13 +484,13 @@ describe('resolveWorkState — the route-choice line and the approval wait (owne
       'the designer rejected it, two parties left',
       [request(5, 'DESIGNER', 'QUOTATION_ISSUED')],
       [[5, quotation(9105, 'REJECTED')]],
-      'ใบเสนอราคาผู้ออกแบบไม่ผ่าน เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ',
+      'ใบเสนอราคาผู้ออกแบบไม่ผ่าน เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ/ผู้รับเหมา',
     ],
     [
       'the owner\'s expired after it superseded the designer\'s, one party left',
       [request(5, 'DESIGNER', 'QUOTATION_ISSUED'), request(6, 'OWNER', 'QUOTATION_ISSUED')],
       [[5, quotation(9105, 'SUPERSEDED')], [6, quotation(9106, 'EXPIRED', 'QT-2026-0101-2')]],
-      'ใบเสนอราคาเจ้าของโครงการไม่ผ่าน ถัดไปเสนอราคาผู้ซื้อ',
+      'ใบเสนอราคาเจ้าของโครงการไม่ผ่าน ถัดไปเสนอราคาผู้ซื้อ/ผู้รับเหมา',
     ],
   ])('a quotation the party said no to reads ไม่ผ่าน: %s', (_label, prs, entries, bannerText) => {
     const result = resolveWorkState(sales, baseDeal({ status: 'draft' }), prs, {

@@ -322,15 +322,15 @@ describe('nextSalesAction — live direct quotation buckets (slice 2, flow A)', 
       });
     });
 
-    it('OWNER -> เสนอราคาผู้ซื้อ with [BUYER]', () => {
+    it('OWNER -> เสนอราคาผู้ซื้อ/ผู้รับเหมา with [BUYER]', () => {
       expect(next({ recipientType: 'OWNER' })).toMatchObject({
-        key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'], anchorParty: 'OWNER', direct: true,
+        key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'], anchorParty: 'OWNER', direct: true,
       });
     });
 
     it('a skipped OWNER (off the route) leaves only BUYER, labelled by the first on-route party', () => {
       expect(next({ recipientType: 'DESIGNER' }, { offRouteParties: new Set(['OWNER']) }))
-        .toMatchObject({ key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'] });
+        .toMatchObject({ key: SALES_ACTION.QUOTE_NEXT_PARTY, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'] });
     });
 
     it('stays CONFIRM_ORDER_DIRECT for BUYER / UNSPECIFIED, when no later party is on the route, and when the route is unknown', () => {
@@ -585,10 +585,10 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
       .toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, pricingRequestId: 1 });
   });
 
-  it('the party furthest along the route anchors the choice: the owner\'s quotation went out after the designer\'s -> "เสนอราคาผู้ซื้อ", the buyer only', () => {
+  it('the party furthest along the route anchors the choice: the owner\'s quotation went out after the designer\'s -> "เสนอราคาผู้ซื้อ/ผู้รับเหมา", the buyer only', () => {
     const prs = [designerSent, request(2, 'OWNER', 'QUOTATION_ISSUED')];
     expect(nextSalesAction(deal(), prs, known([1, 'SUPERSEDED'], [2, 'ISSUED']))).toMatchObject({
-      key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'],
+      key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'],
     });
   });
 
@@ -602,11 +602,11 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(nextSalesAction(deal(), prs, known([1, 'ISSUED']))).toMatchObject({ key: QUOTE_NEXT, parties: ['OWNER', 'BUYER'] });
   });
 
-  it('a party off this deal\'s route is skipped: the owner off the route -> "เสนอราคาผู้ซื้อ", the buyer only', () => {
+  it('a party off this deal\'s route is skipped: the owner off the route -> "เสนอราคาผู้ซื้อ/ผู้รับเหมา", the buyer only', () => {
     const action = nextSalesAction(deal(), [designerSent], {
       offRouteParties: new Set(['OWNER']), quotationByRequest: quotations([1, 'ISSUED']),
     });
-    expect(action).toMatchObject({ key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ', parties: ['BUYER'] });
+    expect(action).toMatchObject({ key: QUOTE_NEXT, label: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา', parties: ['BUYER'] });
   });
 
   // A designer/owner outcome is never prompted, route known or not.
@@ -641,10 +641,10 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
   // The buyer said no, let it expire or asked for changes -> a fresh quotation from the same request
   // (DealQuotationService#createFromPricingRequest's re-quote).
   it.each(['REJECTED', 'EXPIRED', 'REVISION_REQUESTED'])(
-    'a buyer quotation %s -> "เสนอใบราคาผู้ซื้อ" writes a fresh one from the same request, not บันทึกผลใบเสนอราคา',
+    'a buyer quotation %s -> "เสนอใบราคาผู้ซื้อ/ผู้รับเหมา" writes a fresh one from the same request, not บันทึกผลใบเสนอราคา',
     (docStatus) => {
       expect(nextSalesAction(deal(), [request(1, 'BUYER', 'QUOTATION_ISSUED')], known([1, docStatus]))).toEqual({
-        key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ', pricingRequestId: 1,
+        key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ/ผู้รับเหมา', pricingRequestId: 1,
       });
     },
   );
@@ -670,7 +670,7 @@ describe('nextSalesAction — the route choice once a designer/owner quotation i
     expect(nextSalesAction(deal(), prs, known([1, 'DRAFT'], [3, 'ISSUED'])))
       .toMatchObject({ key: SALES_ACTION.RECORD_QUOTATION_OUTCOME, pricingRequestId: 3 });
     expect(nextSalesAction(deal(), prs, known([1, 'DRAFT'], [3, 'REJECTED']))).toEqual({
-      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ', pricingRequestId: 3,
+      key: SALES_ACTION.ISSUE_QUOTATION, label: 'เสนอใบราคาผู้ซื้อ/ผู้รับเหมา', pricingRequestId: 3,
     });
   });
 
