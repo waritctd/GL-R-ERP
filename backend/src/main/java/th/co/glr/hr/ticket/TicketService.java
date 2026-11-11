@@ -280,7 +280,7 @@ public class TicketService {
      * quotations in their return value. That is a narrower, accepted residual gap
      * (transient, tied to import legitimately performing its own action) rather than closed
      * by touching every one of those call sites.
-     * Letting the deal owner use {@link #reserveStock} does not enlarge
+     * Letting the deal owner use {@link #decideProcurementSource} does not enlarge
      * it: this projection only ever strips anything for {@link #IMPORT_ROLES}, and a sales
      * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
@@ -1445,13 +1445,12 @@ public class TicketService {
      * DELIVERY_SCHEDULING}, which in turn blocks {@link #issueImportRequest}), a declaration is
      * refused below {@link DealStage#ORDER_RECEIVED} — see {@link #stockCoverageStageReached}.
      *
-     * <p><strong>Authorisation: "Sales declares, CEO may correct/override."</strong> Import is NOT
-     * allowed (see {@link #STOCK_DECLARATION_ROLES}). Gating this to {@link #FULFILMENT_ROLES}
-     * would leave the one person whose money depends on the number unable to supply it: {@code
+     * <p><strong>Authorisation: CEO only.</strong> The owning rep declares through the stage-10
+     * "จัดซื้อสินค้า" dialog ({@link #decideProcurementSource}) or a direct quotation's จากสต็อก tick;
+     * this endpoint is the CEO's correct/override path. Import is NOT allowed (see {@link
+     * #STOCK_DECLARATION_ROLES}). The figure matters because {@code
      * CommissionRepository#sumActiveStockActualReceived} computes the rep's STOCK_BONUS input as
-     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}. The deal owner declares what
-     * they know about their own deal; ceo has the same ability and can correct a rep's figure
-     * afterwards.
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}.
      *
      * <p><strong>Only the gate differs.</strong> The commission formula is unaffected — the gate
      * decides who may supply its input, never how it is computed. Everything below the gate is
@@ -1460,15 +1459,15 @@ public class TicketService {
      * routing, the same {@link #requireActive} guard. One code path and one meaning for the
      * field: routing follows the facts, not the declarer.
      *
-     * <p>Two gates, in the order {@link #requireViewAccess} uses. The coarse {@link
-     * #STOCK_DECLARATION_ROLES} check runs BEFORE the ticket is loaded so that widening this
+     * <p>Gates, in the order {@link #requireViewAccess} uses. The coarse {@link
+     * #STOCK_DECLARATION_ROLES} and CEO checks run BEFORE the ticket is loaded so that widening this
      * endpoint cannot turn it into an existence probe — a role that can never declare (hr,
      * employee, account, sales_manager) still gets 403 without a row being read.
      * {@link #canDeclareStockCoverage} then applies the per-row rule.
      *
      * <p><strong>Supervision.</strong> A CEO correction is the only check on an uncorroborated
      * declaration, so someone must be told to look. A rep
-     * declaring on their own deal notifies ฝ่ายขาย's ผู้จัดการ — see {@link
+     * declaring on their own deal (now via {@link #decideProcurementSource}) notifies ฝ่ายขาย's ผู้จัดการ — see {@link
      * #notifySalesManagerOfRepDeclaration} for who that resolves to, why it is the manager rather
      * than Import, and why a ceo correction deliberately raises nothing.
      */
@@ -1610,7 +1609,7 @@ public class TicketService {
     }
 
     /**
-     * The order-confirmation twin of {@link #reserveStock}'s supervision: a rep's จากสต็อก tick on a direct quotation
+     * The order-confirmation twin of {@link #decideProcurementSource}'s supervision: a rep's จากสต็อก tick on a direct quotation
      * becomes {@code qty_from_stock} (the STOCK_BONUS input) when the order is confirmed, so the manager is told here
      * too. Call it AFTER the cover is written and the deal routed, so the all-stock claim reflects the real state. Says
      * nothing when no line is covered.
@@ -1636,7 +1635,7 @@ public class TicketService {
      *
      * <p><strong>Why the manager.</strong> Nothing corroborates the declaration and only the CEO
      * can correct it, so the manager must be told to look. The number is a
-     * <em>supervision</em> problem rather than a logistics one: {@link #reserveStock} lets the rep
+     * <em>supervision</em> problem rather than a logistics one: {@link #decideProcurementSource} lets the rep
      * supply {@code qty_from_stock}, which is the {@code stockShare} half of that same rep's own
      * STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived}), and nothing in this
      * codebase corroborates it against real stock. Someone stating an input to their own pay is
@@ -1661,7 +1660,7 @@ public class TicketService {
      * {@code CommissionRepository} is untouched.
      *
      * <p><strong>Rollback safety.</strong> This is a plain {@code INSERT} through {@link
-     * NotificationRepository}, running inside {@link #reserveStock}'s {@code @Transactional} on the
+     * NotificationRepository}, running inside the caller's {@code @Transactional} on the
      * same connection as the declaration itself, so a rollback takes the notification with it —
      * proven, not assumed, by {@code StockDeclarationNotificationIntegrationTest}. It deliberately
      * does NOT go through {@code NotificationService#notify}: that method's {@code
@@ -3580,10 +3579,9 @@ public class TicketService {
     }
 
     /**
-     * Who may declare stock coverage on THIS deal — the single source of truth for {@link
-     * #reserveStock}'s gate and for whether {@link #actions} advertises RESERVE_STOCK, so the two
-     * cannot drift into offering an action that immediately 403s (the same "never advertise a dead
-     * action" discipline).
+     * Who may declare stock coverage on THIS deal — the per-row gate of {@link #decideProcurementSource}
+     * and {@link #reserveStock} (the latter additionally CEO-only, which is also what {@link #actions}
+     * checks before advertising RESERVE_STOCK).
      *
      * <p><strong>S18 is Sales's, not Import's.</strong> Scheduling delivery / declaring stock
      * coverage (S18 จัดตารางส่งมอบ) belongs to the owning sales rep — or the CEO as
@@ -3644,7 +3642,7 @@ public class TicketService {
 
     /**
      * The stage floor a stock-coverage declaration must clear: {@link #reserveStock}'s 409 reads it.
-     * ({@code RESERVE_STOCK} is advertised in {@link #actions} to the owner and the CEO from ORDER_RECEIVED while fulfilment is null.)
+     * ({@code RESERVE_STOCK} is advertised in {@link #actions} to the CEO from ORDER_RECEIVED while fulfilment is null.)
      *
      * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
      * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes

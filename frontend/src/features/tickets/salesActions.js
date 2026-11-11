@@ -50,8 +50,9 @@ export const SALES_ACTION = {
   // The deal page's main button makes the ขั้น 10 deposit notice and the ขั้น 13 invoice.
   CREATE_DEPOSIT_NOTICE: 'create_deposit_notice',
   CREATE_REMAINING_INVOICE: 'create_remaining_invoice',
-  // ขั้น 11, deposit paid: the owning rep creates the import request (IR).
+  // Deposit paid, before the IR: the owning rep confirms each line's source (stock vs import).
   CHOOSE_PROCUREMENT_SOURCE: 'choose_procurement_source',
+  // ขั้น 11, deposit paid: the owning rep creates the import request (IR).
   CREATE_IMPORT_REQUEST: 'create_import_request',
   RECORD_QUOTATION_OUTCOME: 'record_quotation_outcome',
   RECORD_DELIVERY: 'record_delivery',
