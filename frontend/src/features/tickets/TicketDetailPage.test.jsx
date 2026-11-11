@@ -2452,6 +2452,9 @@ describe('TicketDetailPage', () => {
       const primary = await primaryWithAction('quote_next_party');
       expect(primary.getAttribute('aria-haspopup')).toBeNull();
       expect(primary.textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
+      // The banner must not advertise a skip this viewer cannot take.
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาเจ้าของโครงการอนุมัติแล้ว ถัดไปเสนอราคาผู้ซื้อ/ผู้รับเหมา');
+      expect(actionBarOf(primary).textContent).not.toContain('หรือไม่มีผู้รับเหมา');
     });
 
     it('a designer quotation the customer rejected: the line reads "ใบเสนอราคาผู้ออกแบบไม่ผ่าน…", and nothing offers to record its outcome', async () => {
