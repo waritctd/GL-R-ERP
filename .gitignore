@@ -65,6 +65,8 @@ ERP Documentation/00_ALL_DOCS_BUNDLE.md
 .vercel/
 .vercel
 .env*
+# The on-prem env TEMPLATE is committed; ops/onprem/.env itself stays ignored by the lines above.
+!ops/onprem/.env.example
 
 # UX audit evidence — kept local only (large binaries; enable LFS before committing)
 docs/ux-ui-audit/screenshots/
