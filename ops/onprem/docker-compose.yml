@@ -20,7 +20,9 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d hris"]
+      # Over TCP: on a fresh volume the entrypoint's temporary init server answers on the unix
+      # socket before it has created hris, so a socket check passes too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d hris"]
       interval: 10s
       timeout: 5s
       retries: 10
