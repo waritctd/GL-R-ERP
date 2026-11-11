@@ -2329,7 +2329,7 @@ describe('TicketDetailPage', () => {
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
     // The menu's trigger is the neutral เสนอราคา ▾, not the first party.
-    it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
+    it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
       deal();
       renderTicketDetailPage(salesOwnerUser);
 
@@ -2337,19 +2337,19 @@ describe('TicketDetailPage', () => {
       expect(primary.textContent).toBe('เสนอราคา');
       expect(primary.getAttribute('aria-label')).toBe('เสนอราคา');
       expect(primary.getAttribute('aria-haspopup')).toBe('menu');
-      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ/ผู้รับเหมา');
 
       fireEvent.click(primary);
       const items = await screen.findAllByRole('menuitem');
-      expect(items.map((item) => item.textContent)).toEqual(['เสนอราคาเจ้าของโครงการ', 'ข้ามไปเสนอราคาผู้ซื้อ']);
+      expect(items.map((item) => item.textContent)).toEqual(['เสนอราคาเจ้าของโครงการ', 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา']);
     });
 
-    it('picking ข้ามไปเสนอราคาผู้ซื้อ opens the pricing-request form with ผู้รับ = ผู้ซื้อ / ผู้รับเหมา and the buyer\'s name filled in', async () => {
+    it('picking ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา opens the pricing-request form with ผู้รับ = ผู้ซื้อ / ผู้รับเหมา and the buyer\'s name filled in', async () => {
       deal();
       renderTicketDetailPage(salesOwnerUser);
 
       fireEvent.click(await primaryWithAction('quote_next_party'));
-      fireEvent.click(await screen.findByRole('menuitem', { name: 'ข้ามไปเสนอราคาผู้ซื้อ' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา' }));
 
       const dialog = within(await screen.findByRole('dialog'));
       expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
@@ -2371,12 +2371,95 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/pricing-requests/501'));
     });
 
+    // Owner stage: the owner may buy directly, so the choice is the contractor OR no contractor at all.
+    it('a sent OWNER quotation: the primary เสนอราคา is a menu (ผู้ซื้อ, then ไม่มีผู้รับเหมา) and the skip opens the request page to record the outcome', async () => {
+      deal({ requests: [sentRequest({ recipientType: 'OWNER' })], quotations: [requestQuotation({ recipientType: 'OWNER' })], stage: 'QUOTE_OWNER' });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      const primary = await primaryWithAction('quote_next_party');
+      expect(primary.getAttribute('aria-haspopup')).toBe('menu');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาเจ้าของโครงการส่งแล้ว เลือกเสนอราคาผู้ซื้อ/ผู้รับเหมา หรือไม่มีผู้รับเหมา');
+
+      fireEvent.click(primary);
+      const items = await screen.findAllByRole('menuitem');
+      expect(items.map((item) => item.textContent)).toEqual(['เสนอราคาผู้ซื้อ/ผู้รับเหมา', 'ไม่มีผู้รับเหมา — บันทึกผลใบเสนอราคา']);
+      fireEvent.click(items[1]);
+      await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toBe('/pricing-requests/501'));
+    });
+
+    it('a sent OWNER quotation: picking เสนอราคาผู้ซื้อ/ผู้รับเหมา still opens the pricing-request form for the buyer', async () => {
+      deal({ requests: [sentRequest({ recipientType: 'OWNER' })], quotations: [requestQuotation({ recipientType: 'OWNER' })], stage: 'QUOTE_OWNER' });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      fireEvent.click(await primaryWithAction('quote_next_party'));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'เสนอราคาผู้ซื้อ/ผู้รับเหมา' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('an OWNER quotation the customer rejected: no skip — a plain เสนอราคาผู้ซื้อ/ผู้รับเหมา button, nothing to record', async () => {
+      deal({ requests: [sentRequest({ recipientType: 'OWNER' })], quotations: [requestQuotation({ recipientType: 'OWNER', docStatus: 'REJECTED' })], stage: 'QUOTE_OWNER' });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      const primary = await primaryWithAction('quote_next_party');
+      expect(primary.textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
+      expect(primary.getAttribute('aria-haspopup')).toBeNull();
+      expect(actionBarOf(primary).textContent).not.toContain('ไม่มีผู้รับเหมา');
+    });
+
+    it('a sent DESIGNER quotation is unchanged: no ไม่มีผู้รับเหมา item (the owner is still to be quoted)', async () => {
+      deal();
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      fireEvent.click(await primaryWithAction('quote_next_party'));
+      expect((await screen.findAllByRole('menuitem')).map((item) => item.textContent)).toEqual(['เสนอราคาเจ้าของโครงการ', 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา']);
+    });
+
+    it('an APPROVED OWNER direct quotation: the menu\'s ไม่มีผู้รับเหมา — ยืนยันคำสั่งซื้อ opens the confirm dialog and confirms that quotation', async () => {
+      deal({ requests: [], quotations: [{ id: 78, number: 'QT-2026-0078-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'OWNER', depositPercent: 0, salesRepId: 1 }] });
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', createdById: 1, status: 'draft', entryChannel: 'OWNER_DIRECT',
+            liveDirectQuotation: { id: 78, number: 'QT-2026-0078-1', docStatus: 'APPROVED', recipientType: 'OWNER' },
+          },
+        }),
+      });
+      api.dealQuotations.promoteToDeal.mockResolvedValue({ result: { ticketId: 701 } });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      const primary = await primaryWithAction('quote_next_party');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาเจ้าของโครงการอนุมัติแล้ว เลือกเสนอราคาผู้ซื้อ/ผู้รับเหมา หรือไม่มีผู้รับเหมา');
+      fireEvent.click(primary);
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'ไม่มีผู้รับเหมา — ยืนยันคำสั่งซื้อ' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.click(dialog.getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
+      await waitFor(() => expect(api.dealQuotations.promoteToDeal).toHaveBeenCalledWith(78));
+    });
+
+    it('an APPROVED OWNER direct quotation seen by a rep who does not own the deal: no ไม่มีผู้รับเหมา — ยืนยันคำสั่งซื้อ (only the owner may confirm)', async () => {
+      deal({ requests: [], quotations: [{ id: 78, number: 'QT-2026-0078-1', origin: 'DEAL_DIRECT', docStatus: 'APPROVED', recipientType: 'OWNER', depositPercent: 0, salesRepId: 1 }] });
+      api.tickets.get.mockResolvedValue({
+        ticket: buildTicket({
+          summary: {
+            lifecycle: 'ACTIVE', salesStage: 'QUOTE_OWNER', createdById: 2, status: 'draft', entryChannel: 'OWNER_DIRECT',
+            liveDirectQuotation: { id: 78, number: 'QT-2026-0078-1', docStatus: 'APPROVED', recipientType: 'OWNER' },
+          },
+        }),
+      });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+
+      const primary = await primaryWithAction('quote_next_party');
+      expect(primary.getAttribute('aria-haspopup')).toBeNull();
+      expect(primary.textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
+    });
+
     it('a designer quotation the customer rejected: the line reads "ใบเสนอราคาผู้ออกแบบไม่ผ่าน…", and nothing offers to record its outcome', async () => {
       deal({ quotations: [requestQuotation({ docStatus: 'REJECTED' })] });
       renderTicketDetailPage(salesOwnerUser);
 
       const primary = await primaryWithAction('quote_next_party');
-      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบไม่ผ่าน เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบไม่ผ่าน เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ/ผู้รับเหมา');
       const more = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
       if (more) fireEvent.click(more);
       expect(screen.queryByRole('menuitem', { name: 'บันทึกผลใบเสนอราคา' })).toBeNull();
@@ -2385,14 +2468,14 @@ describe('TicketDetailPage', () => {
 
     // H1: the route is the served catalog.routes for the deal's entryChannel — not stageDecisions,
     // which are still missing while GET /actions is in flight (or after it failed).
-    it('one party left: on a BUYER_DIRECT deal the served route drops the owner, even before /actions answers — a plain เสนอราคาผู้ซื้อ button that opens the form', async () => {
+    it('one party left: on a BUYER_DIRECT deal the served route drops the owner, even before /actions answers — a plain เสนอราคาผู้ซื้อ/ผู้รับเหมา button that opens the form', async () => {
       deal({ entryChannel: 'BUYER_DIRECT', actionsAnswered: false });
       renderTicketDetailPage(salesOwnerUser);
 
       const primary = await primaryWithAction('quote_next_party');
-      expect(primary.textContent).toBe('เสนอราคาผู้ซื้อ');
+      expect(primary.textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
       expect(primary.getAttribute('aria-haspopup')).toBeNull();
-      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบส่งแล้ว ถัดไปเสนอราคาผู้ซื้อ/ผู้รับเหมา');
 
       fireEvent.click(primary);
       const dialog = within(await screen.findByRole('dialog'));
@@ -2620,7 +2703,7 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/เลื่อนไป:/)).toBeNull();
     });
 
-    // After ข้ามไปเสนอราคาผู้ซื้อ the buyer's request is open in import, so ถัดไป names ITS stage
+    // After ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา the buyer's request is open in import, so ถัดไป names ITS stage
     // (ขั้น 8), not the next stage on the route (ขั้น 5). A dead request, or one not ahead, changes
     // nothing.
     it.each([
@@ -2708,7 +2791,7 @@ describe('TicketDetailPage', () => {
       const primary = await primaryWithAction('quote_next_party');
       expect(primary.getAttribute('aria-haspopup')).toBe('menu');
       // A direct quotation is approved, not "sent".
-      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบอนุมัติแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ');
+      expect(actionBarOf(primary).textContent).toContain('ใบเสนอราคาผู้ออกแบบอนุมัติแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ/ผู้รับเหมา');
       expect(actionBarOf(primary).textContent).not.toContain('ส่งแล้ว');
 
       fireEvent.click(primary);

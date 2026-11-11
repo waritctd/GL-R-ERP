@@ -212,7 +212,7 @@ describe('SalesOverview', () => {
       const badgeOf = (name) => worklist.getByText(name).closest('button').querySelector('.status-badge').textContent;
 
       expect(badgeOf('บริษัท เอ จำกัด')).toBe('สร้างคำขอราคา'); // no PR at all
-      expect(badgeOf('บริษัท บี จำกัด')).toBe('เสนอใบราคาผู้ซื้อ'); // APPROVED_FOR_QUOTATION, named for its recipient
+      expect(badgeOf('บริษัท บี จำกัด')).toBe('เสนอใบราคาผู้ซื้อ/ผู้รับเหมา'); // APPROVED_FOR_QUOTATION, named for its recipient
       expect(badgeOf('บริษัท ซี จำกัด')).toBe('ยืนยันคำสั่งซื้อ'); // QUOTATION_ACCEPTED, not confirmed
       expect(badgeOf('บริษัท ดี จำกัด')).toBe('ติดตามลูกค้า'); // follow-up overdue
       expect(badgeOf('บริษัท อี จำกัด')).toBe('ติดตามลูกค้า'); // follow-up due today
@@ -398,7 +398,7 @@ describe('SalesOverview — the next party after a designer quotation is sent fo
     }));
   });
 
-  it('designer-led -> เสนอราคาเจ้าของโครงการ; buyer-direct, whose route skips the owner -> เสนอราคาผู้ซื้อ; a designer quotation being redone -> เสนอใบราคาผู้ออกแบบ', async () => {
+  it('designer-led -> เสนอราคาเจ้าของโครงการ; buyer-direct, whose route skips the owner -> เสนอราคาผู้ซื้อ/ผู้รับเหมา; a designer quotation being redone -> เสนอใบราคาผู้ออกแบบ', async () => {
     renderOverview();
     const worklist = within(worklistSection());
     await worklist.findByText('บริษัท ผู้ออกแบบนำ จำกัด');
@@ -407,7 +407,7 @@ describe('SalesOverview — the next party after a designer quotation is sent fo
     // waitFor: the label follows the stage catalog, which may land after the deal list.
     await waitFor(() => {
       expect(badgeOf('บริษัท ผู้ออกแบบนำ จำกัด').textContent).toBe('เสนอราคาเจ้าของโครงการ');
-      expect(badgeOf('บริษัท ผู้ซื้อติดต่อตรง จำกัด').textContent).toBe('เสนอราคาผู้ซื้อ');
+      expect(badgeOf('บริษัท ผู้ซื้อติดต่อตรง จำกัด').textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
       expect(badgeOf('บริษัท ผู้ออกแบบขอแก้ จำกัด').textContent).toBe('เสนอใบราคาผู้ออกแบบ');
     });
   });
