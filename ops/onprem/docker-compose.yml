@@ -36,7 +36,15 @@ services:
     # names; a variable left out of .env stays unset, so application.yml's default applies.
     env_file: .env
     environment:
-      SPRING_PROFILES_ACTIVE: prod,demo
+      # env_file hands the backend every .env line; blank the ones it must not hold (its
+      # LibreOffice/Chromium children inherit its environment).
+      TUNNEL_TOKEN: ""
+      DB_PASSWORD: ""
+      # prod only: the demo profile adds nothing this stack needs (Flyway locations, uploads dir and
+      # payroll employer constants are all set explicitly) and would turn missing REQUIRED settings
+      # into a boot WARN instead of a failure. migration-demo stays in the locations because the
+      # existing schema history includes it.
+      SPRING_PROFILES_ACTIVE: prod
       SPRING_FLYWAY_LOCATIONS: classpath:db/migration,classpath:db/migration-demo
       APP_FLYWAY_ENABLED: "true"
       APP_FLYWAY_VALIDATE_ON_MIGRATE: "false"

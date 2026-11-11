@@ -14,7 +14,10 @@ directory name, `onprem`, so the volumes are `onprem_pgdata` and `onprem_uploads
 
 1. Clone the production branch: `git clone -b main <repo-url> ~/glr`.
 2. `cp .env.example .env && chmod 600 .env`, then fill it in. `GLR_IMAGE_TAG`, `DB_PASSWORD` and
-   `TUNNEL_TOKEN` are required; compose refuses to start without them.
+   `TUNNEL_TOKEN` are required; compose refuses to start without them. The backend runs the `prod`
+   profile only, which refuses to boot while `APP_MAIL_FROM`, `APP_MAIL_APP_BASE_URL` or
+   `APP_MAIL_RESEND_API_KEY` is blank (with `APP_MAIL_PROVIDER=resend`) or `APP_MAIL_OVERRIDE_TO`
+   is set. Fill the `APP_PAYROLL_*` employer constants too, or KBank/PND1/SSO exports are refused.
 3. Get the backend image (private registry):
    `docker login ghcr.io -u <github-user> --password-stdin` (paste a PAT with `read:packages`),
    then `docker compose pull backend`. Offline alternative: `docker load < glr-hr-backend.tar`.
@@ -30,7 +33,16 @@ directory name, `onprem`, so the volumes are `onprem_pgdata` and `onprem_uploads
 
 - Backend: set the new `GLR_IMAGE_TAG` in `.env`, `docker compose pull backend`,
   `docker compose up -d backend`. Flyway migrates on start. Take a backup first (`./backup.sh`).
-- Frontend: `cd ~/glr && git pull`, rebuild (step 4 above), `docker compose restart web`.
+- Frontend: build beside the served `dist` and swap, so users mid-session never hit an emptied
+  folder or a deleted chunk:
+  ```
+  cd ~/glr && git pull && cd frontend
+  docker run --rm -u $(id -u):$(id -g) -e HOME=/tmp -v "$PWD:/app" -w /app node:22 \
+    sh -c "npm ci && npm run build -- --outDir dist.new --emptyOutDir"
+  cp -n dist/assets/* dist.new/assets/ 2>/dev/null || true   # keep old chunks for open tabs
+  rm -rf dist.old && mv dist dist.old && mv dist.new dist
+  cd ~/glr/ops/onprem && docker compose restart web          # the bind mount follows the path only on start
+  ```
 
 ## Backups
 
@@ -64,7 +76,8 @@ Nothing alerts on a failed run: check `/home/glradmin/glr-backup.log` and the sh
 night's files after any change, and periodically.
 
 Each run writes `glr-YYYYmmdd-HHMMSS.dump` (verified with `pg_restore -l`) and
-`glr-uploads-YYYYmmdd-HHMMSS.tgz` (the `onprem_uploads` volume: attachments stored on disk). Only
+`glr-uploads-YYYYmmdd-HHMMSS.tgz` (`/app/uploads` read through the running backend container:
+attachments stored on disk, so the backend must be up). Only
 when both succeed does it prune `glr-*.dump` / `glr-uploads-*.tgz` older than `KEEP_DAYS` (30) and
 `.*.partial` leftovers older than a day. Its tests: `bash ops/onprem/test_backup.sh`.
 
@@ -95,7 +108,11 @@ Before the day:
 - **Vercel env**: check the Vercel project's environment variables for any `VITE_*` value the
   production build relied on; the on-prem build only sees what is in the repo.
 - **Old address**: plan a Cloudflare redirect rule `glr-portal.com/*` → `https://glr-hub.com/$1`
-  (301) for bookmarks and email links, to switch on at step 8.
+  for bookmarks and email links, to switch on at step 8. Use 302 until go-live is signed off
+  (browsers cache a 301 permanently, which would break a rollback), then change it to 301.
+- **Production tunnel**: create a SEPARATE Cloudflare tunnel for this stack and put its token in
+  `.env`. Never reuse the trial's token: two stacks on one token are replicas of one tunnel and
+  Cloudflare splits traffic between them.
 
 On the day:
 
@@ -105,20 +122,21 @@ On the day:
 3. **Final dump from Supabase** (on the VM). Use the session pooler URI from the Supabase dashboard;
    it is read without echo and passed by name, so it never appears in history or `ps`:
    ```
-   mkdir -p ~/cutover && cd ~/glr/ops/onprem
+   mkdir -m 700 ~/cutover && cd ~/glr/ops/onprem     # the dump is full PII: owner-only
    read -rs SUPABASE_URI && export SUPABASE_URI
-   docker run --rm -e SUPABASE_URI -v ~/cutover:/out postgres:17 sh -c \
+   docker run --rm --user "$(id -u):$(id -g)" -e SUPABASE_URI -v ~/cutover:/out postgres:17 sh -c \
      'pg_dump "$SUPABASE_URI" -Fc -n hr -n hr_restricted -n sales -n customers -n price_catalog -f /out/supabase-final.dump'
    docker run --rm -i -e SUPABASE_URI postgres:17 sh -c 'psql "$SUPABASE_URI" -At' < counts.sql > ~/cutover/counts-supabase.txt
    unset SUPABASE_URI
    ```
+   Delete `~/cutover` (`rm -rf ~/cutover`) after go-live is signed off.
 4. **Clean restore** (the on-prem DB must be empty, not migrated by an earlier start).
    > ⚠ `docker volume rm onprem_pgdata` DELETES THE ON-PREM DATABASE. Only before go-live; never
    > after users have written data here.
    ```
    docker compose down
    docker volume rm onprem_pgdata
-   docker compose up -d db
+   docker compose up -d --wait db
    docker compose exec -T db pg_restore -U postgres -d hris --no-owner --no-privileges \
      --exit-on-error --single-transaction < ~/cutover/supabase-final.dump
    ```
@@ -131,17 +149,21 @@ On the day:
    On any difference: stop (`docker compose down`), un-suspend Render, and investigate.
 6. **Start**: `docker compose up -d`; watch `docker compose logs -f backend` until Flyway and
    startup finish.
-7. **Smoke test** via `http://127.0.0.1:8081` (SSH tunnel from a laptop): log in, open a deal, a
-   quotation PDF (Thai fonts render), leave list, payroll page, upload and download an attachment.
-8. **Route traffic**: in Cloudflare Zero Trust, move the trial hostname to `trial.glr-hub.com`,
-   then give the production tunnel the public hostname `glr-hub.com` → `http://web:80`. Re-run the
-   smoke test on `https://glr-hub.com`, then enable the `glr-portal.com` redirect.
+7. **Smoke test over HTTPS** (the session cookie is `Secure`, so plain HTTP on 127.0.0.1 can drop
+   it): add a temporary public hostname `prod-check.glr-hub.com` → `http://web:80` on the
+   PRODUCTION tunnel and test there: log in, open a deal, a quotation PDF (Thai fonts render), leave
+   list, payroll page and an export, upload and download an attachment.
+8. **Route traffic**: stop the trial (`cd ~/trial && docker compose down`) or remove its
+   `glr-hub.com` route, and move the trial to `trial.glr-hub.com` if it is kept. Then give the
+   production tunnel the public hostname `glr-hub.com` → `http://web:80`, re-run the smoke test on
+   `https://glr-hub.com`, enable the `glr-portal.com` redirect (302), and remove
+   `prod-check.glr-hub.com`.
 9. **Attendance agent**: point its server URL at `https://glr-hub.com` (same
    `APP_ATTENDANCE_AGENT_TOKEN`) and confirm the next punches arrive. Also confirm whether the
    agent back-fills punches made during the outage; if not, tell HR which window is missing.
 10. **Announce**: new address `https://glr-hub.com`; everyone must log in again.
 
 Rollback (before on-prem has taken real writes): remove the `glr-hub.com` route or
-`docker compose stop backend tunnel`, un-suspend Render, and tell users to keep using the old
-address. After on-prem has taken writes, rolling back loses them unless they are dumped from here
+`docker compose stop backend tunnel`, disable the `glr-portal.com` redirect, un-suspend Render, and
+tell users to keep using the old address. After on-prem has taken writes, rolling back loses them unless they are dumped from here
 and restored to Supabase first; decide that explicitly, never by running both.

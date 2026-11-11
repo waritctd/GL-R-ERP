@@ -5,7 +5,7 @@
 #   KEEP_DAYS      prune backups older than this, only after a fully successful run (default 30)
 #   DUMP_CMD       writes a custom-format dump to stdout (overridable for tests)
 #   VERIFY_CMD     reads a dump on stdin, fails if it is unreadable (overridable for tests)
-#   UPLOADS_CMD    writes a .tgz of the uploads volume to stdout (overridable for tests)
+#   UPLOADS_CMD    writes a .tgz of /app/uploads (backend container) to stdout (overridable for tests)
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -15,7 +15,9 @@ REQUIRE_MOUNT="${REQUIRE_MOUNT:-1}"
 compose="docker compose --project-directory $here"
 DUMP_CMD="${DUMP_CMD:-$compose exec -T db sh -c 'pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc'}"
 VERIFY_CMD="${VERIFY_CMD:-$compose exec -T db pg_restore -l}"
-UPLOADS_CMD="${UPLOADS_CMD:-docker run --rm -v onprem_uploads:/u:ro alpine:3.20 tar czf - -C /u .}"
+# Through the running stack, not `docker run -v <volume>`: a mistyped volume name would be created
+# empty and "back up" nothing successfully.
+UPLOADS_CMD="${UPLOADS_CMD:-$compose exec -T backend tar czf - -C /app/uploads .}"
 
 die() { echo "backup: $*" >&2; exit 1; }
 

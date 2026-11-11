@@ -60,27 +60,31 @@ case_prune() {
 }
 check case_prune
 
-# Each failure leaves exactly the two seeded old files: nothing new written, nothing pruned.
+# Each failure leaves the two seeded old files (nothing pruned), no .partial and no new tgz.
+# $1 = expected glr-*.dump count: 1 (only the seeded one) when the DB step fails, 2 when only the
+# uploads step fails (the verified dump from the same run is kept).
 fails_cleanly() {
+  local want_dumps="$1"; shift
   local d; d="$(new_dir)"
   seed_old "$d"
   ! run_backup "$d" "$@" && [ -e "$d/glr-old.dump" ] && [ -e "$d/glr-uploads-old.tgz" ] \
-    && [ "$(count "$d" 'glr-uploads-*.tgz')" = 1 ] && [ -z "$(find "$d" -name '.*.partial')" ]
+    && [ "$(count "$d" 'glr-uploads-*.tgz')" = 1 ] && [ -z "$(find "$d" -name '.*.partial')" ] \
+    && [ "$(count "$d" 'glr-*.dump')" = "$want_dumps" ]
 }
 
 name="failing dump: non-zero, nothing written, nothing pruned"
-check fails_cleanly DUMP_CMD=false
+check fails_cleanly 1 DUMP_CMD=false
 name="empty dump: non-zero, nothing written, nothing pruned"
 # A permissive verify isolates the empty-dump guard from the verify step.
-check fails_cleanly DUMP_CMD=true VERIFY_CMD=cat
+check fails_cleanly 1 DUMP_CMD=true VERIFY_CMD=cat
 name="verify rejects a dump it does not receive on stdin"
-check fails_cleanly DUMP_CMD="echo other-bytes"
+check fails_cleanly 1 DUMP_CMD="echo other-bytes"
 name="failing verify: non-zero, nothing written, nothing pruned"
-check fails_cleanly VERIFY_CMD=false
-name="failing uploads archive: non-zero, no tgz, nothing pruned"
-check fails_cleanly UPLOADS_CMD=false
-name="unreadable uploads archive: non-zero, no tgz, nothing pruned"
-check fails_cleanly UPLOADS_CMD="echo not-a-tarball"
+check fails_cleanly 1 VERIFY_CMD=false
+name="failing uploads archive: non-zero, no tgz, nothing pruned (verified dump kept)"
+check fails_cleanly 2 UPLOADS_CMD=false
+name="unreadable uploads archive: non-zero, no tgz, nothing pruned (verified dump kept)"
+check fails_cleanly 2 UPLOADS_CMD="echo not-a-tarball"
 
 name="missing BACKUP_DIR: non-zero, dir not created"
 case_missing() { local d; d="$(new_dir)"; rmdir "$d"; ! run_backup "$d" && [ ! -e "$d" ]; }
