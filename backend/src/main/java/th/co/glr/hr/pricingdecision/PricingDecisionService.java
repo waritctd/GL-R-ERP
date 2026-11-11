@@ -167,6 +167,7 @@ public class PricingDecisionService {
         } else {
             LandedCostCalculator.CalculationResult calc = landedCost.calculate(summary);
             costingId = costings.createComputed(pricingRequestId, request.ceoNote(), actor.id(), calc.total());
+            clearStaleManualFreights(pricingRequestId, calc, actor);
             costings.replaceItemsPreservingOverrides(costingId, calc.items());
         }
         PricingCostingDto submittedCosting = requireCosting(costingId);
@@ -377,7 +378,7 @@ public class PricingDecisionService {
     public PricingDecisionDto recalculateCost(long decisionId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
         PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
-        PricingDecisionDto recomputed = recomputeCostingInPlace(decision);
+        PricingDecisionDto recomputed = recomputeCostingInPlace(decision, actor);
         addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
             "CEO คำนวณต้นทุนใหม่");
         return recomputed;
@@ -400,9 +401,10 @@ public class PricingDecisionService {
      */
     private PricingDecisionDto requireFixContext(long pricingRequestId, UserPrincipal actor, boolean allowNoDecision) {
         requireRole(actor, CEO_ROLES);
-        requirePricingRequest(pricingRequestId); // 404 before taking the lock
+        // Lock first (an advisory lock on the id needs no row, so a missing request is only noticed by the
+        // single read below, as a 404), then read the request ONCE, under the lock.
         decisions.lockPricingRequest(pricingRequestId);
-        PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId); // read once, under the lock
+        PricingRequestSummaryDto summary = requirePricingRequest(pricingRequestId);
         Optional<PricingDecisionDto> draft = decisions.findOpenDraft(pricingRequestId);
         if (draft.isPresent()) {
             return requireOpenDecisionForMutation(draft.get().id());
@@ -415,11 +417,47 @@ public class PricingDecisionService {
     }
 
     /**
+     * True when the freight table has no band for this line's group right now (so a CEO freight may apply). If
+     * the calculator itself cannot run yet (another 422, e.g. a still-broken quote) the answer is unknown and
+     * the save is allowed; a value that turns out unnecessary is cleared on the next recalculation.
+     */
+    private boolean freightGapFor(long pricingRequestId, long itemId) {
+        try {
+            return landedCost.calculate(requirePricingRequest(pricingRequestId)).freightGapItemIds().contains(itemId);
+        } catch (ApiException e) {
+            if (!HttpStatus.UNPROCESSABLE_CONTENT.equals(e.getStatus())) {
+                throw e;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * A CEO freight is dormant once the table has a band for its line's group: clear it (same transaction, with an
+     * event) so it can never apply silently later. Called right after every successful calculation.
+     */
+    private void clearStaleManualFreights(long pricingRequestId, LandedCostCalculator.CalculationResult calc, UserPrincipal actor) {
+        Map<Long, BigDecimal> manual = pricingRequests.findManualFreights(pricingRequestId);
+        if (manual.isEmpty()) {
+            return;
+        }
+        List<PricingRequestItemDto> items = pricingRequests.findItems(pricingRequestId);
+        for (int i = 0; i < items.size(); i++) {
+            long id = items.get(i).id();
+            if (manual.containsKey(id) && !calc.freightGapItemIds().contains(id)) {
+                pricingRequests.updateItemManualFreight(pricingRequestId, id, null);
+                addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_FREIGHT_SET,
+                    "ล้างค่าขนส่งที่กรอกเองของรายการที่ " + (i + 1) + " เพราะตารางมีอัตราแล้ว");
+            }
+        }
+    }
+
+    /**
      * Recalculates after a saved fix WITHOUT letting the calculator's 422 undo the save: the fix stands and
      * the remaining problem (e.g. a second broken quote) comes back as {@code costingError}. The calculator
      * runs before any costing write, so catching its 422 leaves nothing half-written.
      */
-    private CeoFixResult recomputeKeepingFix(PricingDecisionDto decision) {
+    private CeoFixResult recomputeKeepingFix(PricingDecisionDto decision, UserPrincipal actor) {
         if (decision == null) {
             return new CeoFixResult(null, null);
         }
@@ -434,6 +472,7 @@ public class PricingDecisionService {
             }
             return new CeoFixResult(requireDecision(decision.id()), e.getMessage());
         }
+        clearStaleManualFreights(decision.pricingRequestId(), calc, actor);
         return new CeoFixResult(recomputeCostingInPlace(decision, calc), null);
     }
 
@@ -480,7 +519,7 @@ public class PricingDecisionService {
             throw new ApiException(HttpStatus.CONFLICT, "มีใบเสนอราคาโรงงานอื่นในคำขอราคานี้ที่ใช้โรงงาน \"" + newName + "\" อยู่แล้ว");
         }
         int lines = pricingRequests.repointFactoryQuote(factoryQuoteId, request.factoryId(), oldName, newName);
-        CeoFixResult result = recomputeKeepingFix(decision);
+        CeoFixResult result = recomputeKeepingFix(decision, actor);
         addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_FACTORY_QUOTE_REPOINTED,
             "CEO เปลี่ยนโรงงานของใบเสนอราคาโรงงาน " + quote.quoteCode() + ": \"" + oldName + "\" → \"" + newName
                 + "\" (" + lines + " รายการ)");
@@ -498,9 +537,9 @@ public class PricingDecisionService {
         Line line = requireLine(pricingRequestId, itemId);
         PricingRequestItemDto item = line.item();
         String country = request.originCountry() == null ? "" : request.originCountry().trim();
-        if (!LandedCostCalculator.ISO_BY_SALES_ORIGIN.containsKey(country) && !LandedCostCalculator.DOMESTIC_ORIGIN.equals(country)) {
+        if (!LandedCostCalculator.ISO_BY_SALES_ORIGIN.containsKey(country)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
-                "ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน, ไทย-สต็อก");
+                "ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน (ไทย-สต็อกมาจากที่ฝ่ายขายกรอกเท่านั้น)");
         }
         if (item.stockSource() != null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีต้นทุนนำเข้า จึงตั้งประเทศต้นทางไม่ได้");
@@ -509,7 +548,7 @@ public class PricingDecisionService {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ใช้ประเทศต้นทางจาก Price Catalog จึงตั้งประเทศต้นทางเองไม่ได้");
         }
         pricingRequests.updateItemOriginCountry(pricingRequestId, itemId, country);
-        CeoFixResult result = recomputeKeepingFix(decision);
+        CeoFixResult result = recomputeKeepingFix(decision, actor);
         addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET,
             "CEO ตั้งประเทศต้นทางรายการที่ " + line.position() + ": "
                 + (blankToNullTrim(item.originCountry()) != null ? item.originCountry() : "ไม่ระบุ") + " → " + country);
@@ -533,9 +572,12 @@ public class PricingDecisionService {
         if (item.stockSource() != null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการจากสต็อกไม่มีค่าขนส่งนำเข้า");
         }
+        if (freight != null && !freightGapFor(pricingRequestId, itemId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "ตารางค่าขนส่งมีอัตราสำหรับรายการนี้แล้ว จึงกรอกค่าขนส่งเองไม่ได้");
+        }
         BigDecimal rounded = freight == null ? null : money4(freight);
         pricingRequests.updateItemManualFreight(pricingRequestId, itemId, rounded);
-        CeoFixResult result = recomputeKeepingFix(decision);
+        CeoFixResult result = recomputeKeepingFix(decision, actor);
         addEvent(pricingRequestId, actor, PricingRequestEventKind.PRICING_REQUEST_ITEM_FREIGHT_SET,
             rounded == null ? "CEO ล้างค่าขนส่งที่กรอกเองของรายการที่ " + line.position()
                 : "CEO กรอกค่าขนส่งรายการที่ " + line.position() + ": " + rounded.stripTrailingZeros().toPlainString() + " บาท (ไม่มีอัตราในตาราง)");
@@ -1292,7 +1334,7 @@ public class PricingDecisionService {
         }
         pricingRequests.updateItemProductTypeOverride(item.pricingRequestItemId(), productType);
 
-        PricingDecisionDto recomputed = recomputeCostingInPlace(decision);
+        PricingDecisionDto recomputed = recomputeCostingInPlace(decision, actor);
         addEvent(decision.pricingRequestId(), actor, PricingRequestEventKind.PRICING_DECISION_UPDATED,
             productType != null
                 ? "CEO ปรับประเภทสินค้ารายการที่ " + itemId + " เป็น " + productType + " (สำหรับคำนวณอากรขาเข้า)"
@@ -1307,9 +1349,11 @@ public class PricingDecisionService {
      * re-derives every decision item's frozen cost + proposed selling price from the (possibly
      * still-overridden) effective cost.
      */
-    private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision) {
-        return recomputeCostingInPlace(decision,
-            landedCost.calculate(requirePricingRequest(decision.pricingRequestId())));
+    private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision, UserPrincipal actor) {
+        LandedCostCalculator.CalculationResult calc =
+            landedCost.calculate(requirePricingRequest(decision.pricingRequestId()));
+        clearStaleManualFreights(decision.pricingRequestId(), calc, actor);
+        return recomputeCostingInPlace(decision, calc);
     }
 
     private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision, LandedCostCalculator.CalculationResult calc) {

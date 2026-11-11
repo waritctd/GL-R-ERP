@@ -1002,6 +1002,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), who));
             assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("1000")), who));
         }
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.renameItem(Long.MAX_VALUE, itemId, new RenameItemRequest("A", "B"), ceoActor));
         // Returned to import: no open DRAFT decision any more.
         decisionService.returnToImport(decision.id(), new ReturnPricingDecisionRequest("test"), ceoActor);
         assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(target), ceoActor));
@@ -1271,16 +1272,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
-    void ceoCanSetThaiStockOrigin_andTheLineRecalculatesAsDomestic() {
+    void ceoCannotSwitchALineToThaiStock_itComesOnlyFromSalesOwnEntry() {
         PricingDecisionDto decision = startedDecisionWithoutCatalogLink(null);
-        assertThat(costingItemFor(decision).uncostableCode()).isEqualTo("MISSING_ORIGIN");
-
-        PricingDecisionDto after = decisionService.setItemOriginCountry(decision.pricingRequestId(),
-            decision.items().get(0).pricingRequestItemId(), new OriginCountryRequest("ไทย-สต็อก"), ceoActor).decision();
-
-        PricingCostingItemDto item = costingItemFor(after);
-        assertThat(item.uncostableReason()).isNull();
-        assertThat(item.landedCostPerUnitThb()).isEqualByComparingTo("107.0000");
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(decision.pricingRequestId(),
+            decision.items().get(0).pricingRequestItemId(), new OriginCountryRequest("ไทย-สต็อก"), ceoActor));
     }
 
     // ── Freight-table gaps: the CEO enters F (THB, TOTAL for that line) instead of overriding the landed cost ──
@@ -1328,6 +1323,8 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         assertThat(item.totalLandedCostThb()).isEqualByComparingTo("38679.0200");
         assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).singleElement()
             .satisfies(m -> assertThat(m).contains("12000"));
+        assertThat(jdbc.queryForObject("SELECT calculation_snapshot::text FROM sales.pricing_costing_item WHERE pricing_costing_id = :id AND uncostable_reason IS NULL",
+            Map.of("id", after.pricingCostingId()), String.class)).contains("CEO_MANUAL");
 
         // Survives a recalculation (persisted on the item) ...
         PricingDecisionDto recalculated = decisionService.recalculateCost(after.id(), ceoActor);
@@ -1348,14 +1345,23 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
-    void freightFromTheTable_winsOverAStrayManualValue_andBadInputIsRefused() {
+    void freightFromTheTable_isNeverOverriddenByManualFreight_staleValueIsClearedOnRecalc_andBadInputIsRefused() {
         PricingDecisionDto decision = startedDecision(); // Italy 10 mm, band exists: F = 50,000 -> 500.0000/pc
         long prId = decision.pricingRequestId();
         long itemId = decision.items().get(0).pricingRequestItemId();
 
-        PricingDecisionDto after = decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("7")), ceoActor).decision();
+        // A manual freight on a line whose table lookup works is refused (clearing is always allowed).
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("7")), ceoActor));
+        assertThatCode(() -> decisionService.setItemFreight(prId, itemId, new FreightRequest(null), ceoActor)).doesNotThrowAnyException();
 
-        assertThat(costingItemFor(after).freightCostThb()).as("a manual F only fills a gap").isEqualByComparingTo("500.0000");
+        // A dormant value (e.g. the band appeared after it was entered) never applies and is cleared on recalculation.
+        jdbc.update("UPDATE sales.pricing_request_item SET manual_freight_thb = 7 WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+        PricingDecisionDto after = decisionService.recalculateCost(decision.id(), ceoActor);
+        assertThat(costingItemFor(after).freightCostThb()).as("the table wins").isEqualByComparingTo("500.0000");
+        assertThat(jdbc.queryForObject("SELECT manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), BigDecimal.class)).as("stale manual freight cleared").isNull();
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).anySatisfy(m -> assertThat(m).contains("เพราะตารางมีอัตราแล้ว"));
+
         assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(BigDecimal.ZERO), ceoActor));
         assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("-5")), ceoActor));
         jdbc.update("UPDATE sales.pricing_request_item SET stock_source = 'IN_THAILAND' WHERE pricing_request_item_id = :id", Map.of("id", itemId));
@@ -1419,6 +1425,37 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         PricingDecisionDto decision = startedDecision(); // catalogue-linked Italy line
         assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemOriginCountry(decision.pricingRequestId(),
             decision.items().get(0).pricingRequestItemId(), new OriginCountryRequest("จีน"), ceoActor));
+    }
+
+    /** Line A has no band even alone (100 mm); line B (10 mm) is priceable from the table but shares A's group. */
+    @Test
+    void freightGap_aPriceableLineNextToARealGapLine_keepsItsTableFreight_manualValueRefusedAndClearedOnRecalc() {
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("10"));
+        PricingDecisionDto decision = start(prId);
+        List<Long> ids = jdbc.queryForList("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id ORDER BY pricing_request_item_id",
+            Map.of("id", prId), Long.class);
+        long itemA = ids.get(0);
+        long itemB = ids.get(1);
+        List<PricingCostingItemDto> rows = costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        PricingCostingItemDto a = rows.stream().filter(r -> r.pricingRequestItemId() == itemA).findFirst().orElseThrow();
+        PricingCostingItemDto b = rows.stream().filter(r -> r.pricingRequestItemId() == itemB).findFirst().orElseThrow();
+        assertThat(a.uncostableCode()).isEqualTo("NO_FREIGHT_BAND");
+        assertThat(b.uncostableReason()).as("B is priced from the table").isNull();
+        BigDecimal tableFreightB = b.freightCostThb();
+
+        // B is not a true gap: the CEO may not type a freight for it ...
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemFreight(prId, itemB, new FreightRequest(new BigDecimal("999")), ceoActor));
+        // ... and a dormant value on it never replaces the table freight and is cleared on recalculation.
+        jdbc.update("UPDATE sales.pricing_request_item SET manual_freight_thb = 7 WHERE pricing_request_item_id = :id", Map.of("id", itemB));
+        PricingDecisionDto after = decisionService.recalculateCost(decision.id(), ceoActor);
+        PricingCostingItemDto bAfter = costingRepository.find(after.pricingCostingId()).orElseThrow().items().stream()
+            .filter(r -> r.pricingRequestItemId() == itemB).findFirst().orElseThrow();
+        assertThat(bAfter.freightCostThb()).isEqualByComparingTo(tableFreightB);
+        assertThat(jdbc.queryForObject("SELECT manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemB), BigDecimal.class)).isNull();
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).anySatisfy(m -> assertThat(m).contains("เพราะตารางมีอัตราแล้ว"));
+        // The real gap line A still accepts one.
+        assertThatCode(() -> decisionService.setItemFreight(prId, itemA, new FreightRequest(new BigDecimal("12000")), ceoActor)).doesNotThrowAnyException();
     }
 
     private long readyForReview(BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis,

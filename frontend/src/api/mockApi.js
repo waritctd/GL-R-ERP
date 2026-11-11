@@ -15955,7 +15955,7 @@ export const api = {
       const item = pr.items.find((i) => i.id === Number(itemId));
       if (!item) fail('ไม่พบรายการสินค้านี้ในคำขอราคานี้', 404);
       const country = String(payload?.originCountry ?? '').trim();
-      if (!['อิตาลี', 'สเปน', 'จีน', 'ไทย-สต็อก'].includes(country)) fail('ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน, ไทย-สต็อก', 400);
+      if (!['อิตาลี', 'สเปน', 'จีน'].includes(country)) fail('ประเทศต้นทางต้องเป็นหนึ่งใน: อิตาลี, สเปน, จีน', 400);
       if (item.stockSource) fail('รายการจากสต็อกไม่มีต้นทุนนำเข้า จึงตั้งประเทศต้นทางไม่ได้', 400);
       if (item.productId != null || item.catalogPriceId != null) fail('รายการนี้ใช้ประเทศต้นทางจาก Price Catalog จึงตั้งประเทศต้นทางเองไม่ได้', 409);
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET', pr.status, pr.status,

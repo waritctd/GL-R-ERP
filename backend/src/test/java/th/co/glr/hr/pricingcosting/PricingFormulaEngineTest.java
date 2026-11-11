@@ -100,6 +100,7 @@ class PricingFormulaEngineTest {
     @Test
     void freight_missingCountry_throwsRatherThanReturningZero() {
         assertThatThrownBy(() -> engine.selectFreightRate(italyFreightRates(), "VN", bd("10"), bd("50"), "รายการที่ 42"))
+            .isInstanceOf(FreightBandNotFoundException.class) // typed signal, still a plain 422 ApiException
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus().value()).isEqualTo(422);
                 assertThat(e.getMessage()).contains("รายการที่ 42");
@@ -122,6 +123,7 @@ class PricingFormulaEngineTest {
             new PricingFreightRateDto(2L, "IT", "อิตาลี", bd("8"), bd("12"), bd("50"), bd("150"), bd("999999"))
         );
         assertThatThrownBy(() -> engine.selectFreightRate(corrupted, "IT", bd("10"), bd("60"), "test"))
+            .isNotInstanceOf(FreightBandNotFoundException.class) // a corrupt table is not a "gap" the CEO can fill
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(422));
     }
 

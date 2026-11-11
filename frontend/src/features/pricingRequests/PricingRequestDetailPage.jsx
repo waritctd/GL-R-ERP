@@ -494,7 +494,7 @@ function CeoFactoryQuoteFix({ quote, factories, takenNames, value, onChangeValue
   );
 }
 
-const ORIGIN_FIX_OPTIONS = ORIGIN_COUNTRY_OPTIONS.filter((o) => ['อิตาลี', 'สเปน', 'จีน', 'ไทย-สต็อก'].includes(o.code));
+const ORIGIN_FIX_OPTIONS = ORIGIN_COUNTRY_OPTIONS.filter((o) => ['อิตาลี', 'สเปน', 'จีน'].includes(o.code));
 
 /** Inside a line's "คำนวณต้นทุนอัตโนมัติไม่ได้" box when it has no catalogue link to read an origin from. */
 function CeoOriginCountryFix({ itemId, defaultValue, onSave, saving }) {

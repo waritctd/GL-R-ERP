@@ -176,9 +176,10 @@ public class LandedCostCalculator {
         }
 
         List<PricingCostingWriteItem> writeItems = new ArrayList<>();
+        Set<Long> freightGapItemIds = new java.util.HashSet<>();
         Instant calculatedAt = Instant.now();
         for (List<ItemPhysicals> shipment : byShipment.values()) {
-            writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt));
+            writeItems.addAll(costShipment(shipment, formulaConfig, calculatedAt, freightGapItemIds));
         }
 
         // V156: an uncostable line contributes NOTHING to the costing total — it has no computed
@@ -191,7 +192,7 @@ public class LandedCostCalculator {
                 total = total.add(item.totalLandedCostThb());
             }
         }
-        return new CalculationResult(writeItems, money4(total));
+        return new CalculationResult(writeItems, money4(total), freightGapItemIds);
     }
 
     /**
@@ -236,7 +237,8 @@ public class LandedCostCalculator {
      * #resolveItemPhysicals} itself; it only groups/allocates/costs what it is handed.
      */
     private List<PricingCostingWriteItem> costShipment(List<ItemPhysicals> allItems,
-                                                        PricingFormulaConfigDto formulaConfig, Instant calculatedAt) {
+                                                        PricingFormulaConfigDto formulaConfig, Instant calculatedAt,
+                                                        Set<Long> freightGapItemIds) {
         FactoryQuoteDto quote = allItems.get(0).source().quote();
         String factoryName = quote.factoryName();
         // Existence check only: the freight lookup's origin country comes from the catalog link
@@ -278,6 +280,9 @@ public class LandedCostCalculator {
         // Freight table gaps are decided per GROUP (the unit the container rule actually looks up), so a group
         // whose lines each pass alone but have no band together is set aside too, instead of 422ing the request.
         FreightPlan plan = planFreight(items, formulaConfig, shipmentLabel);
+        // A "true gap": lines set aside, plus CEO-freight lines that are legitimately standing in for a missing band.
+        plan.gap().forEach(i -> freightGapItemIds.add(i.source().requestItem().id()));
+        plan.manual().forEach(i -> freightGapItemIds.add(i.source().requestItem().id()));
         List<PricingCostingWriteItem> gapWrites = new ArrayList<>();
         for (ItemPhysicals gap : plan.gap()) {
             gapWrites.add(uncostableWriteItem(gap, formulaConfig, freightGapReason(gap), "NO_FREIGHT_BAND"));
@@ -382,10 +387,7 @@ public class LandedCostCalculator {
             String snapshot = buildSnapshot(item, freightAmountForGroup, freightShareTotal,
                 freightGroupQtySqm, clearance.amountThb(), clearanceShareTotal, shipmentQtySqm,
                 dutyRate.dutyPct(), formulaConfig, calculatedAt, freight, clearance,
-                itemUnits, groupUnits, shipmentUnits);
-            if (manualF) {
-                snapshot = snapshot.replace("{\"formula\":\"V109\"", "{\"formula\":\"V109\",\"freightSource\":\"CEO_MANUAL\"");
-            }
+                itemUnits, groupUnits, shipmentUnits, manualF);
 
             ResolvedSource source = item.source();
             writeItems.add(new PricingCostingWriteItem(
@@ -456,7 +458,14 @@ public class LandedCostCalculator {
             }
             List<ItemPhysicals> rest = new ArrayList<>();
             for (ItemPhysicals item : group) {
-                if (item.manualFreightThb() != null) {
+                // A CEO value is legitimate only if THIS line is part of why the group has no band: it has no band
+                // even alone, or the rest of the group would be priceable without it. A priceable line that merely
+                // sits next to a real gap line keeps its table freight (its value is ignored, then cleared).
+                boolean legit = item.manualFreightThb() != null
+                    && (!freightFound(formulaConfig, entry.getKey(), List.of(item), shipmentLabel)
+                        || freightFound(formulaConfig, entry.getKey(),
+                            group.stream().filter(g -> g != item).toList(), shipmentLabel));
+                if (legit) {
                     manual.add(item);
                 } else {
                     rest.add(item);
@@ -466,8 +475,10 @@ public class LandedCostCalculator {
                 continue;
             }
             // Isolate the lines that have no band even alone, then retry the others together.
-            List<ItemPhysicals> alone = rest.stream().filter(ItemPhysicals::freightGap).toList();
-            List<ItemPhysicals> others = rest.stream().filter(i -> !i.freightGap()).toList();
+            // (the per-line check runs only now, after a group lookup has already failed)
+            List<ItemPhysicals> alone = rest.stream()
+                .filter(i -> !freightFound(formulaConfig, entry.getKey(), List.of(i), shipmentLabel)).toList();
+            List<ItemPhysicals> others = rest.stream().filter(i -> !alone.contains(i)).toList();
             if (others.isEmpty() || !freightFound(formulaConfig, entry.getKey(), others, shipmentLabel)) {
                 gap.addAll(rest);
             } else {
@@ -484,11 +495,8 @@ public class LandedCostCalculator {
         try {
             formulaEngine.containerFreight(formulaConfig.freightRates(), origin, lines, shipmentLabel + " ต้นทาง " + origin);
             return true;
-        } catch (ApiException e) {
-            if (e.getMessage() != null && e.getMessage().startsWith("ไม่พบอัตราค่าขนส่ง")) {
-                return false;
-            }
-            throw e;
+        } catch (FreightBandNotFoundException e) {
+            return false;
         }
     }
 
@@ -634,25 +642,11 @@ public class LandedCostCalculator {
         boolean domestic = originCountryCode == null && !hasCatalogCountry(source.requestItem(), catalogKeys)
             && source.requestItem().originCountry() != null
             && DOMESTIC_ORIGIN.equals(source.requestItem().originCountry().trim());
-        // Probe the freight table per line: no matching band (e.g. 12-16 mm > 800 sqm) sets just this line
-        // aside as uncostable - or lets the CEO's own freight stand in - instead of 422ing the whole request.
-        boolean freightGap = false;
-        if (!domestic && originCountryCode != null && thicknessMm != null && qtySqm != null) {
-            try {
-                formulaEngine.containerFreight(formulaConfig.freightRates(), originCountryCode,
-                    List.of(new PricingFormulaEngine.ContainerLine(thicknessMm, qtySqm)), itemLabel(source.requestItem()));
-            } catch (ApiException e) {
-                if (e.getMessage() == null || !e.getMessage().startsWith("ไม่พบอัตราค่าขนส่ง")) {
-                    throw e;
-                }
-                freightGap = true;
-            }
-        }
         // The CEO's freight is only USED where the table has no band for the line's group (planFreight).
         BigDecimal manualFreight = manualFreights.get(source.requestItem().id());
         String productType = resolveProductType(source.requestItem());
         return new ItemPhysicals(source, sqmPerPiece, qtyPieces, qtySqm, goodsCostPerPiece, goodsCostThb,
-            insuranceThb, thicknessMm, originCountryCode, productType, fx, freightGap, manualFreight, domestic);
+            insuranceThb, thicknessMm, originCountryCode, productType, fx, manualFreight, domestic);
     }
 
     /**
@@ -848,11 +842,13 @@ public class LandedCostCalculator {
                                  PricingFormulaConfigDto formulaConfig, Instant calculatedAt,
                                  PricingFormulaEngine.ContainerCharge freight,
                                  PricingFormulaEngine.ContainerCharge clearance,
-                                 BigDecimal itemUnits, BigDecimal groupUnits, BigDecimal shipmentUnits) {
+                                 BigDecimal itemUnits, BigDecimal groupUnits, BigDecimal shipmentUnits,
+                                 boolean manualFreight) {
         // Every value quoted as a JSON STRING (never a bare number), like requestedUnitBasis and
         // normalizedQuantityPieces, to avoid any BigDecimal-formatting edge case producing a token
         // the jsonb column would reject at insert time.
         return "{\"formula\":\"V109\""
+            + (manualFreight ? ",\"freightSource\":\"CEO_MANUAL\"" : "")
             + ",\"calculatedAt\":\"" + calculatedAt + "\""
             + ",\"formulaConfigId\":\"" + formulaConfig.formulaConfigId() + "\""
             + ",\"formulaConfigVersion\":\"" + formulaConfig.version() + "\""
@@ -1110,7 +1106,12 @@ public class LandedCostCalculator {
 
     public record ResolvedSource(PricingRequestItemDto requestItem, FactoryQuoteDto quote, FactoryQuoteItemDto quoteItem) {}
     public record FxSnapshot(BigDecimal rate, String source, LocalDate effectiveDate, Instant fetchedAt) {}
-    public record CalculationResult(List<PricingCostingWriteItem> items, BigDecimal total) {}
+    /** {@code freightGapItemIds}: request items whose freight group has NO band in the table (CEO freight may apply). */
+    public record CalculationResult(List<PricingCostingWriteItem> items, BigDecimal total, Set<Long> freightGapItemIds) {
+        public CalculationResult(List<PricingCostingWriteItem> items, BigDecimal total) {
+            this(items, total, Set.of());
+        }
+    }
 
     /** Per-item resolution pass, before shipment-level F/S lookup/allocation — see
      * {@link #costShipment}. {@code goodsCostPerPiece} and {@code goodsCostThb} (== C, the
@@ -1123,6 +1124,6 @@ public class LandedCostCalculator {
     private record ItemPhysicals(ResolvedSource source, BigDecimal sqmPerPiece, BigDecimal qtyPieces,
                                  BigDecimal qtySqm, BigDecimal goodsCostPerPiece, BigDecimal goodsCostThb,
                                  BigDecimal insuranceThb, BigDecimal thicknessMm, String originCountryCode,
-                                 String productType, FxSnapshot fx, boolean freightGap, BigDecimal manualFreightThb,
+                                 String productType, FxSnapshot fx, BigDecimal manualFreightThb,
                                  boolean domestic) {}
 }

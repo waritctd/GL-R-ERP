@@ -8261,11 +8261,13 @@ describe('CEO fixes during price review', () => {
     const box = await ceoTable().findByTestId('pcr-ceo-origin-fix-8001');
     const select = within(box).getByLabelText('ประเทศต้นทาง');
     expect(select.value).toBe('อิตาลี');
+    // The CEO may not switch a line to ไทย-สต็อก (it only comes from Sales' own entry).
+    expect(within(select).queryByRole('option', { name: 'ไทย-สต็อก' })).toBeNull();
     expect(box.textContent).toContain('ปรับต้นทุนเอง');
-    fireEvent.change(select, { target: { value: 'ไทย-สต็อก' } });
+    fireEvent.change(select, { target: { value: 'สเปน' } });
     fireEvent.click(within(box).getByRole('button', { name: 'บันทึกและคำนวณต้นทุนใหม่' }));
 
-    await waitFor(() => expect(api.pricingRequests.setItemOriginCountry).toHaveBeenCalledWith(501, 1, { originCountry: 'ไทย-สต็อก' }));
+    await waitFor(() => expect(api.pricingRequests.setItemOriginCountry).toHaveBeenCalledWith(501, 1, { originCountry: 'สเปน' }));
   });
 
   it('B: no country select when the line has a catalogue link', async () => {
