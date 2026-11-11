@@ -310,9 +310,10 @@ export function CostCalculation({ row, priceMode }) {
           {b.insFactor != null ? `C × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}` : 'C × อัตราค่าประกันภัย'}
           {b.insFactor != null ? <Sub>{`= ${n2(b.goods)} × ${nf(b.insFactor)} × ${nf(b.insRate)} × ${nf(b.insBuffer)}`}</Sub> : null}
         </CalcStep>
-        <CalcStep label="ค่าเรือ" symbol="F" amount={n2(b.freight.share)}>
-          {perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}
-          {freightContainers ? (
+        <CalcStep label={b.freight.manual ? 'ค่าเรือ (CEO กรอก)' : 'ค่าเรือ'} symbol="F" amount={n2(b.freight.share)}>
+          {b.freight.manual ? n2(b.freight.share) : <>{perContainer(b.freight)}{share(b.freight, b.freight.groupQtySqm) ?? n2(b.freight.share)}</>}
+          {b.freight.manual ? <Sub>กรอกโดย CEO เพราะไม่มีอัตราค่าขนส่งในตาราง</Sub> : null}
+          {!b.freight.manual && freightContainers ? (
             <Sub>{byUnits
               ? `${freightContainers} · ความจุ ${nf(b.containerSqm)} ตร.ม./ตู้ · เศษเกิน ${nf(b.freight.roundUpAboveSqm)} ตร.ม. ปัดเป็นตู้เต็ม · แบ่งตามพื้นที่ในตู้`
               : `${freightContainers} = ${n2(b.freight.groupQtySqm)} ตร.ม. ÷ ${nf(b.containerSqm ?? 800)} ตร.ม./ตู้ (เศษเกิน 75% ปัดเป็นตู้เต็ม) · แบ่งตาม ตร.ม. กับรายการอื่นในตู้เดียวกัน`}</Sub>
@@ -358,7 +359,10 @@ function Details({ row, model }) {
   return (
     <div data-testid={`pcr-ceo-details-${id}`} className="grid gap-4 p-3 md:grid-cols-3">
       <section aria-label="สินค้า" className="grid content-start gap-1 text-sm">
-        <h4 className="m-0 text-sm">สินค้า</h4>
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="m-0 text-sm">สินค้า</h4>
+          {row.renameNode}
+        </div>
         {row.productNode}
       </section>
       <section aria-label="ต้นทุน" className="grid content-start gap-1 text-sm">
@@ -382,6 +386,8 @@ function Details({ row, model }) {
           <div className="rounded-md border border-danger-border bg-danger-bg p-2 text-danger">
             <b className="block">คำนวณต้นทุนอัตโนมัติไม่ได้</b>
             <span>{row.costingItem.uncostableReason}</span>
+            {row.originFix}
+            {row.freightFix}
           </div>
         ) : null}
         {row.stale ? (

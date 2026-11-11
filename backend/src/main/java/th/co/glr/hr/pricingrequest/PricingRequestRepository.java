@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
+import th.co.glr.hr.factoryquote.FactoryQuoteDtos.FactoryQuoteDto;
 import th.co.glr.hr.factoryquote.FactoryQuoteRepository;
 import th.co.glr.hr.factoryquote.FactoryQuoteStatus;
 import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestAttachmentDto;
@@ -669,6 +670,115 @@ public class PricingRequestRepository {
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
+    }
+
+    /** Every master factory name, in factory_id order (read once per save and matched in memory). */
+    public List<String> findMasterFactoryNames() {
+        return jdbc.queryForList("SELECT name FROM price_catalog.factories ORDER BY factory_id", Map.of(), String.class);
+    }
+
+    public Optional<FactoryQuoteDto> findFactoryQuote(long factoryQuoteId) {
+        return factoryQuotes.find(factoryQuoteId);
+    }
+
+    /** CEO fix: a CURRENT, non-cancelled quote of this request already named {@code factoryName}. */
+    public boolean hasCurrentFactoryQuote(long pricingRequestId, String factoryName) {
+        return factoryQuotes.findCurrentByFactory(pricingRequestId, factoryName).isPresent();
+    }
+
+    /** CEO fix: another CURRENT, non-cancelled quote of this request already carries {@code factoryId}
+     * (V62's unique index would otherwise raise a raw 500). */
+    public boolean hasCurrentFactoryQuoteWithFactoryId(long pricingRequestId, long factoryId, long exceptQuoteId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.factory_quote
+                            WHERE pricing_request_id = :pr AND factory_id = :f AND factory_quote_id <> :q
+                              AND is_current = TRUE AND status <> 'CANCELLED')
+            """, Map.of("pr", pricingRequestId, "f", factoryId, "q", exceptQuoteId), Boolean.class));
+    }
+
+    /**
+     * CEO fix: re-points one factory quote (and every request line on it) from {@code oldName} to
+     * the master factory {@code factoryId}/{@code newName}. Returns the number of lines moved. The
+     * ticket line (what a later revision copies from) is only rewritten where it still carries the
+     * old typo, so a value Sales has since changed is never clobbered. Import's prices are untouched.
+     */
+    public int repointFactoryQuote(long factoryQuoteId, long factoryId, String oldName, String newName) {
+        MapSqlParameterSource p = new MapSqlParameterSource()
+            .addValue("quoteId", factoryQuoteId).addValue("factoryId", factoryId)
+            .addValue("old", oldName).addValue("new", newName);
+        jdbc.update("""
+            UPDATE sales.factory_quote
+               SET factory_id = :factoryId, factory_name_snapshot = :new, updated_at = now()
+             WHERE factory_quote_id = :quoteId
+            """, p);
+        jdbc.update("""
+            UPDATE sales.ticket_item ti SET factory = :new
+              FROM sales.pricing_request_item pri
+              JOIN sales.factory_quote_item fqi ON fqi.pricing_request_item_id = pri.pricing_request_item_id
+             WHERE fqi.factory_quote_id = :quoteId AND ti.item_id = pri.source_ticket_item_id AND ti.factory = :old
+            """, p);
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item pri
+               SET factory = :new, resolved_factory_id = :factoryId,
+                   resolved_factory_name = CASE WHEN pri.resolved_factory_name IS NULL THEN NULL ELSE :new END
+              FROM sales.factory_quote_item fqi
+             WHERE fqi.factory_quote_id = :quoteId AND fqi.pricing_request_item_id = pri.pricing_request_item_id
+            """, p);
+    }
+
+    /** CEO fix: sets the sales-vocabulary origin country on one line (clears the "อื่นๆ" free text). */
+    public int updateItemOriginCountry(long pricingRequestId, long itemId, String originCountry) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item SET origin_country = :o, origin_country_other = NULL
+             WHERE pricing_request_item_id = :id AND pricing_request_id = :prId
+            """, Map.of("o", originCountry, "id", itemId, "prId", pricingRequestId));
+    }
+
+    /** True when the line's catalogue link (snapshot id, else live product id) resolves to a factory with a country. */
+    public boolean catalogProvidesOriginCountry(long pricingRequestItemId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.pricing_request_item pri
+                             JOIN price_catalog.product_prices pp ON pp.price_id = COALESCE(pri.catalog_price_id, pri.product_id)
+                             JOIN price_catalog.factories f ON f.factory_id = pp.factory_id
+                            WHERE pri.pricing_request_item_id = :id AND f.country IS NOT NULL)
+            """, Map.of("id", pricingRequestItemId), Boolean.class));
+    }
+
+    /** CEO fix: sets (or clears, null) the manual freight THB on one line. */
+    public int updateItemManualFreight(long pricingRequestId, long itemId, java.math.BigDecimal freightThb) {
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item SET manual_freight_thb = :f
+             WHERE pricing_request_item_id = :id AND pricing_request_id = :prId
+            """, new MapSqlParameterSource().addValue("f", freightThb).addValue("id", itemId).addValue("prId", pricingRequestId));
+    }
+
+    public Map<Long, java.math.BigDecimal> findManualFreights(long pricingRequestId) {
+        Map<Long, java.math.BigDecimal> out = new java.util.HashMap<>();
+        jdbc.query("SELECT pricing_request_item_id, manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_id = :id AND manual_freight_thb IS NOT NULL",
+            Map.of("id", pricingRequestId), rs -> { out.put(rs.getLong(1), rs.getBigDecimal(2)); });
+        return out;
+    }
+
+    /** CEO fix: renames one line; the catalogue snapshot names (which the UI prefers) follow when present. */
+    public int renameItem(long pricingRequestId, long itemId, String brand, String model) {
+        // Source ticket line first (compared against the OLD pair): rewritten only while it still equals it.
+        // NULL-safe: ticket_item.brand is NOT NULL (blank for a cleared brand), the item's is NULL.
+        jdbc.update("""
+            UPDATE sales.ticket_item ti SET brand = COALESCE(:brand, ''), model = :model
+              FROM sales.pricing_request_item pri
+             WHERE pri.pricing_request_item_id = :id AND pri.pricing_request_id = :prId
+               AND ti.item_id = pri.source_ticket_item_id
+               AND COALESCE(ti.brand, '') = COALESCE(pri.brand, '') AND COALESCE(ti.model, '') = COALESCE(pri.model, '')
+            """, new MapSqlParameterSource().addValue("brand", brand).addValue("model", model)
+                .addValue("id", itemId).addValue("prId", pricingRequestId));
+        return jdbc.update("""
+            UPDATE sales.pricing_request_item
+               SET brand = :brand, model = :model,
+                   catalog_brand = CASE WHEN catalog_brand IS NULL THEN NULL ELSE :brand END,
+                   catalog_model = CASE WHEN catalog_model IS NULL THEN NULL ELSE :model END
+             WHERE pricing_request_item_id = :id AND pricing_request_id = :prId
+            """, new MapSqlParameterSource().addValue("brand", brand).addValue("model", model)
+                .addValue("id", itemId).addValue("prId", pricingRequestId));
     }
 
     /**

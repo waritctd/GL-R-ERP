@@ -1060,7 +1060,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             QuantityType.CONFIRMED, null, null, null,
             null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
             null, qty.intValueExact(), WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, "ไทย-สต็อก", 3, 7, null, null, null);
+            // "อื่นๆ" has no ISO code and no freight band, so the line stays uncostable
+            // ("ไทย-สต็อก" now costs domestically, owner ruling 2026-11-11).
+            false, "อื่นๆ", 3, 7, null, null, null, "โปรตุเกส", null);
     }
 
     /** A single PER_BOX item (not the Phase 1 new-form shape) driven to READY_FOR_CEO_REVIEW --

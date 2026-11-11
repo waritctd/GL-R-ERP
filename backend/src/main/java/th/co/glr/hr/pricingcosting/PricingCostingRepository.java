@@ -125,7 +125,7 @@ public class PricingCostingRepository {
                  calculation_config_id, calculation_config_version, goods_cost_thb, freight_cost_thb,
                  insurance_cost_thb, import_duty_thb, inland_transport_cost_thb, other_cost_thb,
                  cif_cost_thb, landed_cost_per_unit_thb, total_landed_cost_thb, clearance_fee_thb,
-                 product_type, calculated_at, calculation_snapshot, uncostable_reason)
+                 product_type, calculated_at, calculation_snapshot, uncostable_reason, uncostable_code)
             VALUES
                 (:costingId, :pricingRequestItemId, :factoryQuoteId, :factoryQuoteItemId,
                  :factoryQuoteRevisionNo, :factoryId, :factoryName, :supplierQuoteRef, :rawUnitPrice,
@@ -135,7 +135,7 @@ public class PricingCostingRepository {
                  :calculationConfigId, :calculationConfigVersion, :goodsCostThb, :freightCostThb,
                  :insuranceCostThb, :importDutyThb, :inlandTransportCostThb, :otherCostThb,
                  :cifCostThb, :landedCostPerUnitThb, :totalLandedCostThb, :clearanceFeeThb,
-                 :productType, now(), CAST(:calculationSnapshot AS jsonb), :uncostableReason)
+                 :productType, now(), CAST(:calculationSnapshot AS jsonb), :uncostableReason, :uncostableCode)
             ON CONFLICT (pricing_costing_id, pricing_request_item_id) DO UPDATE SET
                  factory_quote_id = EXCLUDED.factory_quote_id,
                  factory_quote_item_id = EXCLUDED.factory_quote_item_id,
@@ -173,7 +173,8 @@ public class PricingCostingRepository {
                  product_type = EXCLUDED.product_type,
                  calculated_at = EXCLUDED.calculated_at,
                  calculation_snapshot = EXCLUDED.calculation_snapshot,
-                 uncostable_reason = EXCLUDED.uncostable_reason
+                 uncostable_reason = EXCLUDED.uncostable_reason,
+                 uncostable_code = EXCLUDED.uncostable_code
             """, batch);
 
         // Drop any line the recalculation no longer produces (the pricing request lost an item
@@ -280,7 +281,7 @@ public class PricingCostingRepository {
                    landed_cost_per_unit_thb, total_landed_cost_thb, clearance_fee_thb, product_type,
                    calculated_at, calculation_snapshot::text AS calculation_snapshot,
                    manual_landed_cost_per_unit_thb, override_reason, overridden_by, overridden_at,
-                   override_fx_rate, override_calc_config_version, uncostable_reason
+                   override_fx_rate, override_calc_config_version, uncostable_reason, uncostable_code
               FROM sales.pricing_costing_item
              WHERE pricing_costing_id = :costingId
              ORDER BY pricing_costing_item_id
@@ -396,7 +397,8 @@ public class PricingCostingRepository {
             effectiveLandedCostPerUnitThb,
             effectiveTotalLandedCostThb,
             overrideStale,
-            rs.getString("uncostable_reason")
+            rs.getString("uncostable_reason"),
+            rs.getString("uncostable_code")
         );
     }
 
@@ -449,7 +451,8 @@ public class PricingCostingRepository {
         String calculationSnapshot,
         /** V156: non-null when the freight table could not be looked up; every shipment-derived
          *  cost above is then null. Enforced as an XOR by chk_pricing_costing_item_uncostable_xor. */
-        String uncostableReason
+        String uncostableReason,
+        String uncostableCode
     ) {
         MapSqlParameterSource toParams(long costingId) {
             return new MapSqlParameterSource()
@@ -490,7 +493,8 @@ public class PricingCostingRepository {
                 .addValue("clearanceFeeThb", clearanceFeeThb)
                 .addValue("productType", productType)
                 .addValue("calculationSnapshot", calculationSnapshot == null ? "{}" : calculationSnapshot)
-                .addValue("uncostableReason", uncostableReason);
+                .addValue("uncostableReason", uncostableReason)
+                .addValue("uncostableCode", uncostableCode);
         }
     }
 }

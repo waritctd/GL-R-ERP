@@ -83,7 +83,7 @@ import {
 import { useUnitBasisCatalog } from './unitBasisCatalog.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 import { cn } from '../../utils/cn.js';
-import { acceptOutcomeConfirmCopy, piecesPerSqmFromSqmPerPiece, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, outcomeReasonConfirmCopy, shownCustomerQuotation } from '../quotations/quotationMeta.js';
+import { acceptOutcomeConfirmCopy, piecesPerSqmFromSqmPerPiece, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, newestQuotationByRequest, outcomeKeyFor, ORIGIN_COUNTRY_OPTIONS, outcomeReasonConfirmCopy, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { SearchableCombobox } from '../../components/common/SearchableCombobox.jsx';
 // Reuses the catalog page's add-factory dialog instead of a second copy of the same fields and
 // validation (see ImportFactoryPicker below).
@@ -92,6 +92,10 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 function isImport(user) {
   return user?.role === 'import';
+}
+
+function isCeo(user) {
+  return user?.role === 'ceo';
 }
 
 function isSales(user) {
@@ -456,6 +460,110 @@ function ImportFactoryPicker({
         />
       ) : null}
     </>
+  );
+}
+
+// CEO price-review fixes (PCR-2026-0005). The server guards (CEO only, open DRAFT decision) are in
+// PricingDecisionService; these forms only render while the CEO can edit, and each save recalculates cost.
+const SAVED_NOT_COSTED = 'บันทึกแล้ว แต่ยังคำนวณต้นทุนไม่ได้';
+const FACTORY_TAKEN_HINT = 'มีใบเสนอราคาโรงงานในคำขอนี้แล้ว';
+
+/** A current factory quote whose saved name is not a master factory (so costing cannot find its config). */
+function CeoFactoryQuoteFix({ quote, factories, takenNames, value, onChangeValue, onSave, saving }) {
+  const options = factories.map((f) => {
+    const taken = takenNames.has(f.name);
+    return { code: String(f.factoryId), nameTh: f.name, disabled: taken, hint: taken ? FACTORY_TAKEN_HINT : undefined };
+  });
+  const id = `pcr-ceo-fix-factory-select-${quote.id}`;
+  return (
+    <div data-testid={`pcr-ceo-fix-factory-${quote.id}`} className="grid gap-2 rounded-md border border-info-border bg-info-bg p-3 text-sm">
+      <b>ชื่อโรงงานในใบเสนอราคาไม่ตรงกับรายชื่อโรงงาน</b>
+      <p className="m-0">
+        {`${quote.quoteCode ?? `ใบเสนอราคาโรงงาน #${quote.id}`} · ชื่อที่บันทึกไว้ "${quote.factoryName}" · ${quote.items?.length ?? 0} รายการ · ราคาของฝ่ายนำเข้าไม่เปลี่ยน`}
+      </p>
+      <SafeForm className="flex flex-wrap items-end gap-2" onSubmit={() => { if (value && !saving) onSave(); }}>
+        <div className="w-[min(320px,100%)]">
+          <FormField label="โรงงานที่ถูกต้อง" htmlFor={id}>
+            <SearchableCombobox id={id} label="โรงงาน" value={value} options={options} disabled={saving}
+              placeholder="พิมพ์ค้นหาโรงงาน…" onChange={onChangeValue} />
+          </FormField>
+        </div>
+        <Button type="submit" variant="primary" disabled={!value || saving}>บันทึกและคำนวณต้นทุนใหม่</Button>
+      </SafeForm>
+    </div>
+  );
+}
+
+const ORIGIN_FIX_OPTIONS = ORIGIN_COUNTRY_OPTIONS.filter((o) => ['อิตาลี', 'สเปน', 'จีน'].includes(o.code));
+
+/** Inside a line's "คำนวณต้นทุนอัตโนมัติไม่ได้" box when it has no catalogue link to read an origin from. */
+function CeoOriginCountryFix({ itemId, defaultValue, onSave, saving }) {
+  const [value, setValue] = useState(ORIGIN_FIX_OPTIONS.some((o) => o.code === defaultValue) ? defaultValue : '');
+  const id = `pcr-ceo-origin-select-${itemId}`;
+  return (
+    <div data-testid={`pcr-ceo-origin-fix-${itemId}`} className="mt-2 grid gap-2 text-text">
+      <label htmlFor={id} className="font-bold">ประเทศต้นทาง</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <select id={id} value={value} disabled={saving} onChange={(e) => setValue(e.target.value)}>
+          <option value="">เลือกประเทศ</option>
+          {ORIGIN_FIX_OPTIONS.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+        </select>
+        <Button type="button" variant="primary" size="sm" disabled={!value || saving} onClick={() => onSave(value)}>บันทึกและคำนวณต้นทุนใหม่</Button>
+      </div>
+      <p className="m-0 text-xs text-text-muted">หรือกด “ปรับต้นทุนเอง” ด้านบนเพื่อกรอกต้นทุนต่อแผ่นเองแทน</p>
+    </div>
+  );
+}
+
+function uncostableCodes(costingItem) {
+  return (costingItem?.uncostableCode ?? '').split(',');
+}
+
+/** For a line the freight table has no band for: the CEO types the freight (THB, total for the line). */
+function CeoFreightFix({ itemId, onSave, saving }) {
+  const [value, setValue] = useState('');
+  const amount = Number(value);
+  const id = `pcr-ceo-freight-input-${itemId}`;
+  return (
+    <div data-testid={`pcr-ceo-freight-fix-${itemId}`} className="mt-2 grid gap-2 text-text">
+      <label htmlFor={id} className="font-bold">ค่าขนส่งของรายการนี้ (บาท)</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <input id={id} type="number" min="0" step="any" inputMode="decimal" value={value} disabled={saving}
+          onChange={(e) => setValue(e.target.value)} />
+        <Button type="button" variant="primary" size="sm" disabled={!(amount > 0) || saving} onClick={() => onSave(amount)}>บันทึกและคำนวณต้นทุนใหม่</Button>
+      </div>
+      <p className="m-0 text-xs text-text-muted">ไม่มีอัตราค่าขนส่งในตารางสำหรับรายการนี้ — กรอกค่าขนส่งรวมของรายการนี้เท่านั้น (ไม่รวมรายการอื่นในตู้เดียวกัน) ระบบคำนวณส่วนที่เหลือตามสูตร</p>
+    </div>
+  );
+}
+
+/** "แก้ชื่อ" beside the item name in the CEO details: ยี่ห้อ + รุ่น, the pair shown and copied to the quotation. */
+function CeoRenameItem({ requestItem, saving, onSave }) {
+  const [open, setOpen] = useState(false);
+  const [brand, setBrand] = useState('');
+  const [model, setModel] = useState('');
+  if (!open) {
+    return (
+      <Button type="button" variant="secondary" size="sm" onClick={() => {
+        setBrand(requestItem.catalogBrand ?? requestItem.brand ?? '');
+        setModel(requestItem.catalogModel ?? requestItem.model ?? '');
+        setOpen(true);
+      }}>แก้ชื่อ</Button>
+    );
+  }
+  return (
+    <SafeForm className="mt-1 grid gap-2" onSubmit={() => onSave({ brand: brand.trim(), model: model.trim() }, () => setOpen(false))}>
+      <FormField label="ยี่ห้อ" htmlFor={`pcr-ceo-rename-brand-${requestItem.id}`}>
+        <input id={`pcr-ceo-rename-brand-${requestItem.id}`} value={brand} maxLength={255} onChange={(e) => setBrand(e.target.value)} />
+      </FormField>
+      <FormField label="รุ่น" htmlFor={`pcr-ceo-rename-model-${requestItem.id}`}>
+        <input id={`pcr-ceo-rename-model-${requestItem.id}`} value={model} maxLength={80} onChange={(e) => setModel(e.target.value)} />
+      </FormField>
+      <div className="flex gap-2">
+        <Button type="submit" variant="primary" size="sm" disabled={saving || (!brand.trim() && !model.trim())}>บันทึกชื่อ</Button>
+        <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={() => setOpen(false)}>ยกเลิก</Button>
+      </div>
+    </SafeForm>
   );
 }
 
@@ -837,7 +945,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const factoriesQuery = useQuery({
     queryKey: queryKeys.priceImportFactories(),
     queryFn: () => api.priceImport.factories(),
-    enabled: isImport(user),
+    // The CEO reads it too (GET /api/price-import/factories is ceo/import): the "fix this quote's factory" form.
+    enabled: isImport(user) || isCeo(user),
     staleTime: 60 * 1000,
   });
   const countriesQuery = useQuery({
@@ -1013,10 +1122,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   function useActionMutation(fn, successMessage, options = {}) {
     return useMutation({
       mutationFn: fn,
-      onSuccess: () => {
-        if (successMessage) showToast?.('success', successMessage);
+      onSuccess: (data) => {
+        const message = typeof successMessage === 'function' ? successMessage(data) : successMessage;
+        if (message) showToast?.('success', message);
         if (!options.skipInvalidate) invalidate();
-        options.onSuccess?.();
+        options.onSuccess?.(data);
       },
       onError: options.onError ?? ((error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ')),
     });
@@ -1381,6 +1491,38 @@ export function PricingRequestDetailPage({ user, showToast }) {
       onError: (error) => setCeoCostingError(error.message || 'คำนวณต้นทุนใหม่ไม่สำเร็จ'),
     },
   );
+  // CEO price-review fixes (server: PricingDecisionService). The first two recalculate cost, so their
+  // failure (LandedCostCalculator's multi-line 422) renders inline like recalculateDecisionCost's.
+  const [factoryFixDrafts, setFactoryFixDrafts] = useState({});
+  const repointFactoryQuote = useActionMutation(
+    ({ quoteId, factoryId }) => api.pricingRequests.repointFactoryQuote(pricingRequestId, quoteId, { factoryId }),
+    (data) => (data?.costingError ? SAVED_NOT_COSTED : 'เปลี่ยนโรงงานแล้ว'),
+    {
+      // The fix is saved even when the recalculation still fails on another problem: show that error.
+      onSuccess: (data) => setCeoCostingError(data?.costingError ?? null),
+      onError: (error) => setCeoCostingError(error.message || 'เปลี่ยนโรงงานไม่สำเร็จ'),
+    },
+  );
+  const setItemOriginCountry = useActionMutation(
+    ({ itemId, originCountry }) => api.pricingRequests.setItemOriginCountry(pricingRequestId, itemId, { originCountry }),
+    (data) => (data?.costingError ? SAVED_NOT_COSTED : 'บันทึกประเทศต้นทางแล้ว'),
+    {
+      onSuccess: (data) => setCeoCostingError(data?.costingError ?? null),
+      onError: (error) => setCeoCostingError(error.message || 'บันทึกประเทศต้นทางไม่สำเร็จ'),
+    },
+  );
+  const setItemFreight = useActionMutation(
+    ({ itemId, freightThb }) => api.pricingRequests.setItemFreight(pricingRequestId, itemId, { freightThb }),
+    (data) => (data?.costingError ? SAVED_NOT_COSTED : 'บันทึกค่าขนส่งแล้ว'),
+    {
+      onSuccess: (data) => setCeoCostingError(data?.costingError ?? null),
+      onError: (error) => setCeoCostingError(error.message || 'บันทึกค่าขนส่งไม่สำเร็จ'),
+    },
+  );
+  const renameItem = useActionMutation(
+    ({ itemId, brand, model }) => api.pricingRequests.renameItem(pricingRequestId, itemId, { brand, model }),
+    'แก้ชื่อรายการแล้ว',
+  );
   // A per-line manual cost override, BESIDE the computed figure (never destroyed). `reason` is
   // mandatory in both directions: the modal refuses to call this without one; the server's check is
   // the backstop.
@@ -1652,6 +1794,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
       detailQuery.isError, factoryQuery.isError, request, factoryQuotes],
   );
   const factoryGroups = useMemo(() => groupFactoryQuotesByFactory(factoryQuotes), [factoryQuotes]);
+  // CEO fix: current quotes whose saved name is not a master factory (costing looks the factory up by exact
+  // name). Only judged once the roster has loaded, so a slow fetch never flags a good quote.
+  const liveQuotes = factoryQuotes.filter((q) => q.current && !['CANCELLED', 'SUPERSEDED'].includes(q.status));
+  const currentQuoteNames = liveQuotes.map((q) => q.factoryName);
+  const masterFactoryNames = new Set((factoriesQuery.data ?? []).map((f) => f.name));
   // pricingRequestItemId -> that item's line on the CURRENT factory quote, once Import has priced it.
   const importQuoteItemByRequestItem = useMemo(() => {
     const byItem = new Map();
@@ -2006,8 +2153,34 @@ export function PricingRequestDetailPage({ user, showToast }) {
         <span>{`จำนวนที่กรอก: ${formatQuantityAsEntered(requestItem)} · เผื่อ (wastage): ${formatWastage(requestItem)}`}</span>
       </>
     ) : <span>{name}</span>;
+    // CEO fixes inside the details: set the origin country the freight lookup lacks (no catalogue link to
+    // read one from), and rename the line. Both only while the decision is editable.
+    const noCatalogLink = requestItem != null && requestItem.productId == null && requestItem.catalogPriceId == null;
+    const originFix = editable && requestItem && !isStockLine && noCatalogLink
+      && uncostableCodes(costingItem).includes('MISSING_ORIGIN') ? (
+        <CeoOriginCountryFix
+          itemId={item.id}
+          defaultValue={requestItem.originCountry}
+          saving={setItemOriginCountry.isPending}
+          onSave={(originCountry) => setItemOriginCountry.mutate({ itemId: requestItem.id, originCountry })}
+        />
+      ) : null;
+    const freightFix = editable && requestItem && !isStockLine && uncostableCodes(costingItem).includes('NO_FREIGHT_BAND') ? (
+      <CeoFreightFix
+        itemId={item.id}
+        saving={setItemFreight.isPending}
+        onSave={(freightThb) => setItemFreight.mutate({ itemId: requestItem.id, freightThb })}
+      />
+    ) : null;
+    const renameNode = editable && requestItem ? (
+      <CeoRenameItem
+        requestItem={requestItem}
+        saving={renameItem.isPending}
+        onSave={(names, onDone) => renameItem.mutate({ itemId: requestItem.id, ...names }, { onSuccess: onDone })}
+      />
+    ) : null;
     return {
-      item, costingItem, position, name, productNode, editable,
+      item, costingItem, position, name, productNode, originFix, freightFix, renameNode, editable,
       size: requestItem?.size,
       factoryLabel: isStockLine ? 'สต็อก' : (factoryName ?? item.factoryName),
       isStock: isStockLine,
@@ -2400,6 +2573,18 @@ export function PricingRequestDetailPage({ user, showToast }) {
             </Button>
           </div>
         ) : null}
+        {brokenFactoryQuotes.map((quote) => (
+          <CeoFactoryQuoteFix
+            key={quote.id}
+            quote={quote}
+            factories={factoriesQuery.data ?? []}
+            takenNames={new Set(currentQuoteNames.filter((n) => n !== quote.factoryName))}
+            value={factoryFixDrafts[quote.id] ?? ''}
+            onChangeValue={(code) => setFactoryFixDrafts((current) => ({ ...current, [quote.id]: code }))}
+            saving={repointFactoryQuote.isPending}
+            onSave={() => repointFactoryQuote.mutate({ quoteId: quote.id, factoryId: Number(factoryFixDrafts[quote.id]) })}
+          />
+        ))}
       </>
     );
   }
@@ -2476,6 +2661,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // (PricingDecisionItemDto#pricingRequestItemId); index order is only the fallback for a DTO that
   // omits it. A decision item that matches no request item row is rendered after the rows, never dropped.
   const ceoState = ceoWorkspace && currentDecision ? ceoDecisionState(currentDecision) : null;
+  // Also offered before any decision exists (READY_FOR_CEO_REVIEW): that is where a failed startReview leaves it.
+  const ceoCanFixQuotes = ceoState?.editable
+    || (ceoWorkspace && needsFreshReview && summary?.status === 'READY_FOR_CEO_REVIEW');
+  const brokenFactoryQuotes = ceoCanFixQuotes && factoriesQuery.data
+    ? liveQuotes.filter((q) => !masterFactoryNames.has(q.factoryName)) : [];
   const ceoPricingByRequestItem = new Map();
   const ceoUnmatchedDecisionItems = [];
   if (ceoState?.newForm) {

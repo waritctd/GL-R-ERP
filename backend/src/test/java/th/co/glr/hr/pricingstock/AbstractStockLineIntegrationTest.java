@@ -207,7 +207,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
      * real factory's country is NOT NULL (V151), so only a free-text (productId == null) line has none.
      */
     protected PricingRequestItemRequest importLineUncostable(String model, String factory, int pieces) {
-        return line(model, null, factory, pieces, "ไทย-สต็อก", 3, 7, null);
+        // "อื่นๆ" has no ISO code and no freight band, so it stays uncostable ("ไทย-สต็อก" now costs domestically).
+        return line(model, null, factory, pieces, "อื่นๆ", 3, 7, null);
     }
 
     /**
@@ -243,7 +244,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
             QuantityType.CONFIRMED, null, null, null,
             null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
             null, pieces, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
-            false, originCountry, leadMin, leadMax, null, null, null, null, stockSource);
+            false, originCountry, leadMin, leadMax, null, null, null,
+            "อื่นๆ".equals(originCountry) ? "โปรตุเกส" : null, stockSource);
     }
 
     // ── pricing-request builders ─────────────────────────────────────────────────────────────

@@ -1302,13 +1302,22 @@ public class PricingRequestService {
      */
     private List<PricingRequestItemRequest> resolveItems(List<PricingRequestItemRequest> items) {
         List<PricingRequestItemRequest> resolved = new ArrayList<>(items.size());
+        // The master factory names are read once per save, lazily (only if some line typed a factory).
+        List<List<String>> masterNames = new ArrayList<>(1);
+        java.util.function.Supplier<List<String>> masters = () -> {
+            if (masterNames.isEmpty()) {
+                masterNames.add(requests.findMasterFactoryNames());
+            }
+            return masterNames.get(0);
+        };
         for (int i = 0; i < items.size(); i++) {
-            resolved.add(resolveItem(i, items.get(i)));
+            resolved.add(resolveItem(i, items.get(i), masters));
         }
         return resolved;
     }
 
-    private PricingRequestItemRequest resolveItem(int rowNumber, PricingRequestItemRequest rawItem) {
+    private PricingRequestItemRequest resolveItem(int rowNumber, PricingRequestItemRequest rawItem,
+                                                  java.util.function.Supplier<List<String>> masterFactoryNames) {
         // Stock lines (V194): an unknown source is a caller-fixable 400, not a CHECK-constraint 500.
         // A blank source normalizes to null (สั่งนำเข้า).
         String stockSource = hasText(rawItem.stockSource()) ? rawItem.stockSource().trim() : null;
@@ -1365,9 +1374,14 @@ public class PricingRequestService {
         if (stockLine) {
             originCountryOther = null;
         }
+        // The deal form's one brand+factory field can hold free text ("Padana marmoker"); only a
+        // master factory name may be stored, else costing 422s. Unknown -> blank, Import picks it.
+        String typedFactory = hasText(item.factory()) ? item.factory().trim() : null;
+        String factory = typedFactory == null ? null : masterFactoryNames.get().stream()
+            .filter(name -> name.trim().equalsIgnoreCase(typedFactory)).findFirst().orElse(null);
         return new PricingRequestItemRequest(
             item.sourceTicketItemId(), item.productId(), item.variantId(), item.brand(), item.model(),
-            item.productDescription(), item.color(), item.texture(), item.size(), item.factory(),
+            item.productDescription(), item.color(), item.texture(), item.size(), factory,
             requestedQty, requestedQtySqm, PIECE_UNIT_LABEL, UnitBasis.PER_PIECE, item.quantityType(),
             item.targetDeliveryDate(), item.deliveryLocation(), item.specialRequirement(),
             item.productCode(), item.thicknessMm(), item.sqmPerPiece(), quantityMode, item.areaSqm(),
