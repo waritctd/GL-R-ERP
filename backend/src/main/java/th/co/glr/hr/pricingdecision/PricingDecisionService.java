@@ -586,11 +586,13 @@ public class PricingDecisionService {
                 throw e;
             }
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยังคำนวณต้นทุนไม่ได้ (" + e.getMessage() + ") — แก้ปัญหาอื่นก่อนแล้วค่อยกรอกค่าขนส่ง");
+                "ยังคำนวณต้นทุนไม่ได้ — แก้ปัญหาด้านล่างก่อนแล้วค่อยกรอกค่าขนส่ง\n" + e.getMessage());
         }
         if (!calc.freightGapItemIds().contains(itemId)) {
             pricingRequests.updateItemManualFreight(pricingRequestId, itemId, previous);
-            throw new ApiException(HttpStatus.CONFLICT, "ตารางค่าขนส่งมีอัตราสำหรับรายการนี้แล้ว จึงกรอกค่าขนส่งเองไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, calc.tableFreightItemIds().contains(itemId)
+                ? "ตารางค่าขนส่งมีอัตราสำหรับรายการนี้แล้ว จึงกรอกค่าขนส่งเองไม่ได้"
+                : "รายการนี้ไม่ได้ใช้ตารางค่าขนส่ง (เป็นไทย-สต็อก หรือยังขาดข้อมูลอื่นที่ใช้คำนวณ) จึงกรอกค่าขนส่งเองไม่ได้");
         }
         clearStaleManualFreights(pricingRequestId, calc, actor);
         CeoFixResult result = new CeoFixResult(decision == null ? null : recomputeCostingInPlace(decision, calc), null);

@@ -449,7 +449,7 @@ public class LandedCostCalculator {
     private record FreightPlan(java.util.Set<ItemPhysicals> manual, java.util.Set<ItemPhysicals> gap) {}
 
     private FreightPlan planFreight(List<ItemPhysicals> items, PricingFormulaConfigDto formulaConfig, String shipmentLabel) {
-        // Each (origin, set of lines) is looked up at most once per plan (lines compared by identity).
+        // Each (origin, set of lines) is looked up at most once per plan, keyed by the lines' request item ids.
         Map<List<Object>, Boolean> memo = new java.util.HashMap<>();
         java.util.function.BiPredicate<String, List<ItemPhysicals>> found = (origin, lines) -> {
             List<Object> key = new ArrayList<>();

@@ -1241,6 +1241,14 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         assertThat(item.totalLandedCostThb()).isEqualByComparingTo("10700.0000");
         assertThat(jdbc.queryForObject("SELECT calculation_snapshot::text FROM sales.pricing_costing_item WHERE pricing_costing_id = :id",
             Map.of("id", decision.pricingCostingId()), String.class)).contains("DOMESTIC");
+
+        // The table never prices a domestic line, so a CEO freight is refused WITHOUT claiming the table has a rate.
+        assertThatThrownBy(() -> decisionService.setItemFreight(decision.pricingRequestId(), item.pricingRequestItemId(),
+                new FreightRequest(new BigDecimal("1000")), ceoActor))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).contains("ไม่ได้ใช้ตารางค่าขนส่ง").doesNotContain("ตารางค่าขนส่งมีอัตรา");
+            });
     }
 
     @Test
