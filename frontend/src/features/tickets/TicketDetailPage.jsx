@@ -85,8 +85,6 @@ import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-const stageIndexOf = (code) => DEAL_STAGE_CATALOG.stages.findIndex((st) => st.code === code);
-
 // Ticket-detail IA rebuild Phase 1 (see
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
 // "Action bar (sticky)"): where the sticky primary button sends the viewer
@@ -527,7 +525,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // Mirrors TicketService.decisionStageOpen: ACTIVE, at/after ORDER_RECEIVED, no fulfilment status yet.
     enabled: readsDocs && ticket?.summary?.fulfillmentStatus == null
       && (ticket?.summary?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
-      && stageIndexOf(ticket?.summary?.salesStage) >= stageIndexOf('ORDER_RECEIVED'),
+      && stageIndexIn(DEAL_STAGE_CATALOG, ticket?.summary?.salesStage) >= stageIndexIn(DEAL_STAGE_CATALOG, 'ORDER_RECEIVED'),
   });
   const procurementSource = procurementSourceQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
