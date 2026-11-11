@@ -102,6 +102,8 @@ export function landedCostBreakdown({ costingItem, formulaConfig, marginFraction
       remainderSqm: num(snap.freightRemainderSqm),
       groupUnits: num(snap.freightGroupContainerUnits),
       roundUpAboveSqm: num(snap.freightRoundUpAboveSqm),
+      // The CEO typed this freight himself (the table had no band for the line).
+      manual: snap.freightSource === 'CEO_MANUAL',
     },
     clearance: {
       share: clearance,

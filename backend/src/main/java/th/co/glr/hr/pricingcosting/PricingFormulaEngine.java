@@ -121,7 +121,7 @@ public class PricingFormulaEngine {
             match = rate;
         }
         if (match == null) {
-            throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
+            throw new FreightBandNotFoundException(
                 "ไม่พบอัตราค่าขนส่งสำหรับ " + itemLabel + " (ต้นทาง=" + originCountryCode
                     + " ความหนา=" + thicknessMm + " มม. จำนวน=" + qtySqm + " ตร.ม.) — กรุณาตั้งค่าสูตรคำนวณราคาให้ครอบคลุม");
         }

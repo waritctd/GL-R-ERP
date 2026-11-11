@@ -12,11 +12,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.pricingdecision.PricingDecisionDtos.CeoFixResult;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionSalesViewDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.FreightRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.OriginCountryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RenameItemRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RepointFactoryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
@@ -96,6 +101,51 @@ public class PricingDecisionController {
     ) {
         UserPrincipal user = sessions.requireUser(session);
         return Map.of("decision", decisions.overrideItemProductType(decisionId, itemId, request, user));
+    }
+
+    // CEO price-review fixes, keyed by the pricing request (the CEO edits the request's data, not the decision).
+    @PutMapping("/pricing-requests/{id}/factory-quotes/{factoryQuoteId}/factory")
+    CeoFixResult repointFactoryQuote(
+        @PathVariable long id,
+        @PathVariable long factoryQuoteId,
+        @RequestBody RepointFactoryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return decisions.repointFactoryQuote(id, factoryQuoteId, request, user);
+    }
+
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/origin-country")
+    CeoFixResult setItemOriginCountry(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @RequestBody OriginCountryRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return decisions.setItemOriginCountry(id, itemId, request, user);
+    }
+
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/freight")
+    CeoFixResult setItemFreight(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @RequestBody FreightRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return decisions.setItemFreight(id, itemId, request, user);
+    }
+
+    @PutMapping("/pricing-requests/{id}/items/{itemId}/name")
+    CeoFixResult renameItem(
+        @PathVariable long id,
+        @PathVariable long itemId,
+        @RequestBody RenameItemRequest request,
+        HttpSession session
+    ) {
+        UserPrincipal user = sessions.requireUser(session);
+        return decisions.renameItem(id, itemId, request, user);
     }
 
     @PostMapping("/pricing-decisions/{decisionId}/approve")

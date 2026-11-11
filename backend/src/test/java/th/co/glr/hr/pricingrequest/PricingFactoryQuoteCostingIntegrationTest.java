@@ -1634,11 +1634,12 @@ class PricingFactoryQuoteCostingIntegrationTest extends AbstractPostgresIntegrat
 
     /** A blank recipient must be allowed — factory RFQ email is manual-only, and the human sending
      * it from their own mail client may have no on-file factory contact to prefill. "Free Text
-     * Factory" (unlike "Factory A"/"B"/"C") is never seeded into price_catalog.factories by this
-     * class's fixture, so factoryConfigs.findByName resolves to nothing and emailTo really is
-     * null at draft time — not merely unasserted. */
+     * Factory" is seeded here as a master row with NO email (a typed name must match a master row
+     * or it is saved blank), so emailTo really is null at draft time — not merely unasserted. */
     @Test
     void markContacted_withANullRecipient_succeedsAndRequestsTheQuote() {
+        insertCatalogProduct("Free Text Factory", "IT", "TEST-FT-001",
+            new BigDecimal("100.00"), "THB", "per_piece");
         long pricingRequestId = pricingRequestService.createDraft(ticketId,
             new PricingRequestRequests.CreatePricingRequestRequest(
                 PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),

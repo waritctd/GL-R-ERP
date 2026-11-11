@@ -1166,6 +1166,16 @@ export const api = {
     recalculatePricingDecisionCost: (id) => apiRequest(API_ROUTES.pricingRequests.pricingDecisionRecalculateCost(id), { method: 'POST' }),
     overridePricingDecisionItemCost: (decisionId, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemCostOverride(decisionId, itemId), { method: 'PUT', body: payload }),
+    // CEO price-review fixes. Each returns { decision }; the first two recalculate cost server-side.
+    repointFactoryQuote: (id, quoteId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.factoryQuoteFactory(id, quoteId), { method: 'PUT', body: payload }),
+    setItemOriginCountry: (id, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.itemOriginCountry(id, itemId), { method: 'PUT', body: payload }),
+    renameItem: (id, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.itemName(id, itemId), { method: 'PUT', body: payload }),
+    // payload { freightThb } - THB total for a line the freight table has no band for; null clears it.
+    setItemFreight: (id, itemId, payload) =>
+      apiRequest(API_ROUTES.pricingRequests.itemFreight(id, itemId), { method: 'PUT', body: payload }),
     // V152 (V109 engine wiring). No request body arity beyond { productType } — null clears it.
     overridePricingDecisionItemProductType: (decisionId, itemId, payload) =>
       apiRequest(API_ROUTES.pricingRequests.pricingDecisionItemProductTypeOverride(decisionId, itemId), { method: 'PUT', body: payload }),

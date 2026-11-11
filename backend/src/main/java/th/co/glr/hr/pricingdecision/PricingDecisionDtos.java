@@ -185,4 +185,9 @@ public final class PricingDecisionDtos {
         BigDecimal approvedSellingPricePerRequestedUnit,
         BigDecimal minimumSellingPricePerRequestedUnit
     ) {}
+
+    /** CEO price-review fix result: the saved fix always stands; {@code costingError} is the recalculation's
+     * 422 message when cost could not be recomputed (the CEO fixes the next problem and goes again);
+     * {@code decision} is null when no decision exists yet (request still READY_FOR_CEO_REVIEW). */
+    public record CeoFixResult(PricingDecisionDto decision, String costingError) {}
 }

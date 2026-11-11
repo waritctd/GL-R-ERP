@@ -1,6 +1,7 @@
 package th.co.glr.hr.pricingcosting;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -47,7 +48,12 @@ import th.co.glr.hr.pricingdecision.PricingDecisionDtos.PricingDecisionItemDto;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ApprovePricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.CostOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.FreightRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.OriginCountryRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ProductTypeOverrideRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RenameItemRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.RepointFactoryRequest;
+import th.co.glr.hr.pricingdecision.PricingDecisionRequests.ReturnPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.StartPricingDecisionRequest;
 import th.co.glr.hr.pricingdecision.PricingDecisionService;
 import th.co.glr.hr.pricingrequest.PricingRequestRecipient;
@@ -634,17 +640,14 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
     }
 
     @Test
-    void missingFreightBand_countryNotInFormulaConfig_refusesToPrice_neverZero() {
-        // "TH" is a genuinely valid, V151-seeded price_catalog.country row (so the catalog INSERT
-        // itself succeeds) — V109 simply never seeded any Thailand freight rows, so the lookup
-        // still correctly fails at the freight-band step, not the fixture-setup step.
+    void missingFreightBand_countryNotInFormulaConfig_setsTheLineAside_neverPricedAsZero() {
+        // "TH" is a valid V151-seeded price_catalog.country row, but V109 seeded no Thailand freight rows.
+        // The line is now uncostable (the CEO can enter the freight himself), never priced with F = 0.
         long pricingRequestId = readyForReviewInCountry("TH", new BigDecimal("10"), "100.00");
-        assertThatThrownBy(() -> decisionService.startReview(pricingRequestId,
-                new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor))
-            .isInstanceOfSatisfying(ApiException.class, e -> {
-                assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                assertThat(e.getMessage()).contains("ไม่พบอัตราค่าขนส่ง");
-            });
+        PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(costingItemFor(decision).uncostableReason()).contains("ไม่มีอัตราค่าขนส่ง");
+        assertThat(decision.items().get(0).frozenLandedCostPerRequestedUnitThb()).isNull();
     }
 
     @Test
@@ -867,6 +870,592 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
     private PricingCostingItemDto costingItemFor(PricingDecisionDto decision) {
         return costingRepository.find(decision.pricingCostingId()).orElseThrow().items().get(0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────────────
+    // CEO price-review fixes (PCR-2026-0005): re-point a factory quote, set the origin country,
+    // rename a line. All three: CEO only, only while the decision is an open DRAFT (the same guard
+    // as recalculateCost), each writes an event and (A, B) recalculates cost.
+    // ─────────────────────────────────────────────────────────────────────────────────────
+
+    private PricingDecisionDto startedDecision() {
+        long pricingRequestId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        return decisionService.startReview(pricingRequestId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+    }
+
+    private long onlyQuoteId(long pricingRequestId) {
+        return jdbc.queryForObject("SELECT factory_quote_id FROM sales.factory_quote WHERE pricing_request_id = :id",
+            Map.of("id", pricingRequestId), Long.class);
+    }
+
+    private long masterFactoryId(String name) {
+        insertCatalogProduct(name, "IT", "FIX-" + UUID.randomUUID(), new BigDecimal("100.00"), "THB", "per_piece");
+        return jdbc.queryForObject("SELECT factory_id FROM price_catalog.factories WHERE name = :n",
+            Map.of("n", name), Long.class);
+    }
+
+    private List<String> eventMessages(long pricingRequestId, String kind) {
+        return jdbc.queryForList("SELECT message FROM sales.pricing_request_event WHERE pricing_request_id = :id AND event_kind = :k",
+            Map.of("id", pricingRequestId, "k", kind), String.class);
+    }
+
+    /** The incident: sales typed a free-text factory, so the quote snapshot matches no master row. */
+    private String breakFactoryName(long pricingRequestId) {
+        String typo = "Padana marmoker " + UUID.randomUUID();
+        jdbc.update("UPDATE sales.factory_quote SET factory_name_snapshot = :n, factory_id = NULL WHERE pricing_request_id = :id",
+            Map.of("n", typo, "id", pricingRequestId));
+        jdbc.update("UPDATE sales.pricing_request_item SET factory = :n, resolved_factory_id = NULL, resolved_factory_name = NULL WHERE pricing_request_id = :id",
+            Map.of("n", typo, "id", pricingRequestId));
+        return typo;
+    }
+
+    @Test
+    void repointFactoryQuote_rewritesQuoteLinesAndTicketItem_thenCostsAgain() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        String typo = breakFactoryName(prId);
+        long ticketItemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t",
+            Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET factory = :n WHERE item_id = :id", Map.of("n", typo, "id", ticketItemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET source_ticket_item_id = :t WHERE pricing_request_id = :id",
+            Map.of("t", ticketItemId, "id", prId));
+        assertThatThrownBy(() -> decisionService.recalculateCost(decision.id(), ceoActor))
+            .hasMessageContaining("ไม่พบ factory config");
+        String master = "Padana " + UUID.randomUUID();
+        long masterId = masterFactoryId(master);
+
+        PricingDecisionDto after = decisionService.repointFactoryQuote(prId, onlyQuoteId(prId),
+            new RepointFactoryRequest(masterId), ceoActor).decision();
+
+        assertThat(jdbc.queryForMap("SELECT factory_name_snapshot, factory_id FROM sales.factory_quote WHERE pricing_request_id = :id",
+            Map.of("id", prId))).containsEntry("factory_name_snapshot", master).containsEntry("factory_id", masterId);
+        assertThat(jdbc.queryForMap("SELECT factory, resolved_factory_id FROM sales.pricing_request_item WHERE pricing_request_id = :id",
+            Map.of("id", prId))).containsEntry("factory", master).containsEntry("resolved_factory_id", masterId);
+        assertThat(jdbc.queryForObject("SELECT factory FROM sales.ticket_item WHERE item_id = :id",
+            Map.of("id", ticketItemId), String.class)).isEqualTo(master);
+        assertThat(eventMessages(prId, "PRICING_REQUEST_FACTORY_QUOTE_REPOINTED")).singleElement()
+            .satisfies(m -> assertThat(m).contains(typo).contains(master));
+        assertThat(after.items().get(0).frozenLandedCostPerRequestedUnitThb())
+            .as("cost was recalculated through the recalculateCost path").isNotNull();
+    }
+
+    @Test
+    void repointFactoryQuote_leavesTicketItemAloneWhenItsFactoryIsSomethingElse() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        breakFactoryName(prId);
+        long ticketItemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t",
+            Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET factory = 'Unrelated' WHERE item_id = :id", Map.of("id", ticketItemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET source_ticket_item_id = :t WHERE pricing_request_id = :id",
+            Map.of("t", ticketItemId, "id", prId));
+
+        decisionService.repointFactoryQuote(prId, onlyQuoteId(prId),
+            new RepointFactoryRequest(masterFactoryId("Padana " + UUID.randomUUID())), ceoActor);
+
+        assertThat(jdbc.queryForObject("SELECT factory FROM sales.ticket_item WHERE item_id = :id",
+            Map.of("id", ticketItemId), String.class)).isEqualTo("Unrelated");
+    }
+
+    @Test
+    void repointFactoryQuote_rejectsUnknownFactorySameNameDuplicateAndForeignQuote() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long quoteId = onlyQuoteId(prId);
+        String current = jdbc.queryForObject("SELECT factory_name_snapshot FROM sales.factory_quote WHERE factory_quote_id = :id",
+            Map.of("id", quoteId), String.class);
+        long currentFactoryId = jdbc.queryForObject("SELECT factory_id FROM price_catalog.factories WHERE name = :n",
+            Map.of("n", current), Long.class);
+        String other = "Other " + UUID.randomUUID();
+        long otherId = masterFactoryId(other);
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, status) VALUES (:c, :id, :n, 'DRAFT')",
+            Map.of("c", "FQ-D" + UUID.randomUUID().toString().substring(0, 8), "id", prId, "n", other));
+        long otherPr = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(),
+            new CreatePricingRequestRequest(PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
+                null, "THB", "other", UUID.randomUUID().toString(), List.of()), salesRepId);
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, status) VALUES (:c, :id, 'X', 'DRAFT')",
+            Map.of("c", "FQ-O" + UUID.randomUUID().toString().substring(0, 8), "id", otherPr));
+        long foreignQuote = onlyQuoteId(otherPr);
+
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(Long.MAX_VALUE), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(currentFactoryId), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(otherId), ceoActor));
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.repointFactoryQuote(prId, foreignQuote, new RepointFactoryRequest(otherId), ceoActor));
+    }
+
+    private void assertStatus(HttpStatus status, org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+        assertThatThrownBy(call).isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(status));
+    }
+
+    @Test
+    void ceoFixes_nonCeoGets403_andOnlyWhileTheDecisionIsAnOpenDraft() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        long quoteId = onlyQuoteId(prId);
+        long target = masterFactoryId("Padana " + UUID.randomUUID());
+        for (UserPrincipal who : List.of(salesActor, importActor)) {
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(target), who));
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("อิตาลี"), who));
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), who));
+            assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("1000")), who));
+        }
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.renameItem(Long.MAX_VALUE, itemId, new RenameItemRequest("A", "B"), ceoActor));
+        // Returned to import: no open DRAFT decision any more.
+        decisionService.returnToImport(decision.id(), new ReturnPricingDecisionRequest("test"), ceoActor);
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quoteId, new RepointFactoryRequest(target), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("อิตาลี"), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), ceoActor));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("1000")), ceoActor));
+    }
+
+    /** Free-text line: no catalog link, so only the item's own origin_country/thickness can feed freight. */
+    private PricingDecisionDto startedDecisionWithoutCatalogLink(String originCountry) {
+        return startedDecisionWithoutCatalogLink(originCountry, 10);
+    }
+
+    private PricingDecisionDto startedDecisionWithoutCatalogLink(String originCountry, int thicknessMm) {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET product_id = NULL, catalog_price_id = NULL, thickness_mm = :t, origin_country = :o WHERE pricing_request_id = :id",
+            Map.of("o", originCountry == null ? "" : originCountry, "id", prId, "t", thicknessMm));
+        if (originCountry == null) {
+            jdbc.update("UPDATE sales.pricing_request_item SET origin_country = NULL WHERE pricing_request_id = :id", Map.of("id", prId));
+        }
+        return decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+    }
+
+    @Test
+    void originCountry_fallsBackToTheItemsOwnSalesValue_whenNoCatalogLink() {
+        // Same band as the hand-computed test: Italy [8,12)mm, qty 100 -> 500.0000/pc freight.
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink("อิตาลี");
+        PricingCostingItemDto item = costingItemFor(decision);
+        assertThat(item.uncostableReason()).isNull();
+        assertThat(item.freightCostThb()).isEqualByComparingTo("500.0000");
+    }
+
+    @Test
+    void originCountry_otherSentinelAndCatalogPrecedence() {
+        assertThat(costingItemFor(startedDecisionWithoutCatalogLink("อื่นๆ")).uncostableReason()).contains("ประเทศต้นทาง");
+        // Catalog (Italy, 500) wins over the item's own จีน (300).
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET origin_country = 'จีน' WHERE pricing_request_id = :id", Map.of("id", prId));
+        PricingDecisionDto decision = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(costingItemFor(decision).freightCostThb()).isEqualByComparingTo("500.0000");
+    }
+
+    @Test
+    void setItemOriginCountry_savesAndRecalculates_refusesStockAndBadValues() {
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink(null);
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        assertThat(costingItemFor(decision).uncostableReason()).contains("ประเทศต้นทาง");
+
+        PricingDecisionDto after = decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("สเปน"), ceoActor).decision();
+
+        assertThat(jdbc.queryForObject("SELECT origin_country FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), String.class)).isEqualTo("สเปน");
+        assertThat(costingItemFor(after).uncostableReason()).isNull();
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_ORIGIN_COUNTRY_SET")).singleElement()
+            .satisfies(m -> assertThat(m).contains("สเปน"));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("อื่นๆ"), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest(" "), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("Atlantis"), ceoActor));
+        jdbc.update("UPDATE sales.pricing_request_item SET stock_source = 'IN_THAILAND' WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("จีน"), ceoActor));
+    }
+
+    @Test
+    void renameItem_trimsAndSaves_requiresAName_respectsLength_andItemMustBelong() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        jdbc.update("UPDATE sales.pricing_request_item SET catalog_brand = 'OldB', catalog_model = 'OldM' WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("  Padana  ", " Marmo "), ceoActor);
+
+        assertThat(jdbc.queryForMap("SELECT brand, model, catalog_brand, catalog_model FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId))).containsEntry("brand", "Padana").containsEntry("model", "Marmo")
+            .containsEntry("catalog_brand", "Padana").containsEntry("catalog_model", "Marmo");
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_RENAMED")).singleElement()
+            .satisfies(m -> assertThat(m).contains("Test Model").contains("Padana Marmo"));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest(" ", null), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("x".repeat(256), "m"), ceoActor));
+        // ticket_item.model is VARCHAR(80): a longer model would 500 the whole rename, so it is a 400 here.
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("b", "m".repeat(81)), ceoActor));
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("b", "m".repeat(80)), ceoActor);
+        assertStatus(HttpStatus.NOT_FOUND, () -> decisionService.renameItem(prId, Long.MAX_VALUE, new RenameItemRequest("a", "b"), ceoActor));
+    }
+
+    /** The REAL incident path: the typed factory is saved, import marks the quote ready, and the CEO's
+     * startReview 422s, so no decision ever exists. The fix must still be reachable, then startReview works. */
+    @Test
+    void repointFactoryQuote_realIncidentPath_startReview422_fixWithNoDecision_thenStartReviewSucceeds() {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        breakFactoryName(prId);
+        StartPricingDecisionRequest start = new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString());
+        assertThatThrownBy(() -> decisionService.startReview(prId, start, ceoActor)).hasMessageContaining("ไม่พบ factory config");
+        long target = masterFactoryId("Padana " + UUID.randomUUID());
+
+        var fixed = decisionService.repointFactoryQuote(prId, onlyQuoteId(prId), new RepointFactoryRequest(target), ceoActor);
+
+        assertThat(fixed.decision()).as("no decision exists yet, so nothing is recalculated").isNull();
+        assertThat(fixed.costingError()).isNull();
+        assertThat(decisionService.startReview(prId, start, ceoActor).items().get(0).frozenLandedCostPerRequestedUnitThb()).isNotNull();
+    }
+
+    @Test
+    void setItemOriginCountry_withNoDecisionYet_savesWithoutRecompute_thenStartReviewCostsTheLine() {
+        long prId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
+            new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+        jdbc.update("UPDATE sales.pricing_request_item SET product_id = NULL, catalog_price_id = NULL, thickness_mm = 10, origin_country = NULL WHERE pricing_request_id = :id", Map.of("id", prId));
+        long itemId = jdbc.queryForObject("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id", Map.of("id", prId), Long.class);
+
+        var fixed = decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("จีน"), ceoActor);
+
+        assertThat(fixed.decision()).isNull();
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.renameItem(prId, itemId, new RenameItemRequest("A", "B"), ceoActor));
+        assertStatus(HttpStatus.FORBIDDEN, () -> decisionService.setItemOriginCountry(prId, itemId, new OriginCountryRequest("จีน"), salesActor));
+        PricingDecisionDto decision = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        assertThat(costingItemFor(decision).uncostableReason()).isNull();
+    }
+
+    /** Two typo'd quotes: fixing the first must stand even though the recalculation still 422s on the second. */
+    @Test
+    void repointFactoryQuote_fixSurvivesARecalculationFailureOnAnotherBrokenQuote() {
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("60"), new BigDecimal("40"));
+        PricingDecisionDto decision = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        long quote1 = onlyQuoteId(prId);
+        long item2 = jdbc.queryForObject("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id ORDER BY pricing_request_item_id DESC LIMIT 1", Map.of("id", prId), Long.class);
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, status, default_currency) SELECT :c, pricing_request_id, 'Second typo', status, default_currency FROM sales.factory_quote WHERE factory_quote_id = :q",
+            Map.of("c", "FQ-S" + UUID.randomUUID().toString().substring(0, 8), "q", quote1));
+        long quote2 = jdbc.queryForObject("SELECT max(factory_quote_id) FROM sales.factory_quote WHERE pricing_request_id = :id", Map.of("id", prId), Long.class);
+        jdbc.update("UPDATE sales.factory_quote_item SET factory_quote_id = :q2 WHERE pricing_request_item_id = :i", Map.of("q2", quote2, "i", item2));
+        jdbc.update("UPDATE sales.pricing_request_item SET factory = 'Second typo', resolved_factory_id = NULL, resolved_factory_name = NULL WHERE pricing_request_item_id = :i", Map.of("i", item2));
+        jdbc.update("UPDATE sales.factory_quote SET factory_name_snapshot = 'First typo', factory_id = NULL WHERE factory_quote_id = :q", Map.of("q", quote1));
+        jdbc.update("UPDATE sales.pricing_request_item SET factory = 'First typo', resolved_factory_id = NULL, resolved_factory_name = NULL WHERE pricing_request_id = :id AND pricing_request_item_id <> :i", Map.of("id", prId, "i", item2));
+        String masterA = "Padana A " + UUID.randomUUID();
+        String masterB = "Padana B " + UUID.randomUUID();
+
+        var first = decisionService.repointFactoryQuote(prId, quote1, new RepointFactoryRequest(masterFactoryId(masterA)), ceoActor);
+
+        assertThat(jdbc.queryForObject("SELECT factory_name_snapshot FROM sales.factory_quote WHERE factory_quote_id = :q", Map.of("q", quote1), String.class))
+            .as("the first fix is persisted despite the recalculation failing").isEqualTo(masterA);
+        assertThat(first.costingError()).contains("ไม่พบ factory config").contains("Second typo");
+        assertThat(eventMessages(prId, "PRICING_REQUEST_FACTORY_QUOTE_REPOINTED")).hasSize(1);
+
+        var second = decisionService.repointFactoryQuote(prId, quote2, new RepointFactoryRequest(masterFactoryId(masterB)), ceoActor);
+
+        assertThat(second.costingError()).isNull();
+        assertThat(second.decision().items()).allSatisfy(i -> assertThat(i.frozenLandedCostPerRequestedUnitThb()).isNotNull());
+        assertThat(decision.id()).isEqualTo(second.decision().id());
+    }
+
+    @Test
+    void repointFactoryQuote_keepsLineResolvedNameConsistent_andRejectsADuplicateFactoryId() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        jdbc.update("UPDATE sales.pricing_request_item SET resolved_factory_name = 'Stale Catalog Name' WHERE pricing_request_id = :id", Map.of("id", prId));
+        String master = "Padana " + UUID.randomUUID();
+        long masterId = masterFactoryId(master);
+
+        decisionService.repointFactoryQuote(prId, onlyQuoteId(prId), new RepointFactoryRequest(masterId), ceoActor);
+
+        assertThat(jdbc.queryForObject("SELECT resolved_factory_name FROM sales.pricing_request_item WHERE pricing_request_id = :id",
+            Map.of("id", prId), String.class)).isEqualTo(master);
+        // Another current quote already carries factory_id = target (under a different snapshot name):
+        // the V62 unique index would raise a raw 500, so it must be a 409 first.
+        long quote = onlyQuoteId(prId);
+        long otherId = masterFactoryId("Alias " + UUID.randomUUID());
+        jdbc.update("INSERT INTO sales.factory_quote (quote_code, pricing_request_id, factory_name_snapshot, factory_id, status) VALUES (:c, :id, :n, :f, 'DRAFT')",
+            Map.of("c", "FQ-I" + UUID.randomUUID().toString().substring(0, 8), "id", prId, "n", "Differently named " + UUID.randomUUID(), "f", otherId));
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.repointFactoryQuote(prId, quote, new RepointFactoryRequest(otherId), ceoActor));
+    }
+
+    @Test
+    void originCountryFallback_withNoFreightBand_setsOnlyThatLineAside_insteadOfFailingTheWholeCosting() {
+        // 100 mm is outside every seeded freight band, so Italy has no rate for it.
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink("อิตาลี", 100);
+        PricingCostingItemDto item = costingItemFor(decision);
+        assertThat(item.uncostableReason()).contains("ไม่มีอัตราค่าขนส่ง").contains("ต้นทาง=อิตาลี");
+        assertThat(item.uncostableCode()).isEqualTo("NO_FREIGHT_BAND");
+    }
+
+    @Test
+    void renameItem_alsoUpdatesTheTicketItemOnlyWhileItStillHasTheOldName() {
+        PricingDecisionDto decision = startedDecision();
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        long ticketItemId = jdbc.queryForObject("SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
+        jdbc.update("UPDATE sales.ticket_item SET brand = 'Test', model = 'Model' WHERE item_id = :id", Map.of("id", ticketItemId));
+        jdbc.update("UPDATE sales.pricing_request_item SET source_ticket_item_id = :t WHERE pricing_request_item_id = :i", Map.of("t", ticketItemId, "i", itemId));
+
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("Padana", "Marmo"), ceoActor);
+
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "Padana").containsEntry("model", "Marmo");
+        jdbc.update("UPDATE sales.ticket_item SET brand = 'Sales changed it' WHERE item_id = :id", Map.of("id", ticketItemId));
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("Padana2", "Marmo2"), ceoActor);
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "Sales changed it").containsEntry("model", "Marmo");
+        // Clearing the brand clears it on the deal line too (ticket_item.brand is NOT NULL, so blank there).
+        jdbc.update("UPDATE sales.ticket_item SET brand = 'Padana2', model = 'Marmo2' WHERE item_id = :id", Map.of("id", ticketItemId));
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("", "Only model"), ceoActor);
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "").containsEntry("model", "Only model");
+        // The item's brand is now NULL and the deal line's is '' (NOT NULL column): the next rename must still sync.
+        decisionService.renameItem(prId, itemId, new RenameItemRequest("Again", "M2"), ceoActor);
+        assertThat(jdbc.queryForMap("SELECT brand, model FROM sales.ticket_item WHERE item_id = :id", Map.of("id", ticketItemId)))
+            .containsEntry("brand", "Again").containsEntry("model", "M2");
+    }
+
+    // ── ไทย-สต็อก (goods already in Thailand): a DOMESTIC purchase, owner ruling ─────────────────────
+    // cost = Import's price in THB only. No freight lookup, insurance, duty, cost buffer or clearance.
+
+    @Test
+    void thaiStockOrigin_noCatalogCountry_sameFormulaWithIFTSZero_everyImportComponentZeroNotNull() {
+        // 100 pieces @ 100.00 THB, 1 sqm/piece: goods = 100.0000/pc; TC = (goods + 0 + 0) x (1 + 0) x 1.07
+        // + 0 = 10,700.0000 -> 107.0000/pc (the sheet's x1.07 stays; i = F = T = S = 0).
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink("ไทย-สต็อก");
+        PricingCostingItemDto item = costingItemFor(decision);
+
+        assertThat(item.uncostableReason()).isNull();
+        assertThat(item.goodsCostThb()).isEqualByComparingTo("100.0000");
+        assertThat(item.freightCostThb()).isEqualByComparingTo("0");
+        assertThat(item.insuranceCostThb()).isEqualByComparingTo("0");
+        assertThat(item.importDutyThb()).isEqualByComparingTo("0");
+        assertThat(item.inlandTransportCostThb()).isEqualByComparingTo("0");
+        assertThat(item.clearanceFeeThb()).isEqualByComparingTo("0");
+        assertThat(item.cifCostThb()).isEqualByComparingTo("100.0000");
+        assertThat(item.landedCostPerUnitThb()).isEqualByComparingTo("107.0000");
+        assertThat(item.totalLandedCostThb()).isEqualByComparingTo("10700.0000");
+        assertThat(jdbc.queryForObject("SELECT calculation_snapshot::text FROM sales.pricing_costing_item WHERE pricing_costing_id = :id",
+            Map.of("id", decision.pricingCostingId()), String.class)).contains("DOMESTIC");
+    }
+
+    @Test
+    void thaiStockLine_inAShipmentWithAnItalyLine_leavesTheItalyLineExactlyAsIfTheThaiLineWereAbsent() {
+        // Baseline: the Italy line alone (60 sqm).
+        PricingDecisionDto alone = decisionService.startReview(
+            readyForReview(new BigDecimal("60"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("60"),
+                "100.00", new BigDecimal("1"), null, null),
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        PricingCostingItemDto baseline = costingItemFor(alone);
+
+        // Same Italy line (60) + a 40 sqm ไทย-สต็อก line on the same factory quote.
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("60"), new BigDecimal("40"));
+        long thaiItem = jdbc.queryForObject("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id ORDER BY pricing_request_item_id DESC LIMIT 1", Map.of("id", prId), Long.class);
+        jdbc.update("UPDATE sales.pricing_request_item SET product_id = NULL, catalog_price_id = NULL, thickness_mm = 10, origin_country = 'ไทย-สต็อก' WHERE pricing_request_item_id = :i", Map.of("i", thaiItem));
+        PricingDecisionDto mixed = decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+        List<PricingCostingItemDto> rows = costingRepository.find(mixed.pricingCostingId()).orElseThrow().items();
+        PricingCostingItemDto italy = rows.stream().filter(r -> r.pricingRequestItemId() != thaiItem).findFirst().orElseThrow();
+        PricingCostingItemDto thai = rows.stream().filter(r -> r.pricingRequestItemId() == thaiItem).findFirst().orElseThrow();
+
+        // The Thai line takes no part in freight grouping or in the clearance denominator/amount: a domestic
+        // purchase clears no customs, so it neither fills container space nor dilutes the fee.
+        assertThat(italy.freightCostThb()).isEqualByComparingTo(baseline.freightCostThb());
+        assertThat(italy.importDutyThb()).isEqualByComparingTo(baseline.importDutyThb());
+        assertThat(italy.clearanceFeeThb()).isEqualByComparingTo(baseline.clearanceFeeThb());
+        assertThat(italy.landedCostPerUnitThb()).isEqualByComparingTo(baseline.landedCostPerUnitThb());
+        assertThat(italy.totalLandedCostThb()).isEqualByComparingTo(baseline.totalLandedCostThb());
+        assertThat(thai.landedCostPerUnitThb()).isEqualByComparingTo("107.0000");
+        assertThat(thai.clearanceFeeThb()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void ceoCannotSwitchALineToThaiStock_itComesOnlyFromSalesOwnEntry() {
+        PricingDecisionDto decision = startedDecisionWithoutCatalogLink(null);
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemOriginCountry(decision.pricingRequestId(),
+            decision.items().get(0).pricingRequestItemId(), new OriginCountryRequest("ไทย-สต็อก"), ceoActor));
+    }
+
+    // ── Freight-table gaps: the CEO enters F (THB, TOTAL for that line) instead of overriding the landed cost ──
+
+    /** A catalogue Italy line at 100 mm: outside every seeded freight band. */
+    private long gapLineReadyForReview() {
+        long productId = insertCatalogProduct("Formula Factory", "IT", "GAP-" + UUID.randomUUID(),
+            new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", new BigDecimal("100"));
+        return readyForReviewWithProduct(productId, "Formula Factory", new BigDecimal("100"), UnitBasis.PER_PIECE,
+            UnitBasis.PER_PIECE, new BigDecimal("100"), "100.00", new BigDecimal("1"), null, null);
+    }
+
+    private PricingDecisionDto start(long prId) {
+        return decisionService.startReview(prId,
+            new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
+    }
+
+    /**
+     * Gap line (no band), CEO F = 12,000.00 THB for the line. Same formula, hand-computed:
+     * C = 10,000.0000; i = 55.3725; F = 12,000; cif = 22,055.3725; duty 30% = 6,616.61175 -> 6,616.6118;
+     * (cif+duty) x 1.07 = 28,671.9843 x 1.07 = 30,679.0232; S (qty 100) = 8,000; TC = 38,679.0232;
+     * per piece = 386.7902 (money4); total = 386.7902 x 100 = 38,679.0200.
+     */
+    @Test
+    void freightGap_ceoEntersF_sameFormulaWithThatF_everyComponent_andItSurvivesRecalculation() {
+        long prId = gapLineReadyForReview();
+        assertThatCode(() -> start(prId)).as("a freight gap must not abort the whole costing").doesNotThrowAnyException();
+        PricingDecisionDto decision = decisionRepository.findOpenDraft(prId).orElseThrow();
+        PricingCostingItemDto gap = costingItemFor(decision);
+        assertThat(gap.uncostableReason()).contains("ไม่มีอัตราค่าขนส่ง").doesNotContain("ประเทศต้นทาง");
+        assertThat(gap.uncostableCode()).isEqualTo("NO_FREIGHT_BAND");
+
+        long itemId = decision.items().get(0).pricingRequestItemId();
+        PricingDecisionDto after = decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("12000")), ceoActor).decision();
+
+        PricingCostingItemDto item = costingItemFor(after);
+        assertThat(item.uncostableReason()).isNull();
+        assertThat(item.goodsCostThb()).isEqualByComparingTo("100.0000");
+        assertThat(item.insuranceCostThb()).isEqualByComparingTo("0.5537");
+        assertThat(item.freightCostThb()).isEqualByComparingTo("120.0000");
+        assertThat(item.cifCostThb()).isEqualByComparingTo("220.5537");
+        assertThat(item.importDutyThb()).isEqualByComparingTo("66.1661");
+        assertThat(item.clearanceFeeThb()).isEqualByComparingTo("80.0000");
+        assertThat(item.landedCostPerUnitThb()).isEqualByComparingTo("386.7902");
+        assertThat(item.totalLandedCostThb()).isEqualByComparingTo("38679.0200");
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).singleElement()
+            .satisfies(m -> assertThat(m).contains("12000"));
+        assertThat(jdbc.queryForObject("SELECT calculation_snapshot::text FROM sales.pricing_costing_item WHERE pricing_costing_id = :id AND uncostable_reason IS NULL",
+            Map.of("id", after.pricingCostingId()), String.class)).contains("CEO_MANUAL");
+
+        // Survives a recalculation (persisted on the item) ...
+        PricingDecisionDto recalculated = decisionService.recalculateCost(after.id(), ceoActor);
+        assertThat(costingItemFor(recalculated).landedCostPerUnitThb()).isEqualByComparingTo("386.7902");
+        // ... and clearing it returns the line to uncostable.
+        PricingDecisionDto cleared = decisionService.setItemFreight(prId, itemId, new FreightRequest(null), ceoActor).decision();
+        assertThat(costingItemFor(cleared).uncostableReason()).contains("ไม่มีอัตราค่าขนส่ง");
+    }
+
+    @Test
+    void freightGap_ceoFreightEnteredBeforeAnyDecision_isSavedAndUsedByStartReview() {
+        long prId = gapLineReadyForReview();
+        long itemId = jdbc.queryForObject("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id", Map.of("id", prId), Long.class);
+
+        assertThat(decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("12000")), ceoActor).decision()).isNull();
+
+        assertThat(costingItemFor(start(prId)).landedCostPerUnitThb()).isEqualByComparingTo("386.7902");
+    }
+
+    @Test
+    void freightFromTheTable_isNeverOverriddenByManualFreight_staleValueIsClearedOnRecalc_andBadInputIsRefused() {
+        PricingDecisionDto decision = startedDecision(); // Italy 10 mm, band exists: F = 50,000 -> 500.0000/pc
+        long prId = decision.pricingRequestId();
+        long itemId = decision.items().get(0).pricingRequestItemId();
+
+        // A manual freight on a line whose table lookup works is refused (clearing is always allowed).
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("7")), ceoActor));
+        assertThatCode(() -> decisionService.setItemFreight(prId, itemId, new FreightRequest(null), ceoActor)).doesNotThrowAnyException();
+
+        // A dormant value (e.g. the band appeared after it was entered) never applies and is cleared on recalculation.
+        jdbc.update("UPDATE sales.pricing_request_item SET manual_freight_thb = 7 WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+        PricingDecisionDto after = decisionService.recalculateCost(decision.id(), ceoActor);
+        assertThat(costingItemFor(after).freightCostThb()).as("the table wins").isEqualByComparingTo("500.0000");
+        assertThat(jdbc.queryForObject("SELECT manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemId), BigDecimal.class)).as("stale manual freight cleared").isNull();
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).anySatisfy(m -> assertThat(m).contains("เพราะตารางมีอัตราแล้ว"));
+
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(BigDecimal.ZERO), ceoActor));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("-5")), ceoActor));
+        jdbc.update("UPDATE sales.pricing_request_item SET stock_source = 'IN_THAILAND' WHERE pricing_request_item_id = :id", Map.of("id", itemId));
+        assertStatus(HttpStatus.BAD_REQUEST, () -> decisionService.setItemFreight(prId, itemId, new FreightRequest(new BigDecimal("100")), ceoActor));
+    }
+
+    private void publishConfigWithGroupedFreightGap() {
+        publishConfigWithGappedClearanceLadder();
+        // Undo that helper's clearance gap (keep the normal ladder) and open a freight gap that only a GROUP hits:
+        // IT 17-21 mm now has [101,401) but nothing from 401, so a 200 sqm line passes alone while a full
+        // 450 sqm container (600 sqm grouped) finds no band.
+        Long id = jdbc.queryForObject("SELECT formula_config_id FROM sales.pricing_formula_config WHERE is_current = TRUE", Map.of(), Long.class);
+        jdbc.update("DELETE FROM sales.pricing_clearance_fee WHERE formula_config_id = :id", Map.of("id", id));
+        jdbc.update("INSERT INTO sales.pricing_clearance_fee (formula_config_id, qty_min_sqm, qty_max_sqm, amount_thb) VALUES (:id, 1, 101, 8000), (:id, 101, 451, 12000), (:id, 451, NULL, 20000)", Map.of("id", id));
+        jdbc.update("DELETE FROM sales.pricing_freight_rate WHERE formula_config_id = :id AND origin_country_code = 'IT' AND thickness_min_mm = 17 AND qty_min_sqm >= 101", Map.of("id", id));
+        jdbc.update("INSERT INTO sales.pricing_freight_rate (formula_config_id, origin_country_code, thickness_min_mm, thickness_max_mm, qty_min_sqm, qty_max_sqm, amount_thb) VALUES (:id, 'IT', 17, 21, 101, 401, 100000)", Map.of("id", id));
+    }
+
+    /** Two 18 mm Italy lines of 200 sqm on one quote: each passes the freight table alone (remainder 200 <= 250), but 400 grouped is "nearly full" -> one full 450 container, which has no band here. */
+    @Test
+    void freightGap_inAGroupedShipment_setsTheGroupAside_andCeoFreightOnOneLineLetsTheOtherCost() {
+        publishConfigWithGroupedFreightGap();
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("200"), new BigDecimal("18"), new BigDecimal("200"), new BigDecimal("18"));
+        jdbc.update("UPDATE sales.pricing_request_item SET origin_country = 'อิตาลี' WHERE pricing_request_id = :id", Map.of("id", prId));
+
+        PricingDecisionDto decision = start(prId);
+
+        List<PricingCostingItemDto> rows = costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        assertThat(rows).allSatisfy(r -> {
+            assertThat(r.uncostableCode()).isEqualTo("NO_FREIGHT_BAND");
+            assertThat(r.uncostableReason()).contains("ต้นทาง=อิตาลี");
+        });
+        long itemA = rows.get(0).pricingRequestItemId();
+
+        PricingDecisionDto after = decisionService.setItemFreight(prId, itemA, new FreightRequest(new BigDecimal("20000")), ceoActor).decision();
+
+        List<PricingCostingItemDto> after2 = costingRepository.find(after.pricingCostingId()).orElseThrow().items();
+        PricingCostingItemDto a = after2.stream().filter(r -> r.pricingRequestItemId() == itemA).findFirst().orElseThrow();
+        PricingCostingItemDto b = after2.stream().filter(r -> r.pricingRequestItemId() != itemA).findFirst().orElseThrow();
+        assertThat(a.uncostableReason()).isNull();
+        assertThat(a.freightCostThb()).as("CEO total 20,000 / 200 pieces").isEqualByComparingTo("100.0000");
+        assertThat(b.uncostableReason()).as("the other line now looks up alone (200 sqm passes)").isNull();
+        assertThat(b.freightCostThb()).as("table band 100,000 / 200 pieces").isEqualByComparingTo("500.0000");
+    }
+
+    @Test
+    void ceoOriginAndRenameEvents_nameTheLinesPositionNotItsDatabaseId() {
+        readyForReview(new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00", new BigDecimal("1"), null, null); // burns item ids
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("60"), new BigDecimal("40"));
+        PricingDecisionDto decision = start(prId);
+        long second = decision.items().get(1).pricingRequestItemId();
+
+        decisionService.renameItem(prId, second, new RenameItemRequest("Second", "Line"), ceoActor);
+
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_RENAMED")).singleElement()
+            .satisfies(m -> assertThat(m).contains("รายการที่ 2 ").doesNotContain("รายการที่ " + second + " "));
+    }
+
+    @Test
+    void setItemOriginCountry_onALineWhoseCatalogueProvidesACountry_is409() {
+        PricingDecisionDto decision = startedDecision(); // catalogue-linked Italy line
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemOriginCountry(decision.pricingRequestId(),
+            decision.items().get(0).pricingRequestItemId(), new OriginCountryRequest("จีน"), ceoActor));
+    }
+
+    /** Line A has no band even alone (100 mm); line B (10 mm) is priceable from the table but shares A's group. */
+    @Test
+    void freightGap_aPriceableLineNextToARealGapLine_keepsItsTableFreight_manualValueRefusedAndClearedOnRecalc() {
+        long prId = twoItemSameFactoryReadyForReview(new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("100"), new BigDecimal("10"));
+        PricingDecisionDto decision = start(prId);
+        List<Long> ids = jdbc.queryForList("SELECT pricing_request_item_id FROM sales.pricing_request_item WHERE pricing_request_id = :id ORDER BY pricing_request_item_id",
+            Map.of("id", prId), Long.class);
+        long itemA = ids.get(0);
+        long itemB = ids.get(1);
+        List<PricingCostingItemDto> rows = costingRepository.find(decision.pricingCostingId()).orElseThrow().items();
+        PricingCostingItemDto a = rows.stream().filter(r -> r.pricingRequestItemId() == itemA).findFirst().orElseThrow();
+        PricingCostingItemDto b = rows.stream().filter(r -> r.pricingRequestItemId() == itemB).findFirst().orElseThrow();
+        assertThat(a.uncostableCode()).isEqualTo("NO_FREIGHT_BAND");
+        assertThat(b.uncostableReason()).as("B is priced from the table").isNull();
+        BigDecimal tableFreightB = b.freightCostThb();
+
+        // B is not a true gap: the CEO may not type a freight for it ...
+        assertStatus(HttpStatus.CONFLICT, () -> decisionService.setItemFreight(prId, itemB, new FreightRequest(new BigDecimal("999")), ceoActor));
+        // ... and a dormant value on it never replaces the table freight and is cleared on recalculation.
+        jdbc.update("UPDATE sales.pricing_request_item SET manual_freight_thb = 7 WHERE pricing_request_item_id = :id", Map.of("id", itemB));
+        PricingDecisionDto after = decisionService.recalculateCost(decision.id(), ceoActor);
+        PricingCostingItemDto bAfter = costingRepository.find(after.pricingCostingId()).orElseThrow().items().stream()
+            .filter(r -> r.pricingRequestItemId() == itemB).findFirst().orElseThrow();
+        assertThat(bAfter.freightCostThb()).isEqualByComparingTo(tableFreightB);
+        assertThat(jdbc.queryForObject("SELECT manual_freight_thb FROM sales.pricing_request_item WHERE pricing_request_item_id = :id",
+            Map.of("id", itemB), BigDecimal.class)).isNull();
+        assertThat(eventMessages(prId, "PRICING_REQUEST_ITEM_FREIGHT_SET")).anySatisfy(m -> assertThat(m).contains("เพราะตารางมีอัตราแล้ว"));
+        // The real gap line A still accepts one.
+        assertThatCode(() -> decisionService.setItemFreight(prId, itemA, new FreightRequest(new BigDecimal("12000")), ceoActor)).doesNotThrowAnyException();
     }
 
     private long readyForReview(BigDecimal requestedQty, String requestedUnitBasis, String quotedUnitBasis,

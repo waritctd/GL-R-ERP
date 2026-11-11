@@ -184,6 +184,6 @@ class CeoReviewNoticeTest {
         return new PricingCostingWriteItem(itemId, 1L, 1L, 1, null, "F", null, null, null, null, null, null,
             null, null, null, null, sqmPerUnit == null ? null : new BigDecimal(sqmPerUnit), null, null, null,
             null, null, 1L, 1, null, null, null, null, null, null, null,
-            landedPerUnit == null ? null : new BigDecimal(landedPerUnit), null, null, null, null, uncostableReason);
+            landedPerUnit == null ? null : new BigDecimal(landedPerUnit), null, null, null, null, uncostableReason, null);
     }
 }

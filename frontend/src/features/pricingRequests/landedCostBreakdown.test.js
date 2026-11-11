@@ -28,6 +28,12 @@ describe('landedCostBreakdown', () => {
     expect(b.listPerPiece).toBe(18.4);
   });
 
+  it('flags a freight the CEO entered himself (snapshot freightSource CEO_MANUAL)', () => {
+    const manual = { ...costingItem, calculationSnapshot: JSON.stringify({ ...JSON.parse(costingItem.calculationSnapshot), freightSource: 'CEO_MANUAL' }) };
+    expect(landedCostBreakdown({ costingItem: manual, formulaConfig, marginFraction: 0.3, sellingBuffer: 1 }).freight.manual).toBe(true);
+    expect(landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1 }).freight.manual).toBe(false);
+  });
+
   it('a selling buffer above 1 still multiplies both prices, with VAT on ราคาพิเศษ only', () => {
     const b = landedCostBreakdown({ costingItem, formulaConfig, marginFraction: 0.3, sellingBuffer: 1.1 });
     expect(b.listPerPiece).toBe(20.24); // 14.1544 × 1.3 × 1.1
