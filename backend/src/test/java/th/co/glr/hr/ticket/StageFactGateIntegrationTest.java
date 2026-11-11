@@ -692,7 +692,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
      * blocks {@code ISSUE_IMPORT_REQUEST}. Below {@code ORDER_RECEIVED} that would reroute an
      * untouched deal around the entire import journey on one person's word.
      *
-     * <p>Every role the declaration is open to is driven, at every stage below the floor, and every
+     * <p>The one role the declaration is open to (the CEO) is driven, at every stage below the floor, and every
      * axis the call could have touched is re-read afterwards.
      */
     @Test
@@ -740,14 +740,14 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * RESERVE_STOCK is advertised to the owner and the CEO from ORDER_RECEIVED, and the
+     * RESERVE_STOCK is advertised to the CEO (never the owner or import) from ORDER_RECEIVED, and the
      * {@code reserveStock} endpoint keeps the same stage floor: refused below ORDER_RECEIVED, accepted at it.
      */
     @Test
     void reserveStockIsAdvertisedFromTheStageFloor_andTheEndpointKeepsIt() {
         long below = createDealWithOneItem();
         tickets.updateSalesStage(below, DealStage.NEGOTIATION);
-                assertThat(actionCodes(below, ceo)).doesNotContain("RESERVE_STOCK");
+        assertThat(actionCodes(below, ceo)).doesNotContain("RESERVE_STOCK");
         assertThatThrownBy(() ->
             ticketService.reserveStock(below, declare(onlyItemId(below), "100.00"), ceo))
             .isInstanceOf(ApiException.class);
