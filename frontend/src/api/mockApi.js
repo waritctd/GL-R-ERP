@@ -3560,7 +3560,7 @@ function findTicketRaw(id) {
 // on the live quotation, not on the quotation_only flag (provenance only; nothing reads it).
 // Callers run their own authz first, so a caller with no access gets the 403, never this 409.
 const DIRECT_QUOTATION_LOCK_REFUSAL =
-  'ดีลนี้มีใบเสนอราคาตรงที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
+  'ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
 function requireNoLiveDirectQuotation(ticket) {
   if (ticket && mockLiveDirectQuotation(ticket.id)) fail(DIRECT_QUOTATION_LOCK_REFUSAL, 409);
 }
@@ -16980,8 +16980,9 @@ export const api = {
     // itself, unlike every neighbouring endpoint here, which wraps. Wrapping it would let the
     // page's `r?.counts ?? r` read disagree silently. The controller is the contract; see
     // mockApi.dealQuotations.test.js for the shape assertion that pins it.
-    async counts() {
-      const list = scopedDealQuotationsFor(requireSession());
+    async counts({ from } = {}) {
+      const scoped = scopedDealQuotationsFor(requireSession());
+      const list = from ? scoped.filter((q) => String(q.quotationDate ?? '').slice(0, 10) >= from) : scoped;
       return delay({
         all: list.length,
         pendingApproval: list.filter((q) => q.docStatus === 'PENDING_APPROVAL').length,
@@ -17057,7 +17058,7 @@ export const api = {
           .sort((a, b) => b.id - a.id)[0];
       if (blocking) {
         fail(
-          `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${blocking.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+          `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${blocking.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
           409,
           { liveQuotationId: blocking.id, number: blocking.number, docStatus: blocking.docStatus },
         );
@@ -17870,7 +17871,7 @@ export const api = {
       // DealQuotationService#requireEditAccess (the DEAL_DIRECT audience), BEFORE any 409.
       requireDealQuotationWriteAccess(ticket, user, 'DEAL_DIRECT');
       if ((row.origin || 'DEAL_DIRECT') !== 'DEAL_DIRECT') {
-        fail('ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
+        fail('ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น', 409);
       }
       const result = () => delay({
         result: { ticketId: ticket.id, ticket: buildTicketDetail(ticket).summary, quotation: buildDealQuotationDto(row) },

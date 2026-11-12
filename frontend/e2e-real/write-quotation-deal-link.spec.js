@@ -116,7 +116,7 @@ test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
     expect(second.status(), 'a second direct quotation on the same deal').toBe(409);
     const error = await second.json();
     expect(error).toEqual({
-      message: `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${quotation.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+      message: `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${quotation.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
       status: 409,
       liveQuotationId: quotation.id,
       number: quotation.number,

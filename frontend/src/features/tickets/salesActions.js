@@ -165,8 +165,8 @@ const QUOTED_STATUSES = new Set(['quotation_issued', 'document_issued']);
 const PRE_SPEC_STAGES = new Set(['LEAD_APPROACH', 'PRESENTATION']);
 
 // The quote route in S-order (DESIGNER → OWNER → BUYER). The labels are a short phrase for after a
-// verb ("เสนอราคาผู้ซื้อ"), not the ผู้รับ chip labels (ผู้ซื้อ / ผู้รับเหมา).
-export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ' };
+// verb ("เสนอราคาผู้ซื้อ/ผู้รับเหมา"), matching the ขั้น 8 stage label, not the ผู้รับ chip labels.
+export const PARTY_LABEL = { DESIGNER: 'ผู้ออกแบบ', OWNER: 'เจ้าของโครงการ', BUYER: 'ผู้ซื้อ/ผู้รับเหมา' };
 // A request's quotation "went out": sent at least once and not awaiting a revision. A REJECTED or
 // EXPIRED one counts — that party said no.
 const SENT_DOC_STATUSES = new Set(['ISSUED', 'SUPERSEDED', 'REJECTED', 'EXPIRED']);
@@ -255,7 +255,10 @@ function routeChoiceAction(ownPrs, quotationOf, offRouteParties) {
       ? { key: SALES_ACTION.SUBMIT_PRICING_REQUEST, label: `ส่งคำขอราคาถึง${PARTY_LABEL[draft.recipientType]}`, pricingRequestId: draft.id }
       : null;
   }
-  return quoteNextPartyAction(anchor.recipientType, parties, { anchorDeclined: DECLINED_DOC_STATUSES.has(quotationOf(anchor)?.docStatus) });
+  const anchorQuotation = quotationOf(anchor);
+  // An OWNER may buy directly: "no contractor" is then a choice, via the owner's outcome (open while ISSUED).
+  const skipBuyer = anchor.recipientType === 'OWNER' && (anchorQuotation == null || anchorQuotation.docStatus === 'ISSUED');
+  return quoteNextPartyAction(anchor.recipientType, parties, { anchorDeclined: DECLINED_DOC_STATUSES.has(anchorQuotation?.docStatus), skipBuyer });
 }
 
 /**
@@ -526,7 +529,7 @@ function directQuoteNextPartyAction(deal, offRouteParties) {
     || (live.recipientType !== 'DESIGNER' && live.recipientType !== 'OWNER')) return null;
   const parties = partiesAfter(live.recipientType, offRouteParties);
   if (parties.length === 0) return null;
-  return quoteNextPartyAction(live.recipientType, parties, { anchorDeclined: false, direct: true, quotationId: live.id, quotationNumber: live.number });
+  return quoteNextPartyAction(live.recipientType, parties, { anchorDeclined: false, direct: true, skipBuyer: live.recipientType === 'OWNER', quotationId: live.id, quotationNumber: live.number });
 }
 
 /**

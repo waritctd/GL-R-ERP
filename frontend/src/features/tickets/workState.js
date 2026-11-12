@@ -109,9 +109,10 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
 
 /** "ใบเสนอราคาผู้ออกแบบส่งแล้ว เลือกเสนอราคาเจ้าของโครงการ หรือข้ามไปผู้ซื้อ"; one party left reads
  * "…ส่งแล้ว ถัดไปเสนอราคา<next>"; a quotation the party said no to reads "…ไม่ผ่าน" instead. */
-function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties, direct }) {
+export function quoteNextPartyBanner({ anchorParty, anchorDeclined, parties, direct, skipBuyer }) {
   const sent = `ใบเสนอราคา${PARTY_LABEL[anchorParty]}${anchorDeclined ? 'ไม่ผ่าน' : direct ? 'อนุมัติแล้ว' : 'ส่งแล้ว'}`;
   const [next, ...later] = parties.map((party) => PARTY_LABEL[party]);
+  if (skipBuyer) return `${sent} เลือกเสนอราคา${next} หรือไม่มีผู้รับเหมา`;
   return later.length > 0
     ? `${sent} เลือกเสนอราคา${next} หรือข้ามไป${later.join(', ')}`
     : `${sent} ถัดไปเสนอราคา${next}`;
