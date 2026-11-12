@@ -86,7 +86,7 @@ const ITEM = {
  * Drives a brand-new deal to CLOSED_PAID through the real API, on the DIRECT-QUOTATION route this
  * release ships (see write-quotation.spec.js): customer + project + deal -> direct quotation ->
  * submit -> approve (sales_manager) -> confirm-order (owning rep; replaces ticket items with the
- * quotation's goods lines) -> waive deposit -> declare stock -> deliver -> final payment (account).
+ * quotation's goods lines) -> waive deposit -> declare stock (CEO) -> deliver -> final payment (account).
  * The PricingRequest chain is NOT used: it needs factory/price-calc master data the demo seed lacks.
  */
 async function buildClosedPaidDeal(sessions) {
@@ -132,7 +132,7 @@ async function buildClosedPaidDeal(sessions) {
   // via psql with the same PG* env the backend launcher uses. See the report: on the shipped route
   // the manager's weight control is inert without this.
   psql(`UPDATE sales.ticket_item SET approved_price = 920 WHERE ticket_id = ${Number(ticketId)}`);
-  await declareStockCoverage(sessions, 'sales', ticketId, read.items.map((item) => ({ itemId: item.id, qtyFromStock: item.qty })));
+  await declareStockCoverage(sessions, 'ceo', ticketId, read.items.map((item) => ({ itemId: item.id, qtyFromStock: item.qty })));
   await completeDelivery(sessions, ticketId);
   const closed = await confirmFinalPayment(sessions, ticketId);
   expect(closed.salesStage).toBe('CLOSED_PAID');
