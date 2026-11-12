@@ -208,6 +208,21 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         assertThat((BigDecimal) rows.get(1).get("qty_from_stock")).isEqualByComparingTo((BigDecimal) rows.get(1).get("qty"));
     }
 
+    /** A line the CEO FULLY covered is cleared when the rep marks it import; only a partial survives. */
+    @Test
+    void legacyDecideClearsAFullyCoveredLineTheRepMarksImport() {
+        long deal = confirmedDeal(OLD, false, false);
+        List<Long> ids = itemIds(deal);
+        ticketService.reserveStock(deal, new StockReservationRequest(
+            List.of(new StockReservationRequest.Line(ids.get(0), new BigDecimal("10"), null))), ceoActor);
+
+        ticketService.decideProcurementSource(deal, split(ids, false, false), salesActor);
+
+        List<Map<String, Object>> rows = stockRows(deal);
+        assertThat((BigDecimal) rows.get(0).get("qty_from_stock")).isEqualByComparingTo("0");
+        assertThat((BigDecimal) rows.get(1).get("qty_from_stock")).isEqualByComparingTo("0");
+    }
+
     /** Bangkok-date boundary: 2026-11-07 01:00+07 is 2026-11-06 18:00 UTC, so a UTC-date cast would call it legacy. */
     @Test
     void legacyFlagUsesTheBangkokDate() {

@@ -104,13 +104,13 @@ function renderPanel(user, rows = [draftRow()], {
 }
 
 // renderPanel has no seam for the handler prop, so wrap it: re-render the same tree with it set.
-function renderPanelWithChoose(user, onChooseProcurementSource, procurementSource) {
+function renderPanelWithChoose(user, onChooseProcurementSource, procurementSource, dealSummary = { ...summary, paymentStatus: 'DEPOSIT_PAID' }) {
   api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
   api.storedImportRequests.coverage.mockRejectedValue(new Error('404'));
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <DealFulfilmentPanel user={user} ticketId={1} summary={{ ...summary, paymentStatus: 'DEPOSIT_PAID' }} items={[]} availableActions={[]}
+      <DealFulfilmentPanel user={user} ticketId={1} summary={dealSummary} items={[]} availableActions={[]}
         procurementSource={procurementSource} onChooseProcurementSource={onChooseProcurementSource} showToast={vi.fn()} />
     </QueryClientProvider>,
   );
@@ -746,6 +746,13 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       ['not pending', { pending: false, editable: true }],
     ])('no จัดซื้อสินค้า button when %s', async (_n, src) => {
       renderPanelWithChoose(OWNER, vi.fn(), { legacy: true, decidedAt: null, ...src });
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByTestId('deal-fulfilment-choose-source')).toBeNull();
+    });
+    it('before the deposit is settled there is no จัดซื้อสินค้า button either (same gate as the IR button)', async () => {
+      const onChoose = vi.fn();
+      renderPanelWithChoose(OWNER, onChoose, { legacy: true, pending: true, editable: true, decidedAt: null },
+        { ...summary, paymentStatus: 'CUSTOMER_CONFIRMED' });
       await screen.findByTestId('deal-fulfilment-stored-ir');
       expect(screen.queryByTestId('deal-fulfilment-choose-source')).toBeNull();
     });

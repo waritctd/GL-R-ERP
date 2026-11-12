@@ -521,7 +521,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const procurementSourceQuery = useQuery({
     queryKey: queryKeys.procurementSource(ticketId),
     queryFn: () => api.tickets.getProcurementSource(ticketId),
-    enabled: (readsDocs || role === 'ceo') && !!ticketId,
+    enabled: (readsDocs || role === 'ceo') && !!ticketId
+      && ticket?.summary?.lifecycle === 'ACTIVE' && ticket?.summary?.fulfillmentStatus == null,
   });
   const procurementSource = procurementSourceQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
