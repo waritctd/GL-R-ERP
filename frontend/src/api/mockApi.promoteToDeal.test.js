@@ -11,7 +11,7 @@ import { api } from './mockApi.js';
 // NOT evidence about authorization: the mock's permission gates are not authoritative (CLAUDE.md) —
 // DealQuotationConfirmOrderIntegrationTest against real Postgres is.
 
-const LOCK_REFUSAL = 'ดีลนี้มีใบเสนอราคาตรงที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
+const LOCK_REFUSAL = 'ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
 
 const TILE = {
   brand: 'SCG', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,

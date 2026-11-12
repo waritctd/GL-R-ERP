@@ -190,11 +190,10 @@ export const queryKeys = {
   // filter at the same empty `status`, so keying on status alone would serve ทั้งหมด's cached
   // rows to แก้ and vice versa.
   dealQuotationsList: (filters = {}) => ['dealQuotations', 'list', filters.status ?? '', filters.needsRework ? 'rework' : ''],
-  dealQuotationCounts: () => ['dealQuotations', 'counts'],
+  dealQuotationCounts: (from) => (from ? ['dealQuotations', 'counts', from] : ['dealQuotations', 'counts']),
   dealQuotationDetail: (id) => ['dealQuotations', 'detail', id ?? ''],
   // The ผู้พิมพ์/พนักงานขาย print-name selector options.
-  // No parameters: the scope is the caller's own session (sales/sales_manager or the grant), same
-  // as dealQuotationCounts above.
+  // No parameters: the scope is the caller's own session (sales/sales_manager or the grant).
   dealQuotationDisplayNameOptions: () => ['dealQuotations', 'displayNameOptions'],
   // One quotation's เอกสารแนบ, its own files and those it inherits from the documents it revises.
   dealQuotationAttachments: (quotationId) => ['dealQuotations', 'attachments', quotationId ?? ''],

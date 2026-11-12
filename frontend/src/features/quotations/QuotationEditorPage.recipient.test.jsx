@@ -297,7 +297,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
     await fillCompleteQuotationItem();
     await waitFor(() => expect(saveButton().disabled).toBe(true));
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1)');
+    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
   }, 10000);
 
   // The summary serves only the NEWEST live direct quotation; the server (DirectQuotationLocks) checks every live
@@ -318,7 +318,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await fillCompleteQuotationItem();
     await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(18));
     await waitFor(() => expect(saveButton().disabled).toBe(true));
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0002-1)');
+    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0002-1)');
   }, 10000);
 
   it('?recipient=BUYER: only an APPROVED designer row (plus a cancelled one) -> บันทึกร่าง stays enabled and the create goes out', async () => {
@@ -355,7 +355,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');
     await fillCompleteQuotationItem();
     expect(saveButton().disabled).toBe(true);
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1)');
+    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
   }, 10000);
 });
 

@@ -950,7 +950,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
     @Test
     void refusalMessage_tellsTheRepWhatToDo() {
         assertThat(DirectQuotationLocks.REFUSAL_MESSAGE)
-            .contains("ใบเสนอราคาตรงที่ยังใช้งานอยู่").contains("แก้ไขรายการที่ใบเสนอราคา").contains("ยกเลิกใบเสนอราคา");
+            .contains("ใบเสนอราคาที่ยังใช้งานอยู่").contains("แก้ไขรายการที่ใบเสนอราคา").contains("ยกเลิกใบเสนอราคา");
     }
 
     /** The pipeline gates must not reach an ordinary deal: the same moves still work there. */

@@ -40,7 +40,7 @@ public final class DirectQuotationLocks {
 
     /** Shown verbatim to the rep (409). Says what to do, not only what is wrong. */
     public static final String REFUSAL_MESSAGE =
-        "ดีลนี้มีใบเสนอราคาตรงที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน";
+        "ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน";
 
     private DirectQuotationLocks() {}
 
@@ -77,7 +77,7 @@ public final class DirectQuotationLocks {
     /** N6's sentence, with the live quotation's number filled in — word for word the frontend's
      * {@code quotationMeta.liveDirectQuotationBlockMessage}. */
     public static String liveDirectQuotationMessage(String number) {
-        return "ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (" + number + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่";
+        return "ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + number + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่";
     }
 
     /**

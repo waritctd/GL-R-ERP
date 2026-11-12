@@ -910,6 +910,17 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(counts.needsRework).toBe(rework.items.length);
   });
 
+  // ช่วงเวลา filter: counts({ from }) counts only the rows list() dates on/after `from`.
+  it('counts({ from }) counts only rows whose quotationDate is on/after from', async () => {
+    await api.auth.login({ role: 'sales_manager' });
+    const dates = (await api.dealQuotations.list()).items.map((q) => q.quotationDate).filter(Boolean).sort();
+    const from = dates[Math.floor(dates.length / 2)];
+    const expected = dates.filter((d) => d >= from).length;
+    expect(expected).toBeLessThan(dates.length);
+    expect((await api.dealQuotations.counts({ from })).all).toBe(expected);
+    expect((await api.dealQuotations.counts()).all).toBe((await api.dealQuotations.list()).items.length);
+  });
+
   it('needsRework=true selects a rejected DRAFT permanently -- resubmitting mints a NEW revision, it does not leave แก้', async () => {
     // submit() on a rejected draft mints a revision of ITSELF (DealQuotationService#submit's
     // status-machine comment; `mintDealQuotationRevision` in mockApi.js) instead of resubmitting the

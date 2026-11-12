@@ -196,7 +196,7 @@ describe('DealPicker — the picked deal already has a live direct quotation (N6
   it('DRAFT: an inline notice (not a dialog) naming the quotation and its status, with เปิดใบเสนอราคา and the reason a new one cannot be made', () => {
     renderPicker({ selected: withLive('DRAFT'), initialPath: '/quotations/new?ticket=12' });
     const notice = screen.getByTestId('deal-picker-live-quotation');
-    expect(notice.textContent).toContain('ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ — QT-2026-0077-1 · ร่าง');
+    expect(notice.textContent).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ — QT-2026-0077-1 · ร่าง');
     // The disabled-with-reason half (DESIGN.md §14): the SAME reason the editor's บันทึกร่าง carries.
     expect(notice.textContent).toContain('สร้างใบเสนอราคาใหม่บนดีลนี้ไม่ได้');
     expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');

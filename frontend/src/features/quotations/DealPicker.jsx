@@ -198,7 +198,7 @@ export function DealPicker({
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex flex-col gap-0.5">
                 <strong className="break-words">
-                  {`ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ — ${live.number} · ${dealQuotationStatusLabel(live.docStatus).label}`}
+                  {`ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ — ${live.number} · ${dealQuotationStatusLabel(live.docStatus).label}`}
                 </strong>
                 <span className="text-xs">
                   {live.docStatus === 'APPROVED'

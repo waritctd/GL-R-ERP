@@ -8,6 +8,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationListPage, groupQuotationRows, quotationRowClassName } from './QuotationListPage.jsx';
 import { api } from '../../api/index.js';
+import { bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -123,6 +124,25 @@ describe('QuotationListPage', () => {
 
   // Counts are advisory chrome. A failed counts call must not blank the list or print a 0 that
   // would read as "nothing here" — the tabs simply carry no number.
+  // Owner ask 2026-11-12: the tab counts follow the ช่วงเวลา filter -- the page asks the server for
+  // counts from the period's start date, and goes back to unfiltered counts on ทั้งหมด.
+  it('re-requests the tab counts with the period start date when ช่วงเวลา changes', async () => {
+    renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+    await waitFor(() => expect(api.dealQuotations.counts).toHaveBeenCalledTimes(1));
+    expect(api.dealQuotations.counts.mock.calls[0][0]?.from).toBeUndefined();
+
+    api.dealQuotations.counts.mockResolvedValue({ all: 1, pendingApproval: 0, needsRework: 0, cancelled: 0, approved: 1 });
+    fireEvent.change(screen.getByRole('combobox', { name: 'กรองตามช่วงเวลา' }), { target: { value: 'today' } });
+    await waitFor(() => expect(api.dealQuotations.counts).toHaveBeenLastCalledWith({ from: bangkokTodayIso() }));
+    await waitFor(() => expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'ทั้งหมด1', 'รออนุมัติ0', 'ฉบับแก้0', 'ยกเลิก0', 'อนุมัติแล้ว1',
+    ]));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'กรองตามช่วงเวลา' }), { target: { value: '' } });
+    await waitFor(() => expect(screen.getAllByRole('tab')[0].textContent).toBe('ทั้งหมด7'));
+  });
+
   it('still renders the tabs and the list when the counts request fails', async () => {
     api.dealQuotations.counts.mockRejectedValue(new Error('boom'));
     renderListPage(salesUser);
@@ -263,6 +283,44 @@ describe('QuotationListPage', () => {
 
     await waitFor(() => expect(screen.queryByText('QD69-0001')).toBeNull());
     expect(screen.getByText('ไม่มีใบเสนอราคาในเงื่อนไขนี้')).not.toBeNull();
+    expect(container.querySelector('.table-head'), 'column header row must stay mounted').not.toBeNull();
+  });
+
+  // Owner ask 2026-11-12: a ช่วงเวลา filter for every role, default ทั้งหมด.
+  it('a plain sales user can filter by ช่วงเวลา, defaulting to ทั้งหมด', async () => {
+    api.dealQuotations.list.mockResolvedValue({
+      items: [
+        row({ id: 1, number: 'QD69-0001', quotationDate: bangkokTodayIso() }),
+        row({ id: 2, number: 'QD69-0002', quotationDate: '2020-01-01' }),
+      ],
+    });
+    renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    const select = screen.getByRole('combobox', { name: 'กรองตามช่วงเวลา' });
+    expect(select.value).toBe('');
+    expect(screen.getByText('QD69-0002')).not.toBeNull();
+
+    fireEvent.change(select, { target: { value: 'today' } });
+    expect(screen.getByText('QD69-0001')).not.toBeNull();
+    expect(screen.queryByText('QD69-0002')).toBeNull();
+
+    fireEvent.change(select, { target: { value: '1y' } });
+    expect(screen.queryByText('QD69-0002')).toBeNull();
+    expect(screen.getByText('QD69-0001')).not.toBeNull();
+
+    fireEvent.change(select, { target: { value: '' } });
+    expect(screen.getByText('QD69-0002')).not.toBeNull();
+  });
+
+  it('keeps the column header row for a plain sales user whose period filter empties the list', async () => {
+    api.dealQuotations.list.mockResolvedValue({ items: [row({ id: 1, number: 'QD69-0001', quotationDate: '2020-01-01' })] });
+    const { container } = renderListPage(salesUser);
+    await screen.findByText('QD69-0001');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'กรองตามช่วงเวลา' }), { target: { value: 'today' } });
+
+    await waitFor(() => expect(screen.queryByText('QD69-0001')).toBeNull());
     expect(container.querySelector('.table-head'), 'column header row must stay mounted').not.toBeNull();
   });
 

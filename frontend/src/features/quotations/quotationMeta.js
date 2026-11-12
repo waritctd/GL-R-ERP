@@ -31,6 +31,7 @@
 // only requests the APPROVED edge, and a DEAL_DIRECT quotation never expires): which edge a caller
 // requests decides what a row reaches, not which edges the table allows.
 import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
+import { bangkokTodayIso } from '../../utils/format.js';
 export const DEAL_QUOTATION_TRANSITIONS = {
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
   PENDING_APPROVAL: ['APPROVED', 'DRAFT', 'ISSUED'],
@@ -439,7 +440,7 @@ export function blocksNewDirectQuotation(live, recipientType, dealStatus = 'draf
 /** N6's reason, word for word the server's 409: the editor disables บันทึกร่าง with it BEFORE the rep
  * reaches that refusal (DESIGN.md §14: a disabled action says why). */
 function liveDirectQuotationBlockMessage(live) {
-  return `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
+  return `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${live?.number ?? '-'}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`;
 }
 
 /** The confirm-order dialog copy for an APPROVED direct quotation (the promote endpoint), shared by
@@ -709,15 +710,40 @@ export const DEAL_QUOTATION_EMAIL_OPTIONS = [
   { value: 'none', label: 'ไม่มีอีเมล' },
 ];
 
+export const DEAL_QUOTATION_PERIOD_OPTIONS = [
+  { value: 'today', label: 'วันนี้' },
+  { value: '3d', label: '3 วันที่แล้ว' },
+  { value: '7d', label: '7 วันที่แล้ว' },
+  { value: '1m', label: '1 เดือน' },
+  { value: '3m', label: '3 เดือน' },
+  { value: '6m', label: '6 เดือน' },
+  { value: '1y', label: '1 ปี' },
+  { value: '', label: 'ทั้งหมด' },
+];
+
+// ISO start date of a period ending `today` (YYYY-MM-DD); months clamp to the target month's last day.
+export function dealQuotationPeriodStart(period, today) {
+  const match = /^(today|(\d+)([dmy]))$/.exec(period);
+  if (!match) return '';
+  const [y, mo, d] = today.split('-').map(Number);
+  let n = match[1] === 'today' ? 0 : Number(match[2]);
+  const unit = match[3] ?? 'd';
+  if (unit === 'd') return new Date(Date.UTC(y, mo - 1, d - n)).toISOString().slice(0, 10);
+  if (unit === 'y') n *= 12;
+  const last = new Date(Date.UTC(y, mo - 1 - n + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, mo - 1 - n, Math.min(d, last))).toISOString().slice(0, 10);
+}
+
 /** Client-side, presentation-only narrowing of an already-server-scoped row list -- NOT a
  * security boundary (see the section comment above). `repId` filters on `row.salesRepId`
  * (string-compared, so `''`/`null`/`undefined` all mean "no filter"); `text` matches
  * case-insensitively against `${customerName} ${projectName}`; `amount` is `'lt1m'` (grandTotal
  * below {@link DEAL_QUOTATION_AMOUNT_THRESHOLD}) or `'gte1m'` (at/above it), anything else meaning
- * "no filter"; `email` is `'has'` / `'none'` (see below), anything else meaning "no filter". All
- * four compose with AND, each is a no-op when empty/absent, and the function is null-safe
+ * "no filter"; `email` is `'has'` / `'none'` (see below), anything else meaning "no filter";
+ * `period` is a {@link DEAL_QUOTATION_PERIOD_OPTIONS} value keeping rows whose quotationDate is
+ * on/after the period's start counted back from `today` (Bangkok). All five compose with AND, each is a no-op when empty/absent, and the function is null-safe
  * throughout. */
-export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '', email = '' } = {}) {
+export function filterDealQuotationRows(rows, { repId = '', text = '', amount = '', email = '', period = '', today = bangkokTodayIso() } = {}) {
   let list = rows ?? [];
   if (repId) list = list.filter((row) => String(row?.salesRepId ?? '') === String(repId));
   const needle = (text ?? '').trim().toLowerCase();
@@ -738,6 +764,11 @@ export function filterDealQuotationRows(rows, { repId = '', text = '', amount = 
     const hasEmail = (row) => Boolean((row?.contactEmail ?? '').trim() || (row?.orderedByEmail ?? '').trim());
     list = list.filter((row) => hasEmail(row) === (email === 'has'));
   }
+  const start = dealQuotationPeriodStart(period, today);
+  if (start) list = list.filter((row) => {
+    const date = String(row?.quotationDate ?? '').slice(0, 10);
+    return date !== '' && date >= start;
+  });
   return list;
 }
 

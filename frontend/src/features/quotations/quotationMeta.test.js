@@ -1260,6 +1260,55 @@ describe('filterDealQuotationRows', () => {
     ]);
   });
 
+  // ช่วงเวลา filter on quotationDate, for every role. Each window starts N days/months before
+  // `today` (Bangkok) and includes that start day; วันนี้ is today only; ทั้งหมด ('') is the default.
+  it('filters by period on quotationDate, each window inclusive of its start day', () => {
+    const today = '2026-11-12';
+    const periodRows = [
+      { id: 1, quotationDate: '2026-11-12' },
+      { id: 2, quotationDate: '2026-11-09' }, // 3d start
+      { id: 3, quotationDate: '2026-11-08' },
+      { id: 4, quotationDate: '2026-11-05' }, // 7d start
+      { id: 5, quotationDate: '2026-10-12' }, // 1m start
+      { id: 6, quotationDate: '2026-08-12' }, // 3m start
+      { id: 7, quotationDate: '2026-05-12' }, // 6m start
+      { id: 8, quotationDate: '2025-11-12' }, // 1y start
+      { id: 9, quotationDate: '2025-11-11' },
+      { id: 10, quotationDate: null },
+    ];
+    const ids = (period) => meta.filterDealQuotationRows(periodRows, { period, today }).map((r) => r.id);
+    expect(ids('today')).toEqual([1]);
+    expect(ids('3d')).toEqual([1, 2]);
+    expect(ids('7d')).toEqual([1, 2, 3, 4]);
+    expect(ids('1m')).toEqual([1, 2, 3, 4, 5]);
+    expect(ids('3m')).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(ids('6m')).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(ids('1y')).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(ids('')).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(ids('nonsense')).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  });
+
+  it('clamps a month window to the end of a shorter month (31 มี.ค. − 1 เดือน = 28 ก.พ.)', () => {
+    const rows2 = [{ id: 1, quotationDate: '2026-02-28' }, { id: 2, quotationDate: '2026-02-27' }];
+    expect(meta.filterDealQuotationRows(rows2, { period: '1m', today: '2026-03-31' }).map((r) => r.id)).toEqual([1]);
+  });
+
+  it('period composes with email (AND)', () => {
+    const mixed = [
+      { id: 1, quotationDate: '2026-11-12', contactEmail: 'a@example.co.th' },
+      { id: 2, quotationDate: '2026-11-12', contactEmail: null },
+      { id: 3, quotationDate: '2020-01-01', contactEmail: 'b@example.co.th' },
+    ];
+    expect(meta.filterDealQuotationRows(mixed, { period: 'today', today: '2026-11-12', email: 'has' }).map((r) => r.id)).toEqual([1]);
+  });
+
+  it('offers the period options in the owner-asked order, ทั้งหมด last', () => {
+    expect(meta.DEAL_QUOTATION_PERIOD_OPTIONS.map((o) => o.label)).toEqual([
+      'วันนี้', '3 วันที่แล้ว', '7 วันที่แล้ว', '1 เดือน', '3 เดือน', '6 เดือน', '1 ปี', 'ทั้งหมด',
+    ]);
+    expect(meta.DEAL_QUOTATION_PERIOD_OPTIONS.at(-1).value).toBe('');
+  });
+
   it('is a no-op when both filters are empty/absent', () => {
     expect(meta.filterDealQuotationRows(rows)).toEqual(rows);
     expect(meta.filterDealQuotationRows(rows, {})).toEqual(rows);
@@ -1653,7 +1702,7 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: live })).toEqual([expect.objectContaining({
       check: 'liveDirectQuotation',
       blocking: true,
-      message: 'ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
+      message: 'ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
@@ -1714,9 +1763,9 @@ describe('buildQuotationChecklist', () => {
     expect(blocks(ownerDraft, 'BUYER')).toBe(true);
 
     expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
-      .toEqual(['ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
+      .toEqual(['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
     // Two blockers: the newest (highest id) is named, whatever the list order.
-    const newestNamed = ['ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
+    const newestNamed = ['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
     expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([approvedDesigner], 'BUYER')).toEqual([]);

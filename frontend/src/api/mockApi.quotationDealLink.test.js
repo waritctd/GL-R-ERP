@@ -326,7 +326,7 @@ describe('mock dealQuotations — N6: one live direct quotation per deal (S2-B3)
     expect(error).not.toBeNull();
     expect(error.status).toBe(409);
     expect(error.message).toBe(
-      `ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (${live.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+      `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${live.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
     );
     expect(error.details).toMatchObject({ liveQuotationId: live.id, number: live.number, docStatus: 'DRAFT' });
     // The refused create stored nothing: still exactly the one live row.
