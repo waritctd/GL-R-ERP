@@ -770,7 +770,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 <StepRoleTag owners={['sales', 'ceo']} viewerRole={role} />
               </div>
               {/* Pending alone: on a new deal the dialog is read-only and only records ยืนยัน, so whoever sees the hint below gets the button it names. */}
-              {canFullWriteStoredIr && sourcePending && onChooseProcurementSource ? (
+              {canFullWriteStoredIr && depositReady && sourcePending && onChooseProcurementSource ? (
                 <Button type="button" size="sm" variant="primary" className="whitespace-nowrap"
                   onClick={onChooseProcurementSource} data-testid="deal-fulfilment-choose-source">
                   จัดซื้อสินค้า

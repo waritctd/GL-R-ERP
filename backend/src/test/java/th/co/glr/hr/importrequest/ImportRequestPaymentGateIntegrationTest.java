@@ -266,7 +266,12 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
         long ticketId = insertTicket("GATE-NEW-UNDECIDED", "DEPOSIT_PAID");
         insertItem(ticketId, "Pay Gate New Deal Factory", "Line", "60x60", "10", "pcs", 0);
 
+        assertThat(ticketService.getProcurementSource(ticketId, owner).pending()).isTrue();
         assertThat(service.createDrafts(ticketId, null, owner)).hasSize(1);
+        // creating the IR is itself the decision: the dialog must not stay pending
+        var after = ticketService.getProcurementSource(ticketId, owner);
+        assertThat(after.pending()).isFalse();
+        assertThat(after.decidedAt()).isNotNull();
     }
 
     /** Hand-seeded legacy shape: DEAL_DIRECT quotation issued 2026-11-06 + DEAL_PROMOTED_FROM_QUOTATION event. */

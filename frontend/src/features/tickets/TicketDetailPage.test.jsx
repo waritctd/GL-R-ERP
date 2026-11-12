@@ -4762,9 +4762,9 @@ describe('TicketDetailPage', () => {
     });
     const scrolledToIrSection = () => scrolledIds.includes('deal-fulfilment-stored-ir');
 
-    function irStageDeal({ rows = [], salesStage = 'DEPOSIT_RECEIVED' } = {}) {
+    function irStageDeal({ rows = [], salesStage = 'DEPOSIT_RECEIVED', lifecycle = 'ACTIVE', fulfillmentStatus = null } = {}) {
       const state = {
-        lifecycle: 'ACTIVE', salesStage, paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued',
+        lifecycle, salesStage, paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus, status: 'quotation_issued',
       };
       api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1 } }) });
       api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
@@ -4896,6 +4896,18 @@ describe('TicketDetailPage', () => {
       api.tickets.getProcurementSource.mockResolvedValue(undecided(true));
       renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
       await waitFor(() => expect(api.tickets.getProcurementSource).toHaveBeenCalledWith(701));
+    });
+
+    it.each([
+      ['already on the stock/import axis (FROM_STOCK)', { fulfillmentStatus: 'FROM_STOCK' }],
+      ['closed', { lifecycle: 'CLOSED_LOST' }],
+    ])('does not read procurement-source for a deal %s (the decision window is shut)', async (_n, state) => {
+      irStageDeal(state);
+      api.tickets.getProcurementSource.mockClear();
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await stickyInputsSettled();
+      await screen.findByRole('heading', { level: 1 });
+      expect(api.tickets.getProcurementSource).not.toHaveBeenCalled();
     });
 
     it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {
