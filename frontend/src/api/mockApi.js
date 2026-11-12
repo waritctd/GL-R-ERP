@@ -8819,7 +8819,11 @@ export const api = {
           fail('ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้', 409);
         }
       } else {
-        for (const it of items) it.qtyFromStock = wanted.get(it.id) ? Number(it.qty ?? 0) : Number(it.qtyFromStock ?? 0);
+        for (const it of items) {
+          // Import keeps only a partial coverage (TicketService.keptPartialCoverage); a fully covered line resets to 0.
+          const kept = Number(it.qtyFromStock ?? 0) < Number(it.qty ?? 0) ? Number(it.qtyFromStock ?? 0) : 0;
+          it.qtyFromStock = wanted.get(it.id) ? Number(it.qty ?? 0) : kept;
+        }
         routeAllStockDealToDelivery(ticket, user);
       }
       ticket.procurementDecidedAt = new Date().toISOString();
@@ -12679,6 +12683,9 @@ export const api = {
         fail(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${missingLeadTime.join(', ')}`, 409);
       }
       if (newGroups.length === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      // ImportRequestService.recordProcurementSourceImplied: creating the IR is itself the import decision on a new deal.
+      // Latched only once nothing below can refuse (Java rolls a refused create back, the mock cannot).
+      if (procurementDecisionOpen(ticket) && !ticket.procurementDecidedAt) ticket.procurementDecidedAt = new Date().toISOString();
       const newIds = [];
       for (const group of newGroups) {
         const supplied = suppliedFor(group);

@@ -1559,7 +1559,7 @@ public class TicketService {
         } else {
             List<StockReservationRequest.Line> lines = ticket.items().stream()
                 .map(i -> new StockReservationRequest.Line(i.id(),
-                    wanted.get(i.id()) ? nullToZero(i.qty()) : nullToZero(i.qtyFromStock()), null))
+                    wanted.get(i.id()) ? nullToZero(i.qty()) : keptPartialCoverage(i), null))
                 .toList();
             tickets.reserveStock(ticketId, lines);
             Map<Long, BigDecimal> merged = new LinkedHashMap<>();
@@ -1588,6 +1588,19 @@ public class TicketService {
     /** ACTIVE, at/after ORDER_RECEIVED, and not yet on the import/stock axis: the window where a decision can still be made. */
     private static boolean decisionStageOpen(TicketSummaryDto s) {
         return DealLifecycle.ACTIVE.equals(s.lifecycle()) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null;
+    }
+
+    /** A line the rep leaves as import keeps the CEO's partial coverage; a fully covered line goes back to 0. */
+    private static BigDecimal keptPartialCoverage(TicketItemDto i) {
+        BigDecimal existing = nullToZero(i.qtyFromStock());
+        return existing.compareTo(nullToZero(i.qty())) < 0 ? existing : BigDecimal.ZERO;
+    }
+
+    /** A new deal's IR create is itself the import decision: latch it while the window is open (no-op once decided). */
+    public void recordProcurementSourceImplied(TicketSummaryDto s, long actorId) {
+        if (decisionStageOpen(s)) {
+            tickets.markProcurementSourceDecided(s.id(), actorId);
+        }
     }
 
     private static boolean isFromStock(TicketItemDto i) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { api, patchTicketForTests, setTicketItemQtyFromStockForTests } from './mockApi.js';
 
 // Mirrors the backend procurement-source contract (Tasks 1-3). Fixtures: ticket 11 is owned by
@@ -118,6 +118,19 @@ describe('mockApi procurement-source (mirrors TicketService.decideProcurementSou
       .rejects.toMatchObject({ status: 409, message: 'เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้' });
   });
 
+  it('a fully covered line the rep marks import goes back to 0; a partial one is kept', async () => {
+    await api.auth.login(SALES);
+    const qty = Number((await api.tickets.get(OLD_DEAL)).ticket.items.find((i) => i.id === ITEM).qty);
+    const covered = async () => Number((await api.tickets.get(OLD_DEAL)).ticket.items.find((i) => i.id === ITEM).qtyFromStock);
+    setTicketItemQtyFromStockForTests(OLD_DEAL, ITEM, qty);
+    await api.tickets.decideProcurementSource(OLD_DEAL, lines(false));
+    expect(await covered()).toBe(0);
+    reset({ legacy: true });
+    setTicketItemQtyFromStockForTests(OLD_DEAL, ITEM, qty - 1);
+    await api.tickets.decideProcurementSource(OLD_DEAL, lines(false));
+    expect(await covered()).toBe(qty - 1);
+  });
+
   it('CEO may decide an old deal', async () => {
     await api.auth.login(CEO);
     await api.tickets.decideProcurementSource(OLD_DEAL, lines(false));
@@ -148,5 +161,34 @@ describe('mockApi createDrafts source gate (mirrors ImportRequestService.procure
     await api.tickets.decideProcurementSource(OLD_DEAL, { lines: [{ itemId: ITEM, fromStock: false }] });
     await expect(api.storedImportRequests.createDrafts(OLD_DEAL, {}))
       .resolves.toBeTruthy();
+  });
+
+  it('a NEW undecided deal: a refused IR create records no decision', async () => {
+    reset({ legacy: false });
+    patchTicketForTests(OLD_DEAL, { paymentStatus: 'DEPOSIT_PAID' });
+    await api.auth.login(SALES);
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(true);
+    // A refused create records nothing (Java rolls the latch back with the transaction).
+    await expect(api.storedImportRequests.createDrafts(OLD_DEAL, { leadTimes: [{ factoryName: 'x', minDays: 0, maxDays: 0 }] }))
+      .rejects.toMatchObject({ status: 400 });
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(true);
+    // An earlier test already created this deal's IRs, so this create is refused 409 too: still no latch.
+    await expect(api.storedImportRequests.createDrafts(OLD_DEAL, {})).rejects.toMatchObject({ status: 409 });
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(true);
+  });
+
+  it('a NEW undecided deal latches the decision when its IR is created', async () => {
+    vi.resetModules();
+    const fresh = await import('./mockApi.js');
+    fresh.patchTicketForTests(OLD_DEAL, {
+      lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', fulfillmentStatus: null,
+      legacyStockSource: false, procurementDecidedAt: null, paymentStatus: 'DEPOSIT_PAID',
+    });
+    fresh.setTicketItemQtyFromStockForTests(OLD_DEAL, ITEM, 0);
+    await fresh.api.auth.login(SALES);
+    await expect(fresh.api.storedImportRequests.createDrafts(OLD_DEAL, {})).resolves.toBeTruthy();
+    const after = await fresh.api.tickets.getProcurementSource(OLD_DEAL);
+    expect(after.pending).toBe(false);
+    expect(after.decidedAt).toBeTruthy();
   });
 });

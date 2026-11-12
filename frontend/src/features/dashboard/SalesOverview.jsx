@@ -12,7 +12,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
-import { offRoutePartiesFor, useStageCatalog } from '../tickets/stageCatalog.js';
+import { offRoutePartiesFor, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { Figure, failed } from './dashboardParts.jsx';
 
 // useQueries' `combine`: each query's rows. Module-level so react-query keeps the combined array
@@ -134,7 +134,22 @@ export function SalesOverview({ user, employee }) {
     combine: dataOfQueries,
   });
 
+  // Old deals still waiting on the import/stock decision read จัดซื้อสินค้า, not ออกใบขอซื้อ (IR): ask the
+  // server (the deal page's own query) for each ACTIVE, undecided-axis deal at/after ORDER_RECEIVED.
+  const orderReceivedIdx = stageIndexIn(stageCatalog, 'ORDER_RECEIVED');
+  const sourceDealIds = useMemo(() => orderReceivedIdx < 0 ? [] : activeDeals
+    .filter((deal) => deal.fulfillmentStatus == null && stageIndexIn(stageCatalog, deal.salesStage) >= orderReceivedIdx)
+    .map((deal) => Number(deal.id)), [activeDeals, stageCatalog, orderReceivedIdx]);
+  const sourceRows = useQueries({
+    queries: sourceDealIds.map((id) => ({
+      queryKey: queryKeys.procurementSource(id),
+      queryFn: () => api.tickets.getProcurementSource(id),
+    })),
+    combine: dataOfQueries,
+  });
+
   const worklist = useMemo(() => {
+    const sourceByDeal = new Map(sourceDealIds.map((id, index) => [id, sourceRows[index]]));
     const rowsByDeal = new Map(quotedDealIds.map((id, index) => [id, quotationRows[index]]));
     const items = activeDeals
       .map((deal) => {
@@ -144,12 +159,13 @@ export function SalesOverview({ user, employee }) {
           action: nextSalesAction(deal, pricingRequests, {
             offRouteParties: rows ? offRoutePartiesFor(stageCatalog, deal.entryChannel) : null,
             quotationByRequest: rows ? newestQuotationByRequest(rows) : undefined,
+            procurementSource: sourceByDeal.get(Number(deal.id)),
           }),
         };
       })
       .filter((item) => item.action != null);
     return sortWorklist(items);
-  }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationRows]);
+  }, [activeDeals, pricingRequests, stageCatalog, quotedDealIds, quotationRows, sourceDealIds, sourceRows]);
 
   const openValue = useMemo(
     () => activeDeals.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0),

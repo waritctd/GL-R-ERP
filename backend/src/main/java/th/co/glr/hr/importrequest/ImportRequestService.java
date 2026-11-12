@@ -290,6 +290,7 @@ public class ImportRequestService {
         // The payment gate applies at create now (widened gate, same as issue()) and refuses FIRST, so a
         // deal with no paid deposit is never walked through the country / lead-time prompts.
         ticketService.requireImportRequestIssuable(summary, true);
+        ticketService.recordProcurementSourceImplied(summary, actor.id());
 
         // 400 before anything is written (the picker and auto-create below both write).
         Map<String, ImportRequestRequests.NewFactoryLeadTimeInput> suppliedLeadTimes =
