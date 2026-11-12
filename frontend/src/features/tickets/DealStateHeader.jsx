@@ -120,7 +120,7 @@ function lastChipSpanClass(count) {
  * trigger at all.
  */
 export function DealStateHeader({
-  summary, pricingRequests = [], importRequests, role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false, onMenuOpenChange,
+  summary, pricingRequests = [], importRequests, procurementSource, role, primaryAction, bannerText, overflowItems, onRefresh, condensed = false, onMenuOpenChange,
   // deal-party-model.md: `{ projectName, count }` while the deal has several bidding contractors and
   // none awarded. The deal's customer_id is then only a placeholder, so the header is titled by the
   // project and says the bill-to is waiting on the bid. Optional: every other caller is unchanged.
@@ -168,7 +168,8 @@ export function DealStateHeader({
     {
       key: 'fulfilment',
       label: 'การนำเข้า',
-      value: importChip ?? (fulfilment ? fulfilment.label : 'ยังไม่ออกใบขอซื้อ'),
+      value: importChip ?? (fulfilment ? fulfilment.label
+        : procurementSource?.pending ? 'ยังไม่ได้จัดซื้อ' : 'ยังไม่ออกใบขอซื้อ'),
       // Every factory at the warehouse reads as done, like the GOODS_RECEIVED rollup it is about to become.
       tone: importChip === importStepMeta('RECEIVED').label ? 'success' : importChip ? 'info'
         : fulfilment ? fulfilment.tone : 'neutral',

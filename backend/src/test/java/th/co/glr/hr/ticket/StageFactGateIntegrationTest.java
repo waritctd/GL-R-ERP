@@ -665,7 +665,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.DEPOSIT_PAID);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
-        ticketService.reserveStock(ticketId, declare(itemId, "100.00"), ownerRep);
+        ticketService.reserveStock(ticketId, declare(itemId, "100.00"), ceo);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
@@ -692,7 +692,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
      * blocks {@code ISSUE_IMPORT_REQUEST}. Below {@code ORDER_RECEIVED} that would reroute an
      * untouched deal around the entire import journey on one person's word.
      *
-     * <p>Every role the declaration is open to is driven, at every stage below the floor, and every
+     * <p>The one role the declaration is open to (the CEO) is driven, at every stage below the floor, and every
      * axis the call could have touched is re-read afterwards.
      */
     @Test
@@ -702,10 +702,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             long itemId = onlyItemId(ticketId);
             tickets.updateSalesStage(ticketId, stage);
 
-            // Only the two roles that CAN declare (owning rep + CEO) reach the stage floor's 409;
-            // import is not a declarer at all and is refused with a
+            // Only the CEO reaches the stage floor's 409; the owning rep and import are refused with a
             // 403 before the floor — see StockDeclarationAuthzIntegrationTest.
-            for (UserPrincipal actor : List.of(ownerRep, ceo)) {
+            for (UserPrincipal actor : List.of(ceo)) {
                 assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), actor))
                     .describedAs("%s must not declare stock coverage at %s", actor.role(), stage)
                     .isInstanceOfSatisfying(ApiException.class,
@@ -732,7 +731,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             long itemId = onlyItemId(ticketId);
             tickets.updateSalesStage(ticketId, stage);
 
-            ticketService.reserveStock(ticketId, declare(itemId, "100.00"), ownerRep);
+            ticketService.reserveStock(ticketId, declare(itemId, "100.00"), ceo);
 
             assertThat(qtyFromStock(itemId)).isEqualByComparingTo("100.00");
             assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FROM_STOCK);
@@ -741,26 +740,25 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
-     * RESERVE_STOCK is advertised to the owner and the CEO from ORDER_RECEIVED, and the
+     * RESERVE_STOCK is advertised to the CEO (never the owner or import) from ORDER_RECEIVED, and the
      * {@code reserveStock} endpoint keeps the same stage floor: refused below ORDER_RECEIVED, accepted at it.
      */
     @Test
     void reserveStockIsAdvertisedFromTheStageFloor_andTheEndpointKeepsIt() {
         long below = createDealWithOneItem();
         tickets.updateSalesStage(below, DealStage.NEGOTIATION);
-        assertThat(actionCodes(below, ownerRep)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(below, ceo)).doesNotContain("RESERVE_STOCK");
         assertThatThrownBy(() ->
-            ticketService.reserveStock(below, declare(onlyItemId(below), "100.00"), ownerRep))
+            ticketService.reserveStock(below, declare(onlyItemId(below), "100.00"), ceo))
             .isInstanceOf(ApiException.class);
 
         long above = createDealWithOneItem();
         tickets.updateSalesStage(above, DealStage.ORDER_RECEIVED);
-        assertThat(actionCodes(above, ownerRep)).contains("RESERVE_STOCK");
+        assertThat(actionCodes(above, ownerRep)).doesNotContain("RESERVE_STOCK");
         assertThat(actionCodes(above, ceo)).contains("RESERVE_STOCK");
         assertThat(actionCodes(above, importActor)).doesNotContain("RESERVE_STOCK");
         assertThatCode(() ->
-            ticketService.reserveStock(above, declare(onlyItemId(above), "100.00"), ownerRep))
+            ticketService.reserveStock(above, declare(onlyItemId(above), "100.00"), ceo))
             .doesNotThrowAnyException();
     }
 

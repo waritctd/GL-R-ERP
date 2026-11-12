@@ -1144,6 +1144,45 @@ public class TicketRepository {
             Map.of("ticketId", ticketId));
     }
 
+    /**
+     * Legacy = the order was confirmed from a direct quotation issued before the quotation carried the
+     * import/stock choice (2026-11-07, Bangkok date): the rep still has to make it in the stage-10 dialog.
+     */
+    public boolean isLegacyStockSourceDeal(long ticketId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1 FROM sales.quotation q
+                 WHERE q.quotation_id = (
+                        SELECT e.related_document_id FROM sales.ticket_event e
+                         WHERE e.ticket_id = :ticketId AND e.kind = :kind
+                           AND e.related_document_type = 'QUOTATION' AND e.related_document_id IS NOT NULL
+                         ORDER BY e.created_at DESC, e.event_id DESC LIMIT 1)
+                   AND q.origin = 'DEAL_DIRECT'
+                   AND (q.issued_at AT TIME ZONE 'Asia/Bangkok')::date < DATE '2026-11-07')
+               AND NOT EXISTS (SELECT 1 FROM sales.ticket_item i WHERE i.ticket_id = :ticketId AND i.sourced_from_stock)
+            """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION), Boolean.class));
+    }
+
+    /** Latches the procurement-source decision; false when it was already decided (the once-only guard). */
+    public boolean markProcurementSourceDecided(long ticketId, long actorId) {
+        return jdbc.update("""
+            UPDATE sales.ticket
+               SET procurement_source_decided_at = now(), procurement_source_decided_by = :actorId
+             WHERE ticket_id = :ticketId AND procurement_source_decided_at IS NULL
+            """, Map.of("ticketId", ticketId, "actorId", actorId)) > 0;
+    }
+
+    public Optional<String> quotationNumber(long quotationId) {
+        return jdbc.query("SELECT number FROM sales.quotation WHERE quotation_id = :id", Map.of("id", quotationId),
+            (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
+    public Optional<Instant> findProcurementSourceDecidedAt(long ticketId) {
+        return jdbc.query("SELECT procurement_source_decided_at FROM sales.ticket WHERE ticket_id = :ticketId",
+            Map.of("ticketId", ticketId), (rs, n) -> rs.getTimestamp(1))
+            .stream().filter(java.util.Objects::nonNull).findFirst().map(Timestamp::toInstant);
+    }
+
     private void insertItems(long ticketId, List<TicketItemRequest> items) {
         if (items.isEmpty()) {
             return;

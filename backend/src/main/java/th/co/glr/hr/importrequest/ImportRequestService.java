@@ -281,10 +281,15 @@ public class ImportRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "สร้างใบขอซื้อได้หลังจากยืนยันคำสั่งซื้อแล้ว (ORDER_RECEIVED) เท่านั้น");
         }
+        TicketSummaryDto summary = requireTicketSummary(ticketId);
+        if (ticketService.procurementSourceAwaitingRep(summary)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "กด \"จัดซื้อสินค้า\" เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)");
+        }
 
         // The payment gate applies at create now (widened gate, same as issue()) and refuses FIRST, so a
         // deal with no paid deposit is never walked through the country / lead-time prompts.
-        ticketService.requireImportRequestIssuable(requireTicketSummary(ticketId), true);
+        ticketService.requireImportRequestIssuable(summary, true);
 
         // 400 before anything is written (the picker and auto-create below both write).
         Map<String, ImportRequestRequests.NewFactoryLeadTimeInput> suppliedLeadTimes =

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -279,7 +280,7 @@ public class TicketService {
      * quotations in their return value. That is a narrower, accepted residual gap
      * (transient, tied to import legitimately performing its own action) rather than closed
      * by touching every one of those call sites.
-     * Letting the deal owner use {@link #reserveStock} does not enlarge
+     * Letting the deal owner use {@link #decideProcurementSource} does not enlarge
      * it: this projection only ever strips anything for {@link #IMPORT_ROLES}, and a sales
      * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
@@ -1444,13 +1445,12 @@ public class TicketService {
      * DELIVERY_SCHEDULING}, which in turn blocks {@link #issueImportRequest}), a declaration is
      * refused below {@link DealStage#ORDER_RECEIVED} — see {@link #stockCoverageStageReached}.
      *
-     * <p><strong>Authorisation: "Sales declares, CEO may correct/override."</strong> Import is NOT
-     * allowed (see {@link #STOCK_DECLARATION_ROLES}). Gating this to {@link #FULFILMENT_ROLES}
-     * would leave the one person whose money depends on the number unable to supply it: {@code
+     * <p><strong>Authorisation: CEO only.</strong> The owning rep declares through the stage-10
+     * "จัดซื้อสินค้า" dialog ({@link #decideProcurementSource}) or a direct quotation's จากสต็อก tick;
+     * this endpoint is the CEO's correct/override path. Import is NOT allowed (see {@link
+     * #STOCK_DECLARATION_ROLES}). The figure matters because {@code
      * CommissionRepository#sumActiveStockActualReceived} computes the rep's STOCK_BONUS input as
-     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}. The deal owner declares what
-     * they know about their own deal; ceo has the same ability and can correct a rep's figure
-     * afterwards.
+     * {@code SUM(actual_received × SUM(qty_from_stock)/SUM(qty))}.
      *
      * <p><strong>Only the gate differs.</strong> The commission formula is unaffected — the gate
      * decides who may supply its input, never how it is computed. Everything below the gate is
@@ -1459,26 +1459,17 @@ public class TicketService {
      * routing, the same {@link #requireActive} guard. One code path and one meaning for the
      * field: routing follows the facts, not the declarer.
      *
-     * <p>Two gates, in the order {@link #requireViewAccess} uses. The coarse {@link
-     * #STOCK_DECLARATION_ROLES} check runs BEFORE the ticket is loaded so that widening this
-     * endpoint cannot turn it into an existence probe — a role that can never declare (hr,
-     * employee, account, sales_manager) still gets 403 without a row being read.
-     * {@link #canDeclareStockCoverage} then applies the per-row rule.
-     *
-     * <p><strong>Supervision.</strong> A CEO correction is the only check on an uncorroborated
-     * declaration, so someone must be told to look. A rep
-     * declaring on their own deal notifies ฝ่ายขาย's ผู้จัดการ — see {@link
-     * #notifySalesManagerOfRepDeclaration} for who that resolves to, why it is the manager rather
-     * than Import, and why a ceo correction deliberately raises nothing.
+     * <p>CEO only: a rep declares through {@link #decideProcurementSource} (the "จัดซื้อสินค้า" button).
+     * The role check runs BEFORE the ticket is loaded, so this cannot be used as an existence probe.
+     * A CEO correction raises no sales-manager notification.
      */
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
-        requireRole(actor, STOCK_DECLARATION_ROLES);
+        if (!CEO_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
+        }
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
-        if (!canDeclareStockCoverage(s, actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
         requireActive(s);
         if (!stockCoverageStageReached(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -1507,13 +1498,105 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.STOCK_RESERVED, s.status(), s.status(),
             "qty_from_stock=" + totalDeclared.stripTrailingZeros().toPlainString());
-        boolean leavesTheImportAxis = routeAllStockDealToDelivery(s, ticket.items(), mergedStock, actor);
-        notifySalesManagerOfRepDeclaration(s, actor, mergedStock, ticket.items(), leavesTheImportAxis);
+        routeAllStockDealToDelivery(s, ticket.items(), mergedStock, actor);
         return requireTicket(ticketId);
     }
 
+    /** Current import/stock split of a deal's lines, for the stage-10 dialog. View access as {@link #requireViewAccess}. */
+    public ProcurementSourceDto getProcurementSource(long ticketId, UserPrincipal actor) {
+        TicketDto ticket = requireViewAccess(ticketId, actor);
+        TicketSummaryDto s = ticket.summary();
+        boolean legacy = tickets.isLegacyStockSourceDeal(ticketId);
+        Instant decidedAt = tickets.findProcurementSourceDecidedAt(ticketId).orElse(null);
+        boolean editable = legacy && decidedAt == null && decisionStageOpen(s)
+            && STOCK_DECLARATION_ROLES.contains(actor.role()) && canDeclareStockCoverage(s, actor);
+        String number = tickets.findOrderConfirmedQuotationId(ticketId)
+            .flatMap(id -> tickets.quotationNumber(id)).orElse(null);
+        List<ProcurementSourceDto.Line> lines = ticket.items().stream()
+            .map(i -> new ProcurementSourceDto.Line(i.id(), isFromStock(i))).toList();
+        return new ProcurementSourceDto(legacy, editable, decisionStageOpen(s) && decidedAt == null, decidedAt, number, lines);
+    }
+
     /**
-     * The order-confirmation twin of {@link #reserveStock}'s supervision: a rep's จากสต็อก tick on a direct quotation
+     * The rep's (or CEO's) one-time import/stock split. A legacy deal writes the declared coverage; a newer
+     * deal's split comes from its quotation, so this only records that it was seen (and refuses a change).
+     */
+    @Transactional
+    public TicketDto decideProcurementSource(long ticketId, ProcurementSourceRequest req, UserPrincipal actor) {
+        requireRole(actor, STOCK_DECLARATION_ROLES);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        if (!canDeclareStockCoverage(s, actor)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        requireActive(s);
+        if (!stockCoverageStageReached(s)) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)");
+        }
+        if (s.fulfillmentStatus() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+        }
+        Map<Long, Boolean> wanted = new LinkedHashMap<>();
+        for (ProcurementSourceRequest.Line line : req.lines()) {
+            if (wanted.put(line.itemId(), line.fromStock()) != null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุที่มาสินค้าให้ครบทุกรายการ");
+            }
+        }
+        Set<Long> itemIds = ticket.items().stream().map(TicketItemDto::id).collect(Collectors.toSet());
+        if (!wanted.keySet().equals(itemIds)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุที่มาสินค้าให้ครบทุกรายการ");
+        }
+        // Cheap pre-check so a second decision never writes; the latch below stays as the race guard.
+        if (tickets.findProcurementSourceDecidedAt(ticketId).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+        }
+        if (!tickets.isLegacyStockSourceDeal(ticketId)) {
+            boolean changes = ticket.items().stream().anyMatch(i -> wanted.get(i.id()) != isFromStock(i));
+            if (changes) {
+                throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+            }
+        } else {
+            List<StockReservationRequest.Line> lines = ticket.items().stream()
+                .map(i -> new StockReservationRequest.Line(i.id(),
+                    wanted.get(i.id()) ? nullToZero(i.qty()) : nullToZero(i.qtyFromStock()), null))
+                .toList();
+            tickets.reserveStock(ticketId, lines);
+            Map<Long, BigDecimal> merged = new LinkedHashMap<>();
+            lines.forEach(l -> merged.put(l.itemId(), l.qtyFromStock()));
+            boolean leavesTheImportAxis = routeAllStockDealToDelivery(s, ticket.items(), merged, actor);
+            if (SALES_ROLES.contains(actor.role()) && wanted.containsValue(true)) {
+                notifySalesManagerOfRepDeclaration(s, actor, merged, ticket.items(), leavesTheImportAxis);
+            }
+        }
+        if (!tickets.markProcurementSourceDecided(ticketId, actor.id())) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+        }
+        long stock = wanted.values().stream().filter(Boolean::booleanValue).count();
+        tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PROCUREMENT_SOURCE_DECIDED,
+            s.status(), s.status(), "เลือกที่มาสินค้า: นำเข้า " + (wanted.size() - stock) + " รายการ · จากสต็อก "
+                + stock + " รายการ");
+        return requireTicket(ticketId);
+    }
+
+    /** True while a legacy deal still waits for the rep's import/stock decision. */
+    public boolean procurementSourceAwaitingRep(TicketSummaryDto s) {
+        return decisionStageOpen(s) && tickets.findProcurementSourceDecidedAt(s.id()).isEmpty()
+            && tickets.isLegacyStockSourceDeal(s.id());
+    }
+
+    /** ACTIVE, at/after ORDER_RECEIVED, and not yet on the import/stock axis: the window where a decision can still be made. */
+    private static boolean decisionStageOpen(TicketSummaryDto s) {
+        return DealLifecycle.ACTIVE.equals(s.lifecycle()) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null;
+    }
+
+    private static boolean isFromStock(TicketItemDto i) {
+        BigDecimal qty = nullToZero(i.qty());
+        return qty.signum() > 0 && nullToZero(i.qtyFromStock()).compareTo(qty) >= 0;
+    }
+
+    /**
+     * The order-confirmation twin of {@link #decideProcurementSource}'s supervision: a rep's จากสต็อก tick on a direct quotation
      * becomes {@code qty_from_stock} (the STOCK_BONUS input) when the order is confirmed, so the manager is told here
      * too. Call it AFTER the cover is written and the deal routed, so the all-stock claim reflects the real state. Says
      * nothing when no line is covered.
@@ -1539,7 +1622,7 @@ public class TicketService {
      *
      * <p><strong>Why the manager.</strong> Nothing corroborates the declaration and only the CEO
      * can correct it, so the manager must be told to look. The number is a
-     * <em>supervision</em> problem rather than a logistics one: {@link #reserveStock} lets the rep
+     * <em>supervision</em> problem rather than a logistics one: {@link #decideProcurementSource} lets the rep
      * supply {@code qty_from_stock}, which is the {@code stockShare} half of that same rep's own
      * STOCK_BONUS ({@code CommissionRepository#sumActiveStockActualReceived}), and nothing in this
      * codebase corroborates it against real stock. Someone stating an input to their own pay is
@@ -1564,7 +1647,7 @@ public class TicketService {
      * {@code CommissionRepository} is untouched.
      *
      * <p><strong>Rollback safety.</strong> This is a plain {@code INSERT} through {@link
-     * NotificationRepository}, running inside {@link #reserveStock}'s {@code @Transactional} on the
+     * NotificationRepository}, running inside the caller's {@code @Transactional} on the
      * same connection as the declaration itself, so a rollback takes the notification with it —
      * proven, not assumed, by {@code StockDeclarationNotificationIntegrationTest}. It deliberately
      * does NOT go through {@code NotificationService#notify}: that method's {@code
@@ -3384,7 +3467,7 @@ public class TicketService {
         if (canEditItems(s, actor)) actions.add(new TicketActionDto("EDIT_ITEMS", "operational", "แก้ไขรายการ"));
         // reserveStock's own gate, advertised only before the deal is on the import axis (or already FROM_STOCK).
         // Lifecycle is already ACTIVE here: buildActions only calls this method for an ACTIVE deal.
-        if (canDeclareStockCoverage(s, actor) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null) {
+        if (CEO_ROLES.contains(actor.role()) && stockCoverageStageReached(s) && s.fulfillmentStatus() == null) {
             actions.add(new TicketActionDto("RESERVE_STOCK", "operational", "ระบุสินค้าจากสต็อก"));
         }
     }
@@ -3483,10 +3566,9 @@ public class TicketService {
     }
 
     /**
-     * Who may declare stock coverage on THIS deal — the single source of truth for {@link
-     * #reserveStock}'s gate and for whether {@link #actions} advertises RESERVE_STOCK, so the two
-     * cannot drift into offering an action that immediately 403s (the same "never advertise a dead
-     * action" discipline).
+     * Who may declare stock coverage on THIS deal — the per-row gate of {@link #decideProcurementSource}
+     * and {@link #reserveStock} (the latter additionally CEO-only, which is also what {@link #actions}
+     * checks before advertising RESERVE_STOCK).
      *
      * <p><strong>S18 is Sales's, not Import's.</strong> Scheduling delivery / declaring stock
      * coverage (S18 จัดตารางส่งมอบ) belongs to the owning sales rep — or the CEO as
@@ -3547,7 +3629,7 @@ public class TicketService {
 
     /**
      * The stage floor a stock-coverage declaration must clear: {@link #reserveStock}'s 409 reads it.
-     * ({@code RESERVE_STOCK} is advertised in {@link #actions} to the owner and the CEO from ORDER_RECEIVED while fulfilment is null.)
+     * ({@code RESERVE_STOCK} is advertised in {@link #actions} to the CEO from ORDER_RECEIVED while fulfilment is null.)
      *
      * <p><strong>Why ORDER_RECEIVED (S10), and why a floor is needed at all.</strong> The
      * declaration is uncorroborated (see {@link #reserveStock}), yet a full-coverage one reroutes

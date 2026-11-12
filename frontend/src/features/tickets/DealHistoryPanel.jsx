@@ -69,6 +69,7 @@ export const EVENT_KIND_LABEL = {
   SHIPPING:               'สินค้าออกเดินทาง',
   GOODS_RECEIVED:         'รับสินค้าแล้ว',
   STOCK_RESERVED:         'จองสินค้าจากสต็อก',
+  PROCUREMENT_SOURCE_DECIDED: 'เลือกที่มาสินค้า',
   DELIVERY_RECORDED:      'บันทึกการส่งสินค้า',
   DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
   AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
@@ -105,7 +106,7 @@ export const PAYMENT_TRACK_KINDS = new Set([
 ]);
 const FULFILLMENT_TRACK_KINDS = new Set([
   'IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED',
-  'STOCK_RESERVED', 'DELIVERY_RECORDED', 'DELIVERY_COMPLETED',
+  'STOCK_RESERVED', 'PROCUREMENT_SOURCE_DECIDED', 'DELIVERY_RECORDED', 'DELIVERY_COMPLETED',
 ]);
 
 const EVENT_DOT_BASE = 'w-2 h-2 rounded-full mt-[5px] shrink-0';

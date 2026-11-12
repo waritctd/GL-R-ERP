@@ -1040,9 +1040,8 @@ export async function advanceImportStep(sessions, importRequestId, targetStep) {
  * to order), which is what makes "this
  * route skipped procurement" a structural fact rather than an ordering coincidence.
  *
- * @param role   'sales' (must be the deal OWNER — canDeclareStockCoverage checks createdById
- *               directly, not requireDealOwnership, so sales_manager does NOT qualify here even
- *               though it can move most sales-gated stages), 'import', or 'ceo'.
+ * @param role   'ceo' only — every other role gets 403; the rep declares stock through
+ *               POST /api/tickets/{id}/procurement-source (the "จัดซื้อสินค้า" dialog) instead.
  * @param lines  [{itemId, qtyFromStock}] — read real item ids/quantities off a fresh
  *               `readDeal(...).items`, never invented. Ticket items are populated by
  *               confirmOrder's own reconciliation (OrderConfirmationService.reconcileTicketItems,

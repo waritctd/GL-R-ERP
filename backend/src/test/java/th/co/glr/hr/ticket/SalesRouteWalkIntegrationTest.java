@@ -109,6 +109,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
     private long ownerRepId;
     private UserPrincipal ownerRep;
     private UserPrincipal accountActor;
+    /** Per-line stock declaration is CEO-only; the from-stock jump below is driven by this actor. */
+    private UserPrincipal ceo;
     /** V184: {@code canWriteDelivery} transferred stages 13-14 to {ceo, owning-rep} only, so every
      * {@code completeDelivery}/{@code recordPartialDelivery} call below uses {@link #ownerRep}
      * (every deal here is created with {@code ownerRepId}) rather than this actor — see
@@ -132,6 +134,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         ownerRepId = createEmployee(employees, "พนักงานขาย เส้นทางดีล", "routewalk-owner@glr.co.th");
         ownerRep = principal(ownerRepId, "sales");
+        ceo = principal(createEmployee(employees, "ซีอีโอ เส้นทางดีล", "routewalk-ceo@glr.co.th"), "ceo");
         accountActor = principal(createEmployee(employees, "ฝ่ายบัญชี เส้นทางดีล", "routewalk-account@glr.co.th"), "account");
         importActor = principal(createEmployee(employees, "ฝ่ายนำเข้า เส้นทางดีล", "routewalk-import@glr.co.th"), "import");
     }
@@ -330,7 +333,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(itemId, new BigDecimal("100.00"), "มีของครบในสต็อก"))),
-            ownerRep);
+            ceo);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
@@ -385,7 +388,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(item1, new BigDecimal("40.00"), "มีของครบในสต็อก"))),
-            ownerRep);
+            ceo);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
         assertThat(fulfilmentOf(ticketId)).isNull();
         assertThat(qtyFromStockOf(item1)).isEqualByComparingTo("40.00");

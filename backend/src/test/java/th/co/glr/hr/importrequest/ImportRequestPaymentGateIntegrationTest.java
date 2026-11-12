@@ -26,6 +26,8 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.ProcurementSourceRequest;
+import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
@@ -230,6 +232,57 @@ class ImportRequestPaymentGateIntegrationTest extends AbstractPostgresIntegratio
                 .isInstanceOfSatisfying(ApiException.class,
                     e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
         }
+    }
+
+    private static final String PICK_SOURCE_FIRST = "กด \"จัดซื้อสินค้า\" เพื่อเลือกที่มาสินค้าก่อนออกใบขอซื้อ (IR)";
+
+    /** Stage-10 dialog: an old (pre-2026-11-07 direct-quotation) deal must have its import/stock split decided first. */
+    @Test
+    void oldUndecidedDealCannotCreateIr() {
+        long ticketId = oldDealWithOneLine("GATE-OLD-UNDECIDED");
+
+        assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(e.getMessage()).isEqualTo(PICK_SOURCE_FIRST);
+            });
+        assertThat(service.list(ticketId, owner)).isEmpty();
+    }
+
+    @Test
+    void oldDecidedDealCreatesIr() {
+        long ticketId = oldDealWithOneLine("GATE-OLD-DECIDED");
+        long itemId = jdbc.queryForObject(
+            "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :t", Map.of("t", ticketId), Long.class);
+        ticketService.decideProcurementSource(ticketId, new ProcurementSourceRequest(
+            List.of(new ProcurementSourceRequest.Line(itemId, false))), owner);
+
+        assertThat(service.createDrafts(ticketId, null, owner)).hasSize(1);
+    }
+
+    @Test
+    void newUndecidedDealStillCreatesIr() {
+        insertFactory("Pay Gate New Deal Factory");
+        long ticketId = insertTicket("GATE-NEW-UNDECIDED", "DEPOSIT_PAID");
+        insertItem(ticketId, "Pay Gate New Deal Factory", "Line", "60x60", "10", "pcs", 0);
+
+        assertThat(service.createDrafts(ticketId, null, owner)).hasSize(1);
+    }
+
+    /** Hand-seeded legacy shape: DEAL_DIRECT quotation issued 2026-11-06 + DEAL_PROMOTED_FROM_QUOTATION event. */
+    private long oldDealWithOneLine(String code) {
+        insertFactory("Pay Gate Old Deal Factory " + code);
+        long ticketId = insertTicket(code, "DEPOSIT_PAID");
+        insertItem(ticketId, "Pay Gate Old Deal Factory " + code, "Line", "60x60", "10", "pcs", 0);
+        long quotationId = jdbc.queryForObject("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, issued_at, origin)
+            VALUES (:t, :n, :by, '2026-11-06 10:00:00+07', 'DEAL_DIRECT') RETURNING quotation_id
+            """, Map.of("t", ticketId, "n", "QT-" + code, "by", ownerId), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.ticket_event (ticket_id, actor_id, kind, related_document_type, related_document_id)
+            VALUES (:t, :by, :kind, 'QUOTATION', :q)
+            """, Map.of("t", ticketId, "by", ownerId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION, "q", quotationId));
+        return ticketId;
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────────────────────────
