@@ -741,8 +741,13 @@ public class DealQuotationService {
     /** {@link #counts(UserPrincipal)} under the same optional {@code origin} filter {@link #search} takes, validated
      * identically so tabs and list agree under a filter. */
     public DealQuotationCountsDto counts(String origin, UserPrincipal actor) {
+        return counts(origin, null, actor);
+    }
+
+    /** As above, optionally limited to quotations dated (Bangkok) on or after {@code from}, matching the list's period filter. */
+    public DealQuotationCountsDto counts(String origin, LocalDate from, UserPrincipal actor) {
         Long owner = listOwnerScope(actor);
-        return quotations.counts(owner, parseListOrigin(origin), canViewPricedOriginsOnList(actor));
+        return quotations.counts(owner, parseListOrigin(origin), canViewPricedOriginsOnList(actor), from);
     }
 
     private static final Set<String> LIST_ORIGIN_FILTERS = Set.of(DealQuotationRepository.ORIGIN_DEAL_DIRECT,
@@ -1746,7 +1751,7 @@ public class DealQuotationService {
         requireEditAccess(actor, requireTicketSummary(ticketId));
         if (!DealQuotationRepository.ORIGIN_DEAL_DIRECT.equals(quotation.origin())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคาตรง (ไม่ผ่านคำขอราคา) เท่านั้น");
+                "ยืนยันคำสั่งซื้อจากหน้านี้ได้เฉพาะใบเสนอราคา (ไม่ผ่านคำขอราคา) เท่านั้น");
         }
 
         // Lock order: advisory (#lockTicket, as approve/create/revise take) THEN ticket row; never reverse (create holds the

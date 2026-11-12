@@ -10,12 +10,12 @@ import { PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
-import { formatMoney, formatThaiDate } from '../../utils/format.js';
+import { bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
 import { partyStatusLabel } from '../tickets/dealPartyMeta.js';
 import {
   canApproveDealQuotation, canCreateDealQuotationStandalone, DEAL_QUOTATION_AMOUNT_OPTIONS,
-  DEAL_QUOTATION_EMAIL_OPTIONS, DEAL_QUOTATION_STATUS_TABS, dealQuotationListSeesAll, dealQuotationRepOptions,
-  dealQuotationStatusLabel, dealQuotationStatusTab, defaultDealQuotationStatusTab,
+  DEAL_QUOTATION_EMAIL_OPTIONS, DEAL_QUOTATION_PERIOD_OPTIONS, DEAL_QUOTATION_STATUS_TABS, dealQuotationListSeesAll, dealQuotationRepOptions,
+  dealQuotationPeriodStart, dealQuotationStatusLabel, dealQuotationStatusTab, defaultDealQuotationStatusTab,
   filterDealQuotationRows, isDealQuotationReadOnlyViewer,
 } from './quotationMeta.js';
 
@@ -527,11 +527,12 @@ export function QuotationListPage({ user }) {
   const [repFilter, setRepFilter] = useState('');
   const [amountFilter, setAmountFilter] = useState('');
   const [emailFilter, setEmailFilter] = useState('');
+  const [periodFilter, setPeriodFilter] = useState('');
   const effectiveRepFilter = seesAll && repOptions.some((option) => option.id === repFilter) ? repFilter : '';
   const effectiveAmountFilter = seesAll ? amountFilter : '';
   const filteredRows = useMemo(
-    () => filterDealQuotationRows(rows, { repId: effectiveRepFilter, amount: effectiveAmountFilter, email: emailFilter }),
-    [rows, effectiveRepFilter, effectiveAmountFilter, emailFilter],
+    () => filterDealQuotationRows(rows, { repId: effectiveRepFilter, amount: effectiveAmountFilter, email: emailFilter, period: periodFilter }),
+    [rows, effectiveRepFilter, effectiveAmountFilter, emailFilter, periodFilter],
   );
 
   // The filters sit in a plain row ABOVE DataTable's own search input (see the JSX below, shared by
@@ -558,12 +559,13 @@ export function QuotationListPage({ user }) {
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
   // are advisory chrome: a failed or in-flight counts call renders the tabs with NO number rather
   // than blocking the list or showing a zero that would read as "nothing here".
+  const periodFrom = periodFilter ? dealQuotationPeriodStart(periodFilter, bangkokTodayIso()) : '';
   const countsQuery = useQuery({
-    queryKey: queryKeys.dealQuotationCounts(),
+    queryKey: queryKeys.dealQuotationCounts(periodFrom || undefined),
     // The BARE DealQuotationCountsDto: DealQuotationController#counts returns the record with no
     // envelope. No `r?.counts ?? r` tolerance, so a disagreement between the controller, hrApi's
     // comment and the mock surfaces in the contract test and the mock shape test.
-    queryFn: () => api.dealQuotations.counts().then((r) => r ?? null),
+    queryFn: () => api.dealQuotations.counts(periodFrom ? { from: periodFrom } : undefined).then((r) => r ?? null),
   });
   const counts = countsQuery.data ?? null;
 
@@ -695,6 +697,19 @@ export function QuotationListPage({ user }) {
               ))}
             </select>
           </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">ช่วงเวลา</span>
+            <select
+              value={periodFilter}
+              onChange={(event) => setPeriodFilter(event.target.value)}
+              aria-label="กรองตามช่วงเวลา"
+              className="h-8 mobile:min-h-[44px] w-auto rounded border border-border bg-surface px-2 text-xs text-text"
+            >
+              {DEAL_QUOTATION_PERIOD_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
         </div>
 
         <DataTable
@@ -713,7 +728,7 @@ export function QuotationListPage({ user }) {
           // narrows the list to zero rows, so the table keeps its shape under the empty-state line.
           // See-all roles always; everyone else only while their email filter is set, so a rep with
           // genuinely no quotations still gets the plain empty-state panel.
-          retainHeaderWhenEmpty={seesAll || emailFilter !== ''}
+          retainHeaderWhenEmpty={seesAll || emailFilter !== '' || periodFilter !== ''}
           loading={listQuery.isLoading}
           emptyState={{ icon: 'fileText', title: 'ไม่มีใบเสนอราคาในเงื่อนไขนี้' }}
         />

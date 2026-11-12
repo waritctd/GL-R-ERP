@@ -2,8 +2,10 @@ package th.co.glr.hr.dealquotation;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -125,11 +127,13 @@ public class DealQuotationController {
     /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,
      * needsRework, cancelled, approved}} ({@code approved} = APPROVED/ISSUED/SENT/ACCEPTED) — so
      * the list page's tabs carry counts without a second full fetch. Same scope rules, and the
-     * same optional {@code origin} filter, as {@link #search}. */
+     * same optional {@code origin} filter, as {@link #search}; optional {@code from} (YYYY-MM-DD) keeps quotations dated on/after it. */
     @GetMapping("/deal-quotations/counts")
-    DealQuotationCountsDto counts(@RequestParam(required = false) String origin, HttpSession session) {
+    DealQuotationCountsDto counts(@RequestParam(required = false) String origin,
+                                   @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                   HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return quotations.counts(origin, user);
+        return quotations.counts(origin, from, user);
     }
 
     /** V179 — the option list for the ผู้พิมพ์/พนักงานขาย print-name selectors on the quotation

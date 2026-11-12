@@ -1868,11 +1868,15 @@ public class DealQuotationRepository {
      * matching what {@code search(null, owner, false, originFilter, includePricedOrigins)} returns.
      */
     public DealQuotationCountsDto counts(Long ownerTicketCreatedById, String originFilter,
-                                         boolean includePricedOrigins) {
+                                         boolean includePricedOrigins, LocalDate from) {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String ownerClause = "";
+        if (from != null) {
+            ownerClause += " AND (q.issued_at AT TIME ZONE 'Asia/Bangkok')::date >= :from";
+            params.addValue("from", from);
+        }
         if (ownerTicketCreatedById != null) {
-            ownerClause = " AND (t.created_by = :ownerId OR t.keyed_by = :ownerId)";
+            ownerClause += " AND (t.created_by = :ownerId OR t.keyed_by = :ownerId)";
             params.addValue("ownerId", ownerTicketCreatedById);
         }
         String originClause = originPredicate(originFilter, includePricedOrigins);

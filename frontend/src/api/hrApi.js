@@ -1263,9 +1263,9 @@ export const api = {
     list: (params) => apiRequest(API_ROUTES.dealQuotations.list(params)),
     // `{ all, pendingApproval, needsRework, cancelled, approved }`: DealQuotationCountsDto itself,
     // BARE, with no `{ counts: ... }` envelope (DealQuotationController#counts returns the record
-    // directly, unlike its wrapping neighbours). Scoped exactly like list() above. No parameters:
-    // the scope is the caller's session.
-    counts: () => apiRequest(API_ROUTES.dealQuotations.counts),
+    // directly, unlike its wrapping neighbours). Scoped exactly like list() above. Scope is the
+    // caller's session; optional `{ from }` (YYYY-MM-DD) keeps quotations dated on/after it.
+    counts: ({ from } = {}) => apiRequest(from ? `${API_ROUTES.dealQuotations.counts}?from=${encodeURIComponent(from)}` : API_ROUTES.dealQuotations.counts),
     // The ผู้พิมพ์/พนักงานขาย print-name selector options: the union of active sales-division
     // employees and can_create_quotation grant holders. `{ items: [{ id, name }] }`, same
     // CommissionRepOptionDto shape as the commission rep picker.

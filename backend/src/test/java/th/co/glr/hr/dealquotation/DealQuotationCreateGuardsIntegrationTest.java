@@ -148,7 +148,7 @@ class DealQuotationCreateGuardsIntegrationTest extends AbstractDealQuotationSlic
         ApiException e = refusal(() -> quotationService.create(ticket, draft("DESIGNER"), salesActor),
             HttpStatus.CONFLICT);
 
-        assertThat(e.getMessage()).isEqualTo("ดีลนี้มีใบเสนอราคาตรงที่ใช้งานอยู่ (" + first.number()
+        assertThat(e.getMessage()).isEqualTo("ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (" + first.number()
             + ") — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่");
         assertThat(e.getDetails()).containsExactly(
             Map.entry("liveQuotationId", first.id()),

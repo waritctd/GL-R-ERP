@@ -217,6 +217,28 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         assertThat(quotationService.counts(origin, salesManager).all()).isEqualTo(rows.size());
     }
 
+    // ช่วงเวลา filter (owner ask 2026-11-12): the tab counts take the period's start date so a tab
+    // never promises rows the period-filtered list hides. Same date the list shows: issued_at on the
+    // Bangkok calendar, for engine and legacy rows alike.
+    @Test
+    void counts_fromDate_countsOnlyRowsTheListDatesOnOrAfterIt() {
+        jdbc.update("UPDATE sales.quotation SET issued_at = now() - interval '40 days' WHERE quotation_id = :id",
+            Map.of("id", directA));
+        LocalDate from = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).minusDays(30);
+
+        long listed = quotationService.search(null, false, null, salesManager).stream()
+            .filter(r -> r.quotationDate() != null && !r.quotationDate().isBefore(from)).count();
+        assertThat(listed).isEqualTo(4);
+
+        DealQuotationCountsDto counts = quotationService.counts(null, from, salesManager);
+        assertThat(counts.all()).isEqualTo(listed);
+        assertThat(counts.pendingApproval()).as("directA (PENDING_APPROVAL) is dated before from").isZero();
+        assertThat(counts.approved()).as("prA2 APPROVED + legacyA ISSUED").isEqualTo(2);
+        // No from = unchanged; the owner scope still applies under a from.
+        assertThat(quotationService.counts(null, null, salesManager).all()).isEqualTo(5);
+        assertThat(quotationService.counts(null, from, salesA).all()).as("legacyA + prA2").isEqualTo(2);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"direct", "FOO", "deal_direct", "NULL"})
     void originFilter_unknownValue_is400(String origin) {
