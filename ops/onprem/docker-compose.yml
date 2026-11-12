@@ -1,0 +1,86 @@
+# On-prem PRODUCTION stack. Runbook: ops/onprem/README.md. Secrets live in ./.env (gitignored).
+# Public traffic: Cloudflare Tunnel (tunnel) -> nginx (web) -> backend. Nothing is published on the LAN.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  db:
+    <<: *logging
+    image: postgres:17
+    restart: unless-stopped
+    shm_size: 256mb
+    environment:
+      POSTGRES_DB: hris
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Over TCP: on a fresh volume the entrypoint's temporary init server answers on the unix
+      # socket before it has created hris, so a socket check passes too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d hris"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    <<: *logging
+    image: ghcr.io/waritctd/glr-hr-backend:${GLR_IMAGE_TAG:?set GLR_IMAGE_TAG in .env}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # App settings (mail, tokens, payroll employer constants, ...) come from .env by their real
+    # names; a variable left out of .env stays unset, so application.yml's default applies.
+    env_file: .env
+    environment:
+      # env_file hands the backend every .env line; blank the ones it must not hold (its
+      # LibreOffice/Chromium children inherit its environment).
+      TUNNEL_TOKEN: ""
+      DB_PASSWORD: ""
+      # prod only: the demo profile adds nothing this stack needs (Flyway locations, uploads dir and
+      # payroll employer constants are all set explicitly) and would turn missing REQUIRED settings
+      # into a boot WARN instead of a failure. migration-demo stays in the locations because the
+      # existing schema history includes it.
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_FLYWAY_LOCATIONS: classpath:db/migration,classpath:db/migration-demo
+      APP_FLYWAY_ENABLED: "true"
+      APP_FLYWAY_VALIDATE_ON_MIGRATE: "false"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/hris
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      APP_UPLOADS_DIR: /app/uploads
+      SERVER_SESSION_COOKIE_SECURE: "true"
+      JAVA_TOOL_OPTIONS: -Xmx${BACKEND_HEAP:-2g} -XX:+UseG1GC
+    volumes:
+      - uploads:/app/uploads
+
+  web:
+    <<: *logging
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:8081:80" # local debugging only; public traffic arrives via the tunnel
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../../frontend/dist:/usr/share/nginx/html:ro
+
+  tunnel:
+    <<: *logging
+    image: cloudflare/cloudflared:2026.10.7
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  uploads:
