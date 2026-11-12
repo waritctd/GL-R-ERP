@@ -179,6 +179,12 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         // import is in this set: it is not in STOCK_DECLARATION_ROLES at all, so it is
         // refused at the coarse pre-filter (403) before the ticket is read, exactly like the
         // roles that could never declare.
+        // sales (even a deal owner) is refused before the ticket read too: reps use the "จัดซื้อสินค้า" button only.
+        assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(e.getMessage()).isEqualTo("ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
+            });
         for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser, importUser)) {
             assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), stranger))
                 .describedAs("role %s must get 403 (not 404) for a ticket it may never touch", stranger.role())

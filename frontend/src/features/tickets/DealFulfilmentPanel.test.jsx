@@ -103,6 +103,19 @@ function renderPanel(user, rows = [draftRow()], {
   );
 }
 
+// renderPanel has no seam for the handler prop, so wrap it: re-render the same tree with it set.
+function renderPanelWithChoose(user, onChooseProcurementSource, procurementSource) {
+  api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+  api.storedImportRequests.coverage.mockRejectedValue(new Error('404'));
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <DealFulfilmentPanel user={user} ticketId={1} summary={{ ...summary, paymentStatus: 'DEPOSIT_PAID' }} items={[]} availableActions={[]}
+        procurementSource={procurementSource} onChooseProcurementSource={onChooseProcurementSource} showToast={vi.fn()} />
+    </QueryClientProvider>,
+  );
+}
+
 const OWNER = { id: 42, name: 'สมหญิง', role: 'sales' };
 const OTHER_REP = { id: 99, name: 'อีกคน', role: 'sales' };
 const CEO = { id: 1, name: 'ราม', role: 'ceo' };
@@ -708,9 +721,33 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
   describe('stage-10 source gate on the create button', () => {
     const paid = { ...summary, paymentStatus: 'DEPOSIT_PAID' };
     it('an old deal whose source is not decided: disabled with a hint pointing at จัดซื้อสินค้า', async () => {
-      renderPanel(OWNER, [], { summary: paid, procurementSource: { legacy: true, decidedAt: null } });
+      renderPanel(OWNER, [], { summary: paid, procurementSource: { legacy: true, pending: true, decidedAt: null } });
       expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(true);
       expect(screen.getByTestId('ir-source-hint').textContent).toContain('จัดซื้อสินค้า');
+    });
+    it('a NEW (non-legacy) undecided deal is gated too: pending alone disables the button and shows the hint', async () => {
+      renderPanel(OWNER, [], { summary: paid, procurementSource: { legacy: false, pending: true, decidedAt: null } });
+      expect((await screen.findByTestId('deal-fulfilment-create-ir-drafts')).disabled).toBe(true);
+      expect(screen.getByTestId('ir-source-hint')).toBeTruthy();
+    });
+    it.each([['CEO', CEO], ['owning rep', OWNER]])('%s: จัดซื้อสินค้า button when pending && editable and a handler is given; click calls it', async (_n, user) => {
+      const onChoose = vi.fn();
+      renderPanelWithChoose(user, onChoose, { legacy: true, pending: true, editable: true, decidedAt: null });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-choose-source'));
+      expect(onChoose).toHaveBeenCalledTimes(1);
+    });
+    it('CEO on a NEW undecided deal (pending, not editable) still gets the จัดซื้อสินค้า button: the hint must never point at a missing button', async () => {
+      const onChoose = vi.fn();
+      renderPanelWithChoose(CEO, onChoose, { legacy: false, pending: true, editable: false, decidedAt: null });
+      fireEvent.click(await screen.findByTestId('deal-fulfilment-choose-source'));
+      expect(onChoose).toHaveBeenCalledTimes(1);
+    });
+    it.each([
+      ['not pending', { pending: false, editable: true }],
+    ])('no จัดซื้อสินค้า button when %s', async (_n, src) => {
+      renderPanelWithChoose(OWNER, vi.fn(), { legacy: true, decidedAt: null, ...src });
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByTestId('deal-fulfilment-choose-source')).toBeNull();
     });
     it('before the deposit is settled only the deposit hint shows, not the source hint', async () => {
       renderPanel(OWNER, [], { summary: { ...summary, paymentStatus: 'CUSTOMER_CONFIRMED' }, procurementSource: { legacy: true, decidedAt: null } });
@@ -718,8 +755,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.queryByTestId('ir-source-hint')).toBeNull();
     });
     it.each([
-      ['decided', { legacy: true, decidedAt: '2026-11-10T00:00:00Z' }],
-      ['a new (non-legacy) deal', { legacy: false, decidedAt: null }],
+      ['decided', { legacy: true, pending: false, decidedAt: '2026-11-10T00:00:00Z' }],
+      ['pending false (e.g. FROM_STOCK)', { legacy: false, pending: false, decidedAt: null }],
       ['not read (undefined)', undefined],
     ])('%s: enabled, no source hint', async (_name, procurementSource) => {
       renderPanel(OWNER, [], { summary: paid, procurementSource });

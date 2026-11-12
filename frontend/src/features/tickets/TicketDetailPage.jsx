@@ -81,7 +81,6 @@ import {
   searchCatalog,
 } from './ticketItemFields.jsx';
 import { manualMoveLabel } from './stageMeta.js';
-import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
@@ -518,14 +517,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId && canReadStoredImportRequests(user, ticket?.summary),
   });
   const importRequests = storedIrQuery.data;
-  // The stage-10 "จัดซื้อสินค้า" decision. Only the owning rep acts on it, and only while no fulfilment status exists.
+  // The stage-10 "จัดซื้อสินค้า" decision: read for the owning rep and the CEO; the server says whether it is pending/editable.
   const procurementSourceQuery = useQuery({
     queryKey: queryKeys.procurementSource(ticketId),
     queryFn: () => api.tickets.getProcurementSource(ticketId),
-    // Mirrors TicketService.decisionStageOpen: ACTIVE, at/after ORDER_RECEIVED, no fulfilment status yet.
-    enabled: readsDocs && ticket?.summary?.fulfillmentStatus == null
-      && (ticket?.summary?.lifecycle ?? 'ACTIVE') === 'ACTIVE'
-      && stageIndexIn(DEAL_STAGE_CATALOG, ticket?.summary?.salesStage) >= stageIndexIn(DEAL_STAGE_CATALOG, 'ORDER_RECEIVED'),
+    enabled: (readsDocs || role === 'ceo') && !!ticketId,
   });
   const procurementSource = procurementSourceQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
@@ -1350,10 +1346,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'choose_procurement_source') {
-      // Disabled until the source is read: the dialog renders what the server says is editable.
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
-          disabled={procurementSource === undefined}
           onClick={() => setProcurementDialogOpen(true)}>
           {workStateAction.label}
         </Button>
@@ -2428,6 +2422,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 items={items}
                 availableActions={availableActions}
                 procurementSource={procurementSource}
+                onChooseProcurementSource={() => setProcurementDialogOpen(true)}
                 showToast={showToast}
               />
             ) : null}
@@ -2678,7 +2673,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             setProcurementDialogOpen(false);
             applyTicketUpdate(decided);
             // Decided now: flip the cached read first so the CTA never offers จัดซื้อสินค้า again during the refetch.
-            queryClient.setQueryData(queryKeys.procurementSource(ticketId), (old) => (old ? { ...old, decidedAt: new Date().toISOString(), editable: false } : old));
+            queryClient.setQueryData(queryKeys.procurementSource(ticketId), (old) => (old ? { ...old, decidedAt: new Date().toISOString(), editable: false, pending: false } : old));
             queryClient.invalidateQueries({ queryKey: queryKeys.procurementSource(ticketId) });
             // The IR itself is made from the main button that follows, never from here.
             if (anyImport) setActiveTab('fulfilment');

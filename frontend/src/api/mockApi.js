@@ -2463,6 +2463,10 @@ function requireDepositPolicyOwner(ticket) {
 function itemFromStock(item) {
   return Number(item.qty ?? 0) > 0 && Number(item.qtyFromStock ?? 0) >= Number(item.qty ?? 0);
 }
+// Mirrors TicketRepository.isLegacyStockSourceDeal: the fixture flag AND no line sourced from stock.
+function isLegacyStockSource(ticket) {
+  return ticket.legacyStockSource === true && !(ticket.items ?? []).some((i) => i.sourcedFromStock);
+}
 function procurementDecisionOpen(ticket) {
   return (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ticket.fulfillmentStatus == null
     && dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED');
@@ -8766,11 +8770,11 @@ export const api = {
     },
 
     async reserveStock(id, payload) {
-      const ticket = findTicketRaw(Number(id));
-      // CEO-ONLY, matching production: the owning rep (and import) decide stock vs import through
-      // decideProcurementSource below. A looser mock gate would be the dangerous drift direction.
+      // CEO-ONLY, matching production (403 before the ticket is read): the owning rep decides stock vs
+      // import through decideProcurementSource below. A looser mock gate would be the dangerous drift direction.
       const user = requireSession();
       if (user.role !== 'ceo') fail('ระบุสินค้าจากสต็อกผ่านปุ่ม "จัดซื้อสินค้า" เท่านั้น', 403);
+      const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       reserveStockForTicket(ticket, user, payload ?? {});
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -8781,12 +8785,13 @@ export const api = {
     // (production derives it from the deal's quotation); `ticket.procurementDecidedAt` is the latch.
     async getProcurementSource(id) {
       const { user, ticket } = requireTicketViewer(id);
-      const legacy = ticket.legacyStockSource === true;
+      const legacy = isLegacyStockSource(ticket);
       const decidedAt = ticket.procurementDecidedAt ?? null;
       const owns = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
       return delay({
         legacy,
         editable: legacy && !decidedAt && procurementDecisionOpen(ticket) && (user.role === 'ceo' || owns),
+        pending: procurementDecisionOpen(ticket) && !decidedAt,
         decidedAt,
         quotationNumber: ticket.quotation?.number ?? null,
         lines: (ticket.items ?? []).map((item) => ({ itemId: item.id, fromStock: itemFromStock(item) })),
@@ -8809,12 +8814,12 @@ export const api = {
       }
       if (ticket.procurementDecidedAt) fail('เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้', 409);
       const wanted = new Map(lines.map((l) => [Number(l.itemId), Boolean(l.fromStock)]));
-      if (ticket.legacyStockSource !== true) {
+      if (!isLegacyStockSource(ticket)) {
         if (items.some((it) => wanted.get(it.id) !== itemFromStock(it))) {
           fail('ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้', 409);
         }
       } else {
-        for (const it of items) it.qtyFromStock = wanted.get(it.id) ? Number(it.qty ?? 0) : 0;
+        for (const it of items) it.qtyFromStock = wanted.get(it.id) ? Number(it.qty ?? 0) : Number(it.qtyFromStock ?? 0);
         routeAllStockDealToDelivery(ticket, user);
       }
       ticket.procurementDecidedAt = new Date().toISOString();

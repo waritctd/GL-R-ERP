@@ -1459,29 +1459,17 @@ public class TicketService {
      * routing, the same {@link #requireActive} guard. One code path and one meaning for the
      * field: routing follows the facts, not the declarer.
      *
-     * <p>Gates, in the order {@link #requireViewAccess} uses. The coarse {@link
-     * #STOCK_DECLARATION_ROLES} and CEO checks run BEFORE the ticket is loaded so that widening this
-     * endpoint cannot turn it into an existence probe — a role that can never declare (hr,
-     * employee, account, sales_manager) still gets 403 without a row being read.
-     * {@link #canDeclareStockCoverage} then applies the per-row rule.
-     *
-     * <p><strong>Supervision.</strong> A CEO correction is the only check on an uncorroborated
-     * declaration, so someone must be told to look. A rep
-     * declaring on their own deal (now via {@link #decideProcurementSource}) notifies ฝ่ายขาย's ผู้จัดการ — see {@link
-     * #notifySalesManagerOfRepDeclaration} for who that resolves to, why it is the manager rather
-     * than Import, and why a ceo correction deliberately raises nothing.
+     * <p>CEO only: a rep declares through {@link #decideProcurementSource} (the "จัดซื้อสินค้า" button).
+     * The role check runs BEFORE the ticket is loaded, so this cannot be used as an existence probe.
+     * A CEO correction raises no sales-manager notification.
      */
     @Transactional
     public TicketDto reserveStock(long ticketId, StockReservationRequest request, UserPrincipal actor) {
-        requireRole(actor, STOCK_DECLARATION_ROLES);
         if (!CEO_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
         }
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
-        if (!canDeclareStockCoverage(s, actor)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
         requireActive(s);
         if (!stockCoverageStageReached(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -1510,8 +1498,7 @@ public class TicketService {
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.STOCK_RESERVED, s.status(), s.status(),
             "qty_from_stock=" + totalDeclared.stripTrailingZeros().toPlainString());
-        boolean leavesTheImportAxis = routeAllStockDealToDelivery(s, ticket.items(), mergedStock, actor);
-        notifySalesManagerOfRepDeclaration(s, actor, mergedStock, ticket.items(), leavesTheImportAxis);
+        routeAllStockDealToDelivery(s, ticket.items(), mergedStock, actor);
         return requireTicket(ticketId);
     }
 
@@ -1527,7 +1514,7 @@ public class TicketService {
             .flatMap(id -> tickets.quotationNumber(id)).orElse(null);
         List<ProcurementSourceDto.Line> lines = ticket.items().stream()
             .map(i -> new ProcurementSourceDto.Line(i.id(), isFromStock(i))).toList();
-        return new ProcurementSourceDto(legacy, editable, decidedAt, number, lines);
+        return new ProcurementSourceDto(legacy, editable, decisionStageOpen(s) && decidedAt == null, decidedAt, number, lines);
     }
 
     /**
@@ -1572,7 +1559,7 @@ public class TicketService {
         } else {
             List<StockReservationRequest.Line> lines = ticket.items().stream()
                 .map(i -> new StockReservationRequest.Line(i.id(),
-                    wanted.get(i.id()) ? nullToZero(i.qty()) : BigDecimal.ZERO, null))
+                    wanted.get(i.id()) ? nullToZero(i.qty()) : nullToZero(i.qtyFromStock()), null))
                 .toList();
             tickets.reserveStock(ticketId, lines);
             Map<Long, BigDecimal> merged = new LinkedHashMap<>();
@@ -1593,9 +1580,9 @@ public class TicketService {
     }
 
     /** True while a legacy deal still waits for the rep's import/stock decision. */
-    public boolean procurementSourceAwaitingRep(long ticketId) {
-        return tickets.isLegacyStockSourceDeal(ticketId) && tickets.findProcurementSourceDecidedAt(ticketId).isEmpty()
-            && tickets.findById(ticketId).map(t -> decisionStageOpen(t.summary())).orElse(false);
+    public boolean procurementSourceAwaitingRep(TicketSummaryDto s) {
+        return decisionStageOpen(s) && tickets.findProcurementSourceDecidedAt(s.id()).isEmpty()
+            && tickets.isLegacyStockSourceDeal(s.id());
     }
 
     /** ACTIVE, at/after ORDER_RECEIVED, and not yet on the import/stock axis: the window where a decision can still be made. */

@@ -4819,7 +4819,7 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' })).toBeNull();
     });
 
-    const undecided = (legacy) => ({ legacy, editable: legacy, decidedAt: null, quotationNumber: 'QT-2026-0001', lines: [{ itemId: 70101, fromStock: false }] });
+    const undecided = (legacy) => ({ legacy, pending: true, editable: legacy, decidedAt: null, quotationNumber: 'QT-2026-0001', lines: [{ itemId: 70101, fromStock: false }] });
 
     it('source not decided: the main button is จัดซื้อสินค้า (not the IR), the banner follows the deal kind, and the header chip reads ยังไม่ได้จัดซื้อ', async () => {
       irStageDeal();
@@ -4844,7 +4844,7 @@ describe('TicketDetailPage', () => {
       api.tickets.getProcurementSource.mockResolvedValue(undecided(false));
       api.tickets.decideProcurementSource.mockImplementation(async () => {
         // From now on the server answers "decided".
-        api.tickets.getProcurementSource.mockResolvedValue({ ...undecided(false), editable: false, decidedAt: '2026-11-12T00:00:00Z' });
+        api.tickets.getProcurementSource.mockResolvedValue({ ...undecided(false), pending: false, editable: false, decidedAt: '2026-11-12T00:00:00Z' });
         return { ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued', createdById: 1 } }) };
       });
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
@@ -4888,6 +4888,14 @@ describe('TicketDetailPage', () => {
       fireEvent.click(within(await screen.findByTestId('procurement-source-dialog')).getByRole('button', { name: 'ยืนยัน' }));
       await waitFor(() => expect(api.tickets.decideProcurementSource).toHaveBeenCalled());
       await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+    });
+
+    it('the CEO reads procurement-source too (not only the owning rep) at ORDER_RECEIVED+', async () => {
+      irStageDeal();
+      api.tickets.getProcurementSource.mockClear();
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(true));
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await waitFor(() => expect(api.tickets.getProcurementSource).toHaveBeenCalledWith(701));
     });
 
     it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {

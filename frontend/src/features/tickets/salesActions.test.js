@@ -802,9 +802,13 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
     expect(SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE).toBe('choose_procurement_source');
   });
 
-  it('procure action replaces IR before the source is decided (undecided or unknown)', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(PROCURE);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { decidedAt: null }, importRequests: [] })).toEqual(PROCURE);
+  it('procure action only when the loaded source says pending === true', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { pending: true, decidedAt: null }, importRequests: [] })).toEqual(PROCURE);
+  });
+
+  it('source not loaded (undefined, e.g. dashboard) or pending false -> IR as before', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { pending: false, decidedAt: null }, importRequests: [] })).toEqual(CREATE_IR);
   });
 
   it('IR action returns once decided', () => {

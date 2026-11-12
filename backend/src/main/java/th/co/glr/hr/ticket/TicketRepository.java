@@ -1151,12 +1151,15 @@ public class TicketRepository {
     public boolean isLegacyStockSourceDeal(long ticketId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS (
-                SELECT 1 FROM sales.ticket_event e
-                  JOIN sales.quotation q ON q.quotation_id = e.related_document_id
-                 WHERE e.ticket_id = :ticketId AND e.kind = :kind
-                   AND e.related_document_type = 'QUOTATION'
+                SELECT 1 FROM sales.quotation q
+                 WHERE q.quotation_id = (
+                        SELECT e.related_document_id FROM sales.ticket_event e
+                         WHERE e.ticket_id = :ticketId AND e.kind = :kind
+                           AND e.related_document_type = 'QUOTATION' AND e.related_document_id IS NOT NULL
+                         ORDER BY e.created_at DESC, e.event_id DESC LIMIT 1)
                    AND q.origin = 'DEAL_DIRECT'
                    AND (q.issued_at AT TIME ZONE 'Asia/Bangkok')::date < DATE '2026-11-07')
+               AND NOT EXISTS (SELECT 1 FROM sales.ticket_item i WHERE i.ticket_id = :ticketId AND i.sourced_from_stock)
             """, Map.of("ticketId", ticketId, "kind", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION), Boolean.class));
     }
 

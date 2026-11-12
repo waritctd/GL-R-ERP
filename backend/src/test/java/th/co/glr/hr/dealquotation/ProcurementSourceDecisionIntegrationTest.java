@@ -132,8 +132,80 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         assertThat(ticketService.getProcurementSource(oldDeal, salesActor).legacy()).isTrue();
         assertThat(ticketService.getProcurementSource(newDeal, salesActor).legacy()).isFalse();
         assertThat(ticketService.getProcurementSource(pcrDeal, salesActor).legacy()).isFalse();
-        assertThat(ticketService.procurementSourceAwaitingRep(oldDeal)).isTrue();
-        assertThat(ticketService.procurementSourceAwaitingRep(newDeal)).isFalse();
+        assertThat(ticketService.procurementSourceAwaitingRep(summaryOf(oldDeal))).isTrue();
+        assertThat(ticketService.procurementSourceAwaitingRep(summaryOf(newDeal))).isFalse();
+    }
+
+    /** Legacy follows the LATEST DEAL_PROMOTED_FROM_QUOTATION event's quotation (same order as findOrderConfirmedQuotationId). */
+    @Test
+    void legacyFollowsTheLatestPromotionEvent() {
+        long deal = confirmedDeal(OLD, false, false);
+        long oldQt = promotedQuotationId(deal);
+        backdatePromotions(deal);
+        long newQt = secondDirectQuotation(deal, NEW);
+        addPromotion(deal, oldQt, "2026-11-06 11:00:00+07");
+        addPromotion(deal, newQt, "2026-11-08 11:00:00+07");
+        assertThat(ticketService.getProcurementSource(deal, salesActor).legacy()).isFalse();
+        assertConflict(() -> ticketService.decideProcurementSource(deal, split(itemIds(deal), true, true), salesActor),
+            "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+
+        long reversed = confirmedDeal(OLD, false, false);
+        long oldQt2 = promotedQuotationId(reversed);
+        backdatePromotions(reversed);
+        long newQt2 = secondDirectQuotation(reversed, NEW);
+        addPromotion(reversed, newQt2, "2026-11-06 11:00:00+07");
+        addPromotion(reversed, oldQt2, "2026-11-08 11:00:00+07");
+        assertThat(ticketService.getProcurementSource(reversed, salesActor).legacy()).isTrue();
+    }
+
+    @Test
+    void aTicketItemSourcedFromStockMeansNotLegacy() {
+        long deal = confirmedDeal(OLD, false, false);
+        assertThat(ticketService.getProcurementSource(deal, salesActor).legacy()).isTrue();
+        jdbc.update("UPDATE sales.ticket_item SET sourced_from_stock = true WHERE item_id = :i", Map.of("i", itemIds(deal).get(0)));
+        assertThat(ticketService.getProcurementSource(deal, salesActor).legacy()).isFalse();
+    }
+
+    @Test
+    void ceoSeesAnUndecidedLegacyDealAsEditable() {
+        long deal = confirmedDeal(OLD, false, false);
+        assertThat(ticketService.getProcurementSource(deal, ceoActor).editable()).isTrue();
+    }
+
+    /** pending = decision window open and undecided. */
+    @Test
+    void pendingIsTrueForAnUndecidedDealOfEitherKindAndFalseOnceDecidedOrFromStock() {
+        long oldDeal = confirmedDeal(OLD, false, false);
+        long newDeal = confirmedDeal(NEW, false, true);
+        assertThat(ticketService.getProcurementSource(oldDeal, salesActor).pending()).isEqualTo(true);
+        assertThat(ticketService.getProcurementSource(newDeal, salesActor).pending()).isEqualTo(true);
+        assertThat(ticketService.getProcurementSource(pipelineTicket(), salesActor).pending()).isEqualTo(false);
+
+        ticketService.decideProcurementSource(oldDeal, split(itemIds(oldDeal), false, true), salesActor);
+        ticketService.decideProcurementSource(newDeal, split(itemIds(newDeal), false, true), salesActor);
+        assertThat(ticketService.getProcurementSource(oldDeal, salesActor).pending()).isEqualTo(false);
+        assertThat(ticketService.getProcurementSource(newDeal, salesActor).pending()).isEqualTo(false);
+
+        long fromStock = confirmedDeal(OLD, false, false);
+        ticketService.reserveStock(fromStock, new StockReservationRequest(List.of(
+            new StockReservationRequest.Line(itemIds(fromStock).get(0), new BigDecimal("10"), null),
+            new StockReservationRequest.Line(itemIds(fromStock).get(1), new BigDecimal("10"), null))), ceoActor);
+        assertThat(ticketService.getProcurementSource(fromStock, salesActor).pending()).isEqualTo(false);
+    }
+
+    /** A legacy decide keeps the CEO's partial coverage on a line the rep leaves as import. */
+    @Test
+    void legacyDecideKeepsAnExistingPartialForAnImportLine() {
+        long deal = confirmedDeal(OLD, false, false);
+        List<Long> ids = itemIds(deal);
+        ticketService.reserveStock(deal, new StockReservationRequest(
+            List.of(new StockReservationRequest.Line(ids.get(0), new BigDecimal("3"), null))), ceoActor);
+
+        ticketService.decideProcurementSource(deal, split(ids, false, true), salesActor);
+
+        List<Map<String, Object>> rows = stockRows(deal);
+        assertThat((BigDecimal) rows.get(0).get("qty_from_stock")).isEqualByComparingTo("3");
+        assertThat((BigDecimal) rows.get(1).get("qty_from_stock")).isEqualByComparingTo((BigDecimal) rows.get(1).get("qty"));
     }
 
     /** Bangkok-date boundary: 2026-11-07 01:00+07 is 2026-11-06 18:00 UTC, so a UTC-date cast would call it legacy. */
@@ -155,7 +227,7 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         assertThat(tickets.findById(deal).orElseThrow().summary().fulfillmentStatus()).isEqualTo("FROM_STOCK");
 
         assertThat(ticketService.getProcurementSource(deal, salesActor).editable()).isFalse();
-        assertThat(ticketService.procurementSourceAwaitingRep(deal)).isFalse();
+        assertThat(ticketService.procurementSourceAwaitingRep(summaryOf(deal))).isFalse();
     }
 
     @Test
@@ -288,7 +360,7 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         assertConflict(() -> ticketService.decideProcurementSource(deal, new ProcurementSourceRequest(
             List.of(new ProcurementSourceRequest.Line(1L, true))), salesActor),
             "เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น");
-        assertThat(ticketService.procurementSourceAwaitingRep(deal)).isFalse();
+        assertThat(ticketService.procurementSourceAwaitingRep(summaryOf(deal))).isFalse();
         assertThat(ticketService.getProcurementSource(deal, salesActor).editable()).isFalse();
     }
 
@@ -345,6 +417,34 @@ class ProcurementSourceDecisionIntegrationTest extends AbstractPostgresIntegrati
         jdbc.update("UPDATE sales.quotation SET issued_at = :at::timestamptz WHERE ticket_id = :t AND origin = 'DEAL_DIRECT'",
             Map.of("at", issuedAt, "t", deal));
         return deal;
+    }
+
+    private th.co.glr.hr.ticket.TicketSummaryDto summaryOf(long deal) {
+        return tickets.findById(deal).orElseThrow().summary();
+    }
+
+    private long promotedQuotationId(long deal) {
+        return tickets.findOrderConfirmedQuotationId(deal).orElseThrow();
+    }
+
+    /** A DEAL_DIRECT quotation issued at {@code issuedAt} (borrowed from a scratch deal: a deal may hold one live direct QT). */
+    private long secondDirectQuotation(long deal, String issuedAt) {
+        return promotedQuotationId(confirmedDeal(issuedAt, false, false));
+    }
+
+    /** The confirm-order event is stamped now(); push it before the events the test inserts. */
+    private void backdatePromotions(long deal) {
+        jdbc.update("UPDATE sales.ticket_event SET created_at = '2026-11-01 10:00:00+07'::timestamptz WHERE ticket_id = :t AND kind = 'DEAL_PROMOTED_FROM_QUOTATION'",
+            Map.of("t", deal));
+    }
+
+    private void addPromotion(long deal, long quotationId, String at) {
+        jdbc.update("""
+            INSERT INTO sales.ticket_event (ticket_id, actor_id, actor_name, kind, from_status, to_status,
+                                            related_document_type, related_document_id, created_at)
+            SELECT :t, e.actor_id, e.actor_name, e.kind, e.from_status, e.to_status, 'QUOTATION', :q, :at::timestamptz
+              FROM sales.ticket_event e WHERE e.ticket_id = :t AND e.kind = 'DEAL_PROMOTED_FROM_QUOTATION' LIMIT 1
+            """, Map.of("t", deal, "q", quotationId, "at", at));
     }
 
     private ItemInput tile(String model, boolean stock) {

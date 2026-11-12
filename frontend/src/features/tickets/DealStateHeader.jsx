@@ -169,7 +169,7 @@ export function DealStateHeader({
       key: 'fulfilment',
       label: 'การนำเข้า',
       value: importChip ?? (fulfilment ? fulfilment.label
-        : procurementSource && !procurementSource.decidedAt ? 'ยังไม่ได้จัดซื้อ' : 'ยังไม่ออกใบขอซื้อ'),
+        : procurementSource?.pending ? 'ยังไม่ได้จัดซื้อ' : 'ยังไม่ออกใบขอซื้อ'),
       // Every factory at the warehouse reads as done, like the GOODS_RECEIVED rollup it is about to become.
       tone: importChip === importStepMeta('RECEIVED').label ? 'success' : importChip ? 'info'
         : fulfilment ? fulfilment.tone : 'neutral',

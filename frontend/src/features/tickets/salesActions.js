@@ -484,7 +484,7 @@ function importRequestAction(deal, importRequests, items, procurementSource) {
   const depositReady = depositSettled(deal) && !PAID_FURTHER.has(deal.paymentStatus);
   const allFromStock = (items?.length ?? 0) > 0 && items.every((i) => Number(i.qtyFromStock ?? 0) >= Number(i.qty ?? 0));
   if (!depositReady || allFromStock || deal.fulfillmentStatus != null) return null;
-  if (!procurementSource?.decidedAt) {
+  if (procurementSource?.pending === true) {
     return { key: SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE, label: ACTION_LABEL[SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE] };
   }
   return {

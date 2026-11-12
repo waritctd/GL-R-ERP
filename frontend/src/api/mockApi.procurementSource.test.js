@@ -59,6 +59,29 @@ describe('mockApi procurement-source (mirrors TicketService.decideProcurementSou
     await expect(api.tickets.getProcurementSource(OLD_DEAL)).rejects.toMatchObject({ status: 403 });
   });
 
+  it('pending = ACTIVE && >= ORDER_RECEIVED && no fulfilment && undecided (true for a new deal too); false once decided or FROM_STOCK', async () => {
+    await api.auth.login(SALES);
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(true);
+    reset({ legacy: false });
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(true);
+    await api.tickets.decideProcurementSource(OLD_DEAL, lines(false));
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(false);
+    reset({ legacy: true });
+    patchTicketForTests(OLD_DEAL, { fulfillmentStatus: 'FROM_STOCK' });
+    expect((await api.tickets.getProcurementSource(OLD_DEAL)).pending).toBe(false);
+  });
+
+  it('legacy also needs NO item sourcedFromStock: the flag alone is not enough (mirrors TicketRepository.isLegacyStockSourceDeal)', async () => {
+    await api.auth.login(SALES);
+    const raw = (await api.tickets.get(OLD_DEAL)).ticket.items.map((i) => ({ ...i }));
+    patchTicketForTests(OLD_DEAL, { items: raw.map((i) => ({ ...i, sourcedFromStock: i.id === ITEM })) });
+    try {
+      expect(await api.tickets.getProcurementSource(OLD_DEAL)).toMatchObject({ legacy: false, editable: false });
+    } finally {
+      patchTicketForTests(OLD_DEAL, { items: raw });
+    }
+  });
+
   it('editable is false once the stage window has closed (fulfillment set)', async () => {
     patchTicketForTests(OLD_DEAL, { fulfillmentStatus: 'IR_ISSUED' });
     await api.auth.login(SALES);
@@ -89,7 +112,7 @@ describe('mockApi procurement-source (mirrors TicketService.decideProcurementSou
     expect(after).toMatchObject({ editable: false, lines: [{ itemId: ITEM, fromStock: true }] });
     expect(after.decidedAt).toBeTruthy();
     const { events } = (await api.tickets.get(OLD_DEAL)).ticket;
-    expect(events.find((e) => e.kind === 'PROCUREMENT_SOURCE_DECIDED').message)
+    expect(events.findLast((e) => e.kind === 'PROCUREMENT_SOURCE_DECIDED').message)
       .toBe('เลือกที่มาสินค้า: นำเข้า 0 รายการ · จากสต็อก 1 รายการ');
     await expect(api.tickets.decideProcurementSource(OLD_DEAL, lines(true)))
       .rejects.toMatchObject({ status: 409, message: 'เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้' });

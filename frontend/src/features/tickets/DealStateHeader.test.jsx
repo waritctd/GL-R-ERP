@@ -191,11 +191,14 @@ describe('DealStateHeader — การนำเข้า chip follows the per-f
   });
 
   it('procurementSource not yet decided -> ยังไม่ได้จัดซื้อ; decided -> back to ยังไม่ออกใบขอซื้อ', () => {
-    const { unmount } = renderHeader({ fulfillmentStatus: null }, { procurementSource: { legacy: false, decidedAt: null } });
+    const { unmount } = renderHeader({ fulfillmentStatus: null }, { procurementSource: { legacy: false, pending: true, decidedAt: null } });
     expect(importChipText()).toBe('ยังไม่ได้จัดซื้อ');
     unmount();
-    renderHeader({ fulfillmentStatus: null }, { procurementSource: { legacy: false, decidedAt: '2026-11-10T00:00:00Z' } });
+    const { unmount: unmount2 } = renderHeader({ fulfillmentStatus: null }, { procurementSource: { legacy: false, pending: false, decidedAt: '2026-11-10T00:00:00Z' } });
     expect(importChipText()).toBe('ยังไม่ออกใบขอซื้อ');
+    unmount2();
+    renderHeader({ fulfillmentStatus: null }, { procurementSource: { legacy: false, pending: false, decidedAt: null } });
+    expect(importChipText()).toBe('ยังไม่ออกใบขอซื้อ'); // no pending flag -> no chip, whatever decidedAt says
   });
 
   it.each(['GOODS_RECEIVED', 'PARTIALLY_DELIVERED', 'FULLY_DELIVERED', 'FROM_STOCK'])(
