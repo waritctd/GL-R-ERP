@@ -155,6 +155,8 @@ public final class TicketEventKind {
     public static final String DEAL_SPLIT_FROM_PARENT = "DEAL_SPLIT_FROM_PARENT";
     /** On a container deal emptied by the V205 reconcile: cites the deal its quotation moved to. */
     public static final String DEAL_MERGED_INTO = "DEAL_MERGED_INTO";
+    /** Stage-10 procurement-source decision (V208): the rep's import/stock split for an order confirmed before the quotation carried it. */
+    public static final String PROCUREMENT_SOURCE_DECIDED = "PROCUREMENT_SOURCE_DECIDED";
 
     private TicketEventKind() {}
 }

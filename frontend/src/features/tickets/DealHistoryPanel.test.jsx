@@ -38,6 +38,11 @@ describe('DealHistoryPanel', () => {
     expect(items[1]).toContain('ลูกค้ายืนยันคำสั่งซื้อ');
   });
 
+  it('PROCUREMENT_SOURCE_DECIDED has a Thai label (not the raw kind)', () => {
+    render(<DealHistoryPanel events={[{ id: 1, kind: 'PROCUREMENT_SOURCE_DECIDED', actorName: 'พนักงานขาย', createdAt: '2026-11-10T09:00:00.000Z' }]} activities={[]} />);
+    expect(screen.getByRole('listitem').textContent).toContain('เลือกที่มาสินค้า');
+  });
+
   it('still renders newest-first for events at genuinely different timestamps (unaffected by the tiebreak)', () => {
     render(
       <DealHistoryPanel

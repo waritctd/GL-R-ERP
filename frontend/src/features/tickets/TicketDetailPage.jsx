@@ -38,6 +38,7 @@ import { ContextSection, FieldRow } from './DealMetaFields.jsx';
 import { DealAttachmentsPanel } from './DealAttachmentsPanel.jsx';
 import { createDepositNoticeDraft, depositNoticesQueryOptions, pickDepositNotice } from '../deposits/createDepositNoticeDraft.js';
 import { DealDocumentRegister, canReadStoredImportRequests } from './DealDocumentRegister.jsx';
+import { ProcurementSourceDialog } from './ProcurementSourceDialog.jsx';
 import { RemainingInvoiceDialog } from './RemainingInvoiceDialog.jsx';
 import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
@@ -381,6 +382,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // server-state mutations (no cache to invalidate), so left as local state.
   const [downloadingQuotationKey, setDownloadingQuotationKey] = useState(null); // `${quotationId}-${format}` | null
   const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
+  const [procurementDialogOpen, setProcurementDialogOpen] = useState(false);
 
   const ticketQuery = useQuery({
     queryKey: queryKeys.ticketDetail(ticketId),
@@ -515,6 +517,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId && canReadStoredImportRequests(user, ticket?.summary),
   });
   const importRequests = storedIrQuery.data;
+  // The stage-10 "จัดซื้อสินค้า" decision: read for the owning rep and the CEO; the server says whether it is pending/editable.
+  const procurementSourceQuery = useQuery({
+    queryKey: queryKeys.procurementSource(ticketId),
+    queryFn: () => api.tickets.getProcurementSource(ticketId),
+    enabled: (readsDocs || role === 'ceo') && !!ticketId
+      && ticket?.summary?.lifecycle === 'ACTIVE' && ticket?.summary?.fulfillmentStatus == null,
+  });
+  const procurementSource = procurementSourceQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
   // undefined until the list is read: nextSalesAction then never offers the invoice.
   const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
@@ -736,6 +746,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   function refreshTicket() {
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.procurementSource(ticketId) });
   }
 
   // Condense the sticky chrome with hysteresis — see the ticketChromeCondensed declaration
@@ -1133,7 +1144,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // treated like an unknown route (no route choice; ⋯ still offers its outcome).
   // (Read once is enough: a failed refetch keeps the rows it read.)
   const offRouteParties = dealQuotationsQuery.data !== undefined ? offRoutePartiesFor(stageCatalog, summary.entryChannel) : null;
-  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items });
+  const workState = resolveWorkState(user, summary, pricingRequests, { reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items, procurementSource });
   // At the owner/buyer quote stages revise is an ADDITIONAL action (header "⋯" menu), never a
   // replacement for the primary บันทึกผลใบเสนอราคา: the client may simply accept the original.
   // The summary serves only the newest live direct quotation; an APPROVED one beside a newer owner/buyer
@@ -1143,14 +1154,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null)
     : null;
   const secondaryActions = secondaryWorkActions(user, summary, pricingRequests, {
-    reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items,
+    reviseTarget, offRouteParties, quotationByRequest, depositNotice, remainingInvoice, importRequests, items, procurementSource,
     approvedDirect: approvedDirect && { id: approvedDirect.id, number: approvedDirect.number }, primary: workState.action,
   });
   const outcomeSecondary = secondaryActions.find((action) => action.key === 'record_quotation_outcome') ?? null;
   const reviseSecondary = secondaryActions.find((action) => action.key === 'revise_quotation') ?? null;
   const confirmDirectSecondary = secondaryActions.find((action) => action.key === 'confirm_order_direct') ?? null;
   // The backend refuses a non-owner for both documents: no main button for them.
-  const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'create_import_request'];
+  const OWNER_ONLY_ACTIONS = ['create_deposit_notice', 'create_remaining_invoice', 'choose_procurement_source', 'create_import_request'];
   // Like the quotation list above: with the deal's request list unread, a DRAFT may be hiding, so no create_pcr.
   const requestListUnread = canViewPricingRequests && pricingRequestsQuery.data === undefined;
   const workStateAction = (OWNER_ONLY_ACTIONS.includes(workState.action?.key) && !isOwner)
@@ -1331,6 +1342,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
           onClick={() => setRemainingInvoiceDialogOpen(true)}>
+          {workStateAction.label}
+        </Button>
+      );
+      stickyPrimaryLabel = workStateAction.label;
+    } else if (actionKey === 'choose_procurement_source') {
+      stickyPrimaryAction = (
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
+          onClick={() => setProcurementDialogOpen(true)}>
           {workStateAction.label}
         </Button>
       );
@@ -1669,6 +1688,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             summary={summary}
             pricingRequests={pricingRequests}
             importRequests={importRequests}
+            procurementSource={procurementSource}
             role={role}
             primaryAction={stickyPrimaryAction}
             bannerText={bannerText}
@@ -2402,6 +2422,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 summary={summary}
                 items={items}
                 availableActions={availableActions}
+                procurementSource={procurementSource}
+                onChooseProcurementSource={() => setProcurementDialogOpen(true)}
                 showToast={showToast}
               />
             ) : null}
@@ -2639,6 +2661,25 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         // sales role + this deal's own owner, see DealDocumentRegister.jsx's identical predicate.
         <RemainingInvoiceDialog ticketId={ticketId} canWrite={role === 'sales' && isOwner}
           onClose={() => setRemainingInvoiceDialogOpen(false)} />
+      ) : null}
+
+      {procurementDialogOpen ? (
+        <ProcurementSourceDialog
+          open
+          ticketId={ticketId}
+          items={items}
+          procurementSource={procurementSource}
+          onClose={() => setProcurementDialogOpen(false)}
+          onDecided={(decided, { anyImport }) => {
+            setProcurementDialogOpen(false);
+            applyTicketUpdate(decided);
+            // Decided now: flip the cached read first so the CTA never offers จัดซื้อสินค้า again during the refetch.
+            queryClient.setQueryData(queryKeys.procurementSource(ticketId), (old) => (old ? { ...old, decidedAt: new Date().toISOString(), editable: false, pending: false } : old));
+            queryClient.invalidateQueries({ queryKey: queryKeys.procurementSource(ticketId) });
+            // The IR itself is made from the main button that follows, never from here.
+            if (anyImport) setActiveTab('fulfilment');
+          }}
+        />
       ) : null}
 
       <ConfirmDialog

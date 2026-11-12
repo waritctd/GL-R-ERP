@@ -17,7 +17,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      tickets: { list: vi.fn() },
+      tickets: { list: vi.fn(), getProcurementSource: vi.fn() },
       pricingRequests: { queue: vi.fn() },
       commissions: { monthlySummary: vi.fn() },
       // Each quoted deal's quotation list (the same call the deal page makes) — none by default.
@@ -410,5 +410,38 @@ describe('SalesOverview — the next party after a designer quotation is sent fo
       expect(badgeOf('บริษัท ผู้ซื้อติดต่อตรง จำกัด').textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
       expect(badgeOf('บริษัท ผู้ออกแบบขอแก้ จำกัด').textContent).toBe('เสนอใบราคาผู้ออกแบบ');
     });
+  });
+});
+
+// Stage-10 "จัดซื้อสินค้า": a deal past order confirmation with no import/stock decision yet reads
+// จัดซื้อสินค้า in the worklist (not ออกใบขอซื้อ (IR)); the cockpit asks the server per such deal.
+describe('SalesOverview — the procurement-source decision shows in the worklist', () => {
+  const at = '2026-07-01T00:00:00.000Z';
+  const base = { lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: at };
+  const procDeals = [
+    { ...base, id: 821, code: 'DL-2026-0821', customerName: 'บริษัท ยังไม่เลือก จำกัด', title: 'ยังไม่เลือก' },
+    { ...base, id: 822, code: 'DL-2026-0822', customerName: 'บริษัท เลือกแล้ว จำกัด', title: 'เลือกแล้ว' },
+    { ...base, id: 823, code: 'DL-2026-0823', customerName: 'บริษัท ก่อนยืนยัน จำกัด', title: 'ก่อนยืนยัน', salesStage: 'QUOTE_OWNER' },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: procDeals });
+    api.pricingRequests.queue.mockResolvedValue({ items: [] });
+    api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
+    api.tickets.getProcurementSource.mockImplementation((id) => Promise.resolve({ pending: Number(id) === 821 }));
+  });
+
+  it('undecided -> จัดซื้อสินค้า; decided -> ออกใบขอซื้อ (IR); a deal before ORDER_RECEIVED is never asked', async () => {
+    renderOverview();
+    const worklist = within(worklistSection());
+    await worklist.findByText('บริษัท ยังไม่เลือก จำกัด');
+    const badgeOf = (name) => worklist.getByText(name).closest('button').querySelector('.status-badge');
+    await waitFor(() => {
+      expect(badgeOf('บริษัท ยังไม่เลือก จำกัด').textContent).toBe('จัดซื้อสินค้า');
+      expect(badgeOf('บริษัท เลือกแล้ว จำกัด').textContent).toBe('ออกใบขอซื้อ (IR)');
+    });
+    expect(api.tickets.getProcurementSource).toHaveBeenCalledTimes(2);
+    expect(api.tickets.getProcurementSource).not.toHaveBeenCalledWith(823);
   });
 });

@@ -124,6 +124,8 @@ export const queryKeys = {
   // ImportFulfilmentPage's rowsQueries and DealFulfilmentPanel's own storedIrQuery must land on the
   // SAME cache entry for the same deal regardless of whether their ticketId is a string or a number.
   storedImportRequests: (ticketId) => ['importRequests', 'byTicket', ticketId == null ? ticketId : Number(ticketId)],
+  // GET /api/tickets/{id}/procurement-source: where each line comes from, and whether the rep has decided.
+  procurementSource: (ticketId) => ['tickets', 'procurement-source', ticketId == null ? ticketId : Number(ticketId)],
   storedImportRequestDetail: (id) => ['importRequests', 'detail', id],
   // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param
   // string vs numeric-field reason as ticketDetail above.

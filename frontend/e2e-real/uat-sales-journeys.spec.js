@@ -477,7 +477,7 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       ).toHaveLength(1);
       const item = ticket.items[0];
 
-      const updated = await declareStockCoverage(sessions, 'sales', deal.id, [
+      const updated = await declareStockCoverage(sessions, 'ceo', deal.id, [
         { itemId: item.id, qtyFromStock: item.qty },
       ]);
       expect(

@@ -793,36 +793,64 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
   const paidDeal = (overrides = {}) => baseDeal({ status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, ...overrides });
   const CREATE_IR = { key: 'create_import_request', label: 'ออกใบขอซื้อ (IR)' };
 
-  it('exposes the action key', () => {
+  // The stage-10 "จัดซื้อสินค้า" decision comes first; the cases below run with it already made.
+  const DECIDED = { procurementSource: { decidedAt: '2026-11-10T00:00:00Z' } };
+  const PROCURE = { key: 'choose_procurement_source', label: 'จัดซื้อสินค้า' };
+
+  it('exposes the action keys', () => {
     expect(SALES_ACTION.CREATE_IMPORT_REQUEST).toBe('create_import_request');
+    expect(SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE).toBe('choose_procurement_source');
+  });
+
+  it('procure action only when the loaded source says pending === true', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { pending: true, decidedAt: null }, importRequests: [] })).toEqual(PROCURE);
+  });
+
+  it('source not loaded (undefined, e.g. dashboard) or pending false -> IR as before', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { procurementSource: { pending: false, decidedAt: null }, importRequests: [] })).toEqual(CREATE_IR);
+  });
+
+  it('IR action returns once decided', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
+  });
+
+  it('no procure action before the deposit is settled', () => {
+    expect(nextSalesAction(paidDeal({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }), [orderConfirmedPr()], { importRequests: [] })?.key)
+      .not.toBe('choose_procurement_source');
+  });
+
+  it('no procure action when every line is from stock', () => {
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: [{ qty: 4, qtyFromStock: 4 }] })?.key)
+      .not.toBe('choose_procurement_source');
   });
 
   it('DEPOSIT_PAID + no fulfilment yet -> ออกใบขอซื้อ (IR); importRequests unknown (undefined) or empty -> same', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()])).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], DECIDED)).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
   });
 
   it('a DRAFT IR exists -> ออกเลขใบขอซื้อ (IR) (same key); SUPERSEDED rows are ignored', () => {
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'DRAFT' }] }))
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'DRAFT' }] }))
       .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'SUPERSEDED' }, { id: 2, status: 'DRAFT' }] }))
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'SUPERSEDED' }, { id: 2, status: 'DRAFT' }] }))
       .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'SUPERSEDED' }] }))
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'SUPERSEDED' }] }))
       .toEqual(CREATE_IR);
   });
 
   it.each(['IR_ISSUED', 'FROM_STOCK', 'SHIPPING'])('fulfillmentStatus %s -> not offered', (fulfillmentStatus) => {
-    expect(nextSalesAction(paidDeal({ fulfillmentStatus }), [orderConfirmedPr()], { importRequests: [] })?.key)
+    expect(nextSalesAction(paidDeal({ fulfillmentStatus }), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key)
       .not.toBe('create_import_request');
   });
 
   it('a confirmed direct-quotation deal with a reviseTarget still gets the IR, not แก้ใบเสนอราคา', () => {
     const deal = paidDeal({ liveDirectQuotation: { id: 90, number: 'QT-2026-0090-1', docStatus: 'APPROVED', recipientType: 'BUYER' } });
-    expect(nextSalesAction(deal, [], { reviseTarget: { quotationId: 90, number: 'QT-2026-0090-1' }, importRequests: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(deal, [], { ...DECIDED, reviseTarget: { quotationId: 90, number: 'QT-2026-0090-1' }, importRequests: [] })).toEqual(CREATE_IR);
   });
 
   it.each(['CUSTOMER_CONFIRMED', 'DEPOSIT_NOTICE_ISSUED', 'AWAITING_FINAL_PAYMENT', null])('paymentStatus %s -> not offered', (paymentStatus) => {
-    expect(nextSalesAction(paidDeal({ paymentStatus }), [orderConfirmedPr()], { importRequests: [] })?.key)
+    expect(nextSalesAction(paidDeal({ paymentStatus }), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key)
       .not.toBe('create_import_request');
   });
 
@@ -832,11 +860,11 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
   it('items all covered from stock -> no create_import_request; some uncovered, or no items passed -> still offered', () => {
     const covered = [{ qty: 10, qtyFromStock: 10 }, { qty: 4, qtyFromStock: 4 }];
     const partly = [{ qty: 10, qtyFromStock: 10 }, { qty: 8, qtyFromStock: 0 }];
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: covered })?.key)
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [], items: covered })?.key)
       .not.toBe('create_import_request');
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: partly })).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [], items: [] })).toEqual(CREATE_IR);
-    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [], items: partly })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [], items: [] })).toEqual(CREATE_IR);
+    expect(nextSalesAction(paidDeal(), [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
   });
 
   // A no-deposit deal never gets a deposit notice, so nothing moves its payment status past
@@ -845,28 +873,28 @@ describe('nextSalesAction — ออกใบขอซื้อ (IR) at ขั�
   it.each(['NOT_REQUIRED', 'WAIVED'])(
     'depositPolicy %s at CUSTOMER_CONFIRMED + no fulfilment yet -> สร้างใบขอซื้อ (IR) (no deposit to wait for)', (depositPolicy) => {
       const deal = paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy });
-      expect(nextSalesAction(deal, [orderConfirmedPr()], { importRequests: [] })).toEqual(CREATE_IR);
-      expect(nextSalesAction(deal, [orderConfirmedPr()], { importRequests: [{ id: 1, status: 'DRAFT' }] }))
+      expect(nextSalesAction(deal, [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toEqual(CREATE_IR);
+      expect(nextSalesAction(deal, [orderConfirmedPr()], { ...DECIDED, importRequests: [{ id: 1, status: 'DRAFT' }] }))
         .toEqual({ key: 'create_import_request', label: 'ออกเลขใบขอซื้อ (IR)' });
     });
 
   it('depositPolicy REQUIRED at CUSTOMER_CONFIRMED still gets the deposit notice, never the IR (wrong-way-round)', () => {
     expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'REQUIRED' }),
-      [orderConfirmedPr()], { importRequests: [] })).toMatchObject({ key: 'create_deposit_notice' });
+      [orderConfirmedPr()], { ...DECIDED, importRequests: [] })).toMatchObject({ key: 'create_deposit_notice' });
   });
 
   it('a no-deposit deal that already has fulfilment (IR issued / from stock) is not offered the IR again', () => {
     expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED', depositPolicy: 'NOT_REQUIRED', fulfillmentStatus: 'IR_ISSUED' }),
-      [orderConfirmedPr()], { importRequests: [] })?.key).not.toBe('create_import_request');
+      [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key).not.toBe('create_import_request');
   });
 
   it('DEPOSIT_NOTICE_ISSUED stays unoffered on a no-deposit deal too (unchanged)', () => {
     expect(nextSalesAction(paidDeal({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED', depositPolicy: 'NOT_REQUIRED' }),
-      [orderConfirmedPr()], { importRequests: [] })?.key).not.toBe('create_import_request');
+      [orderConfirmedPr()], { ...DECIDED, importRequests: [] })?.key).not.toBe('create_import_request');
   });
 
   it('CUSTOMER_CONFIRMED: the deposit-notice action still wins (the IR button only follows it)', () => {
-    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED' }), [orderConfirmedPr()], { importRequests: [] }))
+    expect(nextSalesAction(paidDeal({ paymentStatus: 'CUSTOMER_CONFIRMED' }), [orderConfirmedPr()], { ...DECIDED, importRequests: [] }))
       .toMatchObject({ key: 'create_deposit_notice' });
   });
 });

@@ -366,7 +366,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         long itemId = onlyItemId(ticketId);
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("50.00"), null))),
-            owner);
+            ceoActor);
         ticketService.setItemWeightMultipliers(ticketId,
             new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
 
@@ -395,7 +395,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         long itemId = onlyItemId(ticketId);
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), null))),
-            owner);
+            ceoActor);
         ticketService.setItemWeightMultipliers(ticketId,
             new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
 
@@ -431,7 +431,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         long itemId = onlyItemId(ticketId);
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), null))),
-            owner);
+            ceoActor);
         ticketService.setItemWeightMultipliers(ticketId,
             new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
 
@@ -504,7 +504,7 @@ class StockItemWeightedCommissionIntegrationTest extends AbstractPostgresIntegra
         long itemId = onlyItemId(ticketId);
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(new StockReservationRequest.Line(itemId, new BigDecimal("10.00"), null))),
-            owner);
+            ceoActor);
         ticketService.setItemWeightMultipliers(ticketId,
             new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, 2))), salesManager);
 

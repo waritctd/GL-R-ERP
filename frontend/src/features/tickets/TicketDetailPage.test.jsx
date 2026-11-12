@@ -44,6 +44,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         recordPayment: vi.fn(),
         listDeliveries: vi.fn(),
         reserveStock: vi.fn(),
+        // Default: the deal's source is already decided, so tests that predate the stage-10 dialog keep their IR button.
+        getProcurementSource: vi.fn().mockResolvedValue({ legacy: false, editable: false, decidedAt: '2026-11-10T00:00:00Z', quotationNumber: null, lines: [] }),
+        decideProcurementSource: vi.fn(),
         recordDelivery: vi.fn(),
         completeDelivery: vi.fn(),
         actions: vi.fn(),
@@ -4754,12 +4757,14 @@ describe('TicketDetailPage', () => {
     beforeEach(() => {
       scrolledIds = [];
       Element.prototype.scrollIntoView = function scrollIntoView() { scrolledIds.push(this.id); };
+      // clearAllMocks keeps implementations: put the "already decided" default back after the tests that undecide it.
+      api.tickets.getProcurementSource.mockResolvedValue({ legacy: false, editable: false, decidedAt: '2026-11-10T00:00:00Z', quotationNumber: null, lines: [] });
     });
     const scrolledToIrSection = () => scrolledIds.includes('deal-fulfilment-stored-ir');
 
-    function irStageDeal({ rows = [] } = {}) {
+    function irStageDeal({ rows = [], salesStage = 'DEPOSIT_RECEIVED', lifecycle = 'ACTIVE', fulfillmentStatus = null } = {}) {
       const state = {
-        lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued',
+        lifecycle, salesStage, paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus, status: 'quotation_issued',
       };
       api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1 } }) });
       api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
@@ -4812,6 +4817,97 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(scrolledToIrSection()).toBe(true));
       // createIrDrafts() opens the issue confirm, so "not called" alone doesn't pin the branch.
       expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' })).toBeNull();
+    });
+
+    const undecided = (legacy) => ({ legacy, pending: true, editable: legacy, decidedAt: null, quotationNumber: 'QT-2026-0001', lines: [{ itemId: 70101, fromStock: false }] });
+
+    it('source not decided: the main button is จัดซื้อสินค้า (not the IR), the banner follows the deal kind, and the header chip reads ยังไม่ได้จัดซื้อ', async () => {
+      irStageDeal();
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(false));
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('choose_procurement_source'));
+      expect(primary().textContent).toContain('จัดซื้อสินค้า');
+      expect(await screen.findByText('ตรวจที่มาสินค้าตามใบเสนอราคา')).toBeTruthy();
+      expect(await screen.findByText('ยังไม่ได้จัดซื้อ')).toBeTruthy();
+    });
+
+    it('an old (legacy) deal reads the choose-it-yourself banner', async () => {
+      irStageDeal();
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(true));
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('choose_procurement_source'));
+      expect(await screen.findByText('เลือกว่าสินค้าสั่งนำเข้าหรือมาจากสต็อก')).toBeTruthy();
+    });
+
+    it('จัดซื้อสินค้า opens the dialog; ยืนยัน with an import line switches to the จัดซื้อ-ส่งมอบ tab and the main button becomes ออกใบขอซื้อ (IR) (no IR confirm opens by itself)', async () => {
+      irStageDeal();
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(false));
+      api.tickets.decideProcurementSource.mockImplementation(async () => {
+        // From now on the server answers "decided".
+        api.tickets.getProcurementSource.mockResolvedValue({ ...undecided(false), pending: false, editable: false, decidedAt: '2026-11-12T00:00:00Z' });
+        return { ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued', createdById: 1 } }) };
+      });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('choose_procurement_source'));
+      await waitFor(() => expect(primary().disabled).toBe(false));
+
+      fireEvent.click(primary());
+      const dialog = await screen.findByTestId('procurement-source-dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
+
+      await waitFor(() => expect(api.tickets.decideProcurementSource).toHaveBeenCalledWith(701, { lines: [{ itemId: 70101, fromStock: false }] }));
+      await waitFor(() => expect(location()).toContain('tab=fulfilment'));
+      await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+      expect(primary().textContent).toContain('ออกใบขอซื้อ (IR)');
+      expect(screen.queryByTestId('procurement-source-dialog')).toBeNull();
+      expect(screen.queryByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' })).toBeNull();
+      expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
+    });
+
+    it('a legacy undecided deal hand-moved to PROCUREMENT (fulfillment null) still reads the source and the CTA opens the dialog', async () => {
+      irStageDeal({ salesStage: 'PROCUREMENT' });
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(true));
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('choose_procurement_source'));
+      await waitFor(() => expect(primary().disabled).toBe(false));
+      fireEvent.click(primary());
+      expect(await screen.findByTestId('procurement-source-dialog')).toBeTruthy();
+    });
+
+    it('after ยืนยัน the CTA is never จัดซื้อสินค้า again, even while the source refetch is still pending', async () => {
+      irStageDeal();
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(false));
+      api.tickets.decideProcurementSource.mockImplementation(async () => {
+        api.tickets.getProcurementSource.mockReturnValue(new Promise(() => {}));
+        return { ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null, status: 'quotation_issued', createdById: 1 } }) };
+      });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      await waitFor(() => expect(primaryAction()).toBe('choose_procurement_source'));
+      await waitFor(() => expect(primary().disabled).toBe(false));
+      fireEvent.click(primary());
+      fireEvent.click(within(await screen.findByTestId('procurement-source-dialog')).getByRole('button', { name: 'ยืนยัน' }));
+      await waitFor(() => expect(api.tickets.decideProcurementSource).toHaveBeenCalled());
+      await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
+    });
+
+    it('the CEO reads procurement-source too (not only the owning rep) at ORDER_RECEIVED+', async () => {
+      irStageDeal();
+      api.tickets.getProcurementSource.mockClear();
+      api.tickets.getProcurementSource.mockResolvedValue(undecided(true));
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await waitFor(() => expect(api.tickets.getProcurementSource).toHaveBeenCalledWith(701));
+    });
+
+    it.each([
+      ['already on the stock/import axis (FROM_STOCK)', { fulfillmentStatus: 'FROM_STOCK' }],
+      ['closed', { lifecycle: 'CLOSED_LOST' }],
+    ])('does not read procurement-source for a deal %s (the decision window is shut)', async (_n, state) => {
+      irStageDeal(state);
+      api.tickets.getProcurementSource.mockClear();
+      renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
+      await stickyInputsSettled();
+      await screen.findByRole('heading', { level: 1 });
+      expect(api.tickets.getProcurementSource).not.toHaveBeenCalled();
     });
 
     it('a sales rep who does NOT own the deal gets no create_import_request main button', async () => {

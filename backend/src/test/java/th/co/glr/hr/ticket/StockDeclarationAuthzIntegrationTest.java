@@ -179,6 +179,12 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         // import is in this set: it is not in STOCK_DECLARATION_ROLES at all, so it is
         // refused at the coarse pre-filter (403) before the ticket is read, exactly like the
         // roles that could never declare.
+        // sales (even a deal owner) is refused before the ticket read too: reps use the "จัดซื้อสินค้า" button only.
+        assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(e.getMessage()).isEqualTo("ระบุสินค้าจากสต็อกผ่านปุ่ม \"จัดซื้อสินค้า\" เท่านั้น");
+            });
         for (UserPrincipal stranger : List.of(accountUser, hrUser, salesManagerUser, importUser)) {
             assertThatThrownBy(() -> ticketService.reserveStock(neverCreated, declare(1L, "1.00"), stranger))
                 .describedAs("role %s must get 403 (not 404) for a ticket it may never touch", stranger.role())
@@ -197,7 +203,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     void refusedDeclaration_doesNotOverwriteTheDeclarationAlreadyOnFile() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), owner);
+        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), ceoUser);
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("40.00");
 
         assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "100.00"), otherSalesRep))
@@ -210,16 +216,27 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     // ── the grants: necessary, but not the evidence ──────────────────────────
 
+    /** The rep's per-line declaration is withdrawn: reps declare through POST /procurement-source only. */
     @Test
-    void dealOwner_declares_andTheRowIsActuallyWritten() {
+    void dealOwner_isRefused_andTheRowIsUnmoved() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
 
-        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), owner);
+        assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "40.00"), owner))
+            .isInstanceOfSatisfying(ApiException.class, e -> {
+                assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(e.getMessage()).contains("จัดซื้อสินค้า");
+            });
 
-        assertThat(qtyFromStock(itemId)).isEqualByComparingTo("40.00");
-        assertThat(stockNote(itemId)).isEqualTo("มีของในสต็อก");
-        assertThat(stockReservedEvents(ticketId)).isEqualTo(1);
+        assertNothingMoved(ticketId, itemId);
+    }
+
+    @Test
+    void ownerRepNotAdvertisedReserveStock() {
+        long ticketId = createTicketWithOneItem();
+
+        assertThat(advertised(ticketId, owner)).doesNotContain("RESERVE_STOCK");
+        assertThat(advertised(ticketId, ceoUser)).contains("RESERVE_STOCK");
     }
 
     /**
@@ -232,7 +249,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     void importRole_isRefused_andTheRowIsUnmoved() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), owner);
+        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), ceoUser);
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("80.00");
 
         assertThatThrownBy(() -> ticketService.reserveStock(ticketId, declare(itemId, "25.00"), importUser))
@@ -249,18 +266,17 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
     void ceoCorrectsTheOwnersDeclaration() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
-        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), owner);
+        ticketService.reserveStock(ticketId, declare(itemId, "80.00"), ceoUser);
 
         ticketService.reserveStock(ticketId, declare(itemId, "30.00"), ceoUser);
         assertThat(qtyFromStock(itemId)).isEqualByComparingTo("30.00");
     }
 
     /**
-     * The routing half of the rule: "auto-routing behaviour stays identical, whoever declares."
-     * Two deals in the same starting state, full coverage declared on one by the owner and on the
-     * other by the CEO — both must land on exactly the same fulfilment status and sales stage.
+     * The routing half of the rule: a full-coverage declaration (CEO only now) routes the deal
+     * to FROM_STOCK / DELIVERY_SCHEDULING.
      *
-     * <p>Both start at {@code ORDER_RECEIVED}, not {@code LEAD_APPROACH}: {@code autoAdvanceStage}
+     * <p>The deal starts at {@code ORDER_RECEIVED}, not {@code LEAD_APPROACH}: {@code autoAdvanceStage}
      * has no stage precondition, so a full-coverage declaration would jump the deal straight to
      * {@code DELIVERY_SCHEDULING} from wherever it was — including an untouched lead — which also
      * blocked {@code ISSUE_IMPORT_REQUEST}. That risk is closed by {@code reserveStock}'s stage
@@ -269,21 +285,15 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
      * which is what this test still pins.
      */
     @Test
-    void fullCoverage_routesIdenticallyWhicheverRoleDeclares() {
-        long ownerDeclared = createTicketWithOneItem();
+    void ceoFullCoverage_routesTheDealToDeliveryScheduling() {
         long ceoDeclared = createTicketWithOneItem();
-        assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(salesStage(ceoDeclared)).isEqualTo(DealStage.ORDER_RECEIVED);
 
-        ticketService.reserveStock(ownerDeclared, declare(onlyItemId(ownerDeclared), "100.00"), owner);
         ticketService.reserveStock(ceoDeclared, declare(onlyItemId(ceoDeclared), "100.00"), ceoUser);
 
-        assertThat(fulfillmentStatus(ownerDeclared)).isEqualTo(FulfilmentStatus.FROM_STOCK);
         assertThat(fulfillmentStatus(ceoDeclared)).isEqualTo(FulfilmentStatus.FROM_STOCK);
-        assertThat(salesStage(ownerDeclared)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
+        // PROCUREMENT is skipped — a fully-stocked deal has no import journey.
         assertThat(salesStage(ceoDeclared)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-        // PROCUREMENT is skipped either way — a fully-stocked deal has no import journey.
-        assertThat(salesStage(ownerDeclared)).isEqualTo(salesStage(ceoDeclared));
     }
 
     /**
@@ -299,7 +309,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
      * would test CommissionService, which this class does not touch.
      */
     @Test
-    void ownersOwnDeclaration_feedsTheRealStockBonusCommissionInput() {
+    void ceoDeclaration_feedsTheRealStockBonusCommissionInput() {
         long ticketId = createTicketWithOneItem();
         long itemId = onlyItemId(ticketId);
         LocalDate payrollMonth = LocalDate.of(2026, 8, 1);
@@ -309,7 +319,7 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             .describedAs("nothing declared yet -> stock share 0")
             .isEqualByComparingTo("0.00");
 
-        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), owner);
+        ticketService.reserveStock(ticketId, declare(itemId, "40.00"), ceoUser);
 
         assertThat(commissions.sumActiveStockActualReceived(ownerId, payrollMonth))
             .isEqualByComparingTo("200000.00");
@@ -324,6 +334,11 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(fulfillmentStatus(ticketId)).isNull();
         assertThat(salesStage(ticketId)).isEqualTo(DealStage.ORDER_RECEIVED);
         assertThat(stockReservedEvents(ticketId)).isZero();
+    }
+
+    private List<String> advertised(long ticketId, UserPrincipal actor) {
+        return ticketService.actions(ticketId, actor).availableActions().stream()
+            .map(TicketResponses.TicketActionDto::action).toList();
     }
 
     private static StockReservationRequest declare(long itemId, String qtyFromStock) {
