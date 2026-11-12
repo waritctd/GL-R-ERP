@@ -589,7 +589,7 @@ describe('resolveWorkState — forwards importRequests to nextSalesAction (QA-09
   const deal = baseDeal({ status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: null });
   const prs = [{ id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-10-01T00:00:00Z' }];
 
-  const decided = { procurementSource: { decidedAt: '2026-11-10T00:00:00Z' } };
+  const decided = { procurementSource: { pending: false, decidedAt: '2026-11-10T00:00:00Z' } };
 
   it('sales: a DRAFT importRequests row reaches nextSalesAction (ออกเลขใบขอซื้อ (IR)); without it, ออกใบขอซื้อ (IR)', () => {
     expect(resolveWorkState({ role: 'sales' }, deal, prs, decided).action)
@@ -599,9 +599,9 @@ describe('resolveWorkState — forwards importRequests to nextSalesAction (QA-09
   });
 
   it('sales: procurementSource reaches nextSalesAction - undecided gives จัดซื้อสินค้า, with the banner for the deal kind', () => {
-    expect(resolveWorkState({ role: 'sales' }, deal, prs, { procurementSource: { legacy: false, decidedAt: null } }))
+    expect(resolveWorkState({ role: 'sales' }, deal, prs, { procurementSource: { legacy: false, pending: true, decidedAt: null } }))
       .toMatchObject({ action: { key: 'choose_procurement_source', label: 'จัดซื้อสินค้า' }, bannerText: 'ตรวจที่มาสินค้าตามใบเสนอราคา' });
-    expect(resolveWorkState({ role: 'sales' }, deal, prs, { procurementSource: { legacy: true, decidedAt: null } }).bannerText)
+    expect(resolveWorkState({ role: 'sales' }, deal, prs, { procurementSource: { legacy: true, pending: true, decidedAt: null } }).bannerText)
       .toBe('เลือกว่าสินค้าสั่งนำเข้าหรือมาจากสต็อก');
     expect(resolveWorkState({ role: 'sales' }, deal, prs, decided).bannerText).toBeUndefined();
   });
