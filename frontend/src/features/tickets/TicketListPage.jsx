@@ -24,7 +24,7 @@ import {
   bangkokTodayIso,
 } from '../../utils/format.js';
 import {
-  bangkokDateOf, isNoMovement, lastMovementIso, rangeFromParams, shiftIso, sumAmount, weekPredicates,
+  bangkokDateOf, isNoMovement, lastMovementIso, rangeFromParams, setRangeEdge, shiftRange, sumAmount, WEEK_KEYS, weekPredicates,
 } from './movementRange.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { StageProgressBar } from './DealStageStepper.jsx';
@@ -130,7 +130,7 @@ const PHASE_STYLES = {
 };
 
 const STALE_DAYS = 7;
-const WEEK_KEYS_SET = new Set(['moved', 'activity', 'due', 'overdue', 'silent']);
+const WEEK_KEYS_SET = new Set(WEEK_KEYS);
 const LIFECYCLE_FILTERS = [
   { value: '', label: 'ทั้งหมด', tone: 'neutral' },
   { value: 'ON_HOLD', label: dealLifecycleLabel('ON_HOLD').label, tone: dealLifecycleLabel('ON_HOLD').tone },
@@ -762,7 +762,6 @@ export function TicketListPage({ user, showToast }) {
     all: allDeals.length,
   } : null), [allDeals, hasWorklistDistinction, stageCatalog, user.role]);
 
-  // Movement chips (server flags), counted within the current phase filter.
   // Every filter EXCEPT the movement chip: the chips' counts are taken over exactly these rows, so a chip's
   // number equals the rows it leaves when clicked.
   const baseDeals = useMemo(() => {
@@ -903,6 +902,8 @@ export function TicketListPage({ user, showToast }) {
     }, { replace: true });
   }
 
+  const ownerName = ownerParam ? (allDeals.find((d) => String(d.createdById) === ownerParam)?.createdByName ?? ownerParam) : '';
+
   function setRangeParams(from, to) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -911,7 +912,10 @@ export function TicketListPage({ user, showToast }) {
       return next;
     }, { replace: true });
   }
-  const shiftRange = (days) => setRangeParams(shiftIso(range.from, days), shiftIso(range.to, days));
+  const shiftBy = (days) => {
+    const next = shiftRange(range, days);
+    setRangeParams(next.from, next.to);
+  };
   const resetRange = () => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
     next.delete('from');
@@ -920,8 +924,8 @@ export function TicketListPage({ user, showToast }) {
   }, { replace: true });
   function setRange(which, value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
-    if (which === 'from') setRangeParams(value, value > range.to ? value : range.to);
-    else setRangeParams(value < range.from ? value : range.from, value);
+    const next = setRangeEdge(range, which, value);
+    setRangeParams(next.from, next.to);
   }
 
   function clearFilters() {
@@ -1084,13 +1088,13 @@ export function TicketListPage({ user, showToast }) {
           <>
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ช่วงวันที่">
               <span className="shrink-0 text-2xs font-extrabold text-text-muted">ช่วงวันที่</span>
-              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" title="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" onClick={() => shiftRange(-1)}>
+              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" title="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" onClick={() => shiftBy(-1)}>
                 <Icon name="chevronLeft" size={16} />
               </Button>
               <div className="w-44 shrink-0"><ThaiDateInput key={range.from} className="text-base" aria-label="ตั้งแต่วันที่" value={range.from} onChange={(e) => setRange('from', e.target.value)} /></div>
               <span aria-hidden="true">–</span>
               <div className="w-44 shrink-0"><ThaiDateInput key={range.to} className="text-base" aria-label="ถึงวันที่" value={range.to} onChange={(e) => setRange('to', e.target.value)} /></div>
-              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" title="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" onClick={() => shiftRange(1)}>
+              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" title="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" onClick={() => shiftBy(1)}>
                 <Icon name="chevronRight" size={16} />
               </Button>
               <Button variant="text" type="button" size="sm" className="mobile:min-h-[44px]" onClick={resetRange}>7 วันล่าสุด</Button>
@@ -1100,10 +1104,10 @@ export function TicketListPage({ user, showToast }) {
                 <button
                   type="button"
                   className="ticket-filter-chip is-active"
-                  aria-label={`ผู้ดูแล: ${allDeals.find((d) => String(d.createdById) === ownerParam)?.createdByName ?? ownerParam} (ล้างตัวกรอง)`}
+                  aria-label={`ผู้ดูแล: ${ownerName} (ล้างตัวกรอง)`}
                   onClick={() => updateParam('owner', '')}
                 >
-                  <span>ผู้ดูแล: {allDeals.find((d) => String(d.createdById) === ownerParam)?.createdByName ?? ownerParam}</span>
+                  <span>ผู้ดูแล: {ownerName}</span>
                   <Icon name="close" size={12} />
                 </button>
               </div>
