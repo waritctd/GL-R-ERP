@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerOverview } from './ManagerOverview.jsx';
 import { api } from '../../api/index.js';
+import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import {
   CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows,
 } from '../../test/fixtures/dashboardMoney.js';
@@ -25,6 +26,14 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const managerUser = { role: 'sales_manager', name: 'ผู้จัดการ ทดสอบ', employeeId: 9 };
 const employee = { nickName: 'บอส', nameTh: 'ผู้จัดการ ทดสอบ' };
 const summary = { cashReceivedThisMonth: CASH_RECEIVED_THIS_MONTH, cashReceivedByRep: CASH_BY_REP, ...SERVER_TOTALS };
+
+const linkTo = (row, href) => [...row.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
+const TODAY = bangkokTodayIso();
+function addDays(iso, delta) {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
 
 const now = new Date();
 const thisMonthIso = new Date(now.getFullYear(), now.getMonth(), 5).toISOString();
@@ -109,9 +118,63 @@ describe('ManagerOverview', () => {
     renderOverview();
     await screen.findByTestId('deal-row-208');
 
-    expect(api.tickets.list).toHaveBeenCalledWith({});
+    // one list call, now carrying the default 7-day range for the team-movement panel
+    expect(api.tickets.list).toHaveBeenCalledTimes(1);
+    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
     expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
     expect(api.commissions.list).not.toHaveBeenCalled();
+  });
+
+  describe('ความเคลื่อนไหวของทีม panel', () => {
+    const mv = (id, ownerId, ownerName, extra = {}) => deal(id, ownerName, {
+      createdById: ownerId, lifecycle: 'ACTIVE', stageChangedInRange: false, activityInRange: false,
+      nextFollowUpAt: null, ...extra,
+    });
+    const TEAM = [
+      mv(301, 11, 'เซลส์ เอ', { stageChangedInRange: true }),
+      mv(302, 11, 'เซลส์ เอ', { nextFollowUpAt: '2020-01-01' }),
+      mv(303, 11, 'เซลส์ เอ'),
+      mv(304, 12, 'เซลส์ บี', { activityInRange: true }),
+      mv(305, 12, 'เซลส์ บี', { lifecycle: 'CLOSED_LOST' }),
+      mv(306, 13, 'เซลส์ ซี', { lifecycle: 'CLOSED_LOST' }),
+      mv(307, 11, 'เซลส์ เอ', { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true }),
+    ];
+    const rowIds = () => [...document.querySelectorAll('[data-testid^="team-row-"]')]
+      .map((el) => el.dataset.testid.replace('team-row-', ''));
+
+    beforeEach(() => {
+      api.tickets.list.mockResolvedValue({ tickets: TEAM });
+    });
+
+    it('renders one row per owner with open deals, ไม่เคลื่อนไหว desc, with the default range in the header', async () => {
+      renderOverview();
+      const panel = (await screen.findByRole('heading', { name: 'ความเคลื่อนไหวของทีม' })).closest('section');
+      await within(panel).findByTestId('team-row-11');
+      expect(rowIds()).toEqual(['11', '12']); // เอ has 2 silent deals, บี 0; เซลส์ ซี has no open deal
+      for (const h of ['ผู้ดูแล', 'ดีลที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง']) {
+        expect(panel.textContent).toContain(h);
+      }
+      expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));
+      expect(panel.textContent).toContain(formatThaiDate(TODAY));
+      const rowA = within(panel).getByTestId('team-row-11');
+      expect(rowA.textContent).toContain('เซลส์ เอ');
+      const count = (href) => linkTo(rowA, href)?.textContent.trim();
+      // ดีลที่เปิดอยู่ is a plain number, not a link; the paused deal below counts nowhere
+      expect(linkTo(rowA, '/tickets?owner=11')).toBeUndefined();
+      expect(rowA.querySelectorAll('td')[0].textContent.trim()).toBe('3');
+      expect(count('/tickets?owner=11&week=moved')).toBe('1');
+      expect(count('/tickets?owner=11&week=silent')).toBe('2');
+      // เลยนัด links to its own filter, so the list shows exactly the counted deals
+      expect(count('/tickets?owner=11&week=overdue')).toBe('1');
+    });
+
+    it('a count links to /tickets?owner=<id>&week=<key>', async () => {
+      renderOverview();
+      const row = await screen.findByTestId('team-row-12');
+      fireEvent.click(linkTo(row, '/tickets?owner=12&week=activity'));
+      expect(await screen.findByTestId('location-probe')).toBeTruthy();
+      expect(probeText()).toBe('/tickets?owner=12&week=activity');
+    });
   });
 
   describe('loading (progressive)', () => {

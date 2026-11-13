@@ -93,6 +93,8 @@ export const queryKeys = {
   specialMoneyApprovalPreview: (id) => ['specialMoney', 'approvalPreview', id ?? ''],
   // ticketDetail/ticketAttachments: used by TicketDetailPage.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
+  // Deal list with the movement range (inclusive Bangkok days): rows carry stageChangedInRange / activityInRange.
+  ticketListByRange: (from, to) => ['tickets', 'list', 'range', from, to],
   // Account role-scoped views: the CLOSED_PAID picker AccountOverview/
   // AccountFinancePage/CommissionPage's createFromDeal flow all use — same
   // `salesStage` query param, distinct key from the plain ticketList above.

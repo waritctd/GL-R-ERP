@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CeoOverview } from './CeoOverview.jsx';
 import { api } from '../../api/index.js';
-import { bangkokMonthStartIso } from '../../utils/format.js';
+import { bangkokMonthStartIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import {
   CASH_BY_REP, CASH_RECEIVED_THIS_MONTH, EXPECTED, SERVER_TOTALS, expectFigure, figureRows,
 } from '../../test/fixtures/dashboardMoney.js';
@@ -30,6 +30,13 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
+const linkTo = (row, href) => [...row.querySelectorAll('a')].find((a) => a.getAttribute('href') === href);
+const TODAY = bangkokTodayIso();
+function addDays(iso, delta) {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
 const monthStart = bangkokMonthStartIso();
 const THIS_MONTH = monthStart.slice(0, 7);
 
@@ -191,12 +198,60 @@ describe('CeoOverview', () => {
     mockAllData();
   });
 
+  describe('ความเคลื่อนไหวของทีม panel', () => {
+    const mv = (id, ownerId, ownerName, extra = {}) => ({
+      id, code: `TK-${id}`, customerName: `ลูกค้า ${id}`, title: `โครงการ ${id}`, status: 'quotation_issued',
+      lifecycle: 'ACTIVE', salesStage: 'NEGOTIATION', createdById: ownerId, createdByName: ownerName,
+      amountPayable: 100, amountPaid: 0, amountOutstanding: 0, overdue: false, nextFollowUpAt: null,
+      stageChangedInRange: false, activityInRange: false, ...extra,
+    });
+    const TEAM = [
+      mv(801, 21, 'สมชาย ขายดี', { stageChangedInRange: true }),
+      mv(802, 21, 'สมชาย ขายดี', { nextFollowUpAt: '2020-01-01' }),
+      mv(803, 22, 'สมหญิง ขายเก่ง'),
+      mv(804, 22, 'สมหญิง ขายเก่ง'),
+      mv(805, 22, 'สมหญิง ขายเก่ง', { activityInRange: true }),
+      mv(806, 23, 'ไม่มีดีลเปิด', { lifecycle: 'CLOSED_LOST' }),
+      mv(807, 21, 'สมชาย ขายดี', { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true }),
+    ];
+
+    beforeEach(() => {
+      api.tickets.list.mockResolvedValue({ tickets: TEAM });
+    });
+
+    it('renders one row per owner (no client-side role filter), ไม่เคลื่อนไหว desc, default range in the header', async () => {
+      renderOverview();
+      const panel = (await screen.findByRole('heading', { name: 'ความเคลื่อนไหวของทีม' })).closest('section');
+      await within(panel).findByTestId('team-row-22');
+      const ids = [...panel.querySelectorAll('[data-testid^="team-row-"]')].map((el) => el.dataset.testid);
+      expect(ids).toEqual(['team-row-22', 'team-row-21']); // สมหญิง has 2 silent, สมชาย 1; 23 has no open deal
+      for (const h of ['ผู้ดูแล', 'ดีลที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง']) {
+        expect(panel.textContent).toContain(h);
+      }
+      expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));
+      expect(panel.textContent).toContain(formatThaiDate(TODAY));
+      const row = within(panel).getByTestId('team-row-21');
+      expect(linkTo(row, '/tickets?owner=21&week=silent').textContent.trim()).toBe('1');
+      expect(linkTo(row, '/tickets?owner=21')).toBeUndefined(); // plain number, not a link
+      expect(row.querySelectorAll('td')[0].textContent.trim()).toBe('2');
+      expect(linkTo(row, '/tickets?owner=21&week=overdue').textContent.trim()).toBe('1');
+    });
+
+    it('a count links to /tickets?owner=<id>&week=<key>', async () => {
+      renderOverview();
+      const row = await screen.findByTestId('team-row-22');
+      fireEvent.click(linkTo(row, '/tickets?owner=22&week=silent'));
+      expect(await screen.findByTestId('location-probe')).toBeTruthy();
+      expect(probeText()).toBe('/tickets?owner=22&week=silent');
+    });
+  });
+
   it('fetches each worklist source once, with the same filters as before', async () => {
     renderOverview();
     await findGroup('price');
 
     expect(api.pricingRequests.queue).toHaveBeenCalledWith({ activeOnly: true });
-    expect(api.tickets.list).toHaveBeenCalledWith({});
+    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
     // Only the CEO's own queue, never the whole commission history.
     expect(api.commissions.pendingApproval).toHaveBeenCalledTimes(1);
     expect(api.commissions.list).toHaveBeenCalledTimes(1);
