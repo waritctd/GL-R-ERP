@@ -2788,7 +2788,7 @@ public class DealQuotationService {
         if (salesRepId == null || tickets.moveOwnerToSalesRep(ticket.id(), salesRepId) == 0) {
             return;
         }
-        quotations.moveSalesRep(ticket.id(), ticket.createdById(), salesRepId);
+        quotations.moveSalesRep(ticket.id(), salesRepId);
         String oldOwner = employeeLabel(ticket.createdById());
         String newOwner = employeeLabel(salesRepId);
         tickets.addEvent(ticket.id(), actor.id(), actor.name(), th.co.glr.hr.ticket.TicketEventKind.EDITED, null, null,

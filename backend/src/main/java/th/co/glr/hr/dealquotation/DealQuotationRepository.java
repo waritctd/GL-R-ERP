@@ -1667,14 +1667,15 @@ public class DealQuotationRepository {
     }
 
     /**
-     * The deal's owner moved {@code oldRep} -> {@code newRep}: every quotation on the deal still attributed to the old
-     * owner follows (so approve/reject notices reach the new one). CANCELLED/REJECTED documents keep their rep.
+     * The deal's owner moved to {@code newRep}: every live quotation on the deal follows (so approve/reject notices
+     * reach the new owner), including legacy ones still attributed to the admin who keyed the deal. CANCELLED/REJECTED
+     * documents keep their rep.
      */
-    public void moveSalesRep(long ticketId, long oldRep, long newRep) {
+    public void moveSalesRep(long ticketId, long newRep) {
         jdbc.update("""
             UPDATE sales.quotation SET sales_rep_id = :new
-             WHERE ticket_id = :ticket AND sales_rep_id = :old AND doc_status NOT IN ('CANCELLED', 'REJECTED')
-            """, Map.of("ticket", ticketId, "old", oldRep, "new", newRep));
+             WHERE ticket_id = :ticket AND doc_status NOT IN ('CANCELLED', 'REJECTED')
+            """, Map.of("ticket", ticketId, "new", newRep));
     }
 
     public record RepInfo(String name, String phone) {}

@@ -430,6 +430,9 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
         setDocStatus(awaiting, "REJECTED"); // only so the draft below may be created; made live again next
         long draft = createQuotation(salesActor, ticketId);
         setDocStatus(awaiting, "PENDING_APPROVAL");
+        // A legacy (pre-V203) document still attributed to the admin who keyed the deal, not its owner, follows too.
+        jdbc.update("UPDATE sales.quotation SET sales_rep_id = :m WHERE quotation_id = :q",
+            Map.of("m", salesManagerActor.id(), "q", awaiting));
 
         MvcResult put = send(salesActor, put("/api/deal-quotations/" + draft), quotationBodyWithRep(otherSalesActor.id()));
         assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
