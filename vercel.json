@@ -4,8 +4,16 @@
   "installCommand": "npm install --prefix frontend",
   "buildCommand": "if [ \"$VERCEL_GIT_COMMIT_REF\" = \"develop\" ]; then VITE_SELF_SERVICE_ONLY=false npm run build --prefix frontend; else npm run build --prefix frontend; fi",
   "outputDirectory": "frontend/dist",
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "(www\\.)?glr-portal\\.com" }],
+      "destination": "https://glr-hub.com/:path*",
+      "permanent": false
+    }
+  ],
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://gl-r-erp.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://api.glr-hub.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
