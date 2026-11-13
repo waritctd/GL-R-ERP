@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.Year;
@@ -156,7 +157,7 @@ public class TicketRepository {
     /** As above, plus the optional inclusive Bangkok-day movement range ({@code movementFrom}/{@code movementTo}, both or neither). */
     public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter,
                                                 String actorRole, PageRequest page,
-                                                java.time.LocalDate movementFrom, java.time.LocalDate movementTo) {
+                                                LocalDate movementFrom, LocalDate movementTo) {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
@@ -166,8 +167,8 @@ public class TicketRepository {
             .addValue("status", status)
             .addValue("salesStage", salesStage)
             .addValue("createdBy", createdByFilter)
-            .addValue("movementFrom", movementFrom, java.sql.Types.DATE)
-            .addValue("movementTo", movementTo, java.sql.Types.DATE);
+            .addValue("movementFrom", movementFrom, Types.DATE)
+            .addValue("movementTo", movementTo, Types.DATE);
         appendRoleScope(sql, params, actorRole);
         // The ticket_id tiebreaker is load-bearing, not decoration: created_at alone is not a
         // total order, and this query is paged with LIMIT/OFFSET below. Ties make each page a
@@ -879,8 +880,8 @@ public class TicketRepository {
                           ecc.first_name_th, ecc.last_name_th
                 """,
                 new MapSqlParameterSource("id", id)
-                    .addValue("movementFrom", null, java.sql.Types.DATE)
-                    .addValue("movementTo", null, java.sql.Types.DATE),
+                    .addValue("movementFrom", null, Types.DATE)
+                    .addValue("movementTo", null, Types.DATE),
                 (rs, rowNum) -> mapSummary(rs));
             return Optional.ofNullable(summary).flatMap(x -> enrichSummaries(List.of(x)).stream().findFirst());
         } catch (EmptyResultDataAccessException e) {
@@ -1329,7 +1330,7 @@ public class TicketRepository {
             rs.getBoolean("quotation_only")
         ).withKeyedById(rs.getObject("keyed_by", Long.class))
             .withMovement(rs.getBoolean("stage_changed_in_range"), rs.getBoolean("activity_in_range"),
-                rs.getObject("last_activity_at", java.time.LocalDate.class));
+                rs.getObject("last_activity_at", LocalDate.class));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */

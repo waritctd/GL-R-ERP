@@ -197,8 +197,8 @@ public class TicketService {
      * @param movementFrom / movementTo optional inclusive Asia/Bangkok day range: both or neither, from <= to
      *                     (else 400). When given each row carries stageChangedInRange / activityInRange.
      */
-    public Page<TicketSummaryDto> listPage(String status, String salesStage, java.time.LocalDate movementFrom,
-                                           java.time.LocalDate movementTo, UserPrincipal actor, PageRequest page) {
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, LocalDate movementFrom,
+                                           LocalDate movementTo, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
         if ((movementFrom == null) != (movementTo == null)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุ movementFrom และ movementTo ทั้งคู่");
