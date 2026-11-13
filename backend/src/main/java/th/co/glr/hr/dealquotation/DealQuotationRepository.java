@@ -1666,6 +1666,12 @@ public class DealQuotationRepository {
         return rows.stream().findFirst();
     }
 
+    /** Moves THIS document's real rep (sales_rep_id) with the deal's owner; see DealQuotationService#moveOwnerToSalesRep. */
+    public void updateSalesRep(long quotationId, long salesRepId) {
+        jdbc.update("UPDATE sales.quotation SET sales_rep_id = :rep WHERE quotation_id = :id",
+            Map.of("rep", salesRepId, "id", quotationId));
+    }
+
     public record RepInfo(String name, String phone) {}
 
     /** Nothing existing on the employee-lookup surface returns phone — added here rather than

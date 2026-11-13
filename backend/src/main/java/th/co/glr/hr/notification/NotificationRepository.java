@@ -214,6 +214,7 @@ public class NotificationRepository {
         Map.entry("PAYMENT_RECEIVED", "ฝ่ายบัญชีรับชำระเงินเพิ่มแล้ว"),
         Map.entry("PAYMENT_FULLY_PAID", "ลูกค้าชำระเงินครบแล้ว"),
         Map.entry("DEAL_CLOSED", "ดีลปิดเรียบร้อยแล้ว"),
+        Map.entry("DEAL_OWNER_CHANGED", "คุณได้รับดีลเป็นเจ้าของงาน"),
         Map.entry("CLOSE_CONFIRMATION_REVOKED", "ถอนการยืนยันพร้อมปิดดีลแล้ว"),
         Map.entry("DEAL_LOST", "ดีลเสียงาน"),
         Map.entry("DEAL_CANCELLED", "ดีลถูกยกเลิก"),

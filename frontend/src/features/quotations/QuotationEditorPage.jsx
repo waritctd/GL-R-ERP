@@ -82,6 +82,9 @@ const CALCULATED_ITEM_FIELDS = [
 // this component doesn't rely on it for memoisation today; cheap to keep stable regardless).
 const EMPTY_ITEM_ERRORS = {};
 
+// Shown under both พนักงานขาย selects: the pick moves the deal's owner (backend DealQuotationService#moveOwnerToSalesRep).
+const SALES_REP_MOVES_OWNER_HINT = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานของดีลไปให้คนนี้ (คนที่คีย์ดีลยังเข้าถึงได้)';
+
 // Autosave debounce: long enough that it never fires mid-word, short enough that a rep who closes
 // the tab loses at most one field.
 export const AUTOSAVE_DELAY_MS = 2000;
@@ -2521,7 +2524,7 @@ export function QuotationEditorPage({ user, showToast }) {
                     phone for a selected override comes from the last SAVED value
                     (quotation.salesRepDisplayPhone); the options list carries no phone, so an
                     unsaved selection previews none until the next save. */}
-                <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard">
+                <FormField label="พนักงานขาย" htmlFor="salesRepDisplayIdCard" hint={SALES_REP_MOVES_OWNER_HINT}>
                   <select
                     id="salesRepDisplayIdCard"
                     value={terms.salesRepDisplayId}
@@ -3112,11 +3115,11 @@ export function QuotationEditorPage({ user, showToast }) {
                   )}
                 </div>
               </FormField>
-              {/* PRINT-ONLY name selection (admin helps build a quotation: print the admin as the
-                  typist and the rep as the sales name). Neither field changes who created/owns the
-                  deal, who may edit it or who earns commission (createdById/salesRepId are
-                  untouched); only the two printed names. "(ค่าเริ่มต้น)" (empty, value="") sends null
-                  and prints the real creator/sales rep. Both selects share the same eligible-employee
+              {/* Name selection (admin helps build a quotation: print the admin as the typist and the
+                  rep as the sales name). ผู้พิมพ์ is print-only. Picking a พนักงานขาย ALSO moves the deal's
+                  owner to that rep (Ploy 2026-11-13; the old owner keeps access only as the keyer), hence
+                  SALES_REP_MOVES_OWNER_HINT. "(ค่าเริ่มต้น)" (empty, value="") sends null: prints the real
+                  creator/sales rep and moves nothing. Both selects share the same eligible-employee
                   list (ฝ่ายขาย members plus can_create_quotation grant holders), fetched once above. */}
               <FormField
                 label="แสดงชื่อผู้พิมพ์เป็น"
@@ -3136,7 +3139,7 @@ export function QuotationEditorPage({ user, showToast }) {
               <FormField
                 label="แสดงชื่อพนักงานขายเป็น"
                 htmlFor="salesRepDisplayId"
-                hint="ค่าเริ่มต้น = ชื่อพนักงานขายจริง — มีผลถึงเบอร์โทรบนหัวเอกสารด้วย"
+                hint={`ค่าเริ่มต้น = ชื่อพนักงานขายจริง — มีผลถึงเบอร์โทรบนหัวเอกสารด้วย. ${SALES_REP_MOVES_OWNER_HINT}`}
               >
                 <select
                   id="salesRepDisplayId"

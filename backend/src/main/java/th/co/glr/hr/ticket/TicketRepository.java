@@ -129,6 +129,21 @@ public class TicketRepository {
     private static final List<String> ACCOUNT_ORDER_STAGE_SCOPE =
         DealStage.ORDER.subList(DealStage.indexOf(DealStage.ORDER_RECEIVED), DealStage.ORDER.size());
 
+    /**
+     * A deal quotation's พนักงานขาย moves the deal's owner (Ploy 2026-11-13): the old owner becomes keyer unless one is
+     * already set. One guarded statement: no move to the current owner, after a commission record exists, or on a
+     * finished deal (lifecycle CANCELLED/COMPLETED/CLOSED_LOST or status closed/cancelled). Returns rows moved (0 or 1).
+     */
+    public int moveOwnerToSalesRep(long ticketId, long repId) {
+        return jdbc.update("""
+            UPDATE sales.ticket SET keyed_by = COALESCE(keyed_by, created_by), created_by = :rep
+             WHERE ticket_id = :id AND created_by <> :rep
+               AND lifecycle NOT IN ('CANCELLED', 'COMPLETED', 'CLOSED_LOST')
+               AND status NOT IN ('closed', 'cancelled')
+               AND NOT EXISTS (SELECT 1 FROM sales.commission_record WHERE source_ticket_id = :id)
+            """, new MapSqlParameterSource().addValue("id", ticketId).addValue("rep", repId));
+    }
+
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }

@@ -95,6 +95,7 @@ public final class TicketEventKind {
     public static final String PAYMENT_RECEIVED = "PAYMENT_RECEIVED";
     public static final String PAYMENT_FULLY_PAID = "PAYMENT_FULLY_PAID";
     public static final String DEAL_CLOSED = "DEAL_CLOSED";
+    public static final String DEAL_OWNER_CHANGED = "DEAL_OWNER_CHANGED";
     public static final String CLOSE_CONFIRMATION_REVOKED = "CLOSE_CONFIRMATION_REVOKED";
     public static final String DEAL_LOST = "DEAL_LOST";
     public static final String DEAL_CANCELLED = "DEAL_CANCELLED";

@@ -236,7 +236,230 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
         assertThat(summary.get("createdById").asLong()).isEqualTo(otherSalesActor.id());
     }
 
+    // ── 8: QT พนักงานขาย moves the deal owner (Ploy 2026-11-13) ──────────────────────────────────
+
+    /** 8a: rep B on a deal A owns (no keyer) -> owner B, A becomes keyer; B reaches the deal, A still does. */
+    @Test
+    void create_withSalesRep_movesOwner_andOldOwnerBecomesKeyer() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        // A legacy deal (pre-V202 / keyed_by NULL): the old owner must become the keyer so A keeps access.
+        jdbc.update("UPDATE sales.ticket SET keyed_by = NULL WHERE ticket_id = :id", Map.of("id", ticketId));
+
+        createQuotationWithRep(salesActor, ticketId, otherSalesActor.id());
+
+        assertThat(createdBy(ticketId)).isEqualTo(otherSalesActor.id());
+        assertThat(keyedBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(send(otherSalesActor, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(200);
+        assertThat(send(salesActor, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(200);
+    }
+
+    /** 8b: draft update B -> C on a deal with keyer A: owner C, keyer A kept, B loses access. */
+    @Test
+    void draftUpdate_changingRep_movesOwner_keepsExistingKeyer_oldOwnerLosesAccess() throws Exception {
+        long ticketId = keyedDeal(); // owner B, keyer A
+        long quotationId = createQuotation(otherSalesActor, ticketId);
+
+        MvcResult put = send(otherSalesActor, put("/api/deal-quotations/" + quotationId),
+            quotationBodyWithRep(thirdRep.id()));
+        assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
+
+        assertThat(createdBy(ticketId)).isEqualTo(thirdRep.id());
+        assertThat(keyedBy(ticketId)).as("existing keyer kept, B not promoted").isEqualTo(salesActor.id());
+        assertThat(send(otherSalesActor, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(403);
+        assertThat(send(thirdRep, get("/api/tickets/" + ticketId), null).getResponse().getStatus()).isEqualTo(200);
+    }
+
+    /** 8c: rep already the owner -> nothing changes, nobody is notified. */
+    @Test
+    void salesRep_equalToOwner_changesNothing_noNotification() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+
+        createQuotationWithRep(salesActor, ticketId, salesActor.id());
+
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(keyedBy(ticketId)).as("keyer untouched (a self-keyed deal has keyed_by = created_by)")
+            .isEqualTo(salesActor.id());
+        assertThat(ownerMoveNotifications(ticketId)).isZero();
+        assertThat(employeeMails).isEmpty();
+    }
+
+    /** 8d: no rep (null/cleared) -> no move, also on a draft update. */
+    @Test
+    void salesRep_null_changesNothing() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        long quotationId = createQuotation(salesActor, ticketId);
+
+        MvcResult put = send(salesActor, put("/api/deal-quotations/" + quotationId), quotationBody());
+        assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
+
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(keyedBy(ticketId)).as("keyer untouched (a self-keyed deal has keyed_by = created_by)")
+            .isEqualTo(salesActor.id());
+    }
+
+    /** 8e: a commission_record already exists for the deal -> owner frozen. */
+    @Test
+    void salesRep_withExistingCommissionRecord_changesNothing() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        long invoice = jdbc.queryForObject("""
+            INSERT INTO sales.invoice_details (invoice_number, invoice_date, gross_amount, evidence_provenance)
+            VALUES (:n, CURRENT_DATE, 1000.00, 'PRE_ERP_PAPER_APPROVAL') RETURNING invoice_id""",
+            Map.of("n", "OM-INV-" + ticketId), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.commission_record
+                (invoice_id, source_ticket_id, sales_rep_id, submitted_by_id, kind, status,
+                 payroll_month, actual_received, commissionable_base)
+            VALUES (:inv, :id, :rep, :rep, 'SALE', 'SUBMITTED',
+                    date_trunc('month', CURRENT_DATE)::date, 1000.00, 1000.00)""",
+            Map.of("inv", invoice, "id", ticketId, "rep", salesActor.id()));
+
+        createQuotationWithRep(salesActor, ticketId, otherSalesActor.id());
+
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(ownerMoveNotifications(ticketId)).isZero();
+    }
+
+    /**
+     * 8f: finished deal -> no move. Predicate: lifecycle NOT ACTIVE (CLOSED_LOST/CANCELLED/COMPLETED,
+     * DealLifecycle) or status closed/cancelled (TicketStatus). The draft QT is created while the deal is live,
+     * then the deal is finished, then the rep is changed on the draft. The save itself may or may not be refused;
+     * only the owner is asserted.
+     */
+    @Test
+    void salesRep_onFinishedDeal_changesNothing() throws Exception {
+        String[][] finished = {{"cancelled", "CANCELLED"}, {"closed", "COMPLETED"}, {"cancelled", "CLOSED_LOST"}};
+        for (String[] f : finished) {
+            long ticketId = createDeal(salesActor, null);
+            long quotationId = createQuotation(salesActor, ticketId);
+            jdbc.update("UPDATE sales.ticket SET status = :s, lifecycle = :l WHERE ticket_id = :id",
+                Map.of("s", f[0], "l", f[1], "id", ticketId));
+
+            send(salesActor, put("/api/deal-quotations/" + quotationId), quotationBodyWithRep(otherSalesActor.id()));
+
+            assertThat(createdBy(ticketId)).as("%s/%s", f[0], f[1]).isEqualTo(salesActor.id());
+        }
+    }
+
+    /** 8g: the PCR header's salesRepDisplayId never moves the owner. */
+    @Test
+    void pricingRequestHeader_salesRep_doesNotMoveOwner() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        var item = new th.co.glr.hr.pricingrequest.PricingRequestRequests.PricingRequestItemRequest(null, null, null,
+            "SCG", "Tile Rep", "SCG Tile Rep", "White", "Matte", "60x60", "Factory Rep", null, null, null, null,
+            th.co.glr.hr.pricingrequest.QuantityType.CONFIRMED, null, null, null,
+            null, new java.math.BigDecimal("10"), new java.math.BigDecimal("0.36"),
+            WastageCalculator.QUANTITY_MODE_PIECES, null, 10, WastageCalculator.WASTAGE_MODE_NONE, null, 4, null,
+            false, "ไทย-สต็อก", 3, 7, null, null, null);
+        var request = new th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest(
+            "DESIGNER", null, "Designer Co.", java.time.LocalDate.now().plusDays(14), null, "THB", "rep header",
+            java.util.UUID.randomUUID().toString(), null, null, null, null, otherSalesActor.id(), null, null, null,
+            List.of(item));
+
+        pricingRequestService.createDraft(ticketId, request, salesActor);
+
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(keyedBy(ticketId)).as("keyer untouched (a self-keyed deal has keyed_by = created_by)")
+            .isEqualTo(salesActor.id());
+    }
+
+    /** 8h: a move notifies the NEW owner (bell row + email, link to the deal); nothing before the move. */
+    @Test
+    void ownerMove_notifiesTheNewOwner_bellAndEmail() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        assertThat(ownerMoveNotifications(ticketId)).isZero();
+
+        createQuotationWithRep(salesActor, ticketId, otherSalesActor.id());
+
+        Map<String, Object> row = jdbc.queryForMap("""
+            SELECT employee_id, link FROM hr.notification WHERE type = 'DEAL_OWNER_CHANGED' AND link = :link""",
+            Map.of("link", "/tickets/" + ticketId));
+        assertThat(((Number) row.get("employee_id")).longValue()).isEqualTo(otherSalesActor.id());
+        assertThat(employeeMails).contains(otherSalesActor.id() + "|/tickets/" + ticketId);
+    }
+
+    /** 9 (A-i): a draft that already carries the override gets an unrelated edit with the SAME rep -> no move, no notice. */
+    @Test
+    void draftUpdate_withUnchangedRep_doesNotMoveOwner() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        long quotationId = createQuotation(salesActor, ticketId); // override-free: nothing moved
+        jdbc.update("UPDATE sales.quotation SET sales_rep_display_id = :r WHERE quotation_id = :id",
+            Map.of("r", otherSalesActor.id(), "id", quotationId));
+
+        MvcResult put = send(salesActor, put("/api/deal-quotations/" + quotationId),
+            quotationBodyWithRep(otherSalesActor.id()));
+
+        assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(ownerMoveNotifications(ticketId)).isZero();
+    }
+
+    /** 9 (A-ii): explicitly changing the rep back to the old owner moves the deal back. */
+    @Test
+    void draftUpdate_changingRepBackToOldOwner_movesItBack() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        long quotationId = createQuotationWithRep(salesActor, ticketId, otherSalesActor.id());
+        assertThat(createdBy(ticketId)).as("precondition: moved to B").isEqualTo(otherSalesActor.id());
+
+        MvcResult put = send(salesActor, put("/api/deal-quotations/" + quotationId),
+            quotationBodyWithRep(salesActor.id()));
+
+        assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+    }
+
+    /** 10 (C): on a move THIS quotation's sales_rep_id becomes the new owner. */
+    @Test
+    void ownerMove_setsTheQuotationsSalesRepToTheNewOwner() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+
+        long quotationId = createQuotationWithRep(salesActor, ticketId, otherSalesActor.id());
+
+        assertThat(jdbc.queryForObject("SELECT sales_rep_id FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", quotationId), Long.class)).isEqualTo(otherSalesActor.id());
+    }
+
+    /** 11 (D): a move leaves an audit row in the deal's timeline naming the actor and the new owner. */
+    @Test
+    void ownerMove_writesATicketEvent() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+
+        createQuotationWithRep(salesActor, ticketId, otherSalesActor.id());
+
+        Map<String, Object> ev = jdbc.queryForMap("""
+            SELECT actor_id, message FROM sales.ticket_event
+             WHERE ticket_id = :id AND kind = 'EDITED' AND message LIKE '%เจ้าของงาน%'""", Map.of("id", ticketId));
+        assertThat(((Number) ev.get("actor_id")).longValue()).isEqualTo(salesActor.id());
+        assertThat((String) ev.get("message")).contains("พนักงานขาย S2 →").contains("→ พนักงานขาย S2 อื่น");
+    }
+
+    /** 12 (E): the keyer naming THEMSELVES moves the deal to them but they are not notified of their own action. */
+    @Test
+    void ownerMove_toTheActor_doesNotNotifyThem() throws Exception {
+        long ticketId = keyedDeal(); // owner B, keyer A
+
+        createQuotationWithRep(salesActor, ticketId, salesActor.id());
+
+        assertThat(createdBy(ticketId)).isEqualTo(salesActor.id());
+        assertThat(ownerMoveNotifications(ticketId)).isZero();
+        assertThat(employeeMails).isEmpty();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
+
+    private int ownerMoveNotifications(long ticketId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE type = 'DEAL_OWNER_CHANGED' AND link = :l",
+            Map.of("l", "/tickets/" + ticketId), Integer.class);
+    }
+
+    private long createQuotationWithRep(UserPrincipal actor, long ticketId, long repId) throws Exception {
+        MvcResult result = send(actor, post("/api/tickets/" + ticketId + "/deal-quotations"), quotationBodyWithRep(repId));
+        assertThat(result.getResponse().getStatus()).as(body(result)).isEqualTo(201);
+        return read(result).get("quotation").get("id").asLong();
+    }
+
+    private static String quotationBodyWithRep(long repId) {
+        return quotationBody("OWNER").replace("\"salesRepDisplayId\":null", "\"salesRepDisplayId\":" + repId);
+    }
 
     /** A keys a deal owned by B, after pinning that B really is the owner (see class Javadoc). */
     private long keyedDeal() throws Exception {

@@ -46,10 +46,9 @@ import th.co.glr.hr.ticket.TicketService;
  * Postgres, through the real {@link DealQuotationService}/{@link DealQuotationRepository}. See
  * that migration and {@code DealQuotationDtos}' Javadoc for the feature's shape.
  *
- * <p>Written wrong-way-round where it matters: {@link
- * #settingSalesRepDisplayId_doesNotChangeOwnershipAccessOrCommissionAttribution} asserts the real
- * {@code salesRepId} and the edit-access decision are UNCHANGED by the display override — this is
- * a print-only feature, not a re-assignment of the deal.
+ * <p>Ploy ruling 2026-11-13: the พนักงานขาย pick is no longer print-only. {@link
+ * #settingSalesRepDisplayId_movesTheDealOwnerToThatRep_keyerKeepsAccess} pins that it moves the
+ * deal's owner (the full matrix lives in DealOwnerKeyerHttpIntegrationTest).
  */
 class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationRepository quotationRepository;
@@ -247,32 +246,28 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
-    // Wrong-way-round: this is PRINT-ONLY — ownership/access/commission are untouched
+    // Ruling 2026-11-13: the พนักงานขาย pick MOVES the deal owner (old owner becomes keyer)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
-     * The owner's explicit boundary: setting {@code salesRepDisplayId} must NOT change who owns
-     * the deal (real {@code salesRepId}/{@code createdById}), and must NOT let the display-named
-     * employee edit a deal they otherwise could not. {@code otherSalesActor} owns a DIFFERENT
-     * ticket — being NAMED as the sales-rep display on {@code salesActor}'s quotation must not
-     * grant them edit access to it.
+     * Naming {@code otherSalesRepId} as พนักงานขาย on {@code salesActor}'s deal makes them the deal's owner
+     * (and this document's real {@code salesRepId}); {@code salesActor} becomes the keyer and keeps access.
      */
     @Test
-    void settingSalesRepDisplayId_doesNotChangeOwnershipAccessOrCommissionAttribution() {
+    void settingSalesRepDisplayId_movesTheDealOwnerToThatRep_keyerKeepsAccess() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(null, otherSalesRepId), salesActor);
         assertThat(created.salesRepDisplayId()).isEqualTo(otherSalesRepId);
-        // The REAL owner/commission-driving fields are untouched.
-        assertThat(created.salesRepId()).isEqualTo(salesDivisionRepId);
-        assertThat(created.createdById()).isEqualTo(salesDivisionRepId);
+        assertThat(created.salesRepId()).as("this document's real rep follows the new owner").isEqualTo(otherSalesRepId);
+        assertThat(jdbc.queryForObject("SELECT created_by FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isEqualTo(otherSalesRepId);
+        assertThat(jdbc.queryForObject("SELECT keyed_by FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", ticketId), Long.class)).isEqualTo(salesDivisionRepId);
 
-        // otherSalesActor is now the DISPLAYED sales rep on this document, but does not own the
-        // deal (ticket.createdBy is salesDivisionRepId) and holds no grant — requireEditAccess
-        // must still refuse them.
-        assertThatThrownBy(() -> quotationService.update(created.id(),
-            upsertRequest(null, otherSalesRepId), otherSalesActor))
-            .isInstanceOf(ApiException.class)
-            .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+        assertThat(quotationService.update(created.id(), upsertRequest(null, otherSalesRepId), otherSalesActor)
+            .id()).isEqualTo(created.id());
+        assertThat(quotationService.update(created.id(), upsertRequest(null, otherSalesRepId), salesActor)
+            .id()).isEqualTo(created.id());
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────
