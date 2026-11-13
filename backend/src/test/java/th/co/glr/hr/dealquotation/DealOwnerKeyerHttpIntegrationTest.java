@@ -418,6 +418,28 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
             Map.of("id", quotationId), Long.class)).isEqualTo(otherSalesActor.id());
     }
 
+    /** 10b (C): the deal's OTHER live quotations follow the new owner too; dead (CANCELLED/REJECTED) ones keep the old rep. */
+    @Test
+    void ownerMove_carriesTheDealsOtherLiveQuotations_notTheDeadOnes() throws Exception {
+        long ticketId = createDeal(salesActor, null);
+        long cancelled = createQuotation(salesActor, ticketId);
+        setDocStatus(cancelled, "CANCELLED");
+        long rejected = createQuotation(salesActor, ticketId);
+        setDocStatus(rejected, "REJECTED");
+        long awaiting = createQuotation(salesActor, ticketId);
+        setDocStatus(awaiting, "REJECTED"); // only so the draft below may be created; made live again next
+        long draft = createQuotation(salesActor, ticketId);
+        setDocStatus(awaiting, "PENDING_APPROVAL");
+
+        MvcResult put = send(salesActor, put("/api/deal-quotations/" + draft), quotationBodyWithRep(otherSalesActor.id()));
+        assertThat(put.getResponse().getStatus()).as(body(put)).isEqualTo(200);
+
+        assertThat(salesRepOf(draft)).isEqualTo(otherSalesActor.id());
+        assertThat(salesRepOf(awaiting)).as("live QT-1 follows the owner").isEqualTo(otherSalesActor.id());
+        assertThat(salesRepOf(cancelled)).as("cancelled keeps the old rep").isEqualTo(salesActor.id());
+        assertThat(salesRepOf(rejected)).as("rejected keeps the old rep").isEqualTo(salesActor.id());
+    }
+
     /** 11 (D): a move leaves an audit row in the deal's timeline naming the actor and the new owner. */
     @Test
     void ownerMove_writesATicketEvent() throws Exception {
@@ -445,6 +467,11 @@ class DealOwnerKeyerHttpIntegrationTest extends AbstractDealQuotationSlice2Integ
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
+
+    private long salesRepOf(long quotationId) {
+        return jdbc.queryForObject("SELECT sales_rep_id FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", quotationId), Long.class);
+    }
 
     private int ownerMoveNotifications(long ticketId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE type = 'DEAL_OWNER_CHANGED' AND link = :l",

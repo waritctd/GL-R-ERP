@@ -1666,10 +1666,15 @@ public class DealQuotationRepository {
         return rows.stream().findFirst();
     }
 
-    /** Moves THIS document's real rep (sales_rep_id) with the deal's owner; see DealQuotationService#moveOwnerToSalesRep. */
-    public void updateSalesRep(long quotationId, long salesRepId) {
-        jdbc.update("UPDATE sales.quotation SET sales_rep_id = :rep WHERE quotation_id = :id",
-            Map.of("rep", salesRepId, "id", quotationId));
+    /**
+     * The deal's owner moved {@code oldRep} -> {@code newRep}: every quotation on the deal still attributed to the old
+     * owner follows (so approve/reject notices reach the new one). CANCELLED/REJECTED documents keep their rep.
+     */
+    public void moveSalesRep(long ticketId, long oldRep, long newRep) {
+        jdbc.update("""
+            UPDATE sales.quotation SET sales_rep_id = :new
+             WHERE ticket_id = :ticket AND sales_rep_id = :old AND doc_status NOT IN ('CANCELLED', 'REJECTED')
+            """, Map.of("ticket", ticketId, "old", oldRep, "new", newRep));
     }
 
     public record RepInfo(String name, String phone) {}

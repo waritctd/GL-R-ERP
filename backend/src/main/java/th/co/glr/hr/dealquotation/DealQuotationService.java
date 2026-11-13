@@ -313,7 +313,7 @@ public class DealQuotationService {
             quotations.markPartyQuoted(quotedPartyId);
         }
         advanceDealToRecipientStage(ticketId, recipientType, actor);
-        moveOwnerToSalesRep(ticket, id, salesRepDisplayId, actor);
+        moveOwnerToSalesRep(ticket, salesRepDisplayId, actor);
         // A brand-new document prints its project unless the request says otherwise, so only an explicit true needs
         // writing (the column DEFAULT is FALSE). A statement of its own, see DealQuotationRepository#updateHideProjectName.
         if (Boolean.TRUE.equals(request.hideProjectName())) {
@@ -946,7 +946,7 @@ public class DealQuotationService {
         }
         // Only an ACTUAL change of the rep moves the owner: re-saving a draft that already carries it must not.
         if (!java.util.Objects.equals(salesRepDisplayId, existing.salesRepDisplayId())) {
-            moveOwnerToSalesRep(ticket, id, salesRepDisplayId, actor);
+            moveOwnerToSalesRep(ticket, salesRepDisplayId, actor);
         }
         // Persist a sent ผู้รับ. The header CAS just proved the row is still a DRAFT in this transaction and
         // updateRecipient's WHERE re-states DRAFT + DEAL_DIRECT, so 0 rows can only mean the row moved under us.
@@ -2781,14 +2781,14 @@ public class DealQuotationService {
 
     /**
      * The quotation's พนักงานขาย becomes the deal's owner (guards in {@link TicketRepository#moveOwnerToSalesRep}). On a
-     * move: this document's real rep follows, the deal's timeline records it, and the new owner is told (unless they
+     * move: the deal's live quotations' real rep follows, the deal's timeline records it, and the new owner is told (unless they
      * did it themselves).
      */
-    private void moveOwnerToSalesRep(TicketSummaryDto ticket, long quotationId, Long salesRepId, UserPrincipal actor) {
+    private void moveOwnerToSalesRep(TicketSummaryDto ticket, Long salesRepId, UserPrincipal actor) {
         if (salesRepId == null || tickets.moveOwnerToSalesRep(ticket.id(), salesRepId) == 0) {
             return;
         }
-        quotations.updateSalesRep(quotationId, salesRepId);
+        quotations.moveSalesRep(ticket.id(), ticket.createdById(), salesRepId);
         String oldOwner = employeeLabel(ticket.createdById());
         String newOwner = employeeLabel(salesRepId);
         tickets.addEvent(ticket.id(), actor.id(), actor.name(), th.co.glr.hr.ticket.TicketEventKind.EDITED, null, null,
