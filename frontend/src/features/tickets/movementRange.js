@@ -1,7 +1,8 @@
 // Movement range for the deal list and the sales / manager / CEO dashboards. Pure helpers. The server
 // decides "did the deal move in the range" (TicketSummaryDto.stageChangedInRange / activityInRange, from
 // GET /api/tickets?movementFrom&movementTo); this module only does range arithmetic and the roll-ups on top.
-import { bangkokTodayIso } from '../../utils/format.js';
+import { bangkokTodayIso, formatMoney } from '../../utils/format.js';
+import { stageIndexIn } from './stageCatalog.js';
 
 const DAY = 86400000;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -81,6 +82,15 @@ export const weekPredicates = {
 };
 
 export const sumAmount = (deals) => deals.reduce((s, d) => s + (Number(d.amountPayable) || 0), 0);
+
+/** A deal's value for display: a 0 / missing amount is "not priced yet", not ฿0.00. */
+export const dealAmountLabel = (deal) => (Number(deal.amountPayable) > 0 ? formatMoney(Number(deal.amountPayable)) : '—');
+
+/** Predicate: is the deal at or after ORDER_RECEIVED in this catalog (false while the catalog has not loaded). */
+export function isOrderedIn(catalog) {
+  const orderIdx = stageIndexIn(catalog, 'ORDER_RECEIVED');
+  return (deal) => orderIdx >= 0 && stageIndexIn(catalog, deal.salesStage) >= orderIdx;
+}
 
 /**
  * One row per deal owner with at least one open (ACTIVE) deal, for the manager / CEO team panel.

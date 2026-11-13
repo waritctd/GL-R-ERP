@@ -11,7 +11,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokMonthStartIso, bangkokTodayIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { newestQuotationByRequest } from '../quotations/quotationMeta.js';
-import { defaultRange, sumAmount, weekPredicates } from '../tickets/movementRange.js';
+import { dealAmountLabel, defaultRange, isOrderedIn, sumAmount, weekPredicates } from '../tickets/movementRange.js';
 import { followUpStatus, nextSalesAction, sortWorklist, SALES_ACTION } from '../tickets/salesActions.js';
 import { offRoutePartiesFor, stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
 import { Figure, failed } from './dashboardParts.jsx';
@@ -38,7 +38,7 @@ function groupOf(action) {
 }
 
 function WorklistRow({ deal, action, followUp, muted, onClick }) {
-  const amount = Number(deal.amountPayable) > 0 ? formatMoney(Number(deal.amountPayable)) : '—';
+  const amount = dealAmountLabel(deal);
   // DESIGN.md §15: tone says whose move it is. Every rep-actionable bucket (the slice-2 direct
   // SUBMIT/CONFIRM included) falls through to warning; AWAIT_DIRECT_APPROVAL is waiting on
   // ผจก.ขาย/CEO, so it reads neutral like the other not-mine-yet row.
@@ -176,7 +176,7 @@ export function SalesOverview({ user, employee }) {
     Object.entries(weekPredicates).map(([key, matches]) => [key, deals.filter((deal) => matches(deal, range, todayIso)).length]),
   ), [deals, range, todayIso]);
   const { ordered, expected } = useMemo(() => {
-    const isOrdered = (deal) => orderReceivedIdx >= 0 && stageIndexIn(stageCatalog, deal.salesStage) >= orderReceivedIdx;
+    const isOrdered = isOrderedIn(stageCatalog);
     return {
       ordered: activeDeals.filter(isOrdered),
       expected: orderReceivedIdx >= 0 ? activeDeals.filter((deal) => !isOrdered(deal)) : [],

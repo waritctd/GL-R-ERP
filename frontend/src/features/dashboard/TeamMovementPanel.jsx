@@ -2,8 +2,8 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Panel } from '../../components/common/Layout.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate } from '../../utils/format.js';
-import { defaultRange, summariseByOwner } from '../tickets/movementRange.js';
-import { stageIndexIn, useStageCatalog } from '../tickets/stageCatalog.js';
+import { defaultRange, isOrderedIn, summariseByOwner } from '../tickets/movementRange.js';
+import { useStageCatalog } from '../tickets/stageCatalog.js';
 
 // "ความเคลื่อนไหวของทีม" for the manager / CEO landings: one row per deal owner over the default 7-day
 // range. `deals` is the deal list fetched with that same range (null while loading); the server already
@@ -29,8 +29,7 @@ export function TeamMovementPanel({ deals }) {
   const range = useMemo(() => defaultRange(todayIso), [todayIso]);
   const rows = useMemo(() => {
     if (!deals) return null;
-    const orderIdx = stageIndexIn(catalog, 'ORDER_RECEIVED');
-    return summariseByOwner(deals, range, todayIso, (d) => orderIdx >= 0 && stageIndexIn(catalog, d.salesStage) >= orderIdx);
+    return summariseByOwner(deals, range, todayIso, isOrderedIn(catalog));
   }, [deals, catalog, range, todayIso]);
   return (
     <Panel

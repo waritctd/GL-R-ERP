@@ -24,7 +24,7 @@ import {
   bangkokTodayIso,
 } from '../../utils/format.js';
 import {
-  bangkokDateOf, isNoMovement, lastMovementIso, rangeFromParams, setRangeEdge, shiftRange, sumAmount, WEEK_KEYS, weekPredicates,
+  bangkokDateOf, dealAmountLabel, isNoMovement, lastMovementIso, rangeFromParams, setRangeEdge, shiftRange, sumAmount, WEEK_KEYS, weekPredicates,
 } from './movementRange.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { StageProgressBar } from './DealStageStepper.jsx';
@@ -503,9 +503,6 @@ const WEEK_CHIPS = [
   { key: 'overdue', label: 'เลยนัด' },
   { key: 'silent', label: 'ไม่เคลื่อนไหว' },
 ];
-
-// A 0 / missing amount is "not priced yet", not ฿0.00.
-const dealAmountLabel = (deal) => (Number(deal.amountPayable) > 0 ? formatMoney(Number(deal.amountPayable)) : '—');
 
 function ActivityCell({ deal }) {
   const today = bangkokTodayIso();
