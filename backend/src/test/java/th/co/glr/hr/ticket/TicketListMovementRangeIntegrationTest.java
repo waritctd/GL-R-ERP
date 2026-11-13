@@ -184,6 +184,30 @@ class TicketListMovementRangeIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(ticketService.get(ticket, salesActor).summary().lastActivityAt()).isNotNull();
     }
 
+    /**
+     * CANNOT REACH: a MUTATION response (import marks goods received) is built from the raw deal, not through
+     * requireViewAccess, so it must be redacted on its own path: import still must not get activity facts.
+     */
+    @Test
+    void importMutationResponse_carriesNoActivityFacts() throws Exception {
+        long ticket = deal(salesActor);
+        // the deal already has the auto "สร้างดีล" activity (so lastActivityAt would be non-null un-redacted)
+        jdbc.update("UPDATE sales.ticket SET fulfillment_status = 'SHIPPING' WHERE ticket_id = :t", Map.of("t", ticket));
+        UserPrincipal importer = actor(createEmployee("นำเข้า S2 mut", "imp-mut@glr.co.th", "IMPORT", "ฝ่ายนำเข้า", null), "import");
+
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionContext.SESSION_USER_KEY, importer);
+        MvcResult result = mvc.perform(
+            org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/tickets/" + ticket + "/goods-received")
+                .session(session)).andReturn();
+        String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(result.getResponse().getStatus()).as(body).isEqualTo(200);
+        JsonNode summary = json.readTree(body).get("ticket").get("summary");
+        assertThat(summary.path("lastActivityAt").isNull()).as("lastActivityAt").isTrue();
+        assertThat(summary.path("activityInRange").asBoolean()).isFalse();
+        assertThat(summary.path("stageChangedInRange").asBoolean()).isFalse();
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private void stageChange(long ticketId, String createdAt) {

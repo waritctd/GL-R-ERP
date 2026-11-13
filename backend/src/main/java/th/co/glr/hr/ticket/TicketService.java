@@ -172,6 +172,23 @@ public class TicketService {
         return out;
     }
 
+    /** The activity facts (lastActivityAt, range flags) removed for roles that cannot read a deal's activities. */
+    private static TicketDto withoutUnreadableActivity(TicketDto ticket, String role) {
+        if (canReadActivities(role)) {
+            return ticket;
+        }
+        return new TicketDto(ticket.summary().withoutActivity(), ticket.items(), ticket.events(),
+            ticket.quotation(), ticket.quotations(), ticket.fromPricingChain());
+    }
+
+    /**
+     * For responses built straight from the raw deal (the mutation endpoints), which do not pass through
+     * {@link #projectForRole}: only the activity facts are removed there, nothing else about those responses changes.
+     */
+    public TicketDto withoutUnreadableActivity(TicketDto ticket, UserPrincipal actor) {
+        return withoutUnreadableActivity(ticket, actor.role());
+    }
+
     /**
      * Who may read a deal's activities (the same rule as {@link #requireDealOwnership}: owner/keyer, sales_manager,
      * ceo). A sales list is already own-deals only, so the role alone decides for list rows. Account and import
@@ -231,10 +248,6 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketDto ticket = requireViewAccess(id, actor);
-        if (!canReadActivities(actor.role())) {
-            ticket = new TicketDto(ticket.summary().withoutActivity(), ticket.items(), ticket.events(),
-                ticket.quotation(), ticket.quotations(), ticket.fromPricingChain());
-        }
         // Display-only fallback, scoped to THIS single read endpoint on purpose. Every
         // other reader of ticket.items() (actions()'s canRecordDelivery/
         // hasRemainingDelivery, editItems' merge-by-position, commission/delivery calculations,
@@ -318,6 +331,7 @@ public class TicketService {
      * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
     private TicketDto projectForRole(TicketDto ticket, String role) {
+        ticket = withoutUnreadableActivity(ticket, role);
         if (!IMPORT_ROLES.contains(role)) {
             return ticket;
         }
