@@ -68,6 +68,9 @@ public abstract class AbstractDealQuotationSlice2IntegrationTest extends Abstrac
     protected CustomerRepository customers;
     protected EmployeeRepository employees;
 
+    /** One "employeeId|link" entry per per-employee sales email the notification repository handed to its mailer. */
+    protected final List<String> employeeMails = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     protected UserPrincipal salesActor;
     protected UserPrincipal otherSalesActor;
     protected UserPrincipal salesManagerActor;
@@ -79,7 +82,16 @@ public abstract class AbstractDealQuotationSlice2IntegrationTest extends Abstrac
     void wireSlice2Services() {
         tickets = new TicketRepository(jdbc);
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
-        NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
+        NotificationRepository notifications = new NotificationRepository(jdbc, new SalesNotificationMailer() {
+            @Override
+            public void emailForRole(String role, List<Long> notifiedEmployeeIds, String title, String message,
+                                     String link) {}
+
+            @Override
+            public void emailForEmployee(long employeeId, String title, String message, String link) {
+                employeeMails.add(employeeId + "|" + link);
+            }
+        });
         customers = new CustomerRepository(jdbc);
         ProjectRepository projects = new ProjectRepository(jdbc);
         employees = new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

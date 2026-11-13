@@ -117,6 +117,14 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     expect(printedOptionTexts).toEqual(['(ค่าเริ่มต้น)', 'พนักงาน ได้สิทธิ์', 'ผู้จัดการ ฝ่ายขาย']);
   });
 
+  it('warns on BOTH พนักงานขาย selects that picking one moves the deal owner', async () => {
+    renderEditor('/quotations/5');
+    await waitFor(() => expect(byId('salesRepDisplayId')).toBeTruthy());
+    const warning = 'เปลี่ยนพนักงานขาย = ย้ายเจ้าของงานของดีลไปให้คนนี้ (คนที่คีย์ดีลยังเข้าถึงได้)';
+    expect((await screen.findAllByText((_, el) => el.children.length === 0 && el.textContent.includes(warning))).length)
+      .toBe(2);
+  });
+
   it('a draft that already carries display ids pre-selects them', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ printedByDisplayId: 4, printedByDisplayName: 'พนักงาน ได้สิทธิ์', salesRepDisplayId: 9, salesRepDisplayName: 'ผู้จัดการ ฝ่ายขาย' }),

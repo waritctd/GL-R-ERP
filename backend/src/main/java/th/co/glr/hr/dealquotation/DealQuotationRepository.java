@@ -1666,6 +1666,18 @@ public class DealQuotationRepository {
         return rows.stream().findFirst();
     }
 
+    /**
+     * The deal's owner moved to {@code newRep}: every live quotation on the deal follows (so approve/reject notices
+     * reach the new owner), including legacy ones still attributed to the admin who keyed the deal. CANCELLED/REJECTED
+     * documents keep their rep.
+     */
+    public void moveSalesRep(long ticketId, long newRep) {
+        jdbc.update("""
+            UPDATE sales.quotation SET sales_rep_id = :new
+             WHERE ticket_id = :ticket AND doc_status NOT IN ('CANCELLED', 'REJECTED')
+            """, Map.of("ticket", ticketId, "new", newRep));
+    }
+
     public record RepInfo(String name, String phone) {}
 
     /** Nothing existing on the employee-lookup surface returns phone — added here rather than
