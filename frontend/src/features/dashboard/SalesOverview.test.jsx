@@ -123,7 +123,12 @@ function renderOverview() {
 
 function LocationProbe() {
   const location = useLocation();
-  return <div data-testid="location-probe">{location.pathname}</div>;
+  return (
+    <>
+      <div data-testid="location-probe">{location.pathname}</div>
+      <div data-testid="location-search">{location.search}</div>
+    </>
+  );
 }
 
 function worklistSection() {
@@ -145,7 +150,8 @@ describe('SalesOverview', () => {
   it('greets the rep and requests an own-scoped deal list', async () => {
     renderOverview();
     expect(await screen.findByText(/สวัสดี, คุณสมชาย ใจดี/)).not.toBeNull();
-    expect(api.tickets.list).toHaveBeenCalledWith({});
+    // own-scoped (the server scopes sales), plus the default 7-day movement range
+    expect(api.tickets.list).toHaveBeenCalledWith({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
     expect(api.commissions.monthlySummary).toHaveBeenCalledWith({ payrollMonth: THIS_MONTH });
   });
 
@@ -157,7 +163,8 @@ describe('SalesOverview', () => {
       renderOverview();
 
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00'));
-      expectFigure('ฐานคิดค่าคอม', '฿100,000.00');
+      // the base now sits in the commission figure's caption
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿100,000.00');
     });
 
     // fix/commission-figures-from-backend (#548-style V81 regression guard): the commission figures
@@ -172,13 +179,14 @@ describe('SalesOverview', () => {
       renderOverview();
 
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿99,999.99'));
-      expectFigure('ฐานคิดค่าคอม', '฿1,200,000.00');
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿1,200,000.00');
     });
 
-    it('sums the open-deal value over ACTIVE deals only', async () => {
+    it('sums ยอดคาดหวัง over ACTIVE deals only (nothing here is at ORDER_RECEIVED yet)', async () => {
       renderOverview();
       // 610,000 + deal I's 300,000 + deal J's 120,000; deal H (CLOSED_LOST, 999,999) is excluded.
-      await waitFor(() => expectFigure('มูลค่าดีลที่เปิดอยู่', '฿1,030,000.00'));
+      await waitFor(() => expectFigure('ยอดคาดหวัง', '฿1,030,000.00'));
+      expectFigure('ยอดที่สั่งซื้อแล้ว', '฿0.00');
     });
 
     it('shows the commission while the deal list is still loading, and the deal value waits', async () => {
@@ -189,7 +197,7 @@ describe('SalesOverview', () => {
       renderOverview();
 
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00'));
-      expect(figureRows('มูลค่าดีลที่เปิดอยู่')[0]).not.toContain('฿');
+      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
       expect(worklistSection().querySelector('[aria-busy="true"]')).not.toBeNull();
     });
 
@@ -249,7 +257,7 @@ describe('SalesOverview', () => {
       expect(screen.getByTestId('sales-row-601').textContent).not.toMatch(/เลยนัด|นัดวันนี้/);
     });
 
-    it('shows three quiet deals and expands the rest in place', async () => {
+    it('shows every quiet deal (no cap, no expander)', async () => {
       const quiet = Array.from({ length: 5 }, (_, i) => ({
         ...deals[5], id: 900 + i, code: `PR-2026-09${i}`, customerName: `บริษัท เงียบ ${i}`,
       }));
@@ -261,15 +269,8 @@ describe('SalesOverview', () => {
       renderOverview();
       await screen.findByTestId('sales-group-quiet');
 
-      expect(groupNames('quiet')).toHaveLength(3);
-      const toggle = screen.getByRole('button', { name: 'แสดงอีก 2 ดีล' });
-      fireEvent.click(toggle);
       expect(groupNames('quiet')).toHaveLength(5);
-      // The same button stays (keyboard focus is not dropped) and folds the group back.
-      expect(toggle.textContent).toBe('แสดงน้อยลง');
-      expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      fireEvent.click(toggle);
-      expect(groupNames('quiet')).toHaveLength(3);
+      expect(screen.queryByRole('button', { name: /แสดงอีก|แสดงน้อยลง/ })).toBeNull();
     });
 
     it('opens the deal from its row', async () => {
@@ -307,7 +308,7 @@ describe('SalesOverview', () => {
       api.commissions.monthlySummary.mockRejectedValue(new Error('offline'));
       renderOverview();
       await waitFor(() => expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '—'));
-      expectFigure('ฐานคิดค่าคอม', '—');
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '—');
     });
 
     it('says the list failed when the first load fails', async () => {
@@ -443,5 +444,83 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
     });
     expect(api.tickets.getProcurementSource).toHaveBeenCalledTimes(2);
     expect(api.tickets.getProcurementSource).not.toHaveBeenCalledWith(823);
+  });
+
+  describe('7 วันล่าสุด panel (movement tiles, money band, worklist amounts)', () => {
+    const mv = (id, extra) => ({
+      id, code: `PR-2026-09${id}`, customerName: `ลูกค้า ${id}`, title: `ดีล ${id}`, lifecycle: 'ACTIVE',
+      salesStage: 'NEGOTIATION', amountPayable: 100, stale: false, nextFollowUpAt: null,
+      stageUpdatedAt: '2026-07-01T00:00:00.000Z', stageChangedInRange: false, activityInRange: false, ...extra,
+    });
+    const movementDeals = [
+      mv(1, { stageChangedInRange: true, amountPayable: 100 }),
+      mv(2, { activityInRange: true, amountPayable: 200 }),
+      mv(3, { nextFollowUpAt: TODAY, amountPayable: 300 }),
+      mv(4, { nextFollowUpAt: OVERDUE_DATE, amountPayable: 400 }),
+      mv(5, { lifecycle: 'CLOSED_LOST', amountPayable: 5000 }),
+      mv(6, { salesStage: 'ORDER_RECEIVED', stageChangedInRange: true, amountPayable: 4000 }),
+      // a paused deal is flagged on every signal but counts on none of the tiles
+      mv(7, { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true, nextFollowUpAt: OVERDUE_DATE }),
+    ];
+    const tile = (key) => screen.getByTestId(`week-${key}`);
+
+    beforeEach(() => {
+      api.tickets.list.mockResolvedValue({ tickets: movementDeals });
+    });
+
+    it('shows the four tiles with counts under the same rules as the list (overdue counts: range includes today)', async () => {
+      renderOverview();
+      const panel = (await screen.findByRole('heading', { name: '7 วันล่าสุด' })).closest('section');
+      await waitFor(() => expect(tile('moved').textContent).toMatch(/2 ดีล/));
+      expect(within(panel).getByText('ดีลที่ขยับขั้น')).toBeTruthy();
+      expect(within(panel).getByText('ดีลที่มีกิจกรรม')).toBeTruthy();
+      expect(within(panel).getByText('นัดติดตามถึงกำหนด')).toBeTruthy();
+      expect(within(panel).getByText('ไม่เคลื่อนไหวในช่วงนี้')).toBeTruthy();
+      expect(tile('moved').textContent).toMatch(/2/);
+      expect(tile('activity').textContent).toMatch(/1/);
+      expect(tile('due').textContent).toMatch(/2/);
+      // 3 and 4 only: the CLOSED_LOST deal is not ACTIVE, the others moved
+      expect(tile('silent').textContent).toMatch(/2/);
+    });
+
+    it.each(['moved', 'activity', 'due', 'silent'])('the %s tile navigates to /tickets?week=<same key>', async (key) => {
+      renderOverview();
+      await screen.findByTestId(`week-${key}`);
+      fireEvent.click(screen.getByTestId(`week-${key}`));
+      expect((await screen.findByTestId('location-probe')).textContent).toBe('/tickets');
+      // the link carries the range the counts were computed for, so the list opens on exactly it
+      expect(screen.getByTestId('location-search').textContent).toBe(`?week=${key}&from=${addDays(TODAY, -6)}&to=${TODAY}`);
+    });
+
+    it('money band: ยอดที่สั่งซื้อแล้ว / ยอดคาดหวัง / ค่าคอมประมาณการ (เดือนนี้)', async () => {
+      api.commissions.monthlySummary.mockResolvedValue({
+        summary: { ...defaultCommissionSummary, totalCommission: 250 },
+      });
+      renderOverview();
+      await waitFor(() => expectFigure('ยอดที่สั่งซื้อแล้ว', '฿4,000.00'));
+      expectFigure('ยอดคาดหวัง', '฿1,000.00');
+      expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00');
+    });
+
+    it('shows — for both value figures until the stage catalog has loaded', async () => {
+      api.meta.dealStages.mockImplementation(() => new Promise(() => {}));
+      renderOverview();
+      await screen.findByRole('heading', { name: '7 วันล่าสุด' });
+      await waitFor(() => expect(figureRows('ยอดคาดหวัง')[0]).toContain('—'));
+      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).toContain('—');
+      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).not.toContain('฿');
+      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
+    });
+
+    it('every worklist row shows the deal amount', async () => {
+      renderOverview();
+      await screen.findByRole('heading', { name: '7 วันล่าสุด' });
+      const rows = await waitFor(() => {
+        const found = [...document.querySelectorAll('[data-testid^="sales-row-"]')];
+        expect(found.length).toBeGreaterThan(0);
+        return found;
+      });
+      rows.forEach((row) => expect(row.textContent).toContain('฿'));
+    });
   });
 });

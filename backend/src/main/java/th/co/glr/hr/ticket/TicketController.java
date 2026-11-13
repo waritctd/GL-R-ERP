@@ -2,8 +2,10 @@ package th.co.glr.hr.ticket;
 
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,31 +37,42 @@ public class TicketController {
         this.sessions      = sessions;
     }
 
+    /**
+     * Every TicketDto response goes out through here: mutation responses are built from the raw deal (not through
+     * requireViewAccess), so the activity facts are redacted for roles that cannot read activities on this one path.
+     */
+    private TicketDetailResponse detail(UserPrincipal user, TicketDto ticket) {
+        return new TicketDetailResponse(ticketService.withoutUnreadableActivity(ticket, user));
+    }
+
     @GetMapping
     TicketListResponse list(
         @RequestParam(required = false) String status,
         // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — lets the
         // commission "Linked Deal" picker ask for only deals eligible for a commission submission.
         @RequestParam(required = false) String salesStage,
+        // Movement range (inclusive Asia/Bangkok days): adds stageChangedInRange / activityInRange to every row.
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementFrom,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementTo,
         @RequestParam(required = false) Integer page,
         @RequestParam(required = false) Integer size,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, user, PageRequest.resolve(page, size));
+        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, movementFrom, movementTo, user, PageRequest.resolve(page, size));
         return new TicketListResponse(result.items(), result.page(), result.size(), result.total());
     }
 
     @PostMapping
     TicketDetailResponse create(@Valid @RequestBody CreateTicketRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.create(request, user));
+        return detail(user, ticketService.create(request, user));
     }
 
     @GetMapping("/{id}")
     TicketDetailResponse get(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.get(id, user));
+        return detail(user, ticketService.get(id, user));
     }
 
     @GetMapping("/{id}/actions")
@@ -86,7 +99,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.setBilling(id, request, user));
+        return detail(user, ticketService.setBilling(id, request, user));
     }
 
     @GetMapping("/{id}/deliveries")
@@ -102,7 +115,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.reserveStock(id, request, user));
+        return detail(user, ticketService.reserveStock(id, request, user));
     }
 
     @GetMapping("/{id}/procurement-source")
@@ -118,7 +131,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.decideProcurementSource(id, request, user));
+        return detail(user, ticketService.decideProcurementSource(id, request, user));
     }
 
     // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
@@ -131,7 +144,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.setItemWeightMultipliers(id, request, user));
+        return detail(user, ticketService.setItemWeightMultipliers(id, request, user));
     }
 
     @PostMapping("/{id}/deliveries")
@@ -141,7 +154,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.recordPartialDelivery(id, request, user));
+        return detail(user, ticketService.recordPartialDelivery(id, request, user));
     }
 
     @PostMapping("/{id}/deliveries/complete")
@@ -151,7 +164,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.completeDelivery(id, request, user));
+        return detail(user, ticketService.completeDelivery(id, request, user));
     }
 
     // Slice S1 "engine collapse" (feat/deal-workspace-unification): the legacy ticket-native
@@ -193,14 +206,14 @@ public class TicketController {
                                                  @RequestBody(required = false) NoteRequest body,
                                                  HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
+        return detail(user, 
             ticketService.revokeCloseConfirmation(id, body == null ? null : body.note(), user));
     }
 
     @PostMapping("/{id}/close/verify")
     TicketDetailResponse verifyClose(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.verifyClose(id, user));
+        return detail(user, ticketService.verifyClose(id, user));
     }
 
     @PostMapping("/{id}/cancel")
@@ -208,7 +221,7 @@ public class TicketController {
                                 @Valid @RequestBody CancelRequest request,
                                 HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.cancel(id, request.reason(), request.note(), user));
+        return detail(user, ticketService.cancel(id, request.reason(), request.note(), user));
     }
 
     // ── Deal pipeline (V50) ─────────────────────────────────────────────────
@@ -218,7 +231,7 @@ public class TicketController {
                                      @Valid @RequestBody UpdateStageRequest request,
                                      HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.updateStage(id, request.stage(), request.note(), user));
+        return detail(user, ticketService.updateStage(id, request.stage(), request.note(), user));
     }
 
     @PostMapping("/{id}/lost")
@@ -226,7 +239,7 @@ public class TicketController {
                                   @Valid @RequestBody MarkLostRequest request,
                                   HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.markLost(id, request.reason(), request.note(), user));
+        return detail(user, ticketService.markLost(id, request.reason(), request.note(), user));
     }
 
     @PostMapping("/{id}/reopen")
@@ -234,7 +247,7 @@ public class TicketController {
                                 @RequestBody(required = false) ReopenRequest request,
                                 HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
+        return detail(user, 
             ticketService.reopenDeal(id, request == null ? null : request.note(), user));
     }
 
@@ -243,7 +256,7 @@ public class TicketController {
                               @RequestBody(required = false) NoteRequest request,
                               HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
+        return detail(user, 
             ticketService.placeOnHold(id, request == null ? null : request.note(), user));
     }
 
@@ -252,7 +265,7 @@ public class TicketController {
                                  @RequestBody(required = false) NoteRequest request,
                                  HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
+        return detail(user, 
             ticketService.markDormant(id, request == null ? null : request.note(), user));
     }
 
@@ -261,7 +274,7 @@ public class TicketController {
                                 @RequestBody(required = false) NoteRequest request,
                                 HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(
+        return detail(user, 
             ticketService.resume(id, request == null ? null : request.note(), user));
     }
 
@@ -270,7 +283,7 @@ public class TicketController {
                                            @Valid @RequestBody PolicyValueRequest request,
                                            HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.setTenderRequirement(id, request.value(), user));
+        return detail(user, ticketService.setTenderRequirement(id, request.value(), user));
     }
 
     @PostMapping("/{id}/entry-channel")
@@ -278,7 +291,7 @@ public class TicketController {
                                       @Valid @RequestBody EntryChannelRequest request,
                                       HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.setEntryChannel(id, request.value(), request.note(), user));
+        return detail(user, ticketService.setEntryChannel(id, request.value(), request.note(), user));
     }
 
     @PostMapping("/{id}/deposit-policy")
@@ -286,7 +299,7 @@ public class TicketController {
                                        @Valid @RequestBody DepositPolicyRequest request,
                                        HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.waiveDeposit(id, request.policy(), request.reason(), user));
+        return detail(user, ticketService.waiveDeposit(id, request.policy(), request.reason(), user));
     }
 
     // ── Deal tracking + activity (V83, Slice B1 "kill the weekly report") ───────────────────
@@ -310,7 +323,7 @@ public class TicketController {
                                         @Valid @RequestBody TrackingUpdateRequest request,
                                         HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.updateTracking(id, request, user));
+        return detail(user, ticketService.updateTracking(id, request, user));
     }
 
     @PutMapping("/{id}/customer")
@@ -318,7 +331,7 @@ public class TicketController {
                                         @Valid @RequestBody ChangeCustomerRequest request,
                                         HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.changeCustomer(id, request, user));
+        return detail(user, ticketService.changeCustomer(id, request, user));
     }
 
     record UpdateStageRequest(@jakarta.validation.constraints.NotBlank String stage,
@@ -361,7 +374,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.editItems(id, request, user));
+        return detail(user, ticketService.editItems(id, request, user));
     }
 
     @PostMapping("/{id}/comments")
@@ -371,7 +384,7 @@ public class TicketController {
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.comment(id, request, user));
+        return detail(user, ticketService.comment(id, request, user));
     }
 
     // ── Dual-track post-quotation endpoints (ข้อ 13) ─────────────────────────
@@ -379,30 +392,30 @@ public class TicketController {
     @PostMapping("/{id}/confirm-customer")
     TicketDetailResponse confirmCustomer(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.confirmCustomer(id, user));
+        return detail(user, ticketService.confirmCustomer(id, user));
     }
 
     @PostMapping("/{id}/import-request")
     TicketDetailResponse issueImportRequest(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.issueImportRequest(id, user));
+        return detail(user, ticketService.issueImportRequest(id, user));
     }
 
     @PostMapping("/{id}/ir-sent")
     TicketDetailResponse markIrSent(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.markIrSent(id, user));
+        return detail(user, ticketService.markIrSent(id, user));
     }
 
     @PostMapping("/{id}/shipping")
     TicketDetailResponse markShipping(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.markShipping(id, user));
+        return detail(user, ticketService.markShipping(id, user));
     }
 
     @PostMapping("/{id}/goods-received")
     TicketDetailResponse markGoodsReceived(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return new TicketDetailResponse(ticketService.markGoodsReceived(id, user));
+        return detail(user, ticketService.markGoodsReceived(id, user));
     }
 }

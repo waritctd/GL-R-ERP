@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.time.Year;
@@ -49,7 +50,21 @@ public class TicketRepository {
                t.cancel_reason, t.cancelled_at,
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
-               t.quotation_only, t.keyed_by
+               t.quotation_only, t.keyed_by,
+               (SELECT MAX(da.activity_date) FROM sales.deal_activity da
+                 WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
+               -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
+               (:movementFrom::date IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM sales.ticket_event te
+                   WHERE te.ticket_id = t.ticket_id AND te.kind = 'STAGE_CHANGED'
+                     AND te.created_at >= (:movementFrom::date)::timestamp AT TIME ZONE 'Asia/Bangkok'
+                     AND te.created_at < ((:movementTo::date) + 1)::timestamp AT TIME ZONE 'Asia/Bangkok'
+               )) AS stage_changed_in_range,
+               (:movementFrom::date IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM sales.deal_activity da
+                   WHERE da.ticket_id = t.ticket_id
+                     AND da.activity_date BETWEEN :movementFrom::date AND :movementTo::date
+               )) AS activity_in_range
           FROM sales.ticket t
           JOIN hr.employee ec ON ec.employee_id = t.created_by
           LEFT JOIN hr.employee ea ON ea.employee_id = t.assigned_to
@@ -136,6 +151,13 @@ public class TicketRepository {
      */
     public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter,
                                                 String actorRole, PageRequest page) {
+        return findSummaries(status, salesStage, createdByFilter, actorRole, page, null, null);
+    }
+
+    /** As above, plus the optional inclusive Bangkok-day movement range ({@code movementFrom}/{@code movementTo}, both or neither). */
+    public List<TicketSummaryDto> findSummaries(String status, String salesStage, Long createdByFilter,
+                                                String actorRole, PageRequest page,
+                                                LocalDate movementFrom, LocalDate movementTo) {
         StringBuilder sql = new StringBuilder(SUMMARY_SELECT).append("""
              WHERE (:status::varchar IS NULL OR t.status = :status)
                AND (:salesStage::varchar IS NULL OR t.sales_stage = :salesStage)
@@ -144,7 +166,9 @@ public class TicketRepository {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("status", status)
             .addValue("salesStage", salesStage)
-            .addValue("createdBy", createdByFilter);
+            .addValue("createdBy", createdByFilter)
+            .addValue("movementFrom", movementFrom, Types.DATE)
+            .addValue("movementTo", movementTo, Types.DATE);
         appendRoleScope(sql, params, actorRole);
         // The ticket_id tiebreaker is load-bearing, not decoration: created_at alone is not a
         // total order, and this query is paged with LIMIT/OFFSET below. Ties make each page a
@@ -855,7 +879,10 @@ public class TicketRepository {
                           p.name, ct.first_name, ct.last_name,
                           ecc.first_name_th, ecc.last_name_th
                 """,
-                Map.of("id", id), (rs, rowNum) -> mapSummary(rs));
+                new MapSqlParameterSource("id", id)
+                    .addValue("movementFrom", null, Types.DATE)
+                    .addValue("movementTo", null, Types.DATE),
+                (rs, rowNum) -> mapSummary(rs));
             return Optional.ofNullable(summary).flatMap(x -> enrichSummaries(List.of(x)).stream().findFirst());
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -1301,7 +1328,9 @@ public class TicketRepository {
             rs.getTimestamp("reopened_at") != null ? rs.getTimestamp("reopened_at").toInstant() : null,
             rs.getInt("reopen_count"),
             rs.getBoolean("quotation_only")
-        ).withKeyedById(rs.getObject("keyed_by", Long.class));
+        ).withKeyedById(rs.getObject("keyed_by", Long.class))
+            .withMovement(rs.getBoolean("stage_changed_in_range"), rs.getBoolean("activity_in_range"),
+                rs.getObject("last_activity_at", LocalDate.class));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1388,7 +1417,7 @@ public class TicketRepository {
             due == null ? null : due.creditDays(),
             facts.liveDirectQuotation(), facts.quotedRecipients(),
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
-            s.keyedById());
+            s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt());
     }
 
     /**

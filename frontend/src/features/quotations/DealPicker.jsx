@@ -74,8 +74,9 @@ function DealIdentity({ deal }) {
  * api.tickets.list() already returns (server-scoped: a sales rep only ever receives their own
  * deals), narrowed here to the ACTIVE deals this user may start a quotation on
  * (canCreateDealQuotation — the same gate the editor itself uses) and filtered client-side on
- * code · customer · project. No per-keystroke request: the list is already in memory, and shares
- * its cache entry (queryKeys.ticketList('')) with every overview that reads the same list.
+ * code · customer · project. No per-keystroke request: the list is already in memory. Its cache entry
+ * (queryKeys.ticketList('')) is shared with the other plain-list readers, but NOT with the sales /
+ * sales_manager / ceo list and overviews, which read the range-keyed list (queryKeys.ticketListByRange).
  *
  * Picking a deal sets `?ticket=<id>` and nothing else — the editor's EXISTING ?ticket= path takes
  * over from there (deal summary, customer record, recipient preselect), so there is no second code

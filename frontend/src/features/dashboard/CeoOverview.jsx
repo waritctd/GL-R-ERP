@@ -10,6 +10,8 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { bangkokMonthStartIso, formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { isManualKind } from '../commissions/commissionRecord.js';
 import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
+import { defaultRange } from '../tickets/movementRange.js';
+import { TeamMovementPanel } from './TeamMovementPanel.jsx';
 
 /**
  * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
@@ -78,9 +80,12 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   // already populate for a CEO session — one company-wide fetch each, no
   // per-row detail calls (see the tickets.list() mock-parity note below for
   // why that matters for the close-verify worklist).
+  // The team-movement panel reads the same list with the default 7-day range (server flags per row).
+  const teamRange = useMemo(() => defaultRange(), []);
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list({}).then((r) => (Array.isArray(r) ? r : (r?.tickets ?? []))),
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to })
+      .then((r) => (Array.isArray(r) ? r : (r?.tickets ?? []))),
   });
   const pricingQueueQuery = useQuery({
     queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
@@ -296,6 +301,8 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
           <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
         </dl>
       </section>
+
+      <TeamMovementPanel deals={tickets} range={teamRange} />
 
       <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
         <Panel

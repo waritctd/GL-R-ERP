@@ -162,10 +162,40 @@ public class TicketService {
      * handed. Applied after the query, so ordering, paging and counts are untouched.
      */
     private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
-        if (!IMPORT_ROLES.contains(role)) {
-            return rows;
+        List<TicketSummaryDto> out = rows;
+        if (IMPORT_ROLES.contains(role)) {
+            out = out.stream().map(TicketSummaryDto::withoutMoney).toList();
         }
-        return rows.stream().map(TicketSummaryDto::withoutMoney).toList();
+        if (!canReadActivities(role)) {
+            out = out.stream().map(TicketSummaryDto::withoutActivity).toList();
+        }
+        return out;
+    }
+
+    /** The activity facts (lastActivityAt, range flags) removed for roles that cannot read a deal's activities. */
+    private static TicketDto withoutUnreadableActivity(TicketDto ticket, String role) {
+        if (canReadActivities(role)) {
+            return ticket;
+        }
+        return new TicketDto(ticket.summary().withoutActivity(), ticket.items(), ticket.events(),
+            ticket.quotation(), ticket.quotations(), ticket.fromPricingChain());
+    }
+
+    /**
+     * For responses built straight from the raw deal (the mutation endpoints), which do not pass through
+     * {@link #projectForRole}: only the activity facts are removed there, nothing else about those responses changes.
+     */
+    public TicketDto withoutUnreadableActivity(TicketDto ticket, UserPrincipal actor) {
+        return withoutUnreadableActivity(ticket, actor.role());
+    }
+
+    /**
+     * Who may read a deal's activities (the same rule as {@link #requireDealOwnership}: owner/keyer, sales_manager,
+     * ceo). A sales list is already own-deals only, so the role alone decides for list rows. Account and import
+     * get no lastActivityAt / range flags: they would leak activity they cannot open.
+     */
+    private static boolean canReadActivities(String role) {
+        return SALES_ROLES.contains(role) || "sales_manager".equals(role) || "ceo".equals(role);
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -177,13 +207,29 @@ public class TicketService {
      *                    {@code status} — used by the commission "Linked Deal" picker.
      */
     public Page<TicketSummaryDto> listPage(String status, String salesStage, UserPrincipal actor, PageRequest page) {
+        return listPage(status, salesStage, null, null, actor, page);
+    }
+
+    /**
+     * @param movementFrom / movementTo optional inclusive Asia/Bangkok day range: both or neither, from <= to
+     *                     (else 400). When given each row carries stageChangedInRange / activityInRange.
+     */
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, LocalDate movementFrom,
+                                           LocalDate movementTo, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
+        if ((movementFrom == null) != (movementTo == null)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุ movementFrom และ movementTo ทั้งคู่");
+        }
+        if (movementFrom != null && movementFrom.isAfter(movementTo)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "movementFrom ต้องไม่เกิน movementTo");
+        }
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
         List<TicketSummaryDto> rows =
-            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page), actor.role());
+            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page, movementFrom, movementTo),
+                actor.role());
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -285,6 +331,7 @@ public class TicketService {
      * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
     private TicketDto projectForRole(TicketDto ticket, String role) {
+        ticket = withoutUnreadableActivity(ticket, role);
         if (!IMPORT_ROLES.contains(role)) {
             return ticket;
         }
@@ -751,7 +798,8 @@ public class TicketService {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
-            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById());
+            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById(),
+            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt());
     }
 
     /**

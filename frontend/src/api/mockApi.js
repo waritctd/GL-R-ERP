@@ -8672,6 +8672,23 @@ export const api = {
       // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — mirrors
       // TicketController's new `salesStage` query param, used by the commission "Linked Deal" picker.
       if (params.salesStage) list = list.filter((t) => t.salesStage === params.salesStage);
+      // Mirrors TicketController's movementFrom/movementTo (inclusive Asia/Bangkok days; both or neither, from <= to).
+      const { movementFrom, movementTo } = params;
+      if (Boolean(movementFrom) !== Boolean(movementTo)) fail('ต้องระบุ movementFrom และ movementTo ทั้งคู่', 400);
+      if (movementFrom && movementFrom > movementTo) fail('movementFrom ต้องไม่เกิน movementTo', 400);
+      const bangkokDay = (iso) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+      // account / import cannot read a deal's activities (TicketService.canReadActivities), so they get none of it.
+      const canReadActivities = ['sales', 'sales_manager', 'ceo'].includes(user.role);
+      const movementFlags = (t) => {
+        if (!canReadActivities) return { stageChangedInRange: false, activityInRange: false, lastActivityAt: null };
+        const acts = dealActivitiesForTicket(t.id).map((a) => a.activityDate);
+        const inRange = (d) => d >= movementFrom && d <= movementTo;
+        return {
+          stageChangedInRange: Boolean(movementFrom) && (t.events ?? []).some((e) => e.kind === 'STAGE_CHANGED' && inRange(bangkokDay(e.createdAt))),
+          activityInRange: Boolean(movementFrom) && acts.some(inRange),
+          lastActivityAt: acts.length ? acts.reduce((a, b) => (a > b ? a : b)) : null,
+        };
+      };
       const tickets = list.map((t) => ({
         id: t.id, code: t.code, type: t.type, title: t.title,
         status: t.status, priority: t.priority,
@@ -8720,6 +8737,9 @@ export const api = {
         // Mirrors TicketSummaryDto#liveDirectQuotation on the LIST projection — the CTA cascade and
         // the DealPicker read list rows.
         liveDirectQuotation: mockLiveDirectQuotation(t.id),
+        lastFollowUpAt: t.lastFollowUpAt ?? null,
+        nextFollowUpAt: t.nextFollowUpAt ?? null,
+        ...movementFlags(t),
         ...derivePaymentFields(t),
       }));
       return delay({ tickets });

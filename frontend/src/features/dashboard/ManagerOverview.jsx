@@ -12,6 +12,8 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { Figure, failed, moneySum } from './dashboardParts.jsx';
+import { defaultRange } from '../tickets/movementRange.js';
+import { TeamMovementPanel } from './TeamMovementPanel.jsx';
 
 // A deal is "won" once it reaches the terminal pipeline stage, "lost" once
 // its lifecycle/legacy status marks it lost or cancelled, else "open" —
@@ -114,9 +116,11 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
   const [reasonFilter, setReasonFilter] = useState('all');
 
+  // The team-movement panel reads the same list with the default 7-day range (server flags per row).
+  const teamRange = useMemo(() => defaultRange(), []);
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list({}).then((r) => r.tickets ?? []),
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to }).then((r) => r.tickets ?? []),
   });
   const commissionsQuery = useQuery({
     queryKey: queryKeys.commissionsPendingApproval(),
@@ -198,6 +202,8 @@ export function ManagerOverview({ user, employee, dashboardSummary }) {
           <Figure label="ยอดคาดการณ์" value={money(forecast)} caption="ดีลที่ยังไม่ได้รับคำสั่งซื้อ" />
         </dl>
       </section>
+
+      <TeamMovementPanel deals={tickets} range={teamRange} />
 
       <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
         <div className="grid gap-[18px]">

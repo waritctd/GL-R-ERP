@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -21,7 +21,12 @@ import {
   formatThaiDate,
   fulfilmentStatusLabel,
   overdueBadgeLabel,
+  bangkokTodayIso,
 } from '../../utils/format.js';
+import {
+  bangkokDateOf, dealAmountLabel, isNoMovement, lastMovementIso, rangeFromParams, setRangeEdge, shiftRange, sumAmount, WEEK_KEYS, weekPredicates,
+} from './movementRange.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealHref } from '../finance/dealHref.js';
 import { dealInScope } from './salesViewScope.js';
@@ -125,6 +130,7 @@ const PHASE_STYLES = {
 };
 
 const STALE_DAYS = 7;
+const WEEK_KEYS_SET = new Set(WEEK_KEYS);
 const LIFECYCLE_FILTERS = [
   { value: '', label: 'ทั้งหมด', tone: 'neutral' },
   { value: 'ON_HOLD', label: dealLifecycleLabel('ON_HOLD').label, tone: dealLifecycleLabel('ON_HOLD').tone },
@@ -486,6 +492,100 @@ function MoneyWorklistCard({ deal, onOpen }) {
   );
 }
 
+// ── sales / sales_manager / ceo movement list ──
+const SALES_GRID = 'ticket-sales-table grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,1.1fr)]';
+const OWNER_GRID = 'ticket-sales-table grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,1.1fr)]';
+const WEEK_CHIPS = [
+  { key: '', label: 'ทั้งหมด' },
+  { key: 'moved', label: 'ขยับขั้น' },
+  { key: 'activity', label: 'มีกิจกรรม' },
+  { key: 'due', label: 'นัดติดตาม' },
+  { key: 'overdue', label: 'เลยนัด' },
+  { key: 'silent', label: 'ไม่เคลื่อนไหว' },
+];
+
+function ActivityCell({ deal }) {
+  const today = bangkokTodayIso();
+  const last = lastMovementIso(deal);
+  const days = last ? Math.max(0, Math.round((new Date(`${today}T00:00:00Z`) - new Date(`${last}T00:00:00Z`)) / 86400000)) : null;
+  const silent = isNoMovement(deal);
+  if (days == null) return <span className="text-text-muted">-</span>;
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span className={`text-sm tabular-nums ${silent ? 'font-extrabold text-danger' : 'font-bold text-text'}`}>
+        {days === 0 ? 'วันนี้' : days === 1 ? 'เมื่อวาน' : `${days} วันก่อน`}
+      </span>
+      <span className="text-2xs text-text-muted">{formatThaiDate(last)}</span>
+    </span>
+  );
+}
+
+function NextFollowUpCell({ deal }) {
+  const next = bangkokDateOf(deal.nextFollowUpAt);
+  const today = bangkokTodayIso();
+  if (!next) return <span className="text-xs text-text-muted">ยังไม่ได้นัด</span>;
+  if (next < today) return <StatusBadge tone="danger">เลยนัด {formatThaiDate(next)}</StatusBadge>;
+  if (next === today) return <StatusBadge tone="teal">นัดวันนี้</StatusBadge>;
+  return <span className="text-sm text-text">{formatThaiDate(next)}</span>;
+}
+
+function SalesDealCard({ deal, catalog, showOwner = false, onOpen }) {
+  return (
+    <>
+      <div className="ticket-card-topline">
+        <code>{deal.code}</code>
+        <strong className="tabular-nums">{dealAmountLabel(deal)}</strong>
+      </div>
+      <strong className="ticket-card-title">{deal.customerName || deal.title}</strong>
+      {deal.projectName ? <span className="ticket-card-project">{deal.projectName}</span> : null}
+      {showOwner ? <span className="text-xs text-text-muted">ผู้ดูแล: {deal.createdByName}</span> : null}
+      <DealStageCell deal={deal} catalog={catalog} />
+      <div className="grid grid-cols-2 gap-2">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <small className="text-2xs text-text-muted">ความเคลื่อนไหวล่าสุด</small>
+          <ActivityCell deal={deal} />
+        </span>
+        <span className="flex min-w-0 flex-col items-start gap-0.5">
+          <small className="text-2xs text-text-muted">นัดติดตามถัดไป</small>
+          <NextFollowUpCell deal={deal} />
+        </span>
+      </div>
+      <DealOpenButton deal={deal} onOpen={onOpen} />
+    </>
+  );
+}
+
+function buildSalesColumns({ role, catalog }) {
+  const base = buildDealColumns({ role, isManagerView: false, catalog });
+  const [customer, owner, stage] = base;
+  return [
+    customer,
+    ...(role !== 'sales' ? [owner] : []),
+    { ...stage, header: 'ขั้นตอน', render: (deal) => <DealStageCell deal={deal} catalog={catalog} /> },
+    {
+      key: 'value',
+      header: 'มูลค่า',
+      sortable: true,
+      sortAccessor: (deal) => Number(deal.amountPayable) || 0,
+      render: (deal) => <span className="block text-right text-sm font-bold tabular-nums text-text">{dealAmountLabel(deal)}</span>,
+    },
+    {
+      key: 'date',
+      header: 'ความเคลื่อนไหวล่าสุด',
+      sortable: true,
+      sortAccessor: (deal) => lastMovementIso(deal) ?? '',
+      render: (deal) => <ActivityCell deal={deal} />,
+    },
+    {
+      key: 'next',
+      header: 'นัดติดตามถัดไป',
+      sortable: true,
+      sortAccessor: (deal) => bangkokDateOf(deal.nextFollowUpAt) ?? '9999',
+      render: (deal) => <NextFollowUpCell deal={deal} />,
+    },
+  ];
+}
+
 function buildDealColumns({ role, isManagerView, catalog }) {
   return [
     {
@@ -550,6 +650,11 @@ export function TicketListPage({ user, showToast }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
+  // sales, sales_manager and ceo share the range/movement UI; the latter two keep ผู้ดูแล.
+  const isSales = ['sales', 'sales_manager', 'ceo'].includes(user.role);
+  const showOwnerCol = user.role !== 'sales';
+  const ownerParam = showOwnerCol ? searchParams.get('owner') ?? '' : '';
+  const weekFilter = isSales ? searchParams.get('week') ?? '' : '';
   const flagFilter = searchParams.get('flag') ?? '';
   // Role-scoped views, Phase A: import/account default to their own worklist
   // (dealInScope) — ?inbox=0 opts back into every deal the role may read.
@@ -581,9 +686,16 @@ export function TicketListPage({ user, showToast }) {
   // enumeration is slow. Every lookup over it is written to answer safely for the empty catalog.
   const { catalog: stageCatalog } = useStageCatalog();
 
+  // Date range (URL from/to; absent = last 7 days). Only the movement roles send it to the server.
+  const fromParam = searchParams.get('from');
+  const toParam = searchParams.get('to');
+  const range = useMemo(() => rangeFromParams(fromParam, toParam), [fromParam, toParam]);
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list({}).then((response) => response.tickets || []),
+    queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to) : queryKeys.ticketList(''),
+    queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to } : {})
+      .then((response) => response.tickets || []),
+    // keep the previous rows on screen while a shifted range loads
+    placeholderData: isSales ? keepPreviousData : undefined,
   });
   const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading;
@@ -647,12 +759,15 @@ export function TicketListPage({ user, showToast }) {
     all: allDeals.length,
   } : null), [allDeals, hasWorklistDistinction, stageCatalog, user.role]);
 
-  const deals = useMemo(() => {
+  // Every filter EXCEPT the movement chip: the chips' counts are taken over exactly these rows, so a chip's
+  // number equals the rows it leaves when clicked.
+  const baseDeals = useMemo(() => {
     return allDeals.filter((deal) => {
       const lost = deal.lifecycle === 'CLOSED_LOST';
       // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
       // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
       // chips below. This keeps each phase card's count equal to the rows it filters to.
+      if (ownerParam && String(deal.createdById) !== ownerParam) return false;
       const phaseOk = !phaseFilter
         || (deal.lifecycle === 'ACTIVE' && findStage(stageCatalog, deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
@@ -664,7 +779,17 @@ export function TicketListPage({ user, showToast }) {
       const searchOk = matchesSearch(deal, searchText);
       return phaseOk && lifeOk && flagOk && inboxOk && searchOk;
     });
-  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, stageCatalog, user.role, searchText]);
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, stageCatalog, user.role, searchText, ownerParam]);
+
+  const todayIso = bangkokTodayIso();
+  const weekMatches = useCallback((key, deal) => weekPredicates[key](deal, range, todayIso), [range, todayIso]);
+  const weekCounts = useMemo(() => (isSales
+    ? Object.fromEntries(WEEK_CHIPS.map((c) => [c.key, c.key ? baseDeals.filter((d) => weekMatches(c.key, d)).length : baseDeals.length]))
+    : null), [isSales, baseDeals, weekMatches]);
+  const deals = useMemo(
+    () => (isSales && WEEK_KEYS_SET.has(weekFilter) ? baseDeals.filter((d) => weekMatches(weekFilter, d)) : baseDeals),
+    [isSales, baseDeals, weekFilter, weekMatches],
+  );
 
   const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
   const showMoreFilters = moreFiltersOpen;
@@ -688,6 +813,7 @@ export function TicketListPage({ user, showToast }) {
   const activeFilterCount = [
     searchText.trim(),
     phaseFilter,
+    weekFilter,
     lifecycleFilter,
     flagFilter,
     hasWorklistDistinction && searchParams.get('inbox') === '0' ? 'all' : '',
@@ -700,6 +826,7 @@ export function TicketListPage({ user, showToast }) {
         filters.push(`เฟส ${phaseFilter}: ${phaseName(Number(phaseFilter))}`);
       }
     }
+    if (weekFilter) filters.push(`ช่วงวันที่: ${WEEK_CHIPS.find((c) => c.key === weekFilter)?.label ?? weekFilter}`);
     if (lifecycleFilter) filters.push(`สถานะงาน: ${dealLifecycleLabel(lifecycleFilter).label}`);
     if (flagFilter) {
       const flag = FLAG_FILTERS.find((item) => item.value === flagFilter);
@@ -707,7 +834,7 @@ export function TicketListPage({ user, showToast }) {
     }
     if (hasWorklistDistinction && searchParams.get('inbox') === '0') filters.push('ขอบเขต: ทั้งหมด');
     return filters;
-  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText, stageCatalog]);
+  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText, stageCatalog, weekFilter]);
 
   // Phase chips, WorklistFilters-driven. The "all" chip is named after its action ("ทั้งหมด"),
   // since clicking it clears the phase filter and lists every deal including
@@ -736,9 +863,13 @@ export function TicketListPage({ user, showToast }) {
     { key: '0', label: 'ทั้งหมด', count: inboxCounts.all },
   ] : null), [hasWorklistDistinction, inboxCounts]);
 
+  const weekChipItems = useMemo(() => (weekCounts
+    ? WEEK_CHIPS.map((c) => ({ ...c, count: weekCounts[c.key] })) : null), [weekCounts]);
+
   const tableColumns = useMemo(
-    () => buildDealColumns({ role: user.role, isManagerView, catalog: stageCatalog }),
-    [isManagerView, stageCatalog, user.role],
+    () => (isSales ? buildSalesColumns({ role: user.role, catalog: stageCatalog })
+      : buildDealColumns({ role: user.role, isManagerView, catalog: stageCatalog })),
+    [isSales, isManagerView, stageCatalog, user.role],
   );
 
   const emptyDescription = useMemo(() => {
@@ -766,6 +897,32 @@ export function TicketListPage({ user, showToast }) {
       if (value) next.set(key, value); else next.delete(key);
       return next;
     }, { replace: true });
+  }
+
+  const ownerName = ownerParam ? (allDeals.find((d) => String(d.createdById) === ownerParam)?.createdByName ?? ownerParam) : '';
+
+  function setRangeParams(from, to) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('from', from);
+      next.set('to', to);
+      return next;
+    }, { replace: true });
+  }
+  const shiftBy = (days) => {
+    const next = shiftRange(range, days);
+    setRangeParams(next.from, next.to);
+  };
+  const resetRange = () => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    next.delete('from');
+    next.delete('to');
+    return next;
+  }, { replace: true });
+  function setRange(which, value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
+    const next = setRangeEdge(range, which, value);
+    setRangeParams(next.from, next.to);
   }
 
   function clearFilters() {
@@ -924,6 +1081,43 @@ export function TicketListPage({ user, showToast }) {
           onSelect={selectPhase}
         />
 
+        {isSales ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ช่วงวันที่">
+              <span className="shrink-0 text-2xs font-extrabold text-text-muted">ช่วงวันที่</span>
+              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" title="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" onClick={() => shiftBy(-1)}>
+                <Icon name="chevronLeft" size={16} />
+              </Button>
+              <div className="w-44 shrink-0"><ThaiDateInput key={range.from} className="text-base" aria-label="ตั้งแต่วันที่" value={range.from} onChange={(e) => setRange('from', e.target.value)} /></div>
+              <span aria-hidden="true">–</span>
+              <div className="w-44 shrink-0"><ThaiDateInput key={range.to} className="text-base" aria-label="ถึงวันที่" value={range.to} onChange={(e) => setRange('to', e.target.value)} /></div>
+              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" title="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" onClick={() => shiftBy(1)}>
+                <Icon name="chevronRight" size={16} />
+              </Button>
+              <Button variant="text" type="button" size="sm" className="mobile:min-h-[44px]" onClick={resetRange}>7 วันล่าสุด</Button>
+            </div>
+            {ownerParam ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="ticket-filter-chip is-active"
+                  aria-label={`ผู้ดูแล: ${ownerName} (ล้างตัวกรอง)`}
+                  onClick={() => updateParam('owner', '')}
+                >
+                  <span>ผู้ดูแล: {ownerName}</span>
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            ) : null}
+            <WorklistFilters
+              ariaLabel="ตัวกรองความเคลื่อนไหว"
+              items={weekChipItems}
+              activeKey={weekFilter}
+              onSelect={(key) => updateParam('week', key)}
+            />
+          </>
+        ) : null}
+
         {/* Spacing/reflow live here as utilities, not in styles.css: index.css orders
             `@layer theme, legacy, utilities`, so a `.ticket-filter-bar` rule in the legacy layer
             always loses to FilterBar's own utilities. `mobile:` is the shared <=720px variant. */}
@@ -1051,7 +1245,7 @@ export function TicketListPage({ user, showToast }) {
         columns={tableColumns}
         rows={deals}
         getRowKey={(deal) => deal.id}
-        gridClassName="ticket-worklist-table"
+        gridClassName={isSales ? (showOwnerCol ? OWNER_GRID : SALES_GRID) : 'ticket-worklist-table'}
         // No repeated `เปิด ›` column: the row's onClick is a mouse-only convenience for opening
         // the deal. The identity cell's own `<Link to={`/tickets/${deal.id}`}>` above is the
         // keyboard/assistive-tech affordance, since a `<tr role="button">` would prune every other
@@ -1063,8 +1257,18 @@ export function TicketListPage({ user, showToast }) {
         // filters; it gives the "filtered out of how many" denominator. DataTable appends the
         // clause only when it differs from what matched.
         unfilteredTotal={allDeals.length}
+        footerRow={isSales ? ({ rows }) => (
+          <tr className={`${showOwnerCol ? OWNER_GRID : SALES_GRID} data-row`} data-testid="deal-list-footer">
+            <td className="text-sm font-extrabold">รวม {rows.length} รายการ</td>
+            {showOwnerCol ? <td /> : null}
+            <td />
+            <td className="text-right text-sm font-extrabold tabular-nums">{formatMoney(sumAmount(rows))}</td>
+            <td />
+            <td />
+          </tr>
+        ) : undefined}
         mobileCard={(deal) => (
-          user.role === 'account'
+          isSales ? <SalesDealCard deal={deal} catalog={stageCatalog} showOwner={showOwnerCol} onOpen={openDeal} /> : user.role === 'account'
             ? <MoneyWorklistCard deal={deal} onOpen={openDeal} />
             : <DealCard deal={deal} catalog={stageCatalog} reason={worklistReason(user.role, deal, stageCatalog)} showTracking={isManagerView} onOpen={openDeal} />
         )}
