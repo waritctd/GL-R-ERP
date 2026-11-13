@@ -231,18 +231,18 @@ describe('CeoOverview', () => {
       expect(panel.textContent).toContain(formatThaiDate(addDays(TODAY, -6)));
       expect(panel.textContent).toContain(formatThaiDate(TODAY));
       const row = within(panel).getByTestId('team-row-21');
-      expect(linkTo(row, '/tickets?owner=21&week=silent').textContent.trim()).toBe('1');
+      expect(linkTo(row, `/tickets?owner=21&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`).textContent.trim()).toBe('1');
       expect(linkTo(row, '/tickets?owner=21')).toBeUndefined(); // plain number, not a link
       expect(row.querySelectorAll('td')[0].textContent.trim()).toBe('2');
-      expect(linkTo(row, '/tickets?owner=21&week=overdue').textContent.trim()).toBe('1');
+      expect(linkTo(row, `/tickets?owner=21&week=overdue&from=${addDays(TODAY, -6)}&to=${TODAY}`).textContent.trim()).toBe('1');
     });
 
     it('a count links to /tickets?owner=<id>&week=<key>', async () => {
       renderOverview();
       const row = await screen.findByTestId('team-row-22');
-      fireEvent.click(linkTo(row, '/tickets?owner=22&week=silent'));
+      fireEvent.click(linkTo(row, `/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`));
       expect(await screen.findByTestId('location-probe')).toBeTruthy();
-      expect(probeText()).toBe('/tickets?owner=22&week=silent');
+      expect(probeText()).toBe(`/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`);
     });
   });
 

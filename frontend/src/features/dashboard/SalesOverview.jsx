@@ -141,6 +141,7 @@ export function SalesOverview({ user, employee }) {
   // Old deals still waiting on the import/stock decision read จัดซื้อสินค้า, not ออกใบขอซื้อ (IR): ask the
   // server (the deal page's own query) for each ACTIVE, undecided-axis deal at/after ORDER_RECEIVED.
   const orderReceivedIdx = stageIndexIn(stageCatalog, 'ORDER_RECEIVED');
+  const catalogReady = orderReceivedIdx >= 0; // before it loads nothing can be classed ordered / expected
   const sourceDealIds = useMemo(() => orderReceivedIdx < 0 ? [] : activeDeals
     .filter((deal) => deal.fulfillmentStatus == null && stageIndexIn(stageCatalog, deal.salesStage) >= orderReceivedIdx)
     .map((deal) => Number(deal.id)), [activeDeals, stageCatalog, orderReceivedIdx]);
@@ -218,7 +219,7 @@ export function SalesOverview({ user, employee }) {
               key={f.key}
               type="button"
               data-testid={`week-${f.key}`}
-              onClick={() => navigate(`/tickets?week=${f.key}`)}
+              onClick={() => navigate(`/tickets?week=${f.key}&from=${range.from}&to=${range.to}`)}
               className="block min-w-0 cursor-pointer rounded-md border-0 bg-transparent p-3 text-left hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[inset_var(--shadow-focus-ring)] mobile:min-h-[44px]"
             >
               <dl className="m-0 grid gap-0.5 mobile:grid-cols-[1fr_auto] mobile:items-baseline mobile:gap-x-3">
@@ -239,12 +240,12 @@ export function SalesOverview({ user, employee }) {
           <Figure
             lead
             label="ยอดที่สั่งซื้อแล้ว"
-            value={dash(ticketsQuery, ticketsQuery.data && formatMoney(sumAmount(ordered)))}
+            value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(sumAmount(ordered)) : '—'))}
             caption={`${ordered.length} ดีล · ยังไม่ปิดงาน`}
           />
           <Figure
             label="ยอดคาดหวัง"
-            value={dash(ticketsQuery, ticketsQuery.data && formatMoney(sumAmount(expected)))}
+            value={dash(ticketsQuery, ticketsQuery.data && (catalogReady ? formatMoney(sumAmount(expected)) : '—'))}
             caption={`${expected.length} ดีล · ยังไม่ได้รับใบสั่งซื้อ`}
           />
           <Figure

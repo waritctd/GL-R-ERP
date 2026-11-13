@@ -302,7 +302,7 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
         </dl>
       </section>
 
-      <TeamMovementPanel deals={tickets} />
+      <TeamMovementPanel deals={tickets} range={teamRange} />
 
       <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
         <Panel

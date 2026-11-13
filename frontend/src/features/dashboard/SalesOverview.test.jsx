@@ -488,7 +488,8 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
       await screen.findByTestId(`week-${key}`);
       fireEvent.click(screen.getByTestId(`week-${key}`));
       expect((await screen.findByTestId('location-probe')).textContent).toBe('/tickets');
-      expect(screen.getByTestId('location-search').textContent).toBe(`?week=${key}`);
+      // the link carries the range the counts were computed for, so the list opens on exactly it
+      expect(screen.getByTestId('location-search').textContent).toBe(`?week=${key}&from=${addDays(TODAY, -6)}&to=${TODAY}`);
     });
 
     it('money band: ยอดที่สั่งซื้อแล้ว / ยอดคาดหวัง / ค่าคอมประมาณการ (เดือนนี้)', async () => {
@@ -499,6 +500,16 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
       await waitFor(() => expectFigure('ยอดที่สั่งซื้อแล้ว', '฿4,000.00'));
       expectFigure('ยอดคาดหวัง', '฿1,000.00');
       expectFigure('ค่าคอมประมาณการ (เดือนนี้)', '฿250.00');
+    });
+
+    it('shows — for both value figures until the stage catalog has loaded', async () => {
+      api.meta.dealStages.mockImplementation(() => new Promise(() => {}));
+      renderOverview();
+      await screen.findByRole('heading', { name: '7 วันล่าสุด' });
+      await waitFor(() => expect(figureRows('ยอดคาดหวัง')[0]).toContain('—'));
+      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).toContain('—');
+      expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).not.toContain('฿');
+      expect(figureRows('ยอดคาดหวัง')[0]).not.toContain('฿');
     });
 
     it('every worklist row shows the deal amount', async () => {

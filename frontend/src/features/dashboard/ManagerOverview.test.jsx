@@ -162,18 +162,18 @@ describe('ManagerOverview', () => {
       // ดีลที่เปิดอยู่ is a plain number, not a link; the paused deal below counts nowhere
       expect(linkTo(rowA, '/tickets?owner=11')).toBeUndefined();
       expect(rowA.querySelectorAll('td')[0].textContent.trim()).toBe('3');
-      expect(count('/tickets?owner=11&week=moved')).toBe('1');
-      expect(count('/tickets?owner=11&week=silent')).toBe('2');
+      expect(count(`/tickets?owner=11&week=moved&from=${addDays(TODAY, -6)}&to=${TODAY}`)).toBe('1');
+      expect(count(`/tickets?owner=11&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`)).toBe('2');
       // เลยนัด links to its own filter, so the list shows exactly the counted deals
-      expect(count('/tickets?owner=11&week=overdue')).toBe('1');
+      expect(count(`/tickets?owner=11&week=overdue&from=${addDays(TODAY, -6)}&to=${TODAY}`)).toBe('1');
     });
 
     it('a count links to /tickets?owner=<id>&week=<key>', async () => {
       renderOverview();
       const row = await screen.findByTestId('team-row-12');
-      fireEvent.click(linkTo(row, '/tickets?owner=12&week=activity'));
+      fireEvent.click(linkTo(row, `/tickets?owner=12&week=activity&from=${addDays(TODAY, -6)}&to=${TODAY}`));
       expect(await screen.findByTestId('location-probe')).toBeTruthy();
-      expect(probeText()).toBe('/tickets?owner=12&week=activity');
+      expect(probeText()).toBe(`/tickets?owner=12&week=activity&from=${addDays(TODAY, -6)}&to=${TODAY}`);
     });
   });
 
