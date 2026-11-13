@@ -162,10 +162,23 @@ public class TicketService {
      * handed. Applied after the query, so ordering, paging and counts are untouched.
      */
     private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
-        if (!IMPORT_ROLES.contains(role)) {
-            return rows;
+        List<TicketSummaryDto> out = rows;
+        if (IMPORT_ROLES.contains(role)) {
+            out = out.stream().map(TicketSummaryDto::withoutMoney).toList();
         }
-        return rows.stream().map(TicketSummaryDto::withoutMoney).toList();
+        if (!canReadActivities(role)) {
+            out = out.stream().map(TicketSummaryDto::withoutActivity).toList();
+        }
+        return out;
+    }
+
+    /**
+     * Who may read a deal's activities (the same rule as {@link #requireDealOwnership}: owner/keyer, sales_manager,
+     * ceo). A sales list is already own-deals only, so the role alone decides for list rows. Account and import
+     * get no lastActivityAt / range flags: they would leak activity they cannot open.
+     */
+    private static boolean canReadActivities(String role) {
+        return SALES_ROLES.contains(role) || "sales_manager".equals(role) || "ceo".equals(role);
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -177,13 +190,29 @@ public class TicketService {
      *                    {@code status} — used by the commission "Linked Deal" picker.
      */
     public Page<TicketSummaryDto> listPage(String status, String salesStage, UserPrincipal actor, PageRequest page) {
+        return listPage(status, salesStage, null, null, actor, page);
+    }
+
+    /**
+     * @param movementFrom / movementTo optional inclusive Asia/Bangkok day range: both or neither, from <= to
+     *                     (else 400). When given each row carries stageChangedInRange / activityInRange.
+     */
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, java.time.LocalDate movementFrom,
+                                           java.time.LocalDate movementTo, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
+        if ((movementFrom == null) != (movementTo == null)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุ movementFrom และ movementTo ทั้งคู่");
+        }
+        if (movementFrom != null && movementFrom.isAfter(movementTo)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "movementFrom ต้องไม่เกิน movementTo");
+        }
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
         List<TicketSummaryDto> rows =
-            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page), actor.role());
+            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page, movementFrom, movementTo),
+                actor.role());
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -202,6 +231,10 @@ public class TicketService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         TicketDto ticket = requireViewAccess(id, actor);
+        if (!canReadActivities(actor.role())) {
+            ticket = new TicketDto(ticket.summary().withoutActivity(), ticket.items(), ticket.events(),
+                ticket.quotation(), ticket.quotations(), ticket.fromPricingChain());
+        }
         // Display-only fallback, scoped to THIS single read endpoint on purpose. Every
         // other reader of ticket.items() (actions()'s canRecordDelivery/
         // hasRemainingDelivery, editItems' merge-by-position, commission/delivery calculations,
@@ -751,7 +784,8 @@ public class TicketService {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
-            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById());
+            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById(),
+            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt());
     }
 
     /**

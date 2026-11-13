@@ -167,7 +167,15 @@ public record TicketSummaryDto(
      * to {@link #createdById} when the owner keyed it herself; null only on rows from before V202. The keyer passes every owner access check
      * ({@link DealOwnership}); commission and notifications stay on {@link #createdById}.
      */
-    Long keyedById
+    Long keyedById,
+    /**
+     * Movement-range facts for {@code GET /api/tickets?movementFrom&movementTo} (Bangkok calendar days, inclusive):
+     * a STAGE_CHANGED ticket_event / a deal_activity falls inside the range. Both false when the range is absent.
+     * {@link #lastActivityAt} is the latest deal_activity date (null if none) and is always served.
+     */
+    boolean stageChangedInRange,
+    boolean activityInRange,
+    LocalDate lastActivityAt
 ) {
     /** The shape before {@link #keyedById}: it defaults to {@code null}. */
     public TicketSummaryDto(
@@ -199,7 +207,7 @@ public record TicketSummaryDto(
             closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
             winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
             reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, null);
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, null, false, false, null);
     }
 
     /** The shape before {@link #depositDue}: it defaults to {@code null}. */
@@ -232,7 +240,7 @@ public record TicketSummaryDto(
             closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
             winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
             reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, null, null);
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, null, null, false, false, null);
     }
 
     /** The shape before the derived payment-due fields existed: they default to "no structured term". */
@@ -395,7 +403,8 @@ public record TicketSummaryDto(
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById);
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt);
     }
 
     /**
@@ -414,7 +423,8 @@ public record TicketSummaryDto(
             creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, null, null,
             null, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
-            commissionRecorded, reopenedAt, reopenCount, quotationOnly).withKeyedById(keyedById);
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly, null, null, null, null, Set.of(),
+            null, keyedById, stageChangedInRange, activityInRange, lastActivityAt);
     }
 
     /** Copy with {@link #keyedById} set (the row mapper builds the summary through a shorter shape). */
@@ -428,6 +438,27 @@ public record TicketSummaryDto(
             amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
-            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById);
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt);
+    }
+
+    /** Copy with the movement-range facts set (the row mapper builds the summary through a shorter shape). */
+    public TicketSummaryDto withMovement(boolean stageChangedInRange, boolean activityInRange, LocalDate lastActivityAt) {
+        return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
+            assignedToId, assignedToName, customerName, customerId, projectId, projectName,
+            contactId, contactName, note, createdAt, updatedAt, closedAt, itemCount, hasEdits,
+            paymentStatus, fulfillmentStatus, salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle,
+            tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
+            creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
+            amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt);
+    }
+
+    /** Copy without the activity facts (lastActivityAt and the range flags), for roles that cannot read deal activities. */
+    public TicketSummaryDto withoutActivity() {
+        return withMovement(false, false, null);
     }
 }

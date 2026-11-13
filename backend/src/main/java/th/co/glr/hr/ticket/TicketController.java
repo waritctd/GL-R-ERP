@@ -7,6 +7,8 @@ import java.util.Map;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import java.time.LocalDate;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -41,12 +43,15 @@ public class TicketController {
         // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — lets the
         // commission "Linked Deal" picker ask for only deals eligible for a commission submission.
         @RequestParam(required = false) String salesStage,
+        // Movement range (inclusive Asia/Bangkok days): adds stageChangedInRange / activityInRange to every row.
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementFrom,
+        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementTo,
         @RequestParam(required = false) Integer page,
         @RequestParam(required = false) Integer size,
         HttpSession session
     ) {
         UserPrincipal user = sessions.requireUser(session);
-        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, user, PageRequest.resolve(page, size));
+        Page<TicketSummaryDto> result = ticketService.listPage(status, salesStage, movementFrom, movementTo, user, PageRequest.resolve(page, size));
         return new TicketListResponse(result.items(), result.page(), result.size(), result.total());
     }
 
