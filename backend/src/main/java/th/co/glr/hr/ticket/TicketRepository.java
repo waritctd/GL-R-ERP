@@ -2632,6 +2632,12 @@ public class TicketRepository {
             new MapSqlParameterSource().addValue("v", value).addValue("id", ticketId));
     }
 
+    /** V209: the rep's expected close quarter ({@code YYYY-Qn}), or null to clear. */
+    public void updateExpectedQuarter(long ticketId, String expectedQuarter) {
+        jdbc.update("UPDATE sales.ticket SET expected_quarter = :q, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("q", expectedQuarter).addValue("id", ticketId));
+    }
+
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
                                String ownerName, String buyerName, LocalDate nextFollowUpAt) {
         jdbc.update("""

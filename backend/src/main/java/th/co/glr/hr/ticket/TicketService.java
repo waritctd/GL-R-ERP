@@ -2461,6 +2461,9 @@ public class TicketService {
         requireActive(s);
         tickets.updateTracking(ticketId, request.winProbability(), blankToNull(request.designerName()),
             blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
+        if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
+            tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
+        }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
         return requireTicket(ticketId);
